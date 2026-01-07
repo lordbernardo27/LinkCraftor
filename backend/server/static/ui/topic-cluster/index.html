@@ -1,0 +1,1637 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Topic Cluster Generator</title>
+  <style>
+    :root{
+      --bg:#f6f7fb; --card:#ffffff; --line:#e6e8ef; --text:#111827; --muted:#6b7280;
+      --shadow:0 10px 30px rgba(17,24,39,.06);
+      --blue:#1f6feb; --blue2:#0b5ed7;
+      --warn-bg:#fff7d6; --warn-border:#f4e2a0;
+      --ok:#16a34a; --bad:#ef4444;
+      --ok-bg:#ecfdf3; --bad-bg:#fef2f2;
+      --pill:#eef2ff;
+      --dup-bg:#fff1f2; --dup-br:#fecdd3; --dup-txt:#7f1d1d;
+    }
+
+    *{box-sizing:border-box} html,body{height:100%}
+    body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; color:var(--text); background:var(--bg)}
+    .shell{max-width:1500px;margin:28px auto;padding:0 18px}
+
+    .card{background:var(--card);border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+
+    /* Center main header */
+    .topbar{
+      padding:22px 26px 16px;
+      display:grid;
+      grid-template-columns:1fr auto 1fr;
+      align-items:center;
+      gap:12px;
+    }
+    .title{
+      grid-column:2;
+      text-align:center;
+      font-size:44px;
+      font-weight:750;
+      letter-spacing:-0.02em;
+      margin:0;
+      line-height:1.1
+    }
+    .topbar-left{
+      grid-column:1;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      justify-content:flex-start;
+    }
+    .topbar-actions{
+      grid-column:3;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      justify-content:flex-end;
+    }
+
+    .iconbtn{
+      border:1px solid var(--line); background:#fff; border-radius:10px;
+      padding:10px 12px; cursor:pointer; display:inline-flex; align-items:center; gap:8px;
+      font-size:14px; color:#111827;
+    }
+    .iconbtn:hover{background:#f7f8fb}
+    .iconbtn:focus-visible{outline:3px solid rgba(31,111,235,.25);outline-offset:2px}
+
+    .kebab{border:1px solid transparent;background:transparent;border-radius:10px;padding:10px 12px;cursor:pointer}
+    .kebab:focus-visible{outline:3px solid rgba(31,111,235,.25);outline-offset:2px}
+    .kebab .dot{width:4px;height:4px;border-radius:999px;background:#111827;display:block;margin:3px auto}
+
+    .divider{height:1px;background:var(--line)}
+
+    .grid{
+      display:grid;
+      grid-template-columns:420px 1fr;
+      gap:0;
+      min-height:760px;
+      height:calc(100vh - 140px);
+      max-height:980px;
+    }
+    .left,.right{height:100%; overflow:hidden}
+    .left{border-right:1px solid var(--line); padding:0}
+    .right{padding:0}
+
+    .left-scroll{
+      height:100%;
+      overflow-y:auto;
+      padding:22px 22px 20px;
+    }
+    .right-scroll{
+      height:100%;
+      overflow-y:auto;
+      padding:18px 22px 22px;
+    }
+
+    h2{font-size:28px;margin:2px 0 14px;font-weight:750}
+    .panel{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+    .panel .panel-head{
+      padding:14px 16px;border-bottom:1px solid var(--line);font-weight:650;color:#111827;
+      background:linear-gradient(#fff,#fcfcff);display:flex;align-items:center;justify-content:space-between;gap:12px
+    }
+    .panel .panel-sub{font-size:12px;color:var(--muted);font-weight:600}
+
+    .pillar-list{padding:0;margin:0;list-style:none}
+    .pillar-item{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:16px;border-bottom:1px solid var(--line)}
+    .pillar-item:last-child{border-bottom:none}
+    .pillar-name{font-size:18px;line-height:1.15;font-weight:600;white-space:pre-line}
+    .pillar-item.active .pillar-name{font-weight:820}
+
+    .btn{
+      border:1px solid #d4d7df;background:#fff;border-radius:6px;padding:8px 12px;
+      font-size:14px;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:8px;
+    }
+    .btn:hover{background:#f7f8fb}
+    .btn:active{transform:translateY(1px)}
+    .btn:focus-visible{outline:3px solid rgba(31,111,235,.25);outline-offset:2px}
+    .btn.primary{border-color:#0b57d0;background:linear-gradient(180deg,var(--blue),var(--blue2));color:#fff}
+    .btn.primary:hover{filter:brightness(1.02)}
+    .btn.ghost{background:#fff;border-color:#e2e5ee}
+    .btn.danger{border-color:#f5c2c7;background:#fff}
+    .btn.small{padding:6px 10px;font-size:13px}
+    .btn[disabled]{opacity:.55;cursor:not-allowed;transform:none}
+
+    /* Pillar source selector */
+    .sourceCtl{
+      display:flex;align-items:center;justify-content:space-between;gap:10px;
+      margin:0 0 12px;
+      border:1px solid var(--line);border-radius:10px;background:#fff;
+      padding:10px 12px;
+    }
+    .sourceCtl label{font-size:12px;color:var(--muted);font-weight:800}
+    .sourceCtl select{
+      border:1px solid var(--line); border-radius:10px; padding:8px 10px; font-size:14px; background:#fff;
+      outline:none; min-width:220px;
+    }
+    .sourceCtl select:focus{outline:3px solid rgba(31,111,235,.18)}
+
+    /* Manual pillar input (NEW) */
+    .manualCtl{
+      margin:0 0 12px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#fff;
+      padding:12px;
+      display:none;
+    }
+    .manualCtl.show{display:block}
+    .manualCtl .field{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+    .manualCtl label{font-size:12px;color:var(--muted);font-weight:800}
+    .manualCtl textarea{
+      border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+      font-size:14px; outline:none; background:#fff;
+      min-height:86px; resize:vertical;
+    }
+    .manualCtl textarea:focus{outline:3px solid rgba(31,111,235,.18)}
+    .manualCtl .rowBtns{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .manualCtl .help{font-size:12px;color:var(--muted);line-height:1.35}
+
+    /* Document upload (NEW) */
+    .docsCtl{
+      margin:0 0 12px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      background:#fff;
+      padding:12px;
+      display:none;
+    }
+    .docsCtl.show{display:block}
+    .docsCtl .rowBtns{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+    .docsCtl .help{font-size:12px;color:var(--muted);line-height:1.35}
+    .fileRow{
+      display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap;
+    }
+    .fileRow input[type="file"]{max-width:100%}
+    .fileList{
+      margin-top:10px;
+      border:1px solid var(--line);
+      border-radius:10px;
+      padding:10px;
+      max-height:140px;
+      overflow:auto;
+      font-size:13px;
+      color:#374151;
+      background:#fff;
+      display:none;
+    }
+    .fileList.show{display:block}
+    .fileItem{display:flex;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px dashed #eef0f6}
+    .fileItem:last-child{border-bottom:none}
+    .pill{font-size:12px;color:#374151;background:var(--pill);border:1px solid #dfe3ff;border-radius:999px;padding:4px 10px;white-space:nowrap}
+
+    .pillars-subtitle{margin:18px 0 10px}
+
+    .export-wrap{
+      padding:18px 0 0;
+      position:sticky;
+      bottom:0;
+      background:linear-gradient(transparent,rgba(255,255,255,.95) 40%,#fff);
+    }
+    .export-btn{
+      width:100%;height:64px;border-radius:6px;border:1px solid #0b57d0;
+      background:linear-gradient(180deg,var(--blue),var(--blue2));color:#fff;
+      font-size:22px;font-weight:750;cursor:pointer;box-shadow:0 10px 20px rgba(31,111,235,.22)
+    }
+    .export-btn:hover{filter:brightness(1.02)}
+    .export-btn:focus-visible{outline:3px solid rgba(31,111,235,.25);outline-offset:3px}
+
+    .warn{
+      display:flex;gap:10px;align-items:flex-start;background:var(--warn-bg);border:1px solid var(--warn-border);
+      color:#4b5563;padding:14px 16px;border-radius:6px;margin:4px 0 14px;font-size:15px
+    }
+    .warn .icon{margin-top:2px;font-size:16px}
+
+    .right-head{display:flex;align-items:flex-end;justify-content:space-between;gap:14px;flex-wrap:wrap}
+    .right h3{font-size:34px;margin:8px 0 10px;font-weight:780;letter-spacing:-0.01em}
+
+    .meta-line{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:13px;margin:0 0 14px;flex-wrap:wrap}
+    .chip{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+    .dot{width:8px;height:8px;border-radius:999px;background:#9ca3af;display:inline-block}
+    .dot.ok{background:var(--ok)}
+    .dot.bad{background:var(--bad)}
+
+    .tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap; padding:10px 0 12px}
+    .search{
+      min-width:320px;flex:1;display:flex;align-items:center;gap:10px;
+      border:1px solid var(--line);border-radius:10px;background:#fff;padding:10px 12px;
+    }
+    .search input{border:none;outline:none;width:100%;font-size:14px}
+
+    .togglebar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .seg{
+      display:inline-flex;overflow:hidden;border:1px solid var(--line);border-radius:10px;background:#fff;
+    }
+    .seg button{
+      border:none;background:transparent;padding:9px 12px;font-size:13px;cursor:pointer;color:#374151;
+    }
+    .seg button.active{background:var(--pill);font-weight:700}
+    .seg button:focus-visible{outline:3px solid rgba(31,111,235,.25);outline-offset:2px}
+
+    .countCtl{
+      display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:10px;background:#fff;padding:8px 10px;
+    }
+    .countCtl label{font-size:12px;color:var(--muted);font-weight:700}
+    .countCtl input{
+      width:110px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:14px;outline:none;
+    }
+    .countCtl input:focus{outline:3px solid rgba(31,111,235,.18)}
+    .countCtl .hint{font-size:12px;color:var(--muted);white-space:nowrap}
+
+    .copybar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+    .toast{
+      position:fixed; left:50%; bottom:18px; transform:translateX(-50%);
+      background:#111827; color:#fff; padding:10px 12px; border-radius:10px;
+      font-size:13px; opacity:0; pointer-events:none; transition:opacity .18s ease;
+      box-shadow:0 10px 25px rgba(0,0,0,.15);
+      z-index:9999;
+    }
+    .toast.show{opacity:1}
+
+    .table{border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#fff}
+    .row{display:grid;grid-template-columns:1fr 130px 130px;gap:12px;align-items:center;padding:14px 16px;border-top:1px solid var(--line)}
+    .row.header{border-top:none;background:linear-gradient(#fff,#fcfcff);font-weight:650;color:#111827}
+    .topic{font-size:18px;line-height:1.25;font-weight:520}
+    .substatus{margin-top:8px;color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+    .status-pill{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:#374151}
+
+    .row.accepted{background:var(--ok-bg);border-left:4px solid var(--ok)}
+    .row.rejected{background:var(--bad-bg);border-left:4px solid var(--bad)}
+
+    .dupWarn{
+      margin-top:8px;
+      display:inline-flex; align-items:center; gap:8px;
+      border:1px solid var(--dup-br);
+      background:var(--dup-bg);
+      color:var(--dup-txt);
+      padding:6px 10px;
+      border-radius:999px;
+      font-size:12px;
+      max-width:100%;
+    }
+    .dupWarn strong{font-weight:800}
+    .dupWarn .mini{opacity:.8}
+
+    .empty{padding:28px 16px;color:var(--muted);text-align:center}
+    .footer-hint{margin-top:12px;color:var(--muted);font-size:13px}
+
+    body.density-compact .row{padding:10px 12px}
+    body.density-compact .topic{font-size:15px}
+    body.density-compact .substatus{margin-top:6px}
+    body.density-comfortable .row{padding:14px 16px}
+    body.density-spacious .row{padding:18px 18px}
+    body.density-spacious .topic{font-size:19px}
+
+    /* Settings drawer (unchanged) */
+    .overlay{
+      position:fixed; inset:0; background:rgba(17,24,39,.38);
+      opacity:0; pointer-events:none; transition:opacity .18s ease;
+      z-index:9000;
+    }
+    .overlay.show{opacity:1; pointer-events:auto}
+
+    .drawer{
+      position:fixed; top:0; right:0; height:100vh; width:min(460px, 92vw);
+      background:#fff; border-left:1px solid var(--line);
+      box-shadow:-20px 0 45px rgba(17,24,39,.10);
+      transform:translateX(102%);
+      transition:transform .22s ease;
+      z-index:9010;
+      display:flex; flex-direction:column;
+    }
+    .drawer.show{transform:translateX(0)}
+    .drawer-head{
+      padding:18px 18px 12px; border-bottom:1px solid var(--line);
+      display:flex; align-items:flex-start; justify-content:space-between; gap:10px;
+    }
+    .drawer-title{margin:0; font-size:22px; font-weight:800; letter-spacing:-0.01em}
+    .drawer-sub{margin:4px 0 0; color:var(--muted); font-size:13px}
+    .drawer-body{padding:14px 18px 18px; overflow-y:auto}
+    .section{border:1px solid var(--line); border-radius:12px; padding:12px; background:#fff; margin:12px 0}
+    .section h4{margin:0 0 10px; font-size:14px; letter-spacing:.02em; text-transform:uppercase; color:#374151}
+    .field{display:flex; flex-direction:column; gap:6px; margin:10px 0}
+    .field label{font-size:12px; color:var(--muted); font-weight:800}
+    .field input[type="text"], .field input[type="number"], .field select, .field textarea{
+      border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+      font-size:14px; outline:none; background:#fff;
+    }
+    .field textarea{min-height:84px; resize:vertical}
+    .field input:focus, .field select:focus, .field textarea:focus{outline:3px solid rgba(31,111,235,.18)}
+    .row2{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+    .help{font-size:12px; color:var(--muted); line-height:1.3}
+    .toggle{
+      display:flex; align-items:center; justify-content:space-between; gap:12px;
+      border:1px solid var(--line); border-radius:10px; padding:10px 12px;
+    }
+    .toggle strong{font-size:13px}
+    .switch{
+      width:46px; height:26px; border-radius:999px; background:#e5e7eb; position:relative; cursor:pointer; flex:none;
+      border:1px solid #e5e7eb;
+    }
+    .switch::after{
+      content:""; width:22px; height:22px; border-radius:999px; background:#fff; position:absolute; top:1px; left:1px;
+      box-shadow:0 4px 10px rgba(0,0,0,.12); transition:left .18s ease;
+    }
+    .switch.on{background:rgba(31,111,235,.30); border-color:rgba(31,111,235,.35)}
+    .switch.on::after{left:23px}
+
+    .drawer-foot{
+      padding:12px 18px; border-top:1px solid var(--line);
+      display:flex; align-items:center; justify-content:space-between; gap:10px;
+      background:linear-gradient(#fff, #fcfcff);
+    }
+
+    @media (max-width:1040px){
+      .topbar{grid-template-columns:1fr; justify-items:center}
+      .topbar-left,.topbar-actions{grid-column:auto; justify-content:center}
+      .title{grid-column:auto;font-size:34px}
+      .grid{grid-template-columns:1fr; height:auto; max-height:none}
+      .left{border-right:none;border-bottom:1px solid var(--line)}
+      .left,.right{height:auto}
+      .left-scroll,.right-scroll{height:auto; overflow:visible}
+      .right h3{font-size:28px}
+      .row{grid-template-columns:1fr 120px 120px}
+      .search{min-width:0}
+      .countCtl{width:100%}
+      .countCtl input{width:100%}
+    }
+  </style>
+</head>
+
+<body>
+  <div class="shell">
+    <div class="card" role="application" aria-label="Topic Cluster Generator">
+      <div class="topbar">
+        <!-- left spacer/optional future nav -->
+        <div class="topbar-left"></div>
+
+        <!-- centered title -->
+        <h1 class="title">Topic Cluster Generator</h1>
+
+        <!-- actions -->
+        <div class="topbar-actions">
+          <button class="iconbtn" id="openSettingsBtn" aria-label="Open Settings" title="Settings">
+            ⚙️ <span style="font-weight:700;">Settings</span>
+          </button>
+          <button class="kebab" aria-label="More options" title="More">
+            <span class="dot"></span><span class="dot"></span><span class="dot"></span>
+          </button>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="grid">
+        <!-- LEFT -->
+        <aside class="left" aria-label="Pillar Topics panel">
+          <div class="left-scroll">
+            <h2>Pillar Topics</h2>
+
+            <div class="sourceCtl" aria-label="Pillar source selector">
+              <div style="display:flex;flex-direction:column;gap:2px;">
+                <label for="pillarSource">Pillar source</label>
+                <div style="font-size:12px;color:var(--muted);font-weight:700;">UI-only (wiring later)</div>
+              </div>
+              <select id="pillarSource">
+                <option value="manual">Manual pillars</option>
+                <option value="documents">Documents uploaded (batch)</option>
+                <option value="sitemap">From Sitemap / Imported URLs</option>
+                <option value="drafts">From Draft Topics</option>
+              </select>
+            </div>
+
+            <!-- Manual pillars: user enters their own pillar topics -->
+            <div class="manualCtl" id="manualCtl" aria-label="Manual pillar entry">
+              <div class="field">
+                <label for="manualPillars">Enter pillar topics (one per line)</label>
+                <textarea id="manualPillars" placeholder="BMI Calculator&#10;High Blood Pressure Guide&#10;Calorie Deficit Explained"></textarea>
+                <div class="help">
+                  These become your Pillar Topics list. Click <strong>Generate Cluster Topics</strong> next to any pillar to view clusters on the right.
+                </div>
+              </div>
+              <div class="rowBtns">
+                <button class="btn small primary" id="applyManualPillarsBtn">Use these pillars</button>
+                <span class="pill">UI-only</span>
+              </div>
+            </div>
+
+            <!-- Documents uploaded: batch upload docs, derive pillar topics (UI-only heuristic) -->
+            <div class="docsCtl" id="docsCtl" aria-label="Documents uploaded pillar source">
+              <div class="help">
+                Upload a batch of documents. For now, pillars are derived using a simple heuristic from filenames
+                (later: real extraction from content + headings).
+              </div>
+              <div class="fileRow">
+                <input id="docsInput" type="file" multiple
+                       accept=".doc,.docx,.txt,.md,.html,.pdf"
+                       aria-label="Upload documents (multiple)" />
+                <button class="btn small primary" id="derivePillarsBtn">Derive pillars</button>
+                <span class="pill">UI-only</span>
+              </div>
+              <div class="fileList" id="fileList" aria-label="Uploaded documents list"></div>
+            </div>
+
+            <div class="panel" aria-label="Pillar topics list">
+              <div class="panel-head">
+                <span>Pillar Topic</span>
+                <span class="panel-sub" id="persistHint">Persist: <strong>Local</strong></span>
+              </div>
+              <ul class="pillar-list" id="pillarList"></ul>
+            </div>
+
+            <h2 class="pillars-subtitle">No Action Taken</h2>
+            <div class="panel" aria-label="No action taken list">
+              <div class="panel-head">
+                <span>Allarc Topic</span>
+                <span class="panel-sub"><span id="noActionCount">0</span> items</span>
+              </div>
+              <div style="padding:16px;color:var(--muted);" id="noAction">No Action Taken</div>
+            </div>
+
+            <div class="export-wrap">
+              <button class="export-btn" id="exportBtn">Export CSV</button>
+            </div>
+          </div>
+        </aside>
+
+        <!-- RIGHT -->
+        <main class="right" aria-label="Cluster topics results panel">
+          <div class="right-scroll">
+            <div class="warn" role="status" aria-live="polite">
+              <div class="icon">⚠️</div>
+              <div>
+                Generated <strong id="generatedCount">0</strong> cluster topics
+                <span style="opacity:.75;">(you control the count)</span>.
+                Review and accept or reject suggestions.
+              </div>
+            </div>
+
+            <div class="right-head">
+              <div>
+                <h3 id="rightTitle">Cluster Topics for “BMI Calculator”</h3>
+                <div class="meta-line" aria-label="Decision summary">
+                  <span class="chip"><span class="dot ok"></span> Accepted: <strong id="acceptedCount">0</strong></span>
+                  <span class="chip"><span class="dot bad"></span> Rejected: <strong id="rejectedCount">0</strong></span>
+                  <span class="chip"><span class="dot"></span> No action: <strong id="noneCount">0</strong></span>
+                </div>
+              </div>
+
+              <div class="togglebar" aria-label="Bulk actions">
+                <button class="btn small primary" id="acceptAllBtn">Accept all</button>
+                <button class="btn small danger" id="rejectAllBtn">Reject all</button>
+                <button class="btn small ghost" id="resetBtn">Reset</button>
+              </div>
+            </div>
+
+            <div class="tools" aria-label="Search and filters">
+              <div class="search" role="search">
+                🔎
+                <input id="searchInput" type="text" placeholder="Search cluster topics..." autocomplete="off" />
+              </div>
+
+              <div class="countCtl" aria-label="Cluster topic count control">
+                <label for="clusterCount">Cluster count</label>
+                <input id="clusterCount" type="number" min="1" step="1" inputmode="numeric" />
+                <button class="btn small" id="applyCountBtn" title="Apply count">Apply</button>
+                <span class="hint" id="countHint"></span>
+              </div>
+
+              <div class="copybar" aria-label="Copy controls">
+                <button class="btn small" id="copyAcceptedBtn" title="Copy accepted topics to clipboard">Copy Accepted</button>
+                <button class="btn small" id="copyAllBtn" title="Copy all topics to clipboard">Copy All</button>
+              </div>
+
+              <div class="seg" aria-label="Filter topics">
+                <button type="button" class="active" data-filter="all">All</button>
+                <button type="button" data-filter="accepted">Accepted</button>
+                <button type="button" data-filter="rejected">Rejected</button>
+                <button type="button" data-filter="none">No action</button>
+              </div>
+            </div>
+
+            <div class="table" role="table" aria-label="Cluster topics table">
+              <div class="row header" role="row">
+                <div role="columnheader">Cluster Topic</div>
+                <div role="columnheader" style="text-align:center;">Accept</div>
+                <div role="columnheader" style="text-align:center;">Reject</div>
+              </div>
+              <div id="rows"></div>
+            </div>
+
+            <div class="footer-hint">
+              Tips: Use <strong>Search</strong> + filter tabs to find quickly. Decisions are saved <strong>per pillar</strong> in your browser (localStorage).
+              Export is <strong>CSV only</strong> for now.
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- Settings drawer -->
+  <div class="overlay" id="overlay" aria-hidden="true"></div>
+  <aside class="drawer" id="drawer" aria-label="Settings panel" aria-hidden="true">
+    <div class="drawer-head">
+      <div>
+        <h3 class="drawer-title">Topic Cluster Settings</h3>
+        <p class="drawer-sub">UI-only. Stored locally (localStorage). Wiring comes later.</p>
+      </div>
+      <button class="iconbtn" id="closeSettingsBtn" aria-label="Close Settings">✕</button>
+    </div>
+
+    <div class="drawer-body">
+      <div class="section">
+        <h4>General</h4>
+        <div class="field">
+          <label for="setDefaultCount">Default cluster count</label>
+          <input id="setDefaultCount" type="number" min="1" step="1" inputmode="numeric" />
+          <div class="help">Used when you open the tool or switch pillars (unless the pillar already has its own saved count).</div>
+        </div>
+        <div class="field">
+          <label for="setDensity">Visual density</label>
+          <select id="setDensity">
+            <option value="comfortable">Comfortable</option>
+            <option value="compact">Compact</option>
+            <option value="spacious">Spacious</option>
+          </select>
+          <div class="help">Controls row spacing and font sizing for large lists.</div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h4>Export</h4>
+        <div class="row2">
+          <div class="field">
+            <label for="setCsvDelimiter">CSV delimiter</label>
+            <select id="setCsvDelimiter">
+              <option value=",">Comma (,)</option>
+              <option value=";">Semicolon (;)</option>
+              <option value="\\t">Tab (TSV)</option>
+            </select>
+            <div class="help">Semicolon is useful for some Excel locale settings.</div>
+          </div>
+
+          <div class="field">
+            <label for="setFilenamePattern">Filename pattern</label>
+            <input id="setFilenamePattern" type="text" placeholder="topic-clusters_{pillar}_{date}" />
+            <div class="help">Tokens: <strong>{pillar}</strong> and <strong>{date}</strong> (YYYY-MM-DD).</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h4>Automation</h4>
+        <div class="field">
+          <label for="setAutoAccept">Auto-accept if topic contains (one per line)</label>
+          <textarea id="setAutoAccept" placeholder="how to&#10;best&#10;guide"></textarea>
+          <div class="help">Applies to <strong>undecided</strong> topics when you generate/switch pillars or change counts.</div>
+        </div>
+
+        <div class="field">
+          <label for="setAutoReject">Auto-reject if topic contains (one per line)</label>
+          <textarea id="setAutoReject" placeholder="free&#10;definition"></textarea>
+          <div class="help">Auto-reject runs after auto-accept. Conflicts resolve in favor of <strong>reject</strong>.</div>
+        </div>
+
+        <div class="toggle">
+          <div>
+            <strong>Confirm bulk actions</strong>
+            <div class="help">Ask before “Accept all” and “Reject all”.</div>
+          </div>
+          <div class="switch" id="setConfirmBulk" role="switch" aria-checked="true" tabindex="0"></div>
+        </div>
+      </div>
+
+      <div class="section">
+        <h4>Quality control</h4>
+        <div class="field">
+          <label for="setDupTolerance">Duplicate tolerance (strict → relaxed)</label>
+          <input id="setDupTolerance" type="number" min="0" max="100" step="1" inputmode="numeric" />
+          <div class="help">0 = very strict warnings, 100 = very relaxed. This affects overlap warnings shown per topic.</div>
+        </div>
+
+        <div class="field">
+          <label>Cluster intent weighting (UI-only)</label>
+          <div class="row2">
+            <div class="field" style="margin:0">
+              <label for="wInfo">Informational</label>
+              <input id="wInfo" type="number" min="0" max="100" step="1" inputmode="numeric" />
+            </div>
+            <div class="field" style="margin:0">
+              <label for="wComm">Commercial</label>
+              <input id="wComm" type="number" min="0" max="100" step="1" inputmode="numeric" />
+            </div>
+          </div>
+          <div class="row2">
+            <div class="field" style="margin:0">
+              <label for="wComp">Comparative</label>
+              <input id="wComp" type="number" min="0" max="100" step="1" inputmode="numeric" />
+            </div>
+            <div class="field" style="margin:0">
+              <label for="wHow">How-to</label>
+              <input id="wHow" type="number" min="0" max="100" step="1" inputmode="numeric" />
+            </div>
+          </div>
+          <div class="help">This will later bias generation. For now it’s stored as a preset.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="drawer-foot">
+      <button class="btn ghost" id="resetSettingsBtn">Reset settings</button>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <button class="btn" id="closeSettingsBtn2">Close</button>
+        <button class="btn primary" id="saveSettingsBtn">Save</button>
+      </div>
+    </div>
+  </aside>
+
+  <script>
+    /**********************
+     * DEMO DATA (UI ONLY)
+     **********************/
+    const PILLARS_DEFAULT = [
+      { id: "bmi", title: "BMi Calculator" },
+      { id: "bp", title: "High Blood Pressure\\nGuide" },
+      { id: "cal", title: "Calorie Deficit\\nExplained" },
+      { id: "hair", title: "Hair Loss\\nTreatments" },
+    ];
+
+    // Current working pillar list (can be replaced by manual/doc sources)
+    let PILLARS = structuredClone(PILLARS_DEFAULT);
+
+    const CLUSTERS_BASE = {
+      bmi: [
+        "How to Calculate BMi for Children (Step-by-Step Guide)",
+        "The Most Accurate BMI Formula Explained",
+        "BMI vs. Body Fat Percentage: What’s the Difference?",
+        "Limitations of BMI and Better Alternatives",
+        "Why BMI Doesn’t Work for Athletes (and What to Use Instead)",
+        "How to Interpret BMI Results for Women vs. Men",
+        "Ideal BMI Ranges by Age and Gender",
+        "BMi for Teens: Healthy Weight for Adolescents",
+        "The History and Development of the BMI Scale",
+        "Using BMi in Conjunction with Other Health Metrics",
+        "Can BMI Accurately Measure Obesity?",
+        "Adjustments to BMI for Different Ethnic Groups",
+        "BMI and Your Risk of Chronic Diseases",
+        "BMi Charts: Visualizing Your Body Mass Index"
+      ],
+      bp: [
+        "Blood Pressure Numbers Explained (Systolic vs. Diastolic)",
+        "Home Blood Pressure Monitoring: Correct Technique",
+        "Why Your BP Is High in the Morning (and What to Do)",
+        "White Coat Hypertension vs. True Hypertension",
+        "Salt Sensitivity: How Sodium Affects Blood Pressure",
+        "Top BP-Lowering Lifestyle Changes That Actually Work",
+        "Blood Pressure Medications: Common Side Effects & Tips"
+      ],
+      cal: [
+        "Calorie Deficit vs. Weight Loss Plateau: What’s Going On?",
+        "How to Calculate Your Maintenance Calories",
+        "Deficit Too Large? Signs You’re Undereating",
+        "High-Protein Deficit: Does It Preserve Muscle?",
+        "Cutting Calories Without Feeling Hungry (Practical Guide)"
+      ],
+      hair: [
+        "Telogen Effluvium: Causes, Timeline, and Recovery",
+        "Male Pattern Baldness vs. Female Pattern Hair Loss",
+        "Minoxidil: How It Works and How to Use It Correctly",
+        "Hair Loss Blood Tests: What to Ask Your Doctor For",
+        "Scalp Health 101: Dandruff, Seborrheic Dermatitis, and Hair Fall"
+      ]
+    };
+
+    /**********************
+     * STATE + SETTINGS (LOCAL)
+     **********************/
+    const LS_KEY = "lc_topic_cluster_state_v3";
+    const DEFAULT_SETTINGS = {
+      defaultClusterCount: 23,
+      csvDelimiter: ",",
+      filenamePattern: "topic-clusters_{pillar}_{date}",
+      autoAccept: ["how to", "best", "guide"],
+      autoReject: ["free", "definition"],
+      confirmBulk: true,
+      visualDensity: "comfortable",
+      dupTolerance: 35,
+      intentWeights: { informational: 50, commercial: 30, comparative: 20, howto: 40 }
+    };
+
+    const DEFAULT_STATE = {
+      selectedPillarId: "bmi",
+      pillarSource: "manual",
+      decisions: {},
+      search: "",
+      filter: "all",
+      clusterCountByPillar: { bmi: 23, bp: 23, cal: 23, hair: 23 },
+      settings: structuredClone(DEFAULT_SETTINGS),
+
+      // NEW: source data persistence
+      manualPillarsText: "",
+      uploadedDocs: [] // [{name,size,type,lastModified}]
+    };
+
+    function safeParse(json, fallback){
+      try { return JSON.parse(json); } catch { return fallback; }
+    }
+    function deepMerge(base, incoming){
+      const out = structuredClone(base);
+      if (!incoming || typeof incoming !== "object") return out;
+      for (const k of Object.keys(incoming)){
+        if (incoming[k] && typeof incoming[k] === "object" && !Array.isArray(incoming[k])){
+          out[k] = deepMerge(out[k] || {}, incoming[k]);
+        } else {
+          out[k] = incoming[k];
+        }
+      }
+      return out;
+    }
+
+    function loadState(){
+      const raw = localStorage.getItem(LS_KEY);
+      const parsed = raw ? safeParse(raw, {}) : {};
+      const st = deepMerge(DEFAULT_STATE, parsed);
+
+      if (!st.decisions || typeof st.decisions !== "object") st.decisions = {};
+      if (!st.clusterCountByPillar || typeof st.clusterCountByPillar !== "object") st.clusterCountByPillar = structuredClone(DEFAULT_STATE.clusterCountByPILLAR);
+      if (!st.settings || typeof st.settings !== "object") st.settings = structuredClone(DEFAULT_SETTINGS);
+      if (!Array.isArray(st.uploadedDocs)) st.uploadedDocs = [];
+
+      return st;
+    }
+
+    function saveState(){
+      localStorage.setItem(LS_KEY, JSON.stringify(state));
+    }
+
+    const state = loadState();
+
+    /**********************
+     * DOM
+     **********************/
+    const pillarListEl = document.getElementById("pillarList");
+    const rowsEl = document.getElementById("rows");
+    const rightTitleEl = document.getElementById("rightTitle");
+    const exportBtn = document.getElementById("exportBtn");
+
+    const acceptAllBtn = document.getElementById("acceptAllBtn");
+    const rejectAllBtn = document.getElementById("rejectAllBtn");
+    const resetBtn = document.getElementById("resetBtn");
+
+    const searchInput = document.getElementById("searchInput");
+    const filterSeg = document.querySelector(".seg");
+
+    const acceptedCountEl = document.getElementById("acceptedCount");
+    const rejectedCountEl = document.getElementById("rejectedCount");
+    const noneCountEl = document.getElementById("noneCount");
+    const noActionCountEl = document.getElementById("noActionCount");
+    const noActionEl = document.getElementById("noAction");
+    const generatedCountEl = document.getElementById("generatedCount");
+
+    const clusterCountInput = document.getElementById("clusterCount");
+    const applyCountBtn = document.getElementById("applyCountBtn");
+    const countHintEl = document.getElementById("countHint");
+
+    const copyAcceptedBtn = document.getElementById("copyAcceptedBtn");
+    const copyAllBtn = document.getElementById("copyAllBtn");
+
+    const toastEl = document.getElementById("toast");
+
+    const pillarSourceSel = document.getElementById("pillarSource");
+    const manualCtl = document.getElementById("manualCtl");
+    const manualPillars = document.getElementById("manualPillars");
+    const applyManualPillarsBtn = document.getElementById("applyManualPillarsBtn");
+
+    const docsCtl = document.getElementById("docsCtl");
+    const docsInput = document.getElementById("docsInput");
+    const derivePillarsBtn = document.getElementById("derivePillarsBtn");
+    const fileList = document.getElementById("fileList");
+
+    // settings drawer
+    const overlay = document.getElementById("overlay");
+    const drawer = document.getElementById("drawer");
+    const openSettingsBtn = document.getElementById("openSettingsBtn");
+    const closeSettingsBtn = document.getElementById("closeSettingsBtn");
+    const closeSettingsBtn2 = document.getElementById("closeSettingsBtn2");
+    const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+    const resetSettingsBtn = document.getElementById("resetSettingsBtn");
+
+    // settings fields
+    const setDefaultCount = document.getElementById("setDefaultCount");
+    const setCsvDelimiter = document.getElementById("setCsvDelimiter");
+    const setFilenamePattern = document.getElementById("setFilenamePattern");
+    const setAutoAccept = document.getElementById("setAutoAccept");
+    const setAutoReject = document.getElementById("setAutoReject");
+    const setConfirmBulk = document.getElementById("setConfirmBulk");
+    const setDensity = document.getElementById("setDensity");
+    const setDupTolerance = document.getElementById("setDupTolerance");
+    const wInfo = document.getElementById("wInfo");
+    const wComm = document.getElementById("wComm");
+    const wComp = document.getElementById("wComp");
+    const wHow = document.getElementById("wHow");
+
+    /**********************
+     * HELPERS
+     **********************/
+    function showToast(msg){
+      toastEl.textContent = msg;
+      toastEl.classList.add("show");
+      clearTimeout(showToast._t);
+      showToast._t = setTimeout(() => toastEl.classList.remove("show"), 1200);
+    }
+
+    function escapeHtml(str){
+      return String(str).replace(/[&<>"']/g, (m) => ({
+        "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"
+      }[m]));
+    }
+
+    function safeSlug(s){
+      return String(s || "")
+        .toLowerCase()
+        .replace(/\n/g," ")
+        .replace(/[^a-z0-9\s_-]/g,"")
+        .trim()
+        .replace(/\s+/g,"_")
+        .slice(0,80) || "pillar";
+    }
+
+    function formatDateYYYYMMDD(d){
+      const y = d.getFullYear();
+      const m = String(d.getMonth()+1).padStart(2,"0");
+      const day = String(d.getDate()).padStart(2,"0");
+      return `${y}-${m}-${day}`;
+    }
+
+    function currentPillar(){
+      return PILLARS.find(p => p.id === state.selectedPillarId) || PILLARS[0];
+    }
+
+    function getSettings(){ return state.settings || DEFAULT_SETTINGS; }
+
+    function applyDensityClass(){
+      document.body.classList.remove("density-compact","density-comfortable","density-spacious");
+      const d = getSettings().visualDensity || "comfortable";
+      document.body.classList.add(`density-${d}`);
+    }
+
+    function getDesiredCount(pillarId){
+      const v = Number(state.clusterCountByPillar?.[pillarId]);
+      if (Number.isFinite(v) && v > 0) return Math.floor(v);
+      const def = Number(getSettings().defaultClusterCount);
+      return Number.isFinite(def) && def > 0 ? Math.floor(def) : 23;
+    }
+
+    function setDesiredCount(pillarId, count){
+      if (!state.clusterCountByPillar) state.clusterCountByPillar = {};
+      state.clusterCountByPillar[pillarId] = count;
+      saveState();
+    }
+
+    // UI-only "extend" topics to requested count
+    function generateTopics(pillarId, desiredCount){
+      const base = (CLUSTERS_BASE[pillarId] || []).slice();
+      if (desiredCount <= base.length) return base.slice(0, desiredCount);
+
+      const out = base.slice();
+      let i = 1;
+      while (out.length < desiredCount) {
+        const seed = base[(out.length - base.length) % Math.max(base.length, 1)] || "Cluster Topic";
+        out.push(`${seed} (Variation ${i})`);
+        i++;
+      }
+      return out;
+    }
+
+    function topicsForCurrent(){
+      const pid = state.selectedPillarId;
+      const desired = getDesiredCount(pid);
+      // For manual/doc-derived pillars, we may not have a CLUSTERS_BASE entry; fallback to bmi seed.
+      const known = CLUSTERS_BASE[pid] ? pid : "bmi";
+      return generateTopics(known, desired);
+    }
+
+    function decisionsFor(pillarId){
+      if (!state.decisions[pillarId]) state.decisions[pillarId] = {};
+      return state.decisions[pillarId];
+    }
+
+    function getDecision(topicText){
+      const d = decisionsFor(state.selectedPillarId)[topicText];
+      return d === "accepted" || d === "rejected" ? d : undefined;
+    }
+
+    function setDecision(topicText, value){
+      const m = decisionsFor(state.selectedPillarId);
+      if (!value) delete m[topicText];
+      else m[topicText] = value;
+      saveState();
+    }
+
+    function counts(){
+      const topics = topicsForCurrent();
+      let a=0, r=0, n=0;
+      for (const t of topics){
+        const d = getDecision(t);
+        if (d === "accepted") a++;
+        else if (d === "rejected") r++;
+        else n++;
+      }
+      return { accepted:a, rejected:r, none:n, total: topics.length };
+    }
+
+    function matchesSearch(topic){
+      const q = (state.search || "").trim().toLowerCase();
+      if (!q) return true;
+      return topic.toLowerCase().includes(q);
+    }
+
+    function matchesFilter(topic){
+      const d = getDecision(topic);
+      switch(state.filter){
+        case "accepted": return d === "accepted";
+        case "rejected": return d === "rejected";
+        case "none": return !d;
+        default: return true;
+      }
+    }
+
+    function filteredTopics(){
+      return topicsForCurrent().filter(t => matchesSearch(t) && matchesFilter(t));
+    }
+
+    function normalizeLine(s){ return String(s || "").trim(); }
+    function listFromTextarea(text){
+      return String(text || "")
+        .split(/\r?\n/)
+        .map(normalizeLine)
+        .filter(Boolean);
+    }
+
+    /**********************
+     * Auto rules (settings)
+     **********************/
+    function applyAutoRules(){
+      const s = getSettings();
+      const acceptTerms = (s.autoAccept || []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+      const rejectTerms = (s.autoReject || []).map(x => String(x).trim().toLowerCase()).filter(Boolean);
+      if (!acceptTerms.length && !rejectTerms.length) return;
+
+      const topics = topicsForCurrent();
+      for (const t of topics){
+        if (getDecision(t)) continue;
+        const lt = t.toLowerCase();
+        const accepted = acceptTerms.some(term => lt.includes(term));
+        const rejected = rejectTerms.some(term => lt.includes(term));
+        if (rejected) setDecision(t, "rejected");
+        else if (accepted) setDecision(t, "accepted");
+      }
+    }
+
+    /**********************
+     * Duplicate warnings (lite heuristic)
+     **********************/
+    function tokenize(s){
+      return String(s || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter(w => w.length >= 3);
+    }
+    function jaccard(aTokens, bTokens){
+      const A = new Set(aTokens);
+      const B = new Set(bTokens);
+      if (!A.size || !B.size) return 0;
+      let inter = 0;
+      for (const x of A) if (B.has(x)) inter++;
+      const union = A.size + B.size - inter;
+      return union ? (inter / union) : 0;
+    }
+    function dupThreshold(){
+      const tol = Number(getSettings().dupTolerance);
+      const t = Number.isFinite(tol) ? Math.max(0, Math.min(100, tol)) : 35;
+      const minTh = 0.35;
+      const maxTh = 0.85;
+      return minTh + (t/100) * (maxTh - minTh);
+    }
+    function findClosestDuplicate(topic, allTopics){
+      const th = dupThreshold();
+      const tok = tokenize(topic);
+      let best = { score: 0, other: null };
+      for (const other of allTopics){
+        if (other === topic) continue;
+        const s = jaccard(tok, tokenize(other));
+        if (s > best.score){
+          best = { score: s, other };
+        }
+      }
+      if (best.other && best.score >= th) return best;
+      return null;
+    }
+
+    /**********************
+     * Pillar source logic (UI-only)
+     **********************/
+    function setPillars(newPillars){
+      PILLARS = newPillars.length ? newPillars : structuredClone(PILLARS_DEFAULT);
+      // ensure selected pillar exists
+      const exists = PILLARS.some(p => p.id === state.selectedPillarId);
+      if (!exists) state.selectedPillarId = PILLARS[0]?.id || "bmi";
+      saveState();
+      renderAll();
+    }
+
+    function applyManualPillars(){
+      const lines = listFromTextarea(manualPillars.value);
+      state.manualPillarsText = manualPillars.value || "";
+      saveState();
+
+      if (!lines.length){
+        showToast("No manual pillars entered");
+        return;
+      }
+
+      const newP = lines.map((t, idx) => ({
+        id: `manual_${idx+1}_${safeSlug(t)}`,
+        title: t
+      }));
+
+      // Initialize per-pillar counts if missing
+      for (const p of newP){
+        if (!state.clusterCountByPillar[p.id]){
+          state.clusterCountByPillar[p.id] = getSettings().defaultClusterCount || 23;
+        }
+      }
+      saveState();
+
+      setPillars(newP);
+      applyAutoRules();
+      renderAll();
+      showToast("Manual pillars applied");
+    }
+
+    function renderUploadedDocsList(){
+      const docs = state.uploadedDocs || [];
+      if (!docs.length){
+        fileList.classList.remove("show");
+        fileList.innerHTML = "";
+        return;
+      }
+      fileList.classList.add("show");
+      fileList.innerHTML = docs.map(d => `
+        <div class="fileItem">
+          <div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:280px;">${escapeHtml(d.name)}</div>
+          <div style="color:var(--muted);white-space:nowrap;">${Math.round((d.size||0)/1024)} KB</div>
+        </div>
+      `).join("");
+    }
+
+    function onDocsSelected(fileListObj){
+      const files = Array.from(fileListObj || []);
+      state.uploadedDocs = files.map(f => ({
+        name: f.name,
+        size: f.size,
+        type: f.type || "",
+        lastModified: f.lastModified || 0
+      }));
+      saveState();
+      renderUploadedDocsList();
+      showToast(`${files.length} document(s) selected`);
+    }
+
+    // UI-only heuristic: derive pillars from filenames
+    function derivePillarsFromDocs(){
+      const docs = state.uploadedDocs || [];
+      if (!docs.length){
+        showToast("Upload documents first");
+        return;
+      }
+
+      const titles = docs.map(d => {
+        const base = String(d.name || "").replace(/\.[a-z0-9]+$/i, "");
+        const clean = base.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+        return clean || "Untitled Document";
+      });
+
+      // De-duplicate
+      const seen = new Set();
+      const uniq = [];
+      for (const t of titles){
+        const k = t.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        uniq.push(t);
+      }
+
+      const newP = uniq.map((t, idx) => ({
+        id: `doc_${idx+1}_${safeSlug(t)}`,
+        title: t
+      }));
+
+      // Ensure per-pillar counts exist
+      for (const p of newP){
+        if (!state.clusterCountByPillar[p.id]){
+          state.clusterCountByPillar[p.id] = getSettings().defaultClusterCount || 23;
+        }
+      }
+      saveState();
+
+      setPillars(newP);
+      applyAutoRules();
+      renderAll();
+      showToast("Pillars derived from documents");
+    }
+
+    function syncSourceUI(){
+      pillarSourceSel.value = state.pillarSource || "manual";
+      manualCtl.classList.toggle("show", (state.pillarSource === "manual"));
+      docsCtl.classList.toggle("show", (state.pillarSource === "documents"));
+    }
+
+    function applySourceMode(){
+      // When switching modes, build pillars accordingly (UI-only)
+      if (state.pillarSource === "manual"){
+        manualPillars.value = state.manualPillarsText || "";
+        // If they already have manual pillars saved, re-apply them (if text exists)
+        const lines = listFromTextarea(state.manualPillarsText || "");
+        if (lines.length){
+          const newP = lines.map((t, idx) => ({ id:`manual_${idx+1}_${safeSlug(t)}`, title:t }));
+          setPillars(newP);
+        } else {
+          setPillars(structuredClone(PILLARS_DEFAULT));
+        }
+      } else if (state.pillarSource === "documents"){
+        // keep existing derived list if any; otherwise default until derive is clicked
+        renderUploadedDocsList();
+        // don't auto-derive without user action
+      } else {
+        // sitemap/drafts are placeholders in UI-only mode; keep default pillars
+        setPillars(structuredClone(PILLARS_DEFAULT));
+      }
+    }
+
+    /**********************
+     * RENDER
+     **********************/
+    function renderPillars(){
+      pillarListEl.innerHTML = "";
+      PILLARS.forEach(p => {
+        const li = document.createElement("li");
+        li.className = "pillar-item" + (p.id === state.selectedPillarId ? " active" : "");
+
+        const name = document.createElement("div");
+        name.className = "pillar-name";
+        name.textContent = p.title;
+
+        const btn = document.createElement("button");
+        btn.className = "btn";
+        btn.textContent = "Generate Cluster Topics";
+        btn.addEventListener("click", () => {
+          state.selectedPillarId = p.id;
+          // if no count stored for this pillar, set from default
+          if (!state.clusterCountByPillar[p.id]){
+            state.clusterCountByPillar[p.id] = getSettings().defaultClusterCount || 23;
+          }
+          saveState();
+          applyAutoRules();
+          renderAll();
+        });
+
+        li.appendChild(name);
+        li.appendChild(btn);
+        pillarListEl.appendChild(li);
+      });
+    }
+
+    function renderHeader(){
+      const pillar = currentPillar();
+      rightTitleEl.textContent = `Cluster Topics for “${pillar?.title?.replace(/\\n/g," ") || "Pillar"}”`;
+
+      const c = counts();
+      acceptedCountEl.textContent = String(c.accepted);
+      rejectedCountEl.textContent = String(c.rejected);
+      noneCountEl.textContent = String(c.none);
+
+      noActionCountEl.textContent = String(c.none);
+      noActionEl.textContent = (c.none === 0) ? "No Action Taken" : `${c.none} topic(s) still have no action.`;
+
+      generatedCountEl.textContent = String(c.total);
+
+      const desired = getDesiredCount(state.selectedPillarId);
+      clusterCountInput.value = String(desired);
+      countHintEl.textContent = `${desired} requested`;
+    }
+
+    function rowStatusLine(decision){
+      if (decision === "accepted") return `<span class="dot ok"></span><span class="status-pill">Accepted</span>`;
+      if (decision === "rejected") return `<span class="dot bad"></span><span class="status-pill">Rejected</span>`;
+      return `<span class="dot"></span><span class="status-pill">No action</span>`;
+    }
+
+    function renderRows(){
+      const list = filteredTopics();
+      const all = topicsForCurrent();
+      rowsEl.innerHTML = "";
+
+      if (!list.length){
+        rowsEl.innerHTML = `<div class="empty">No topics match your current search/filter.</div>`;
+        return;
+      }
+
+      list.forEach(topic => {
+        const decision = getDecision(topic);
+        const dup = findClosestDuplicate(topic, all);
+
+        const row = document.createElement("div");
+        row.className = "row" + (decision ? ` ${decision}` : "");
+        row.setAttribute("role","row");
+
+        const topicCell = document.createElement("div");
+        topicCell.className = "topic";
+
+        const dupHtml = dup
+          ? `<div class="dupWarn" title="Potential overlap (UI-only heuristic)">
+              ⚠️ <strong>Overlap</strong>
+              <span class="mini">similar to:</span>
+              <span style="font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px;display:inline-block;vertical-align:bottom;">
+                ${escapeHtml(dup.other)}
+              </span>
+            </div>`
+          : "";
+
+        topicCell.innerHTML = `
+          <div>${escapeHtml(topic)}</div>
+          <div class="substatus">${rowStatusLine(decision)}</div>
+          ${dupHtml}
+        `;
+
+        const acceptCell = document.createElement("div");
+        acceptCell.style.textAlign = "center";
+        const acceptBtn = document.createElement("button");
+        acceptBtn.className = "btn";
+        acceptBtn.textContent = "Accept";
+        acceptBtn.disabled = decision === "rejected";
+        acceptBtn.title = decision === "rejected" ? "This topic is rejected. Reset to change." : "";
+        acceptBtn.addEventListener("click", () => {
+          const prev = getDecision(topic);
+          setDecision(topic, prev === "accepted" ? undefined : "accepted");
+          renderAll();
+        });
+        acceptCell.appendChild(acceptBtn);
+
+        const rejectCell = document.createElement("div");
+        rejectCell.style.textAlign = "center";
+        const rejectBtn = document.createElement("button");
+        rejectBtn.className = "btn";
+        rejectBtn.textContent = "Reject";
+        rejectBtn.disabled = decision === "accepted";
+        rejectBtn.title = decision === "accepted" ? "This topic is accepted. Reset to change." : "";
+        rejectBtn.addEventListener("click", () => {
+          const prev = getDecision(topic);
+          setDecision(topic, prev === "rejected" ? undefined : "rejected");
+          renderAll();
+        });
+        rejectCell.appendChild(rejectBtn);
+
+        row.appendChild(topicCell);
+        row.appendChild(acceptCell);
+        row.appendChild(rejectCell);
+        rowsEl.appendChild(row);
+      });
+    }
+
+    function renderFilterSeg(){
+      [...filterSeg.querySelectorAll("button[data-filter]")].forEach(btn => {
+        btn.classList.toggle("active", btn.getAttribute("data-filter") === state.filter);
+      });
+    }
+
+    function renderAll(){
+      applyDensityClass();
+      syncSourceUI();
+      renderPillars();
+      renderHeader();
+      renderFilterSeg();
+      renderRows();
+
+      searchInput.value = state.search || "";
+
+      const total = topicsForCurrent().length;
+      acceptAllBtn.disabled = total === 0;
+      rejectAllBtn.disabled = total === 0;
+      resetBtn.disabled = total === 0;
+      exportBtn.disabled = total === 0;
+    }
+
+    /**********************
+     * BULK ACTIONS (confirm in settings)
+     **********************/
+    function confirmBulk(actionName){
+      if (!getSettings().confirmBulk) return true;
+      return window.confirm(`Confirm: ${actionName}?`);
+    }
+
+    function acceptAll(){
+      if (!confirmBulk("Accept all topics")) return;
+      const topics = topicsForCurrent();
+      const m = decisionsFor(state.selectedPillarId);
+      for (const t of topics) m[t] = "accepted";
+      saveState();
+      renderAll();
+    }
+
+    function rejectAll(){
+      if (!confirmBulk("Reject all topics")) return;
+      const topics = topicsForCurrent();
+      const m = decisionsFor(state.selectedPillarId);
+      for (const t of topics) m[t] = "rejected";
+      saveState();
+      renderAll();
+    }
+
+    function resetAll(){
+      state.decisions[state.selectedPillarId] = {};
+      saveState();
+      renderAll();
+    }
+
+    acceptAllBtn.addEventListener("click", acceptAll);
+    rejectAllBtn.addEventListener("click", rejectAll);
+    resetBtn.addEventListener("click", resetAll);
+
+    /**********************
+     * SEARCH + FILTER
+     **********************/
+    searchInput.addEventListener("input", (e) => {
+      state.search = String(e.target.value || "");
+      saveState();
+      renderRows();
+    });
+
+    filterSeg.addEventListener("click", (e) => {
+      const btn = e.target?.closest?.("button[data-filter]");
+      if (!btn) return;
+      state.filter = btn.getAttribute("data-filter") || "all";
+      saveState();
+      renderFilterSeg();
+      renderRows();
+    });
+
+    /**********************
+     * Pillar source interactions
+     **********************/
+    pillarSourceSel.addEventListener("change", (e) => {
+      state.pillarSource = String(e.target.value || "manual");
+      saveState();
+      syncSourceUI();
+      applySourceMode();
+      showToast(`Pillar source: ${state.pillarSource}`);
+      renderAll();
+    });
+
+    applyManualPillarsBtn.addEventListener("click", applyManualPillars);
+
+    docsInput.addEventListener("change", (e) => {
+      onDocsSelected(e.target.files);
+      renderAll();
+    });
+
+    derivePillarsBtn.addEventListener("click", derivePillarsFromDocs);
+
+    /**********************
+     * CLUSTER COUNT CONTROL (no limit)
+     **********************/
+    function applyClusterCount(){
+      const raw = String(clusterCountInput.value || "").trim();
+      const n = Math.floor(Number(raw));
+      if (!Number.isFinite(n) || n < 1){
+        countHintEl.textContent = "Enter a number ≥ 1";
+        clusterCountInput.focus();
+        return;
+      }
+      setDesiredCount(state.selectedPillarId, n);
+      applyAutoRules();
+      renderAll();
+      countHintEl.textContent = `${n} requested`;
+    }
+
+    applyCountBtn.addEventListener("click", applyClusterCount);
+    clusterCountInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") applyClusterCount();
+    });
+
+    /**********************
+     * COPY
+     **********************/
+    async function copyTextToClipboard(text){
+      const t = String(text || "");
+      if (!t.trim()){
+        showToast("Nothing to copy");
+        return;
+      }
+      try{
+        await navigator.clipboard.writeText(t);
+        showToast("Copied!");
+      }catch{
+        const ta = document.createElement("textarea");
+        ta.value = t;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        try{ document.execCommand("copy"); showToast("Copied!"); }
+        catch{ showToast("Copy failed"); }
+        ta.remove();
+      }
+    }
+
+    function listToCopy(topics){ return topics.map(t => `- ${t}`).join("\\n"); }
+
+    copyAcceptedBtn.addEventListener("click", () => {
+      const topics = topicsForCurrent().filter(t => getDecision(t) === "accepted");
+      copyTextToClipboard(listToCopy(topics));
+    });
+
+    copyAllBtn.addEventListener("click", () => {
+      copyTextToClipboard(listToCopy(topicsForCurrent()));
+    });
+
+    /**********************
+     * EXPORT (CSV ONLY) + Settings (delimiter + filename pattern)
+     **********************/
+    function downloadText(filename, text, mime){
+      const blob = new Blob([text], { type: mime || "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    }
+
+    function toCSV(rows, delimiter){
+      const delim = delimiter === "\\t" ? "\\t" : (delimiter || ",");
+      const esc = (s) => `"${String(s).replaceAll('"','""')}"`;
+      const header = ["pillar","cluster_topic","decision"];
+      const lines = [header.map(esc).join(delim)];
+      for (const r of rows){
+        lines.push([r.pillar, r.topic, r.decision].map(esc).join(delim));
+      }
+      return lines.join("\\n");
+    }
+
+    function exportCSV(){
+      const pillarName = currentPillar()?.title?.replace(/\\n/g," ") || "pillar";
+      const topics = topicsForCurrent();
+
+      const rows = topics.map(t => ({
+        pillar: pillarName,
+        topic: t,
+        decision: getDecision(t) || "none"
+      }));
+
+      const s = getSettings();
+      const date = formatDateYYYYMMDD(new Date());
+      const pattern = String(s.filenamePattern || "topic-clusters_{pillar}_{date}");
+      const base = pattern
+        .replaceAll("{pillar}", safeSlug(pillarName))
+        .replaceAll("{date}", date);
+
+      const delim = s.csvDelimiter || ",";
+      const ext = (delim === "\\t") ? ".tsv" : ".csv";
+      downloadText(`${base}${ext}`, toCSV(rows, delim), "text/csv");
+    }
+
+    exportBtn.addEventListener("click", exportCSV);
+
+    /**********************
+     * SETTINGS DRAWER (unchanged behavior)
+     **********************/
+    function openDrawer(){
+      overlay.classList.add("show");
+      drawer.classList.add("show");
+      overlay.setAttribute("aria-hidden","false");
+      drawer.setAttribute("aria-hidden","false");
+      syncSettingsUI();
+    }
+    function closeDrawer(){
+      overlay.classList.remove("show");
+      drawer.classList.remove("show");
+      overlay.setAttribute("aria-hidden","true");
+      drawer.setAttribute("aria-hidden","true");
+    }
+    openSettingsBtn.addEventListener("click", openDrawer);
+    closeSettingsBtn.addEventListener("click", closeDrawer);
+    closeSettingsBtn2.addEventListener("click", closeDrawer);
+    overlay.addEventListener("click", closeDrawer);
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+    function setSwitch(el, on){
+      el.classList.toggle("on", !!on);
+      el.setAttribute("aria-checked", on ? "true" : "false");
+    }
+    function switchValue(el){ return el.classList.contains("on"); }
+    function toggleSwitch(el){ setSwitch(el, !switchValue(el)); }
+
+    function syncSettingsUI(){
+      const s = getSettings();
+      setDefaultCount.value = String(s.defaultClusterCount ?? 23);
+      setCsvDelimiter.value = String(s.csvDelimiter ?? ",");
+      setFilenamePattern.value = String(s.filenamePattern ?? "topic-clusters_{pillar}_{date}");
+      setAutoAccept.value = (s.autoAccept || []).join("\\n");
+      setAutoReject.value = (s.autoReject || []).join("\\n");
+      setSwitch(setConfirmBulk, !!s.confirmBulk);
+      setDensity.value = String(s.visualDensity || "comfortable");
+      setDupTolerance.value = String(Number.isFinite(Number(s.dupTolerance)) ? s.dupTolerance : 35);
+
+      wInfo.value = String(s.intentWeights?.informational ?? 50);
+      wComm.value = String(s.intentWeights?.commercial ?? 30);
+      wComp.value = String(s.intentWeights?.comparative ?? 20);
+      wHow.value = String(s.intentWeights?.howto ?? 40);
+    }
+
+    function readSettingsUI(){
+      const s = structuredClone(getSettings());
+      const defCount = Math.floor(Number(setDefaultCount.value));
+      s.defaultClusterCount = Number.isFinite(defCount) && defCount > 0 ? defCount : 23;
+
+      s.csvDelimiter = String(setCsvDelimiter.value || ",");
+      s.filenamePattern = String(setFilenamePattern.value || "topic-clusters_{pillar}_{date}").trim() || "topic-clusters_{pillar}_{date}";
+
+      s.autoAccept = listFromTextarea(setAutoAccept.value).map(x => x.toLowerCase());
+      s.autoReject = listFromTextarea(setAutoReject.value).map(x => x.toLowerCase());
+
+      s.confirmBulk = switchValue(setConfirmBulk);
+
+      s.visualDensity = String(setDensity.value || "comfortable");
+      const dt = Math.floor(Number(setDupTolerance.value));
+      s.dupTolerance = Number.isFinite(dt) ? Math.max(0, Math.min(100, dt)) : 35;
+
+      s.intentWeights = {
+        informational: Math.max(0, Math.min(100, Math.floor(Number(wInfo.value) || 0))),
+        commercial: Math.max(0, Math.min(100, Math.floor(Number(wComm.value) || 0))),
+        comparative: Math.max(0, Math.min(100, Math.floor(Number(wComp.value) || 0))),
+        howto: Math.max(0, Math.min(100, Math.floor(Number(wHow.value) || 0))),
+      };
+      return s;
+    }
+
+    function saveSettings(){
+      state.settings = readSettingsUI();
+      saveState();
+      applyDensityClass();
+      applyAutoRules();
+      renderAll();
+      showToast("Settings saved");
+      closeDrawer();
+    }
+
+    function resetSettings(){
+      state.settings = structuredClone(DEFAULT_SETTINGS);
+      saveState();
+      syncSettingsUI();
+      applyDensityClass();
+      applyAutoRules();
+      renderAll();
+      showToast("Settings reset");
+    }
+
+    saveSettingsBtn.addEventListener("click", saveSettings);
+    resetSettingsBtn.addEventListener("click", resetSettings);
+    setConfirmBulk.addEventListener("click", () => toggleSwitch(setConfirmBulk));
+    setConfirmBulk.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSwitch(setConfirmBulk); }
+    });
+
+    /**********************
+     * INIT
+     **********************/
+    // restore source state + UI
+    pillarSourceSel.value = state.pillarSource || "manual";
+    manualPillars.value = state.manualPillarsText || "";
+    syncSourceUI();
+    applySourceMode();
+
+    searchInput.value = state.search || "";
+    applyDensityClass();
+    renderUploadedDocsList();
+
+    // apply auto rules once
+    applyAutoRules();
+    renderAll();
+  </script>
+</body>
+</html>
