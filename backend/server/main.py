@@ -1,7 +1,7 @@
 # backend/server/main.py
 # -------------------------------
-# Minimal FastAPI backend exposing:
-#  - GET  /health + /api/health
+# FastAPI backend exposing:
+#  - GET  /health + /api/health  (via health_router)
 #  - POST /api/convert/docx
 #  - POST /api/export/docx
 #  - GET  /api/external/resolve
@@ -9,38 +9,74 @@
 #  - FRONTEND served at /
 #  - Static assets at /assets/*
 #  - Static UI pages at /static/*
+#  - Business Dashboard at /business/*
 #
 # Uses python-mammoth to convert .docx -> HTML.
 
-import os
-import json
+from __future__ import annotations
+
 import io
-from datetime import datetime
-from typing import Optional, List, Dict, Any
+import logging
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile, HTTPException, Body
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse, Response
-from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
-
 import mammoth
+from fastapi import Body, FastAPI, File, HTTPException, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 
-# ✅ Create app ONCE (MUST be before include_router)
-app = FastAPI()
+log = logging.getLogger("linkcraftor.server")
+logging.basicConfig(level=logging.INFO)
 
-# ✅ Base dir for backend/server
+app = FastAPI(title="LinkCraftor API", version="0.1.0")
+
+
+# =========================
+# Path helpers
+# =========================
+def _normalize_prefix(p: str) -> str:
+    p = (p or "").strip()
+    if not p:
+        return ""
+    if not p.startswith("/"):
+        p = "/" + p
+    return p.rstrip("/") or "/"
+
+
+def _already_mounted(module_path: str, prefix: str) -> bool:
+    pfx = _normalize_prefix(prefix)
+    for r in app.routes:
+        path = getattr(r, "path", None) or getattr(r, "path_format", "")
+        endpoint = getattr(r, "endpoint", None)
+        mod = getattr(endpoint, "__module__", "") if endpoint else ""
+        if mod.startswith(module_path) and str(path).startswith(pfx):
+            return True
+    return False
+
+
 BASE_DIR = Path(__file__).resolve().parent
-
-# ✅ Serve backend static UI files safely (avoid crash if folder missing)
 STATIC_DIR = BASE_DIR / "static"
-if STATIC_DIR.is_dir():
-    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+BUSINESS_DIR = STATIC_DIR / "business"
 
-# -----------------------
-# CORS (loose for local dev)
-# -----------------------
+
+# =========================
+# Static mounts
+# =========================
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
+
+if BUSINESS_DIR.is_dir():
+    app.mount("/business", StaticFiles(directory=str(BUSINESS_DIR), html=True), name="business")
+
+
+@app.get("/business", include_in_schema=False)
+def business_root():
+    return RedirectResponse(url="/business/")
+
+
+# =========================
+# CORS
+# =========================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -49,26 +85,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# Frontend serving (single URL)
-# =========================
-FRONTEND_DIR = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "public")
-)
-ASSETS_DIR = os.path.join(FRONTEND_DIR, "assets")
 
-# Mount /assets only if folder exists (prevents crash)
-if os.path.isdir(ASSETS_DIR):
-    app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
+# =========================
+# Frontend serving
+# =========================
+FRONTEND_DIR = (BASE_DIR / ".." / ".." / "frontend" / "public").resolve()
+ASSETS_DIR = FRONTEND_DIR / "assets"
+
+if ASSETS_DIR.is_dir():
+    app.mount("/assets", StaticFiles(directory=str(ASSETS_DIR), html=False), name="assets")
+
 
 @app.get("/")
 def serve_index():
-    index_path = os.path.join(FRONTEND_DIR, "index.html")
-    if not os.path.isfile(index_path):
+    index_path = FRONTEND_DIR / "index.html"
+    if not index_path.is_file():
         raise HTTPException(status_code=404, detail=f"Missing frontend file: {index_path}")
-    return FileResponse(index_path)
+    return FileResponse(str(index_path))
 
-# ✅ Favicon: avoid 404 spam (return 204 if no icon exists)
+
 @app.get("/favicon.ico", include_in_schema=False)
 def favicon():
     icon_path = STATIC_DIR / "favicon.ico"
@@ -76,103 +111,10 @@ def favicon():
         return FileResponse(str(icon_path))
     return Response(status_code=204)
 
-# =========================
-# Router imports + includes (AFTER app exists)
-# =========================
-
-# ✅ Use relative imports (recommended inside the backend.server package)
-from .routes.imported_urls import router as imported_urls_router
-from .routes.draft_topics import router as draft_router
-from .routes.planning import router as planning_router
-from .routes.engine_scoring import router as engine_scoring_router
-
-# ✅ Decision Intelligence Layer 1 router
-from backend.server.routes.engine_decisions import router as engine_decisions_router
-
-app.include_router(imported_urls_router)
-app.include_router(draft_router)
-app.include_router(planning_router)
-app.include_router(engine_scoring_router)
-app.include_router(engine_decisions_router)
 
 # =========================
-# Helpers
-# =========================
-
-def _data_dir() -> str:
-    return os.path.join(os.path.dirname(__file__), "data")
-
-def _path_manual() -> str:
-    return os.path.join(_data_dir(), "global_external_manual.json")
-
-def _path_auto() -> str:
-    return os.path.join(_data_dir(), "global_external_auto.json")
-
-def _path_blacklist() -> str:
-    return os.path.join(_data_dir(), "blacklist_urls.json")
-
-def _safe_read_json(path: str) -> Any:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return None
-    except Exception:
-        return None
-
-def _safe_read_json_list(path: str) -> List[Dict[str, Any]]:
-    raw = _safe_read_json(path)
-    return [x for x in raw if isinstance(x, dict)] if isinstance(raw, list) else []
-
-def _safe_read_blacklist() -> List[str]:
-    raw = _safe_read_json(_path_blacklist())
-    if isinstance(raw, list):
-        return [str(x).strip().lower() for x in raw if str(x).strip()]
-    return []
-
-def _atomic_write_json(path: str, data: Any) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, path)
-
-def _norm(s: str) -> str:
-    return " ".join((s or "").strip().lower().split())
-
-def _url_is_blacklisted(url: str, blacklist: List[str]) -> bool:
-    u = (url or "").strip().lower()
-    if not u:
-        return True
-    for b in blacklist:
-        if b and b in u:
-            return True
-    return False
-
-# -----------------------
-# Health check (aliases)
-# -----------------------
-@app.get("/health")
-@app.get("/api/health")
-def health():
-    return {"ok": True}
-
-# -----------------------
-# Debug: list routes
-# -----------------------
-@app.get("/__routes")
-def routes():
-    out = []
-    for r in app.router.routes:
-        methods = sorted(list(getattr(r, "methods", []) or []))
-        path = getattr(r, "path", None)
-        if path:
-            out.append({"path": path, "methods": methods})
-    return {"routes": out}
-
-# -----------------------
 # DOCX → HTML converter
-# -----------------------
+# =========================
 @app.post("/api/convert/docx")
 async def convert_docx(file: UploadFile = File(...)):
     if file is None or not (file.filename or "").lower().endswith(".docx"):
@@ -192,10 +134,10 @@ async def convert_docx(file: UploadFile = File(...)):
         except Exception:
             text = ""
 
-        return {"filename": file.filename, "ext": ".docx", "html": html, "text": text}
-
+        return {"ok": True, "filename": file.filename, "ext": ".docx", "html": html, "text": text}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"DOCX conversion error: {e}")
+
 
 # ================================
 # Export simple HTML → .docx
@@ -217,7 +159,7 @@ async def export_docx(payload: dict = Body(...)):
             status_code=500,
             detail=(
                 f"Export dependencies missing: {ie}. "
-                "Install with: pip install python-docx bs4"
+                "Install with: pip install python-docx beautifulsoup4"
             ),
         )
 
@@ -267,151 +209,90 @@ async def export_docx(payload: dict = Body(...)):
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
-# ==========================================
-# External resolver (manual wins, then auto)
-# ==========================================
 
-class ExternalCandidate(BaseModel):
-    phrase: str
-    url: str
-    title: Optional[str] = None
-    score: float = 1.0
-    source: str = "backend"
+# =========================
+# Router imports
+# =========================
+from .routes.imported_targets_urls_compat import router as imported_urls_router
+from .routes.draft_topics import router as draft_router
+from .routes.planning import router as planning_router
+from .routes.engine_scoring import router as engine_scoring_router
+from .routes.files import router as files_router
+from .routes.health import router as health_router
+from .routes.engine_run import router as engine_run_router
+from .routes.engine_decisions import router as engine_decisions_router
 
-def _find_matches(phrase_clean: str, lang: str, rows: List[Dict[str, Any]]) -> List[ExternalCandidate]:
-    q = _norm(phrase_clean)
-    out: List[ExternalCandidate] = []
+from backend.app.routers.rb2_run import router as rb2_runner_router
+from backend.app.routers.document_registry import router as document_registry_router
+from backend.server.routes.workspace_health import router as workspace_health_router
 
-    for item in rows:
-        p = str(item.get("phrase") or item.get("key") or "").strip()
-        u = str(item.get("url") or "").strip()
-        if not p or not u:
-            continue
 
-        item_lang = str(item.get("lang") or "en").strip().lower()
-        if lang and item_lang != str(lang).strip().lower():
-            continue
+# =========================
+# Optional Site Reader
+# =========================
+site_reader_mount_error = None
+site_reader_router = None
+try:
+    from backend.app.routers.site_reader import router as site_reader_router
+except Exception as e:
+    site_reader_router = None
+    site_reader_mount_error = repr(e)
 
-        pk = _norm(p)
-        if pk in q or q in pk:
-            out.append(
-                ExternalCandidate(
-                    phrase=phrase_clean,
-                    url=u,
-                    title=item.get("title") or phrase_clean,
-                    score=float(item.get("score", 1.0) or 1.0),
-                    source=str(item.get("source") or "dataset"),
-                )
-            )
 
-    out.sort(key=lambda x: x.score, reverse=True)
-    return out
+# =========================
+# Core API mounts
+# =========================
+if not _already_mounted("backend.server.routes.health", "/"):
+    app.include_router(health_router, tags=["health"])
 
-@app.get("/api/external/resolve", response_model=List[ExternalCandidate])
-async def external_resolve(phrase: str, lang: str = "en"):
-    phrase_clean = (phrase or "").strip()
-    if not phrase_clean:
-        return []
+if not _already_mounted("backend.server.routes.imported_targets_urls_compat", "/api/urls"):
+    app.include_router(imported_urls_router, tags=["urls"])
 
-    blacklist = _safe_read_blacklist()
+if not _already_mounted("backend.server.routes.draft_topics", "/api/draft"):
+    app.include_router(draft_router, tags=["draft"])
 
-    manual_rows = _safe_read_json_list(_path_manual())
-    manual_matches = [m for m in _find_matches(phrase_clean, lang, manual_rows)
-                      if not _url_is_blacklisted(m.url, blacklist)]
-    if manual_matches:
-        return manual_matches[:8]
+if not _already_mounted("backend.server.routes.planning", "/api/planning"):
+    app.include_router(planning_router, tags=["planning"])
 
-    auto_rows = _safe_read_json_list(_path_auto())
-    auto_matches = [m for m in _find_matches(phrase_clean, lang, auto_rows)
-                    if not _url_is_blacklisted(m.url, blacklist)]
-    return auto_matches[:8]
+if not _already_mounted("backend.server.routes.engine_run", "/api/engine"):
+    app.include_router(engine_run_router, tags=["engine"])
 
-# ==========================================
-# External logger (writes ONLY to auto)
-# ==========================================
+if not _already_mounted("backend.server.routes.engine_decisions", "/api/engine"):
+    app.include_router(engine_decisions_router, tags=["engine-decisions"])
 
-class ExternalLogEvent(BaseModel):
-    event: str = "auto_apply"
-    phrase: str
-    url: str
-    title: Optional[str] = None
-    providerId: Optional[str] = None
-    providerLabel: Optional[str] = None
-    docCode: Optional[str] = None
-    docTitle: Optional[str] = None
-    lang: str = "en"
-    source: str = "auto_link"
+if not _already_mounted("backend.server.routes.engine_scoring", "/api/engine"):
+    app.include_router(engine_scoring_router, tags=["engine-scoring"])
 
-@app.post("/api/external/log")
-async def external_log(payload: ExternalLogEvent = Body(...)):
-    url = (payload.url or "").strip()
-    phrase = (payload.phrase or "").strip()
-    if not url or not phrase:
-        return {"ok": False, "error": "Missing url or phrase"}
+if not _already_mounted("backend.server.routes.files", "/api"):
+    app.include_router(files_router, tags=["files"])
 
-    blacklist = _safe_read_blacklist()
-    if _url_is_blacklisted(url, blacklist):
-        return {"ok": False, "error": "URL is blacklisted", "url": url}
+if not _already_mounted("backend.app.routers.rb2_run", "/api/rb2"):
+    app.include_router(rb2_runner_router, prefix="/api/rb2", tags=["rb2"])
 
-    path = _path_auto()
-    dataset = _safe_read_json_list(path)
-    now = datetime.utcnow().isoformat() + "Z"
+if not _already_mounted("backend.server.routes.workspace_health", "/api/workspace"):
+    app.include_router(workspace_health_router, tags=["workspace"])
 
-    idx = None
-    for i, item in enumerate(dataset):
-        if isinstance(item, dict) and str(item.get("url", "")).strip() == url:
-            idx = i
-            break
+if not _already_mounted("backend.app.routers.document_registry", "/api/site/target_pools/document_registry"):
+    app.include_router(
+        document_registry_router,
+        prefix="/api/site/target_pools/document_registry",
+        tags=["document-registry"],
+    )
 
-    if idx is None:
-        entry = {
-            "phrase": phrase,
-            "key": _norm(phrase),
-            "url": url,
-            "title": payload.title or phrase,
-            "score": 1.0,
-            "source": payload.source or "auto_log",
-            "seen_count": 1,
-            "first_seen": now,
-            "last_seen": now,
-            "phrases": [phrase],
-            "providerId": payload.providerId,
-            "providerLabel": payload.providerLabel,
-            "lang": payload.lang,
-            "last_event": payload.event,
-            "docCode": payload.docCode,
-            "docTitle": payload.docTitle,
-        }
-        dataset.append(entry)
-        _atomic_write_json(path, dataset)
-        return {"ok": True, "action": "added", "path": path}
+if site_reader_router is not None:
+    if not _already_mounted("backend.app.routers.site_reader", "/api/site"):
+        app.include_router(site_reader_router, prefix="/api/site", tags=["site-reader"])
 
-    existing = dataset[idx] if isinstance(dataset[idx], dict) else {}
-    existing["url"] = url
-    existing["phrase"] = existing.get("phrase") or phrase
-    existing["key"] = existing.get("key") or _norm(phrase)
-    existing["title"] = payload.title or existing.get("title") or phrase
-    existing["source"] = existing.get("source") or (payload.source or "auto_log")
 
-    existing["seen_count"] = int(existing.get("seen_count", 0) or 0) + 1
-    existing["last_seen"] = now
-    existing["first_seen"] = existing.get("first_seen") or now
-
-    phrases = existing.get("phrases")
-    if not isinstance(phrases, list):
-        phrases = []
-    if phrase not in phrases:
-        phrases.append(phrase)
-    existing["phrases"] = phrases[-50:]
-
-    existing["providerId"] = payload.providerId or existing.get("providerId")
-    existing["providerLabel"] = payload.providerLabel or existing.get("providerLabel")
-    existing["lang"] = payload.lang or existing.get("lang")
-    existing["last_event"] = payload.event
-    existing["docCode"] = payload.docCode or existing.get("docCode")
-    existing["docTitle"] = payload.docTitle or existing.get("docTitle")
-
-    dataset[idx] = existing
-    _atomic_write_json(path, dataset)
-
-    return {"ok": True, "action": "updated", "seen_count": existing["seen_count"], "path": path}
+# =========================
+# Debug route list
+# =========================
+@app.get("/__routes")
+def routes():
+    out = []
+    for r in app.router.routes:
+        methods = sorted(list(getattr(r, "methods", []) or []))
+        path = getattr(r, "path", None)
+        if path:
+            out.append({"path": path, "methods": methods})
+    return {"routes": out, "site_reader_mount_error": site_reader_mount_error}

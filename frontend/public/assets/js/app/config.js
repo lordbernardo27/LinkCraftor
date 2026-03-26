@@ -8,7 +8,7 @@ export const API_BASE =
 
 // (Optional) central paths used by api.js. Safe to keep even if app.js only imports API_BASE.
 export const ENDPOINTS = Object.freeze({
-  upload:          `${API_BASE}/api/upload`,
+  upload:          `${API_BASE}/api/upload?workspace_id=default`,
   exportDocx:      `${API_BASE}/api/export/docx`,
   exportZip:       `${API_BASE}/api/export/zip`,
   exportRar:       `${API_BASE}/api/export/rar`,

@@ -7,13 +7,14 @@ import io
 import json
 import random
 import re
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Body, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
 router = APIRouter()
@@ -31,7 +32,6 @@ AUDIT_PATH = DATA_DIR / "owner_audit_log.jsonl"
 SOURCES_PATH = DATA_DIR / "owner_sources.json"
 SNAPSHOT_DIR = DATA_DIR / "import_snapshots"
 IMPORT_RUNS_INDEX_PATH = DATA_DIR / "import_runs_index.json"
-
 
 # ------------------------------------------------------------
 # Tiny read-cache to speed repeated reads
@@ -70,7 +70,7 @@ DEFAULT_SOURCES = {
                 "block_extensions": [".pdf", ".jpg", ".jpeg", ".png", ".gif", ".zip", ".mp4"],
                 "block_lang_prefixes": [
                     "/ar/", "/zh-hans/", "/es/", "/fr/", "/de/",
-                    "/pt/", "/it/", "/ru/", "/tr/", "/vi/"
+                    "/pt/", "/it/", "/ru/", "/tr/", "/vi/",
                 ],
                 "allow_lang_prefixes": [],
                 "require_host_match": True,
@@ -109,33 +109,6 @@ def _atomic_write_json(path: Path, data: Any) -> None:
     _invalidate_cache(path)
     _invalidate_resolve_index()
 
-def _append_import_run_index(entry: Dict[str, Any], max_keep: int = 200) -> None:
-    _ensure_data_dir()
-
-    raw = _safe_read_json(IMPORT_RUNS_INDEX_PATH)
-    if not isinstance(raw, dict):
-        raw = {}
-
-    # accept old schema
-    runs = raw.get("runs")
-    if not isinstance(runs, list):
-        runs = raw.get("items")
-    if not isinstance(runs, list):
-        runs = []
-
-    # newest first
-    runs.insert(0, entry)
-
-    # trim
-    runs = runs[: max(1, min(int(max_keep), 2000))]
-
-    # ✅ write both keys
-    raw["runs"] = runs
-    raw["items"] = runs
-
-    _atomic_write_json(IMPORT_RUNS_INDEX_PATH, raw)
-
-
 def _safe_read_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
@@ -173,14 +146,21 @@ def _ensure_files_exist() -> None:
         _atomic_write_json(BLACKLIST_PATH, {"blocked_domains": [], "blocked_urls": []})
     if not SOURCES_PATH.exists():
         _atomic_write_json(SOURCES_PATH, DEFAULT_SOURCES)
-
-    # ✅ NEW: ensure import runs index exists
     if not IMPORT_RUNS_INDEX_PATH.exists():
         _atomic_write_json(IMPORT_RUNS_INDEX_PATH, {"runs": [], "items": []})
 
 
+
+
 def _make_key(phrase: str) -> str:
     return " ".join((phrase or "").strip().lower().split())
+
+def _slugify(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"[^a-z0-9\s-]", "", s)
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"-{2,}", "-", s)
+    return s[:120].strip("-")
 
 def _normalize_url(url: str) -> str:
     return (url or "").strip()
@@ -229,7 +209,6 @@ def _normalize_url_for_storage(url: str, prefer_no_www: bool = True, drop_query:
         path = path[:-1]
 
     query = "" if drop_query else (p.query or "")
-    # never store fragments
     out = f"{scheme}://{netloc}{path}"
     if query:
         out += f"?{query}"
@@ -300,6 +279,31 @@ def _migrate_owner_sources(existing: Dict[str, Any]) -> Dict[str, Any]:
     out["sources"] = sources
     return out
 
+def _load_owner_sources() -> Dict[str, Any]:
+    _ensure_files_exist()
+    raw = _safe_read_json(SOURCES_PATH)
+    if not isinstance(raw, dict):
+        raw = DEFAULT_SOURCES
+
+    migrated = _migrate_owner_sources(raw)
+
+    try:
+        if migrated != raw:
+            _atomic_write_json(SOURCES_PATH, migrated)
+    except Exception:
+        pass
+
+    return migrated
+
+@router.get("/owner/sources")
+def owner_list_sources() -> Dict[str, Any]:
+    """
+    Owner-only: returns backend-owned authority sources config.
+    Protected by main.py middleware because path starts with /api/external/owner/
+    """
+    cfg = _load_owner_sources()
+    return {"ok": True, "default_source": cfg.get("default_source"), "sources": cfg.get("sources", {})}
+
 def _ensure_sources_file_migrated() -> None:
     _ensure_data_dir()
     if not SOURCES_PATH.exists():
@@ -339,16 +343,556 @@ def _new_import_run_id(prefix: str = "run") -> str:
 _ensure_files_exist()
 _ensure_sources_file_migrated()
 
-@router.get("/owner/sources")
-async def owner_sources():
-    data = _read_sources()
-    sources = sorted(list((data.get("sources") or {}).keys()))
+# ============================================================
+# Queue 7 — Owner Counts (Manual + Auto JSON totals)
+# GET /api/external/owner/counts
+# ============================================================
+
+@router.get("/owner/counts")
+def owner_counts() -> Dict[str, Any]:
+    _ensure_files_exist()
+
+    def _count_records(path: Path) -> int:
+        try:
+            if not path.exists():
+                return 0
+            raw = path.read_text(encoding="utf-8", errors="replace").strip()
+            if not raw:
+                return 0
+            obj = json.loads(raw)
+            if isinstance(obj, list):
+                return len(obj)
+            if isinstance(obj, dict):
+                return len(obj.keys())
+            return 0
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"count_failed:{path.name}:{e}")
+
+    manual_count = _count_records(MANUAL_PATH)
+    auto_count = _count_records(AUTO_PATH)
+
     return {
         "ok": True,
-        "sources": sources,
-        "default_source": _get_default_source_label(),
-        "has_default": bool(_get_default_source_label()),
+        "manual_count": manual_count,
+        "auto_count": auto_count,
+        "total_count": manual_count + auto_count,
+        "manual_path": str(MANUAL_PATH),
+        "auto_path": str(AUTO_PATH),
     }
+
+
+# ============================================================
+# Queue 10.5 — Owner Sources: Upsert (create/update) endpoint
+# ============================================================
+
+class OwnerSourceDefaults(BaseModel):
+    include_paths: List[str] = Field(default_factory=list)
+    exclude_paths: List[str] = Field(default_factory=list)
+    block_extensions: List[str] = Field(default_factory=list)
+    block_lang_prefixes: List[str] = Field(default_factory=list)
+    allow_lang_prefixes: List[str] = Field(default_factory=list)
+    require_host_match: bool = True
+    allowed_hosts: List[str] = Field(default_factory=list)
+
+class OwnerSourceUpsert(BaseModel):
+    label: str = Field(..., description="Unique source key/label, e.g. 'nhs'")
+    domain: str = Field(..., description="Domain only, no scheme, e.g. 'nhs.uk'")
+    defaults: OwnerSourceDefaults = Field(default_factory=OwnerSourceDefaults)
+    set_as_default: bool = False
+
+def _norm_label(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"\s+", "-", s)
+    s = re.sub(r"[^a-z0-9\-_]", "", s)
+    return s
+
+def _norm_domain(s: str) -> str:
+    s = (s or "").strip().lower()
+    s = re.sub(r"^https?://", "", s)
+    s = s.split("/")[0].strip()
+    s = s.split(":")[0].strip()
+    return s
+
+def _clean_path_list(xs: List[str]) -> List[str]:
+    out: List[str] = []
+    for x in xs or []:
+        t = (x or "").strip()
+        if not t:
+            continue
+        if not t.startswith("/"):
+            t = "/" + t
+        out.append(t)
+
+    seen = set()
+    uniq: List[str] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+def _clean_ext_list(xs: List[str]) -> List[str]:
+    out: List[str] = []
+    for x in xs or []:
+        t = (x or "").strip().lower()
+        if not t:
+            continue
+        if not t.startswith("."):
+            t = "." + t
+        out.append(t)
+
+    seen = set()
+    uniq: List[str] = []
+    for t in out:
+        if t not in seen:
+            seen.add(t)
+            uniq.append(t)
+    return uniq
+
+@router.post("/owner/sources/upsert")
+def owner_upsert_source(payload: OwnerSourceUpsert) -> Dict[str, Any]:
+    cfg = _load_owner_sources()
+
+    label = _norm_label(payload.label)
+    domain = _norm_domain(payload.domain)
+
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+    if not domain:
+        raise HTTPException(status_code=400, detail="domain is required")
+    if "/" in domain:
+        raise HTTPException(status_code=400, detail="domain must not contain path segments")
+    if "." not in domain:
+        raise HTTPException(status_code=400, detail="domain looks invalid (expected a dot)")
+
+    d = payload.defaults or OwnerSourceDefaults()
+
+    source_obj = {
+        "label": label,
+        "domain": domain,
+        "defaults": {
+            "include_paths": _clean_path_list(d.include_paths),
+            "exclude_paths": _clean_path_list(d.exclude_paths),
+            "block_extensions": _clean_ext_list(d.block_extensions),
+            "block_lang_prefixes": _clean_path_list(d.block_lang_prefixes),
+            "allow_lang_prefixes": _clean_path_list(d.allow_lang_prefixes),
+            "require_host_match": bool(d.require_host_match),
+            "allowed_hosts": [h.strip().lower() for h in (d.allowed_hosts or []) if str(h).strip()],
+        },
+    }
+
+    if not isinstance(cfg.get("sources"), dict):
+        cfg["sources"] = {}
+
+    cfg["sources"][label] = source_obj
+
+    if bool(payload.set_as_default):
+        cfg["default_source"] = label
+
+    _atomic_write_json(SOURCES_PATH, cfg)
+
+    return {
+        "ok": True,
+        "saved": label,
+        "default_source": cfg.get("default_source"),
+        "sources_count": len(cfg.get("sources") or {}),
+    }
+
+# ==========================
+# Queue 10.7 — Set Default + Delete
+# ==========================
+
+class OwnerSourceSetDefault(BaseModel):
+    label: str = Field(..., description="Source label to set as default")
+
+class OwnerSourceDelete(BaseModel):
+    label: str = Field(..., description="Source label to delete")
+
+@router.post("/owner/sources/set_default")
+def owner_set_default_source(payload: OwnerSourceSetDefault) -> Dict[str, Any]:
+    cfg = _load_owner_sources()
+
+    label = _norm_label(payload.label)
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+
+    sources = cfg.get("sources")
+    if not isinstance(sources, dict) or label not in sources:
+        raise HTTPException(status_code=404, detail=f"source not found: {label}")
+
+    cfg["default_source"] = label
+    _atomic_write_json(SOURCES_PATH, cfg)
+
+    return {"ok": True, "default_source": label, "sources_count": len(sources)}
+
+@router.post("/owner/sources/delete")
+def owner_delete_source(payload: OwnerSourceDelete) -> Dict[str, Any]:
+    cfg = _load_owner_sources()
+
+    label = _norm_label(payload.label)
+    if not label:
+        raise HTTPException(status_code=400, detail="label is required")
+
+    sources = cfg.get("sources")
+    if not isinstance(sources, dict) or label not in sources:
+        raise HTTPException(status_code=404, detail=f"source not found: {label}")
+
+    if len(sources) <= 1:
+        raise HTTPException(status_code=400, detail="cannot delete the last remaining source")
+
+    sources.pop(label, None)
+
+    if cfg.get("default_source") == label:
+        cfg["default_source"] = next(iter(sources.keys()), None)
+
+    _atomic_write_json(SOURCES_PATH, cfg)
+
+    return {
+        "ok": True,
+        "deleted": label,
+        "default_source": cfg.get("default_source"),
+        "sources_count": len(sources),
+    }
+
+# ============================================================
+# Queue 11.2 — Owner Resolver Search (Provider: PubMed)
+# GET /api/external/owner/resolver/search
+# ============================================================
+
+def _pubmed_esearch(term: str, retmax: int = 50, retstart: int = 0) -> Dict[str, Any]:
+    base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
+    q = urllib.parse.urlencode({
+        "db": "pubmed",
+        "term": term,
+        "retmode": "json",
+        "retmax": str(max(0, int(retmax))),
+        "retstart": str(max(0, int(retstart))),
+        "sort": "relevance",
+    })
+    url = f"{base}?{q}"
+    try:
+        with urllib.request.urlopen(url, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        data = json.loads(raw) or {}
+        esr = data.get("esearchresult", {}) if isinstance(data, dict) else {}
+        ids = esr.get("idlist", []) or []
+        count = int(esr.get("count", 0) or 0)
+        return {"count": count, "ids": [str(x) for x in ids if str(x).strip()]}
+    except Exception:
+        return {"count": 0, "ids": []}
+
+
+def _pubmed_esummary(id_list: List[str]) -> Dict[str, Any]:
+    if not id_list:
+        return {}
+    base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+    q = urllib.parse.urlencode({
+        "db": "pubmed",
+        "id": ",".join(id_list),
+        "retmode": "json",
+    })
+    url = f"{base}?{q}"
+    try:
+        with urllib.request.urlopen(url, timeout=12) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+        return json.loads(raw) or {}
+    except Exception:
+        return {}
+
+def _pubmed_esummary_batched(id_list: List[str], batch_size: int = 200) -> Dict[str, Any]:
+    if not id_list:
+        return {}
+
+    merged: Dict[str, Any] = {"result": {"uids": []}}
+    all_uids: List[str] = []
+    all_result: Dict[str, Any] = {}
+
+    for i in range(0, len(id_list), batch_size):
+        chunk = id_list[i:i + batch_size]
+        base = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
+        q = urllib.parse.urlencode({
+            "db": "pubmed",
+            "id": ",".join(chunk),
+            "retmode": "json",
+        })
+        url = f"{base}?{q}"
+        try:
+            with urllib.request.urlopen(url, timeout=12) as resp:
+                raw = resp.read().decode("utf-8", errors="replace")
+            data = json.loads(raw) or {}
+        except Exception:
+            continue
+
+        result = data.get("result", {}) if isinstance(data, dict) else {}
+        uids = result.get("uids", []) if isinstance(result, dict) else []
+        for u in uids or []:
+            su = str(u)
+            if su and su not in all_uids:
+                all_uids.append(su)
+
+        for k, v in (result or {}).items():
+            if k == "uids":
+                continue
+            all_result[k] = v
+
+    merged["result"]["uids"] = all_uids
+    merged["result"].update(all_result)
+    return merged
+
+
+@router.get("/owner/resolver/search")
+def owner_resolver_search(
+    phrase: str = Query(..., description="Search phrase, e.g. 'amlodipine side effects'"),
+    source_label: str = Query("pubmed", description="Provider label (only 'pubmed' supported)"),
+    limit: int = Query(50, ge=1, le=5000, description="Number of results to return"),
+    retstart: int = Query(0, ge=0, description="Pagination offset (0-based)"),
+) -> Dict[str, Any]:
+    _ensure_files_exist()
+
+    p = (phrase or "").strip()
+    if not p:
+        raise HTTPException(status_code=400, detail="phrase is required")
+
+    src = _norm_label(source_label)
+    if src != "pubmed":
+        raise HTTPException(status_code=400, detail="Only source_label=pubmed is supported in this step")
+
+    # ESearch: get total_count + the exact slice of PMIDs for this page
+    es = _pubmed_esearch(p, retmax=int(limit), retstart=int(retstart))
+    total_count = int(es.get("count", 0) or 0)
+    ids = es.get("ids", []) or []
+
+    if not ids:
+        return {
+            "ok": True,
+            "source_label": src,
+            "phrase": p,
+            "total_count": total_count,
+            "retstart": retstart,
+            "limit": limit,
+            "returned": 0,
+            "has_more": False,
+            "next_retstart": None,
+            "items": [],
+        }
+
+    # ESummary: batch to avoid URL-length / API limits
+    summ = _pubmed_esummary_batched(ids, batch_size=200)
+    result = summ.get("result", {}) if isinstance(summ, dict) else {}
+    uids = result.get("uids", []) if isinstance(result, dict) else []
+
+    ordered = [str(x) for x in (uids or ids) if str(x).strip()]
+
+    items: List[Dict[str, Any]] = []
+    denom = float(max(1, len(ordered)))
+
+    for idx, pmid in enumerate(ordered):
+        row = result.get(pmid, {}) if isinstance(result, dict) else {}
+        title = (row.get("title") or "").strip()
+        if title.endswith("."):
+            title = title[:-1].strip()
+
+        url = f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/"
+        score = max(0.0, 1.0 - (idx / denom))
+
+        pubdate = (row.get("pubdate") or "").strip()
+        journal = (row.get("fulljournalname") or row.get("source") or "").strip()
+
+        items.append({
+            "id": pmid,
+            "title": title or f"PubMed {pmid}",
+            "title_slug": _slugify(title) if title else None,
+            "url": url,
+            "source_label": src,
+            "score": round(score, 4),
+            "pubdate": pubdate,
+            "journal": journal,
+        })
+
+    returned = len(items)  # should match 'limit' unless you reached the end
+    next_retstart = int(retstart) + int(returned)
+    has_more = (next_retstart < total_count) if total_count > 0 else False
+
+    return {
+        "ok": True,
+        "source_label": src,
+        "phrase": p,
+        "total_count": total_count,     # this is the "2000 results" number you see on phone
+        "retstart": retstart,
+        "limit": limit,
+        "returned": returned,
+        "has_more": bool(has_more),
+        "next_retstart": next_retstart if has_more else None,
+        "items": items,
+    }
+
+
+
+# ============================================================
+# Queue 11.1 — Owner Resolver Add (writes into AUTO dataset)
+# POST /api/external/owner/resolver/add
+# ============================================================
+
+class OwnerResolverSelection(BaseModel):
+    url: str = Field(..., description="Selected URL to add into AUTO dataset")
+    title: Optional[str] = Field(None, description="Optional title")
+    id: Optional[str] = Field(None, description="Optional provider id")
+
+class OwnerResolverAddPayload(BaseModel):
+    phrase: str = Field(..., description="Original phrase, e.g. 'amlodipine side effects'")
+    source_label: str = Field(..., description="Provider/source label, e.g. 'pubmed'")
+    selection: OwnerResolverSelection
+
+@router.post("/owner/resolver/add")
+def owner_resolver_add(payload: OwnerResolverAddPayload) -> Dict[str, Any]:
+    """
+    Owner-only: add a selected resolver result into AUTO dataset.
+    Writes into backend/data/global_external_auto.json
+    """
+    _ensure_files_exist()
+
+    phrase = (payload.phrase or "").strip()
+    source_label = _norm_label(payload.source_label)
+
+    if not phrase:
+        raise HTTPException(status_code=400, detail="phrase is required")
+    if not source_label:
+        raise HTTPException(status_code=400, detail="source_label is required")
+
+    sel = payload.selection
+    raw_url = (sel.url or "").strip()
+    if not raw_url:
+        raise HTTPException(status_code=400, detail="selection.url is required")
+
+    # Normalize URL for storage/dedup
+    url = _normalize_url_for_storage(raw_url)
+    if not url:
+        raise HTTPException(status_code=400, detail="selection.url invalid after normalization")
+
+    # Title + provider id
+    title = (sel.title or "").strip() or None
+    title_slug = _slugify(title) if title else None
+    ext_id = (sel.id or "").strip() or None
+
+    # ✅ Key must be unique per selection (prevents overwriting same phrase)
+    # Prefer resolver/provider id; fallback to url if id missing
+    key = _make_key(f"{phrase}::{source_label}::{ext_id or url}")
+
+    auto_items = _safe_read_list(AUTO_PATH)
+
+    # Match only by key (unique per selection now)
+    existing = next((x for x in auto_items if isinstance(x, dict) and (x.get("key") or "") == key), None)
+
+    now = datetime.utcnow().isoformat() + "Z"
+    action = "added"
+
+    # Backward compatibility fields: source/provider_id
+    candidate = {
+        "key": key,
+        "phrase": phrase,
+        "url": url,
+        "title": title,
+        "title_slug": title_slug,
+        "source_label": source_label,
+        "resolver_id": ext_id,
+        "source": source_label,
+        "provider_id": ext_id,
+        "added_at": now,
+        "updated_at": now,
+        "disabled": False,
+    }
+
+    if existing:
+        action = "updated"
+        existing.update({
+            "key": key,
+            "phrase": phrase,
+            "url": url,
+            "title": title,
+            "title_slug": title_slug,
+            "source_label": source_label,
+            "resolver_id": ext_id,
+            "source": source_label,
+            "provider_id": ext_id,
+            "updated_at": now,
+        })
+        existing.setdefault("added_at", now)
+        existing.setdefault("disabled", False)
+        saved_record = existing
+    else:
+        auto_items.append(candidate)
+        saved_record = candidate
+
+    _atomic_write_json(AUTO_PATH, auto_items)
+
+    import_run_id = f"owner_resolver_{int(datetime.utcnow().timestamp())}"
+
+    # audit + runs index (best-effort)
+    try:
+        audit = {
+            "ts": now,
+            "event": "owner_resolver_add",
+            "import_run_id": import_run_id,
+            "phrase": phrase,
+            "key": key,
+            "source_label": source_label,
+            "selection": {"url": url, "title": title, "title_slug": title_slug, "id": ext_id},
+            "auto_added": 1 if action == "added" else 0,
+            "auto_updated": 1 if action == "updated" else 0,
+        }
+        with AUDIT_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(audit, ensure_ascii=False) + "\n")
+
+        _append_import_run_index({
+            "ts": now,
+            "event": "owner_resolver_add",
+            "import_run_id": import_run_id,
+            "source_label": source_label,
+            "auto_added": 1 if action == "added" else 0,
+            "auto_updated": 1 if action == "updated" else 0,
+            "snapshot_path": "",
+        }, max_keep=None)
+    except Exception:
+        pass
+
+    return {
+        "ok": True,
+        "action": action,
+        "key": key,
+        "import_run_id": import_run_id,
+        "saved_record": saved_record,
+    }
+
+# ------------------------------------------------------------
+# Import run index helper (NO CAP by default)
+# ------------------------------------------------------------
+def _append_import_run_index(entry: Dict[str, Any], max_keep: Optional[int] = None) -> None:
+
+    """
+    Append a run entry into import_runs_index.json.
+    If max_keep is None => do not trim (unlimited).
+    """
+    _ensure_data_dir()
+
+    raw = _safe_read_json(IMPORT_RUNS_INDEX_PATH)
+    if not isinstance(raw, dict):
+        raw = {}
+
+    runs = raw.get("runs")
+    if not isinstance(runs, list):
+        runs = raw.get("items")
+    if not isinstance(runs, list):
+        runs = []
+
+    runs.insert(0, entry)
+
+   # No cap — keep full history
+# (max_keep ignored intentionally)
+
+
+    raw["runs"] = runs
+    raw["items"] = runs
+    _atomic_write_json(IMPORT_RUNS_INDEX_PATH, raw)
 
 # ------------------------------------------------------------
 # Blacklist
@@ -388,7 +932,6 @@ def _http_get_text(url: str, timeout_sec: int = 15) -> str:
 
     with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
         raw = resp.read()
-        enc = ""
         try:
             enc = (resp.headers.get("Content-Encoding") or "").lower().strip()
         except Exception:
@@ -641,14 +1184,10 @@ def _write_snapshot_before_commit(run_id: str) -> str:
     _ensure_snapshot_dir()
     snap_path = _snapshot_path(run_id)
     current = _safe_read_list(AUTO_PATH)
-    # write snapshot WITHOUT invalidating resolve index (snapshot doesn’t affect resolve)
     _ensure_data_dir()
     snap_path.write_text(json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8")
     return str(snap_path)
 
-# ------------------------------------------------------------
-# Bulk upsert authority URLs into AUTO
-# ------------------------------------------------------------
 def _bulk_upsert_auto_authority(
     urls: List[str],
     source_label: str,
@@ -662,22 +1201,73 @@ def _bulk_upsert_auto_authority(
     by_url: Dict[str, Dict[str, Any]] = {}
     order: List[str] = []
 
-    # normalize existing for stable dedup
+    # 1) Build an in-memory map of existing rows by normalized URL.
+    #    If duplicates exist, MERGE them instead of dropping "later" rows.
     for item in dataset:
         if not isinstance(item, dict):
             continue
+
         raw = str(item.get("url") or "").strip()
         u = _normalize_url_for_storage(raw, prefer_no_www=True, drop_query=True)
         if not u:
             continue
         item["url"] = u
+
         if u not in by_url:
             by_url[u] = item
             order.append(u)
+            continue
+
+        # MERGE duplicates (same normalized URL) so we don't "lose" better titles/phrases
+        existing = by_url[u]
+
+        # keep a non-empty title if either has it
+        ex_title = str(existing.get("title") or "").strip()
+        new_title = str(item.get("title") or "").strip()
+        if (not ex_title) and new_title:
+            existing["title"] = new_title
+
+        # keep a non-empty phrase if either has it
+        ex_phrase = str(existing.get("phrase") or "").strip()
+        new_phrase = str(item.get("phrase") or "").strip()
+        if (not ex_phrase) and new_phrase:
+            existing["phrase"] = new_phrase
+
+        # keep the best score
+        try:
+            ex_score = float(existing.get("score", 1.0) or 1.0)
+        except Exception:
+            ex_score = 1.0
+        try:
+            new_score = float(item.get("score", 1.0) or 1.0)
+        except Exception:
+            new_score = 1.0
+        existing["score"] = max(ex_score, new_score)
+
+        # merge phrases arrays (dedup)
+        ph1 = existing.get("phrases")
+        if not isinstance(ph1, list):
+            ph1 = []
+        ph2 = item.get("phrases")
+        if not isinstance(ph2, list):
+            ph2 = []
+        for p in ph2:
+            p = (p or "").strip()
+            if p and p not in ph1:
+                ph1.append(p)
+        existing["phrases"] = ph1
+
+        # merge seen_count + timestamps (best-effort)
+        existing["seen_count"] = int(existing.get("seen_count", 0) or 0) + int(item.get("seen_count", 0) or 0)
+        existing["first_seen"] = existing.get("first_seen") or item.get("first_seen")
+        existing["last_seen"] = max(str(existing.get("last_seen") or ""), str(item.get("last_seen") or ""))
+
+        by_url[u] = existing
 
     added = 0
     updated = 0
 
+    # 2) Upsert the incoming sitemap URLs.
     for raw_u in urls:
         u = _normalize_url_for_storage(raw_u, prefer_no_www=True, drop_query=True)
         if not u:
@@ -738,6 +1328,7 @@ def _bulk_upsert_auto_authority(
     out = [by_url[u] for u in order if u in by_url]
     _atomic_write_json(AUTO_PATH, out)
     return {"added": added, "updated": updated}
+
 
 # ------------------------------------------------------------
 # Models
@@ -1009,7 +1600,7 @@ async def external_log(payload: ExternalLogEvent = Body(...)):
         ph = []
     if phrase and phrase not in ph:
         ph.append(phrase)
-    existing["phrases"] = ph[-50:]
+    existing["phrases"] = ph  # no trimming
 
     existing["providerId"] = payload.providerId or existing.get("providerId")
     existing["providerLabel"] = payload.providerLabel or existing.get("providerLabel")
@@ -1110,7 +1701,7 @@ async def import_external_file(file: UploadFile = File(...), source: str = "impo
             phrases = []
         if phrase2 and phrase2 not in phrases:
             phrases.append(phrase2)
-        existing["phrases"] = phrases[-50:]
+        existing["phrases"] = phrases  # no trimming
 
         updated += 1
 
@@ -1150,13 +1741,44 @@ async def import_external_file(file: UploadFile = File(...), source: str = "impo
         "skipped_bad": skipped_bad,
     }
 
+@router.post("/clear")
+def clear_imported_urls(source: str = "import"):
+    """
+    Hard-clear imported URLs from persisted storage (AUTO_PATH).
+    This ensures they do NOT reappear after reload.
+    """
+    try:
+        _atomic_write_json(AUTO_PATH, [])
+    except Exception:
+        # Fallback if your helper differs
+        with open(AUTO_PATH, "w", encoding="utf-8") as f:
+            f.write("[]")
+
+    # Optional: clear the import runs index too (keeps history clean)
+    try:
+        raw = _safe_read_json(IMPORT_RUNS_INDEX_PATH)
+        if isinstance(raw, dict):
+            raw["runs"] = []
+            raw["items"] = []
+            _atomic_write_json(IMPORT_RUNS_INDEX_PATH, raw)
+    except Exception:
+        pass
+
+    return {"ok": True, "cleared": True, "path": str(AUTO_PATH)}
+
+
+
+
 # ------------------------------------------------------------
 # Manual dataset management
 # ------------------------------------------------------------
 @router.get("/manual/list")
 async def manual_list(limit: int = 200):
     data = _safe_read_list(MANUAL_PATH)
-    return {"ok": True, "count": len(data), "items": data[: max(1, min(limit, 2000))]}
+    # return slice only (does not cap stored file)
+    limit = max(1, int(limit or 200))
+    return {"ok": True, "count": len(data), "items": data}
+
 
 @router.post("/manual/add")
 async def manual_add(payload: ManualAddRequest = Body(...)):
@@ -1372,7 +1994,7 @@ async def owner_auto_cleanup(preview: bool = True):
             for p in ph2:
                 if p and p not in ph1:
                     ph1.append(p)
-            existing["phrases"] = ph1[-50:]
+            existing["phrases"] = ph1  # no trimming
 
             existing["seen_count"] = int(existing.get("seen_count", 0) or 0) + int(it.get("seen_count", 0) or 0)
             existing["last_seen"] = max(str(existing.get("last_seen") or ""), str(it.get("last_seen") or ""))
@@ -1406,11 +2028,11 @@ async def owner_auto_cleanup_get(preview: bool = True):
     return await owner_auto_cleanup(preview=preview)
 
 # ------------------------------------------------------------
-# OWNER: Import runs (reads audit log JSONL)  ✅
+# OWNER: Import runs (reads audit log JSONL)
 # ------------------------------------------------------------
 @router.get("/owner/import/runs")
 async def owner_import_runs(limit: int = 20):
-    limit = max(1, min(int(limit or 20), 200))
+    limit = max(1, int(limit or 20))
     if not AUDIT_PATH.exists():
         return {"ok": True, "count": 0, "items": [], "path": str(AUDIT_PATH)}
 
@@ -1427,7 +2049,7 @@ async def owner_import_runs(limit: int = 20):
                 continue
 
             ev = str(rec.get("event") or "")
-            if ev not in ("owner_sitemap_commit_auto", "owner_import_rollback"):
+            if ev not in ("owner_sitemap_commit_auto", "owner_import_rollback", "owner_resolver_add"):
                 continue
 
             items.append(rec)
@@ -1439,86 +2061,6 @@ async def owner_import_runs(limit: int = 20):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"import_runs_error: {type(e).__name__}: {str(e)}")
 
-def _rebuild_import_runs_index_from_audit(max_keep: int = 200) -> Dict[str, Any]:
-    """
-    Rebuild import_runs_index.json from owner_audit_log.jsonl.
-    Uses events that contain import_run_id (commit + rollback).
-    """
-    _ensure_data_dir()
-
-    if not AUDIT_PATH.exists():
-        _atomic_write_json(IMPORT_RUNS_INDEX_PATH, {"runs": []})
-        return {"ok": True, "rebuilt": True, "count": 0, "path": str(IMPORT_RUNS_INDEX_PATH)}
-
-    lines = AUDIT_PATH.read_text(encoding="utf-8", errors="ignore").splitlines()
-    runs: List[Dict[str, Any]] = []
-
-    for line in reversed(lines):
-        line = (line or "").strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-        except Exception:
-            continue
-
-        ev = str(rec.get("event") or "")
-        if ev not in ("owner_sitemap_commit_auto", "owner_import_rollback"):
-            continue
-
-        rid = str(rec.get("import_run_id") or "").strip()
-        if not rid:
-            continue
-
-        runs.append({
-            "import_run_id": rid,
-            "ts": rec.get("ts"),
-            "event": ev,
-            "source_label": rec.get("source_label"),
-            "auto_added": rec.get("auto_added"),
-            "auto_updated": rec.get("auto_updated"),
-            "written_count": rec.get("written_count"),
-            "snapshot_path": rec.get("snapshot_path"),
-            "auto_path": rec.get("auto_path"),
-        })
-
-        if len(runs) >= max_keep:
-            break
-
-    _atomic_write_json(IMPORT_RUNS_INDEX_PATH, {"runs": runs})
-    return {"ok": True, "rebuilt": True, "count": len(runs), "path": str(IMPORT_RUNS_INDEX_PATH)}
-
-
-@router.get("/owner/import/runs/index")
-async def owner_import_runs_index(limit: int = 50, rebuild: bool = False):
-    limit = max(1, min(int(limit or 50), 200))
-
-    # If file missing, create it
-    if not IMPORT_RUNS_INDEX_PATH.exists():
-        _atomic_write_json(IMPORT_RUNS_INDEX_PATH, {"runs": []})
-
-    # If user requests rebuild OR file is empty, rebuild from audit
-    raw = _safe_read_json(IMPORT_RUNS_INDEX_PATH)
-    runs = (raw or {}).get("runs") if isinstance(raw, dict) else []
-    if rebuild or not isinstance(runs, list) or len(runs) == 0:
-        _rebuild_import_runs_index_from_audit(max_keep=200)
-        raw = _safe_read_json(IMPORT_RUNS_INDEX_PATH)
-        runs = (raw or {}).get("runs") if isinstance(raw, dict) else []
-        if not isinstance(runs, list):
-            runs = []
-
-    return {
-        "ok": True,
-        "count": min(limit, len(runs)),
-        "items": runs[:limit],
-        "path": str(IMPORT_RUNS_INDEX_PATH),
-    }
-
-
-
-# ------------------------------------------------------------
-# OWNER: Rollback by restoring snapshot ✅
-# ------------------------------------------------------------
 @router.post("/owner/import/rollback")
 async def owner_import_rollback(payload: OwnerRollbackRequest = Body(...)):
     run_id = (payload.import_run_id or "").strip()
@@ -1564,7 +2106,7 @@ async def owner_import_rollback(payload: OwnerRollbackRequest = Body(...)):
     }
 
 # ------------------------------------------------------------
-# OWNER: Remote sitemap import (C4)
+# OWNER: Remote sitemap import (C4)  (NO caps on write)
 # ------------------------------------------------------------
 @router.post("/owner/sitemap/import")
 async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
@@ -1659,9 +2201,7 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
         "sitemaps_found_count": len(discovered.get("sitemaps_found") or []),
     })
 
-    MAX_SITEMAPS_TOTAL = None
-    MAX_URLS_RETURN_SAMPLE = 200
-    MAX_WRITE_URLS = None
+    MAX_URLS_RETURN_SAMPLE = 200  # UI sample only (not storage)
 
     queue: List[str] = list(discovered.get("sitemaps_found") or [])
     seen_sitemaps = set()
@@ -1685,10 +2225,7 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
     accepted_urls_all: List[str] = []
     seen_urls = set()
 
-    def _cap_ok(cap, current):
-        return (cap is None) or (current < cap)
-
-    while queue and _cap_ok(MAX_SITEMAPS_TOTAL, sitemaps_processed):
+    while queue:
         sm_url = _normalize_url(queue.pop(0))
         if not sm_url or not sm_url.startswith("http"):
             continue
@@ -1755,8 +2292,7 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
             if len(accepted_sample) < MAX_URLS_RETURN_SAMPLE:
                 accepted_sample.append(u)
 
-            if _cap_ok(MAX_WRITE_URLS, len(accepted_urls_all)):
-                accepted_urls_all.append(u)
+            accepted_urls_all.append(u)
 
     _audit("owner_sitemap_step4_recursive", {
         "source_label": source_label,
@@ -1769,8 +2305,6 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
         "skipped_host": skipped_host,
         "skipped_lang": skipped_lang,
         "fetch_errors": fetch_errors,
-        "cap_max_sitemaps_total": MAX_SITEMAPS_TOTAL or "unlimited",
-        "cap_max_write_urls": MAX_WRITE_URLS or "unlimited",
     })
 
     auto_added = 0
@@ -1782,7 +2316,6 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
         now = datetime.utcnow().isoformat() + "Z"
         import_run_id = _new_import_run_id("auth")
 
-        # ✅ snapshot BEFORE writing
         snapshot_path = _write_snapshot_before_commit(import_run_id)
 
         stats = _bulk_upsert_auto_authority(
@@ -1807,16 +2340,15 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
         })
 
         _append_import_run_index({
-    "import_run_id": import_run_id,
-    "ts": now,
-    "source_label": source_label,
-    "written_count": len(accepted_urls_all),
-    "auto_added": auto_added,
-    "auto_updated": auto_updated,
-    "snapshot_path": snapshot_path,
-})
-
-
+            "import_run_id": import_run_id,
+            "ts": now,
+            "event": "owner_sitemap_commit_auto",
+            "source_label": source_label,
+            "written_count": len(accepted_urls_all),
+            "auto_added": auto_added,
+            "auto_updated": auto_updated,
+            "snapshot_path": snapshot_path,
+        }, max_keep=None)
 
     return {
         "ok": True,
@@ -1856,8 +2388,10 @@ async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):
         "auto_updated": auto_updated,
         "auto_path": str(AUTO_PATH),
         "caps": {
-            "max_sitemaps_total": MAX_SITEMAPS_TOTAL or "unlimited",
-            "max_write_urls": MAX_WRITE_URLS or "unlimited",
+            "max_sitemaps_total": "unlimited",
+            "max_write_urls": "unlimited",
             "max_urls_return_sample": MAX_URLS_RETURN_SAMPLE,
         },
     }
+
+

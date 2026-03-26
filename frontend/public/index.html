@@ -1,3 +1,4 @@
+```html
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -37,8 +38,36 @@
       --kw-sem-br: var(--kw-opt-br);
     }
 
-    .spacer{ flex:1; }
-    .menu[hidden]{ display:none !important; }
+  .spacer{ flex:1; }
+.menu[hidden]{ display:none !important; }
+
+.connection-status{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-left:14px;
+  padding:6px 10px;
+  border:1px solid rgba(0,0,0,.10);
+  border-radius:999px;
+  background:#fff;
+  font-size:12px;
+  color:#374151;
+}
+
+.connection-dot{
+  width:10px;
+  height:10px;
+  border-radius:999px;
+  display:inline-block;
+}
+
+.connection-dot.connected{
+  background:#10b981;
+}
+
+.connection-dot.disconnected{
+  background:#ef4444;
+}
 
     /* Modal */
     .modal-overlay{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:var(--il-overlay); backdrop-filter:blur(2px); z-index:1000; }
@@ -148,21 +177,56 @@
     .pill-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:4px 6px; border-radius:6px; background:#f9fafb; border:1px solid #e5e7eb; }
     .pill-phrase { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     .pill-undo { font-size:11px; border:1px solid #dc2626; color:#dc2626; background:#fff; border-radius:999px; padding:2px 8px; cursor:pointer; }
+
+    /* Work Folder (UI-only) */
+    #workFolderPanel{
+      display:none;
+      position:fixed;
+      top:64px;
+      right:16px;
+      width:360px;
+      max-width: calc(100vw - 32px);
+      background:#ffffff;
+      border:1px solid rgba(0,0,0,.12);
+      border-radius:14px;
+      box-shadow:0 18px 50px rgba(0,0,0,.15);
+      z-index:9999;
+      overflow:hidden;
+    }
   </style>
 </head>
 <body>
   <!-- Top bar -->
-  <div class="topnav" role="navigation" aria-label="Primary">
-    <div class="brand">
-      <img id="logoImg" class="logoImg" src="assets/img/logo.svg" alt="LinkCraftor logo" />
-    </div>
-    <div class="tabs" role="tablist" aria-label="Main sections">
-      <div class="tab active" role="tab" aria-selected="true" tabindex="0">Editor</div>
-      <div class="tab" role="tab" tabindex="-1">What’s New</div>
-      <div class="tab" role="tab" tabindex="-1">Features</div>
-    </div>
-    <div class="spacer"></div>
-    <button class="iconbtn" title="Notifications" aria-label="Notifications" type="button">🔔</button>
+<div class="topnav" role="navigation" aria-label="Primary">
+  <div class="brand">
+    <img id="logoImg" class="logoImg" src="assets/img/logo.svg" alt="LinkCraftor logo" />
+  </div>
+
+  
+
+  <div class="tabs" role="tablist" aria-label="Main sections">
+    <div class="tab active" role="tab" aria-selected="true" tabindex="0">Editor</div>
+    <div class="tab" role="tab" tabindex="-1">What’s New</div>
+    <div class="tab" role="tab" tabindex="-1">Features</div>
+  </div>
+  <div class="spacer"></div>
+
+<div id="connectionStatus" class="connection-status" aria-live="polite">
+  <span id="connectionDot" class="connection-dot disconnected"></span>
+  <span id="connectionText">Disconnected</span>
+</div>
+
+<button class="iconbtn" title="Notifications" aria-label="Notifications" type="button">🔔</button>
+    <!-- Work Folder button (next to Notifications) -->
+    <button
+      id="workFolderBtn"
+      class="iconbtn"
+      title="Work Folder"
+      aria-label="Work Folder"
+      type="button"
+      style="margin-left:10px;"
+    >📁</button>
+
     <span class="avatar" title="Profile" aria-label="Profile"></span>
   </div>
 
@@ -207,7 +271,6 @@
         <hr />
         <button role="menuitem" data-action="draft-map" type="button">Draft map (.csv or .txt)</button>
         <hr />
-        <button role="menuitem" data-action="clear-imports" type="button">Clear imported</button>
       </div>
     </div>
     <span id="importCount" class="meta" aria-live="polite" title="Imported topics">0</span>
@@ -448,6 +511,27 @@
     <div class="toolchip"><span class="dot"></span> Relevance Score</div>
   </div>
 
+  <!-- Work Folder Panel (UI-only for now) -->
+  <div id="workFolderPanel" aria-label="Work Folder">
+    <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid rgba(0,0,0,.08);">
+      <div style="font-weight:700;">Work Folder</div>
+      <button id="workFolderClose" type="button" aria-label="Close"
+              style="border:none; background:transparent; cursor:pointer; font-size:18px; line-height:18px;">✕</button>
+    </div>
+
+    <div style="padding:12px 14px;">
+      <div style="opacity:.75; font-size:13px; margin-bottom:10px;">
+        This folder will automatically store uploads, batch runs, editor saves, and versions.
+      </div>
+
+      <div id="workFolderEmpty" style="padding:14px; border:1px dashed rgba(0,0,0,.18); border-radius:12px; opacity:.75;">
+        No items yet. Upload a file or run a batch and it will appear here automatically.
+      </div>
+
+      <div id="workFolderList" style="display:none;"></div>
+    </div>
+  </div>
+
   <!-- Internal Linking Modal -->
   <div id="ilModal" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="ilTitleHeading">
     <div class="modal-card">
@@ -528,7 +612,67 @@
     </div>
   </div>
 
-    <script>
+  <script>
+    // Work Folder (UI-only toggle)
+    (function(){
+      const btn = document.getElementById("workFolderBtn");
+      const panel = document.getElementById("workFolderPanel");
+      const close = document.getElementById("workFolderClose");
+
+      function openPanel(){ if(panel) panel.style.display = "block"; }
+      function closePanel(){ if(panel) panel.style.display = "none"; }
+
+      btn && btn.addEventListener("click", () => {
+        const isOpen = panel && panel.style.display === "block";
+        if (isOpen) closePanel(); else openPanel();
+      });
+      close && close.addEventListener("click", closePanel);
+
+      // close when clicking outside
+      document.addEventListener("click", (e) => {
+        if (!panel || panel.style.display !== "block") return;
+        const t = e.target;
+        if (t === btn || (btn && btn.contains(t))) return;
+        if (panel.contains(t)) return;
+        closePanel();
+      });
+    })();
+  </script>
+
+
+
+<!-- DOMAIN CONNECT MODAL -->
+<div id="domainModal" class="modal-overlay" style="display:flex;">
+  <div class="modal-card">
+
+    <div class="il-header">
+      <div class="il-title">Connect Domain</div>
+    </div>
+
+    <div style="padding:10px 0; font-size:13px; color:#6b7280;">
+      Enter the website domain you want to work with.  
+      This will create or load its workspace.
+    </div>
+
+    <input
+      id="domainInput"
+      type="text"
+      placeholder="betterhealthcheck.com"
+      class="il-input"
+      style="margin-top:8px;"
+    />
+
+    <div style="display:flex; gap:10px; margin-top:12px;">
+      <button id="btnConnectDomain" class="btn-primary" type="button">
+        Continue
+      </button>
+    </div>
+
+  </div>
+</div>
+
+
+  <script>
     // Backend API base (FastAPI)
     window.LINKCRAFTOR_API_BASE = "http://127.0.0.1:8001";
     console.log("[Config] LINKCRAFTOR_API_BASE =", window.LINKCRAFTOR_API_BASE);
@@ -544,3 +688,4 @@
   <script type="module" src="assets/js/engine/context-hooks.js"></script>
 </body>
 </html>
+```

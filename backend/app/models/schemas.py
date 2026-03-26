@@ -27,7 +27,17 @@ class RunEngineResponse(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 class UploadResponse(BaseModel):
+    # Identity / metadata
+    doc_id: str
     filename: str
     ext: str
-    text: Optional[str] = None
-    html: Optional[str] = None
+
+    # Optional lightweight preview payloads (used only for simple types)
+    text: str = ""
+    html: str = ""
+
+    # Backend-owned contract for frontend rendering/downloading
+    original_url: str
+    preview_url: str
+    preview_mime: str
+    preview_kind: Literal["pdf", "html", "text", "image", "download"]

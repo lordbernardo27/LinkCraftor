@@ -1,292 +1,641 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <title>LinkCraftor Control Tower</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LinkCraftor — Owner Control Tower</title>
 
-  <!-- IMPORTANT: relative paths -->
-  <link rel="stylesheet" href="./owner.css" />
+  <!-- ✅ FIX: load from /owner mount + cache-bust -->
+  <link rel="stylesheet" href="/owner/owner.css?v=5" />
 </head>
-<body style="background:#0b1220;color:#e5e7eb;font-family:Inter,system-ui,sans-serif">
+<body>
+  <div class="shell">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="logoDot" aria-hidden="true"></div>
+        <div class="brandText">LinkCraftor</div>
+      </div>
 
-  <header style="padding:20px;border-bottom:1px solid #1f2937">
-    <h1>LinkCraftor Control Tower</h1>
-    <p>Owner access · External Intelligence</p>
-  </header>
+      <nav class="nav">
+        <button class="navItem isActive" data-nav="overview">
+          <span class="navIcon">◔</span>
+          <span>Overview</span>
+        </button>
 
-  <main style="padding:20px">
+        <!-- External Intelligence (parent) -->
+        <button class="navItem" data-nav="external">
+          <span class="navIcon">⛓</span>
+          <span>External Intelligence</span>
+          <span class="navCaret" aria-hidden="true">▾</span>
+        </button>
 
-    <!-- ===================================== -->
-    <!-- A) MANUAL URL OVERRIDES -->
-    <!-- ===================================== -->
-    <section>
-      <h2>Manual External URLs</h2>
-      <p>Owner-only manual overrides (manual always wins).</p>
-
-      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
-
-        <!-- Form -->
-        <div style="min-width:320px;max-width:420px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <h3 style="margin-top:0">Add Manual URL</h3>
-
-          <label>Phrase</label><br/>
-          <input id="inPhrase" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="e.g. white cervical mucus"/>
-
-          <label>URL</label><br/>
-          <input id="inUrl" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="https://..."/>
-
-          <label>Title (optional)</label><br/>
-          <input id="inTitle" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="Optional page title"/>
-
-          <button id="btnSave" style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-            Save Manual URL
+        <div class="navSub" data-sub="external">
+          <button class="navSubItem" data-nav="manual">
+            <span class="navBullet">•</span> Manual External URLs
           </button>
 
-          <div id="msg" style="margin-top:10px;color:#a7b1c2"></div>
-        </div>
+          <button class="navSubItem" data-nav="sitemap">
+            <span class="navBullet">•</span> Authority Sitemap Import
+          </button>
 
-        <!-- Table -->
-        <div style="flex:1;min-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <h3 style="margin:0">Manual Dataset</h3>
-            <button id="btnRefresh" style="padding:8px 12px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-              Refresh
+          <button class="navSubItem" data-nav="sources">
+            <span class="navBullet">•</span> Authority Sources
+          </button>
+
+          <button class="navSubItem" data-nav="resolve">
+            <span class="navBullet">•</span> Resolver Test (Search)
+          </button>
+
+          <button class="navSubItem" data-nav="runs">
+            <span class="navBullet">•</span> Import Runs (History)
+          </button>
+
+          <button class="navSubItem" data-nav="rollback">
+            <span class="navBullet">•</span> Rollback (Restore Snapshot)
+          </button>
+
+          <button class="navSubItem" data-nav="resolver">
+            <span class="navBullet">•</span> Resolver Builder
+          </button>
+        </div>
+      </nav>
+
+      <div class="sidebarFooter">
+        <div class="sessionRow">
+          <span class="chip" id="sessionChip">Session: Unknown</span>
+        </div>
+        <button id="btnLogout" class="btnGhost">Logout</button>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <!-- Topbar -->
+      <header class="topbar">
+        <div class="topbarTitle">Admin</div>
+        <div class="topbarRight">
+          <button class="iconBtn" title="Notifications" aria-label="Notifications">🔔</button>
+          <button class="iconBtn" title="Profile" aria-label="Profile">👤</button>
+        </div>
+      </header>
+
+      <!-- Content -->
+      <div class="content">
+
+        <!-- ============= Overview ============= -->
+        <section class="panel isVisible" data-section="overview">
+          <div class="panelHeader">
+            <h2>Overview</h2>
+            <p class="muted">Owner Control Tower — External Intelligence (UI restructured, logic unchanged)</p>
+          </div>
+
+          <div class="grid3">
+            <div class="kpi">
+              <div class="kpiLabel">Total URLs (Manual + Auto)</div>
+              <!-- ✅ FIX: add id so JS can set total -->
+              <div class="kpiValue" id="kpiTotalUrls">—</div>
+              <!-- ✅ FIX: split hints into manual + auto (both with ids) -->
+              <div class="kpiHint">
+                Manual: <strong id="kpiManualUrls">—</strong> ·
+                Auto: <strong id="kpiAutoUrls">—</strong>
+              </div>
+            </div>
+
+            <div class="kpi">
+              <div class="kpiLabel">Authority Sources</div>
+              <div class="kpiValue" id="kpiSourcesCount">—</div>
+              <div class="kpiHint" id="kpiSourcesHint">Default: —</div>
+            </div>
+
+            <div class="kpi">
+              <div class="kpiLabel">Status</div>
+              <div class="kpiValue" id="kpiStatus">—</div>
+              <div class="kpiHint">Session chip shows auth</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="cardTitle">Quick Actions</div>
+            <div class="row">
+              <button class="btn" data-jump="manual">Open Manual URLs</button>
+              <button class="btn" data-jump="sitemap">Open Sitemap Import</button>
+              <button class="btn" data-jump="sources">Open Authority Sources</button>
+              <button class="btn" data-jump="resolve">Open Resolver Test</button>
+              <button class="btn" data-jump="runs">Open Import Runs</button>
+              <button class="btn" data-jump="rollback">Open Rollback</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============= Manual External URLs ============= -->
+        <section class="panel" data-section="manual">
+          <div class="panelHeader">
+            <h2>Manual External URLs</h2>
+            <p class="muted">Add / toggle / delete manual external URLs (owner-protected)</p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="field">
+                <label>Phrase</label>
+                <input id="inPhrase" placeholder="e.g. amlodipine side effects" />
+              </div>
+              <div class="field">
+                <label>URL</label>
+                <input id="inUrl" placeholder="https://example.com/page" />
+              </div>
+              <div class="field">
+                <label>Title (optional)</label>
+                <input id="inTitle" placeholder="Page title" />
+              </div>
+            </div>
+
+            <div class="row">
+              <button id="btnSave" class="btn">Save</button>
+              <button id="btnRefresh" class="btnSecondary">Refresh</button>
+              <div class="spacer"></div>
+              <div id="msg" class="status"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="cardTitle">Manual Dataset</div>
+            <div class="tableWrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Key</th>
+                    <th>Phrase</th>
+                    <th>URL</th>
+                    <th>Source</th>
+                    <th>Added</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="rows">
+                  <tr><td colspan="6" style="padding:10px">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============= Authority Sitemap Import ============= -->
+        <section class="panel" data-section="sitemap">
+          <div class="panelHeader">
+            <h2>Authority Sitemap Import</h2>
+            <p class="muted">Import authority URLs from a domain OR sitemap URL (owner-protected)</p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="field">
+                <label>Domain (optional)</label>
+                <input id="smDomain" placeholder="example.com" />
+              </div>
+              <div class="field">
+                <label>Sitemap URL (optional)</label>
+                <input id="smUrl" placeholder="https://example.com/sitemap.xml" />
+              </div>
+              <div class="field">
+                <label>Source Label (required)</label>
+                <input id="smLabel" placeholder="e.g. MayoClinic" />
+              </div>
+            </div>
+
+            <div class="row">
+              <button id="btnSmDryRun" class="btnSecondary">Dry Run</button>
+              <button id="btnSmRun" class="btn">Commit Import</button>
+              <button id="btnSmClear" class="btnGhost" type="button">Clear</button>
+              <div class="spacer"></div>
+              <div id="smMsg" class="status"></div>
+            </div>
+
+            <pre id="smOut" class="pre">No import yet.</pre>
+          </div>
+        </section>
+
+        <!-- ============= Authority Sources ============= -->
+        <section class="panel" data-section="sources">
+          <div class="panelHeader">
+            <h2>Authority Sources</h2>
+            <p class="muted">
+              View backend-owned authority sources and their rules (include/exclude paths, language blocks, file blocks).
+              These rules control what gets imported and how resolver candidates are filtered.
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <button id="btnSourcesRefresh" class="btnSecondary">Refresh</button>
+              <div class="spacer"></div>
+              <div id="srcMsg" class="status"></div>
+            </div>
+
+            <div class="card" style="margin-top:12px">
+              <div class="cardTitle">
+                Authority Source Editor
+                <span id="srcEditMode" style="margin-left:10px;font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.25);color:#94a3b8">
+                  Create Mode
+                </span>
+              </div>
+
+              <p class="muted" style="margin-top:0">
+                This form prepares a source configuration. In the next step we will save it to the backend.
+              </p>
+
+              <div class="row">
+                <div class="field">
+                  <label>Source Label (unique, lowercase recommended)</label>
+                  <input id="srcNewLabel" placeholder="e.g. nhs" />
+                </div>
+
+                <div class="field">
+                  <label>Domain (no scheme)</label>
+                  <input id="srcNewDomain" placeholder="e.g. nhs.uk" />
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="field">
+                  <label>Include Paths (comma-separated)</label>
+                  <input id="srcNewInclude" placeholder="/conditions/, /medicines/" />
+                </div>
+
+                <div class="field">
+                  <label>Exclude Paths (comma-separated)</label>
+                  <input id="srcNewExclude" placeholder="/news/, /about/" />
+                </div>
+              </div>
+
+              <div class="row">
+                <div class="field">
+                  <label>Block Extensions (comma-separated)</label>
+                  <input id="srcNewBlockExt" placeholder=".pdf, .jpg, .png, .zip" />
+                </div>
+
+                <div class="field">
+                  <label>Block Language Prefixes (comma-separated)</label>
+                  <input id="srcNewBlockLang" placeholder="/fr/, /es/, /de/" />
+                </div>
+              </div>
+
+              <div class="row">
+                <button id="btnSrcNewBuild" class="btnSecondary">Build JSON (Preview)</button>
+                <button id="btnSrcNewSave" class="btn">Save to Backend</button>
+                <button id="btnSrcNewClear" class="btnGhost" type="button">Clear</button>
+                <div class="spacer"></div>
+                <div id="srcNewMsg" class="status"></div>
+              </div>
+
+              <div class="row" style="margin-top:10px">
+                <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:#e5e7eb">
+                  <input id="srcNewSetDefault" type="checkbox" />
+                  <span>Set as default source after saving</span>
+                </label>
+              </div>
+
+              <pre id="srcNewOut" class="pre">No draft yet.</pre>
+            </div>
+
+            <div class="tableWrap" style="margin-top:12px">
+              <table class="table" style="min-width: 980px">
+                <thead>
+                  <tr>
+                    <th>Label</th>
+                    <th>Domain</th>
+                    <th>Default</th>
+                    <th>Host Rules</th>
+                    <th>Include</th>
+                    <th>Exclude</th>
+                    <th>Block Ext</th>
+                    <th>Lang Blocks</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="srcRows">
+                  <tr><td colspan="9" style="padding:10px">No sources loaded yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+
+            <pre id="srcOut" class="pre" style="margin-top:12px">No sources loaded yet.</pre>
+          </div>
+        </section>
+
+        <!-- ============= Resolver Test (Search) ============= -->
+        <section class="panel" data-section="resolve">
+          <div class="panelHeader">
+            <h2>Resolver Test (Search)</h2>
+            <p class="muted">Test the resolver endpoint with a phrase and optional source label</p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="field">
+                <label>Phrase</label>
+                <input id="rsPhrase" placeholder="e.g. syphilis" />
+              </div>
+              <div class="field">
+                <label>Source Label (optional)</label>
+                <input id="rsSource" placeholder="e.g. MayoClinic" />
+              </div>
+            </div>
+
+            <div class="row">
+              <button id="btnResolveTest" class="btn">Search</button>
+              <button id="btnResolveClear" class="btnGhost" type="button">Clear</button>
+              <div class="spacer"></div>
+              <div id="rsMsg" class="status"></div>
+            </div>
+
+            <pre id="rsOut" class="pre">No search yet.</pre>
+          </div>
+        </section>
+
+        <!-- ============= Import Runs (History) ============= -->
+        <section class="panel" data-section="runs">
+          <div class="panelHeader">
+            <h2>Import Runs (History)</h2>
+            <p class="muted">View commit runs and copy a Run ID into the rollback panel</p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="field" style="max-width:220px">
+                <label>Limit</label>
+                <input id="runsLimit" value="20" />
+              </div>
+              <button id="btnRunsRefresh" class="btnSecondary">Refresh</button>
+              <div class="spacer"></div>
+              <div id="runsMsg" class="status"></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="cardTitle">Commit Runs</div>
+            <div class="tableWrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th>Timestamp</th>
+                    <th>Run ID</th>
+                    <th>Source</th>
+                    <th>Added</th>
+                    <th>Updated</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="runsRows">
+                  <tr><td colspan="6" style="padding:10px">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- ============= Rollback (Restore Snapshot) ============= -->
+        <section class="panel" data-section="rollback">
+          <div class="panelHeader">
+            <h2>Rollback (Restore Snapshot)</h2>
+            <p class="muted">Preview or restore a snapshot by Run ID (owner-protected)</p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="field" style="flex:1">
+                <label>Import Run ID</label>
+                <input id="rbRunId" placeholder="paste run id here" />
+              </div>
+            </div>
+
+            <div class="row">
+              <button id="btnRbPreview" class="btnSecondary">Preview</button>
+              <button id="btnRbRestore" class="btn">Restore</button>
+              <!-- ✅ FIX: unique id -->
+              <button id="btnRbClearRollback" class="btnGhost" type="button">Clear</button>
+              <div class="spacer"></div>
+              <div id="rbMsg" class="status"></div>
+            </div>
+
+            <pre id="rbOut" class="pre">No rollback yet.</pre>
+          </div>
+        </section>
+
+        <!-- ============= Resolver Builder ============= -->
+        <section class="panel" data-section="resolver">
+          <div class="panelHeader">
+            <h2>Resolver Builder</h2>
+            <p class="muted">
+              Search external authority providers, review candidates, then add the best result into AUTO dataset (owner-only).
+            </p>
+          </div>
+
+          <div class="card">
+            <div class="row">
+              <div class="field" style="flex:1">
+                <label>Phrase</label>
+                <input id="rbPhrase" placeholder="e.g. amlodipine side effects" />
+              </div>
+
+              <div class="field" style="max-width:260px">
+                <label>Source Provider</label>
+                <select id="rbProvider">
+                  <option value="pubmed">PubMed (Clinical / Research)</option>
+                  <option value="nhs" disabled>NHS (coming soon)</option>
+                  <option value="who" disabled>WHO (coming soon)</option>
+                  <option value="cdc" disabled>CDC (coming soon)</option>
+                  <option value="wikipedia" disabled>Wikipedia (coming soon)</option>
+                </select>
+              </div>
+
+              <div class="field" style="max-width:160px">
+                <label>Limit (0 = unlimited)</label>
+                <input id="rbLimit" type="number" min="0" step="1" value="0" />
+              </div>
+
+              <div class="field" style="max-width:160px">
+                <label>Start (retstart)</label>
+                <input id="rbRetstart" type="number" min="0" step="1" value="0" />
+              </div>
+            </div>
+
+            <!-- ✅ NEW: Dataset counts strip (synced from /api/external/owner/counts) -->
+            <div class="row" style="margin-top:8px">
+              <div class="status" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                <span>Manual JSON: <strong id="rbManualCount">—</strong></span>
+                <span>Auto JSON: <strong id="rbAutoCount">—</strong></span>
+                <span>Total: <strong id="rbTotalCount">—</strong></span>
+              </div>
+              <div class="spacer"></div>
+            </div>
+
+            <!-- ✅ NEW: Year filter + sort row -->
+            <div class="row" style="margin-top:8px">
+              <div class="field" style="max-width:160px">
+                <label>Year ≥</label>
+                <input id="rbYearMin" placeholder="e.g. 2015" inputmode="numeric" />
+              </div>
+
+              <div class="field" style="max-width:160px">
+                <label>Year ≤</label>
+                <input id="rbYearMax" placeholder="e.g. 2024" inputmode="numeric" />
+              </div>
+
+              <div class="field" style="max-width:220px">
+                <label>Sort</label>
+                <select id="rbSort">
+                  <option value="relevance">Relevance</option>
+                  <option value="newest">Newest</option>
+                  <option value="oldest">Oldest</option>
+                </select>
+              </div>
+
+              <div class="spacer"></div>
+
+              <button id="btnRbApplyFilters" class="btnSecondary" type="button">Apply</button>
+              <button id="btnRbClearFilters" class="btnGhost" type="button">Clear Filters</button>
+            </div>
+
+            <div class="row">
+              <button id="btnRbSearch" class="btn">Search</button>
+              <button id="btnRbAddAll" class="btnSecondary">Add All</button>
+              <button id="btnRbRejectAll" class="btnGhost">Clear Results</button>
+
+              <div class="spacer"></div>
+
+              <!-- ✅ pager + counters -->
+              <div class="status" id="rbPager"
+                   style="display:flex;align-items:center;gap:10px;white-space:nowrap;margin-left:auto">
+                <span>Showing: <strong id="rbShowing">—</strong></span>
+                <span>Total: <strong id="rbTotal">—</strong></span>
+                <button id="btnRbPrev" class="btnGhost" type="button" style="padding:6px 10px">◀ Prev</button>
+                <button id="btnRbNext" class="btnGhost" type="button" style="padding:6px 10px">Next ▶</button>
+                <span>Next Start: <strong id="rbNextRetstart">—</strong></span>
+              </div>
+
+              <div id="rbSearchMsg" class="status"></div>
+            </div>
+          </div>
+
+          <!-- ✅ Add All results summary -->
+          <div id="rbAddSummary" class="status" style="display:none;margin-top:10px;gap:10px;align-items:center;flex-wrap:wrap">
+            <span>Added/Updated: <strong id="rbAddOk">0</strong></span>
+            <span>Failed: <strong id="rbAddFail">0</strong></span>
+            <button id="btnRbCopyFailed" class="btnGhost" type="button" style="padding:6px 10px;display:none">
+              Copy Failed IDs
             </button>
+            <span id="rbAddNote" style="color:#94a3b8"></span>
           </div>
 
-          <div style="margin-top:10px;overflow:auto;max-height:420px;border:1px solid #1f2937;border-radius:8px">
-            <table style="width:100%;border-collapse:collapse">
-              <thead>
-                <tr style="background:#0e172a">
-                  <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Key</th>
-                  <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Phrase</th>
-                  <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">URL</th>
-                  <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Source</th>
-                  <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Added</th>
-                  <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Actions</th>
-                </tr>
-              </thead>
-              <tbody id="rows">
-                <tr><td colspan="6" style="padding:10px">Loading…</td></tr>
-              </tbody>
-            </table>
+          <!-- ✅ NEW: Resolver Builder — Job History (persisted) -->
+<div class="card" style="margin-top:12px">
+  <div class="cardTitle" style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+    <span>Job History</span>
+    <span style="display:flex;gap:10px;align-items:center">
+      <span id="rbHistoryMsg" class="status" style="margin:0"></span>
+      <button id="btnRbClearHistory" class="btnGhost" type="button">Clear History</button>
+    </span>
+  </div>
+
+  <p class="muted" style="margin-top:6px">
+    Shows persisted Resolver “Add All” jobs (survives refresh). Use “Load” to restore the phrase, or “Run Again” to re-run.
+  </p>
+
+  <div class="tableWrap">
+    <table class="table">
+      <thead>
+        <tr>
+          <th style="width:280px">Phrase</th>
+          <th style="width:120px">Status</th>
+          <th style="width:140px">Progress</th>
+          <th style="width:160px">OK / Fail</th>
+          <th style="width:170px">Duration</th>
+          <th style="width:220px">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rbHistoryRows">
+        <tr><td colspan="6" style="padding:10px">No job history yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+
+
+          <div class="card">
+            <div class="cardTitle">Results</div>
+
+            <div class="tableWrap">
+              <table class="table">
+                <thead>
+                  <tr>
+                    <th style="width:110px">ID</th>
+                    <th>Title</th>
+                    <th style="width:240px">Title Slug</th>
+                    <th style="width:220px">Journal</th>
+                    <th style="width:140px">Pubdate</th>
+                    <th style="width:90px">Score</th>
+                    <th style="width:220px">URL</th>
+                    <th style="width:200px">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="rbRows">
+                  <tr><td colspan="8" style="padding:10px">No results yet.</td></tr>
+                </tbody>
+              </table>
+            </div>
+           <!-- =========================
+     Resolver Builder — Job History (Step 3)
+     Required by owner.js: rbHistoryRender(), rbHistoryClear()
+========================= -->
+<div style="margin-top:18px;padding:14px;border:1px solid #1f2937;border-radius:14px;background:#0b1220">
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+    <div style="font-weight:700;color:#e5e7eb">Job History</div>
+
+    <button id="btnRbClearHistory"
+      type="button"
+      class="btnGhost"
+      style="padding:8px 12px;border-radius:12px">
+      Clear History
+    </button>
+  </div>
+
+  <div style="height:10px"></div>
+
+  <div style="overflow:auto;border:1px solid #1f2937;border-radius:12px">
+    <table style="width:100%;border-collapse:collapse;min-width:860px">
+      <thead>
+        <tr style="background:#0f172a;color:#94a3b8;text-align:left">
+          <th style="padding:10px;border-bottom:1px solid #1f2937">Phrase</th>
+          <th style="padding:10px;border-bottom:1px solid #1f2937">State</th>
+          <th style="padding:10px;border-bottom:1px solid #1f2937">Progress</th>
+          <th style="padding:10px;border-bottom:1px solid #1f2937">OK / Fail</th>
+          <th style="padding:10px;border-bottom:1px solid #1f2937">Duration</th>
+          <th style="padding:10px;border-bottom:1px solid #1f2937">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="rbHistoryRows">
+        <tr><td colspan="6" style="padding:10px;border-bottom:1px solid #1f2937;color:#94a3b8">No job history yet.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:10px;color:#94a3b8;font-size:12px">
+    Tip: Use “Load” to restore a phrase into the input, or “Run Again” to re-run that phrase.
+  </div>
+</div>
+
+            <pre id="rbRaw" class="pre" style="margin-top:12px">No search yet.</pre>
           </div>
-        </div>
+        </section>
 
       </div>
-    </section>
+    </main>
+  </div>
 
-    <!-- spacer -->
-    <div style="height:22px"></div>
-
-    <!-- ===================================== -->
-    <!-- B) AUTHORITY SITEMAP IMPORT (AUTO) -->
-    <!-- ===================================== -->
-    <section>
-      <h2>Authority Sitemap Import</h2>
-      <p>
-        Import external authority URLs into <b>global_external_auto.json</b> (owner-only).<br/>
-        Use <b>dry run</b> first, then commit.
-      </p>
-
-      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
-
-        <!-- Import form -->
-        <div style="min-width:340px;max-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <h3 style="margin-top:0">Import Source</h3>
-
-          <label>Domain (preferred)</label><br/>
-          <input id="smDomain" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="e.g. mayoclinic.org"/>
-
-          <div style="margin:8px 0;color:#94a3b8">OR</div>
-
-          <label>Sitemap URL (optional)</label><br/>
-          <input id="smUrl" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="https://example.com/sitemap.xml"/>
-
-          <label>Source label</label><br/>
-          <input id="smLabel" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="e.g. mayoclinic_en_only"/>
-
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button id="btnSmDryRun" style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-              Dry run
-            </button>
-            <button id="btnSmRun" style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#1d4ed8;color:#e5e7eb;cursor:pointer">
-              Run import
-            </button>
-          </div>
-
-          <div id="smMsg" style="margin-top:10px;color:#a7b1c2"></div>
-        </div>
-
-        <!-- Result box -->
-        <div style="flex:1;min-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <h3 style="margin:0">Import Result</h3>
-            <button id="btnSmClear" style="padding:8px 12px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-              Clear
-            </button>
-          </div>
-
-          <pre id="smOut" style="margin-top:10px;white-space:pre-wrap;word-break:break-word;background:#0e172a;border:1px solid #1f2937;border-radius:8px;padding:10px;max-height:420px;overflow:auto;color:#e5e7eb">No import yet.</pre>
-        </div>
-
-      </div>
-    </section>
-
-    <!-- spacer -->
-    <div style="height:22px"></div>
-
-    <!-- ===================================== -->
-    <!-- C) RESOLVER TEST (SEARCH) -->
-    <!-- ===================================== -->
-    <section>
-      <h2>Resolver Test (Search)</h2>
-      <p>
-        Quickly test the resolver endpoint from inside the Control Tower.<br/>
-        Example: <b>syphilis</b> + source_label <b>mayoclinic</b>
-      </p>
-
-      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
-
-        <!-- Search form -->
-        <div style="min-width:340px;max-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <h3 style="margin-top:0">Search Resolver</h3>
-
-          <label>Phrase</label><br/>
-          <input id="rsPhrase" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="e.g. syphilis"/>
-
-          <label>Source label (optional)</label><br/>
-          <input id="rsSource" style="width:100%;padding:10px;margin:6px 0 12px 0" placeholder="e.g. mayoclinic"/>
-
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button id="btnResolveTest" style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#2563eb;color:#e5e7eb;cursor:pointer">
-              Search
-            </button>
-            <button id="btnResolveClear" style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-              Clear
-            </button>
-          </div>
-
-          <div id="rsMsg" style="margin-top:10px;color:#a7b1c2"></div>
-        </div>
-
-        <!-- Search output -->
-        <div style="flex:1;min-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <h3 style="margin:0">Resolver Output</h3>
-          </div>
-
-          <pre id="rsOut" style="margin-top:10px;white-space:pre-wrap;word-break:break-word;background:#0e172a;border:1px solid #1f2937;border-radius:8px;padding:10px;max-height:420px;overflow:auto;color:#e5e7eb">No search yet.</pre>
-        </div>
-
-      </div>
-    </section>
-
-    <!-- spacer -->
-    <div style="height:22px"></div>
-
-    <!-- ===================================== -->
-    <!-- D) IMPORT RUNS HISTORY -->
-    <!-- ===================================== -->
-    <section>
-      <h2>Import Runs (History)</h2>
-      <p>
-        Shows the most recent import runs (audit trail). Click <b>Use</b> to populate rollback panel.
-      </p>
-
-      <div style="border:1px solid #1f2937;padding:14px;border-radius:10px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-            <button id="btnRunsRefresh" style="padding:8px 12px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-              Refresh runs
-            </button>
-
-            <label style="color:#94a3b8">Limit</label>
-            <input id="runsLimit" value="20" style="width:90px;padding:8px;border-radius:8px;border:1px solid #1f2937;background:#0e172a;color:#e5e7eb" />
-          </div>
-
-          <div id="runsMsg" style="color:#a7b1c2"></div>
-        </div>
-
-        <div style="margin-top:12px;overflow:auto;max-height:420px;border:1px solid #1f2937;border-radius:8px">
-          <table style="width:100%;border-collapse:collapse">
-            <thead>
-              <tr style="background:#0e172a">
-                <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Time</th>
-                <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Run ID</th>
-                <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Source label</th>
-                <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Added</th>
-                <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Updated</th>
-                <th style="text-align:left;padding:10px;border-bottom:1px solid #1f2937">Actions</th>
-              </tr>
-            </thead>
-            <tbody id="runsRows">
-              <tr><td colspan="6" style="padding:10px">No runs loaded yet.</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-
-    <!-- spacer -->
-    <div style="height:22px"></div>
-
-    <!-- ===================================== -->
-    <!-- E) ROLLBACK PANEL (B) -->
-    <!-- ===================================== -->
-    <section>
-      <h2>Rollback (Restore Snapshot)</h2>
-      <p>
-        Paste a <b>Run ID</b> (example: <code>auth_20260102T014642Z_976393</code>) then click <b>Preview</b>.
-        If it looks correct, click <b>Restore</b>.
-      </p>
-
-      <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
-
-        <!-- Rollback form -->
-        <div style="min-width:340px;max-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <h3 style="margin-top:0">Rollback Control</h3>
-
-          <label>Import Run ID</label><br/>
-          <input id="rbRunId" style="width:100%;padding:10px;margin:6px 0 12px 0"
-                 placeholder="e.g. auth_20260102T014642Z_976393"/>
-
-          <div style="display:flex;gap:10px;flex-wrap:wrap">
-            <button id="btnRbPreview"
-              style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#2563eb;color:#e5e7eb;cursor:pointer">
-              Preview
-            </button>
-
-            <button id="btnRbRestore"
-              style="padding:10px 14px;border-radius:10px;border:1px solid #7f1d1d;background:#b91c1c;color:#fff;cursor:pointer">
-              Restore
-            </button>
-
-            <button id="btnRbClear"
-              style="padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:#e5e7eb;cursor:pointer">
-              Clear
-            </button>
-          </div>
-
-          <div id="rbMsg" style="margin-top:10px;color:#a7b1c2"></div>
-        </div>
-
-        <!-- Rollback output -->
-        <div style="flex:1;min-width:520px;border:1px solid #1f2937;padding:14px;border-radius:10px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
-            <h3 style="margin:0">Rollback Output</h3>
-          </div>
-
-          <pre id="rbOut"
-               style="margin-top:10px;white-space:pre-wrap;word-break:break-word;background:#0e172a;border:1px solid #1f2937;border-radius:8px;padding:10px;max-height:420px;overflow:auto;color:#e5e7eb">No rollback yet.</pre>
-        </div>
-
-      </div>
-    </section>
-
-  </main>
-
-  <!-- IMPORTANT: relative path -->
-  <script src="./owner.js"></script>
+  <!-- ✅ FIX: load from /owner mount + cache-bust -->
+  <script src="/owner/owner.js?v=18"></script>
 </body>
 </html>

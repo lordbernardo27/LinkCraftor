@@ -52,12 +52,23 @@ class ScoreRequest(BaseModel):
 
 
 @router.post("/score")
-def score_endpoint(payload: ScoreRequest):
+def score_endpoint(payload: ScoreRequest, debug: bool = False):
     phrase_ctx = payload.phraseCtx.model_dump()
     candidates = [c.model_dump() for c in payload.candidates]
 
+    # Debug echo mode (no scoring) — verifies frontend payload shape fast
+    if debug:
+        return {
+            "ok": True,
+            "debug": True,
+            "phrase_ctx": phrase_ctx,
+            "candidate_count": len(candidates),
+            "candidates_sample": candidates[:3],
+        }
+
     # ---- Decision Intelligence: load feedback memory for this workspace/doc ----
-    workspace_id = phrase_ctx.get("workspaceId") or "ws_demo"
+    workspace_id = phrase_ctx.get("workspaceId") or "default"
+
     doc_id = phrase_ctx.get("docId")
 
     feedback_map = get_aggregated_link_feedback(workspaceId=workspace_id, docId=doc_id)

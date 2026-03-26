@@ -499,6 +499,12 @@ for (const r of source.slice(0,12)){
     // Remember what was clicked
     ctx.state.setCurrentMark(markEl || null);
     ctx.state.setCurrentPhrase(phrase || "");
+
+    // Snapshot what the suggestion was when the modal opened (for EDITED vs ACCEPTED)
+try { markEl && markEl.setAttribute("data-orig-url", String(markEl.getAttribute("data-url") || "").trim()); } catch {}
+try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribute("data-title") || "").trim()); } catch {}
+
+
     if (ilKeyword) ilKeyword.textContent = phrase || "";
 
     const isExternalMark = !!(
@@ -774,29 +780,43 @@ for (const r of source.slice(0,12)){
 
     // ensure data-url is present for exports
     const finalUrl = ctx.computeFinalUrl(kind, topicId, title, url);
-    if (finalUrl) el.setAttribute("data-url", finalUrl);
+   
+   // Decide if user edited the suggestion (compare against snapshot from openIL)
+let decisionEventType = "LINK_SUGGESTION_ACCEPTED";
+try {
+  const m = ctx.state.getCurrentMark(); // the <mark> clicked (may be detached after replace)
+  const origUrl   = String(m?.getAttribute("data-orig-url")   || "").trim();
+  const origTitle = String(m?.getAttribute("data-orig-title") || "").trim();
 
-    const key = norm(phrase);
-    ctx.state.LINKED_SET.add(key);
-    const s = ctx.state.LINKED_MAP.get(key) || new Set();
-    s.add(url || title);
-    ctx.state.LINKED_MAP.set(key, s);
-    ctx.state.APPLIED_LINKS.push({ phrase, sectionIdx:-1, topicId, title, url, kind });
-    ctx.saveLinkedSet();
+  const chosenUrl   = String(finalUrl || url || "").trim();
+  const chosenTitle = String(title || "").trim();
 
-    // 🔁 Memory & Feedback Layer – record ACCEPT
-    try {
-      if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback === "function") {
-        window.LC_registerLinkFeedback("accept", {
-          phraseText: phrase || "",
-          targetId:   topicId || "",
-          url:        finalUrl || url || "",
-          title:      title || ""
-        });
-      }
-    } catch (e) {
-      console.warn("[IL Modal] feedback accept failed", e);
-    }
+  const edited =
+    (origUrl   && chosenUrl   && origUrl   !== chosenUrl) ||
+    (origTitle && chosenTitle && origTitle !== chosenTitle);
+
+  if (edited) decisionEventType = "LINK_SUGGESTION_EDITED";
+} catch {}
+
+// 🔁 Decision Intelligence (Layer 1.3): emit exactly ONE canonical eventType (silent)
+try {
+  if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback === "function") {
+    window.LC_registerLinkFeedback("accept", {
+      eventType: decisionEventType,
+      workspaceId: (window.LC_WORKSPACE_ID || "default"),
+      docId: (window.LC_ACTIVE_DOC_ID || "doc_demo_001"),
+      phraseText: phrase || "",
+      targetId:   topicId || "",
+      url:        (finalUrl || url || ""),
+      title:      (title || ""),
+      kind:       (kind || "internal")
+    });
+  }
+} catch (e) {
+  console.warn("[IL Modal] decision emit failed", e);
+}
+
+
 
     ctx.underlineLinkedPhrases();
     ctx.highlightBucketKeywords();
@@ -906,12 +926,17 @@ for (const r of source.slice(0,12)){
       // 🔁 Memory & Feedback Layer – record REJECT
       try {
         if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback === "function") {
-          window.LC_registerLinkFeedback("reject", {
-            phraseText: phrase || "",
-            targetId:   targetId || "",
-            url:        urlAttr || "",
-            title:      titleAttr || ""
-          });
+         window.LC_registerLinkFeedback("reject", {
+  eventType: "LINK_SUGGESTION_REJECTED",
+  workspaceId: (window.LC_WORKSPACE_ID || "ws_demo"),
+  docId: (window.LC_ACTIVE_DOC_ID || "doc_demo_001"),
+  phraseText: phrase || "",
+  targetId:   targetId || "",
+  url:        urlAttr || "",
+  title:      titleAttr || "",
+  kind:       type || "internal"
+});
+
         }
       } catch (e2) {
         console.warn("[IL Modal] feedback reject failed", e2);

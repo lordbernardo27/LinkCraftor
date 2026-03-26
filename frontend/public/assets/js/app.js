@@ -1,8 +1,25 @@
-console.log("APP.JS ACTIVE VERSION: ✅ EDIT CONFIRMED 2025-12-14-AAA");
+﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+
+// ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
+if (typeof window.reloadFromBackend !== "function") {
+  window.reloadFromBackend = async function reloadFromBackend(){
+    try { await window.loadImportedUrlsLocal?.(); } catch(e) {}
+    try {
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  if (ws) await window.updateUnifiedImportCount?.(ws);
+} catch(e) {}
+    try {
+      return (window.IMPORTED_URLS && window.IMPORTED_URLS.size) ? window.IMPORTED_URLS.size : 0;
+    } catch(e) {}
+    return 0;
+  };
+  console.log("[Imports] reloadFromBackend shim installed ");
+}
+// ---- END SHIM ----
 
 
 // -------------------------------------------------------------------------------------------
-// app.js — LinkCraftor (Full, updated)  ✅ wired to external_categories.js
+// app.js � LinkCraftor (Full, updated)  ? wired to external_categories.js
 // -------------------------------------------------------------------------------------------
 
 import { KEYS, lsGet, lsSet, lsDel } from "./core/storage.js";
@@ -11,10 +28,10 @@ import { initStopwordsUI } from "./ui/stopwords.js";
 import { scoreCandidatesForPhrase } from "./engine/scoring.js";
 import { shouldHighlightPhrase } from "./features/highlight-filter.js";
 
-// 🔹 Link Resolution panel (resolved / unresolved phrases)
+// ?? Link Resolution panel (resolved / unresolved phrases)
 import { initLinkResolutionPanel, LR_rebuild } from "./sidebar/link-resolution.js";
 
-// 🔹 Rejections + Linked Phrases (per-phrase undo)
+// ?? Rejections + Linked Phrases (per-phrase undo)
 import {
   initRejectionsUI,
   rebuildRejectionsPanel,
@@ -69,7 +86,7 @@ function lcImportSitemapXML(file, onDone) {
       }
     }
 
-    console.log("✅ lcImportSitemapXML:", entries);
+    console.log("? lcImportSitemapXML:", entries);
 
     if (typeof onDone === "function") {
       onDone(entries);
@@ -96,6 +113,115 @@ const API_BASE =
     ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
     : "";
 
+// =====================================================
+// Layer 1.3 � UI ? Decision Ingestion (canonical Layer 0)
+// Endpoint: POST /api/engine/decision
+// =====================================================
+const API_DECISION = "/api/engine/decision";
+
+async function emitDecision(eventType, phraseCtx, candidate, meta){
+  try{
+    const ws = String((phraseCtx && phraseCtx.workspaceId) || window.LC_WORKSPACE_ID || "ws_demo").trim();
+const doc = String((phraseCtx && phraseCtx.docId) || window.LC_ACTIVE_DOC_ID || "doc_demo_001").trim();
+const user = String(window.LC_USER_ID || "bernard").trim();
+
+const payload = {
+  // ? required by backend model (top-level)
+  workspaceId: ws,
+  userId: user,
+  docId: doc,
+
+  // existing fields
+  eventType,
+  phraseCtx: phraseCtx || {},
+  candidate: candidate || {},
+  meta: {
+  ts: Date.now(),
+  ui: "editor",
+  ...(meta || {})
+}
+
+};
+
+
+    const res = await fetch(`${API_BASE}${API_DECISION}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      console.warn("[DECISION] failed", res.status, data);
+      return { ok:false, status:res.status, data };
+    }
+
+    console.log("[DECISION] ok", eventType, data);
+    return { ok:true, data };
+  }catch(err){
+    console.warn("[DECISION] error", err);
+    return { ok:false, error:String(err) };
+  }
+}
+
+// =====================================================
+// Layer 1.3.1 � Global bridge for IL Modal ? Decision API
+// IL modal calls window.LC_registerLinkFeedback(...)
+// =====================================================
+if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback !== "function") {
+  window.LC_registerLinkFeedback = async function(action, data){
+    try{
+      const eventType = String(data?.eventType || "").trim();
+      if (!eventType) return { ok:false, error:"missing eventType" };
+
+      const workspaceId = String(data?.workspaceId || (window.LC_WORKSPACE_ID || "default")).trim();
+      const docId       = String(data?.docId || window.LC_ACTIVE_DOC_ID || "").trim();
+
+      const phraseText  = String(data?.phraseText || "").trim();
+      const targetId    = String(data?.targetId || "").trim();
+      const url         = String(data?.url || "").trim();
+      const title       = String(data?.title || "").trim();
+      const kind        = String(data?.kind || "").trim();
+
+      const phraseCtx = {
+        workspaceId,
+        docId,
+        phraseText,
+        contextType: data?.contextType || null,
+        sectionType: data?.sectionType || "BODY",
+        intent: data?.intent || "INFO",
+        entities: Array.isArray(data?.entities) ? data.entities : []
+      };
+
+      const candidate = {
+        id: targetId || "",
+        title: title || "",
+        url: url || "",
+        sourceType: kind || "ui",
+        isExternal: (kind === "external"),
+        topicTypes: Array.isArray(data?.topicTypes) ? data.topicTypes : [],
+        entities: Array.isArray(data?.candidateEntities) ? data.candidateEntities : []
+      };
+
+      // Use the canonical helper already in app.js
+      if (typeof emitDecision === "function") {
+        return await emitDecision(eventType, phraseCtx, candidate, {
+          action: action || "ui",
+          ui: "il-modal"
+        });
+      }
+
+      return { ok:false, error:"emitDecision not available" };
+    }catch(e){
+      console.warn("[LC_registerLinkFeedback] failed", e);
+      return { ok:false, error:String(e) };
+    }
+  };
+}
+
+
+
+
 // ================================
 // Backend URLs API base (single source of truth)
 // ================================
@@ -105,35 +231,208 @@ const URLS_API_BASE =
     : "http://127.0.0.1:8001";
 
 
+async function apiEngineRun(payload){
+
+  // ---- RB2 TARGETS AUTOFILL (fix internal/semantic highlights) ----
+  try {
+    const t = payload && payload.targets;
+    const empty = !Array.isArray(t) || t.length === 0;
+
+    if (empty) {
+      const rows =
+        (typeof window.LC_getImportedTopics === "function"
+          ? window.LC_getImportedTopics()
+          : (Array.isArray(window.LC_IMPORTS) ? window.LC_IMPORTS : []));
+
+      if (Array.isArray(rows) && rows.length) {
+        payload.targets = rows
+          .map(r => {
+            const url = r && r.url ? String(r.url).trim() : "";
+            const title = r && r.title ? String(r.title).trim() : "";
+            if (!url || !title) return null;
+            return { url, title, aliases: [], inboundLinks: 0 };
+          })
+          .filter(Boolean);
+
+        console.log("[RB2 FIX] Autofilled targets from imports:", payload.targets.length);
+      } else {
+        console.warn("[RB2 FIX] No imports available to autofill targets");
+      }
+    }
+  } catch (e) {
+    console.warn("[RB2 FIX] Autofill failed", e);
+  }
+  // ---- END RB2 TARGETS AUTOFILL ----
+
+  console.log("[RB2 PAYLOAD CHECK]", {
+    __rb2_capture: (() => {
+      try {
+        window.__RB2_LAST_PAYLOAD = payload;
+        const n = (payload && payload.targets) ? payload.targets.length : null;
+        console.log("[RB2 DEBUG] UI targets length =", n);
+        return n;
+      } catch (e) {
+        console.warn("[RB2 DEBUG] capture failed", e);
+        return null;
+      }
+    })(),
+    hasHtml: !!(payload && payload.html && String(payload.html).trim()),
+    hasText: !!(payload && payload.text && String(payload.text).trim()),
+    targetsType: payload && payload.targets ? Object.prototype.toString.call(payload.targets) : null,
+    targetsLen: Array.isArray(payload?.targets) ? payload.targets.length : null,
+    sampleTarget0: Array.isArray(payload?.targets) ? (payload.targets[0] || null) : null,
+    keys: payload ? Object.keys(payload) : null
+  });
+
+  const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+
+  // ---- TARGET NORMALIZATION (restores internal/strong lexical grounding) ----
+  function __lc_slugToTitle(u) {
+    try {
+      const x = new URL(String(u || ""));
+      const parts = (x.pathname || "").split("/").filter(Boolean);
+      const last = (parts[parts.length - 1] || "").trim();
+      if (!last) return "";
+      return last.replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+    } catch {
+      return "";
+    }
+  }
+
+  function __lc_normTarget(t) {
+    const url = String(t?.url || t?.href || "").trim();
+    let title = String(t?.title || "").trim();
+    if (!title && url) title = __lc_slugToTitle(url);
+
+    const aliasesRaw = Array.isArray(t?.aliases) ? t.aliases : [];
+    const aliases = aliasesRaw.map(a => String(a || "").trim()).filter(Boolean);
+
+    if (title && !aliases.includes(title)) aliases.unshift(title);
+
+    return {
+      url,
+      title,
+      aliases,
+      inboundLinks: Number(t?.inboundLinks || t?.inlinks || 0) || 0
+    };
+  }
+
+  // normalize payload.targets so RB2 can produce internal/strong again
+  payload.targets = Array.isArray(payload?.targets) ? payload.targets.map(__lc_normTarget) : [];
+  console.log("[RB2 TARGETS NORMALIZED] first5=",
+    payload.targets.slice(0, 5).map(x => ({ title: x.title, aliases_len: x.aliases.length }))
+  );
+  // ---- END TARGET NORMALIZATION ----
+
+  // ? IMPORTANT FIX: correct backend RB2 route
+  const res = await fetch(`${base}/api/rb2/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json; charset=utf-8" },
+    body: JSON.stringify({
+      html: payload?.html || "",
+      text: payload?.text || "",
+      workspace_id: payload?.workspace_id || "default",
+      limit: payload?.limit || 50,
+      targets: Array.isArray(payload?.targets) ? payload.targets : [],
+      include: (payload?.include && typeof payload.include === "object") ? payload.include : {},
+      block: Array.isArray(payload?.block) ? payload.block : [],
+      synonyms: (payload?.synonyms && typeof payload.synonyms === "object") ? payload.synonyms : {},
+      config: (payload?.config && typeof payload.config === "object") ? payload.config : {}
+    })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  if (!data || data.ok !== true || !data.out) throw new Error(data?.error || "RB2 backend returned ok:false");
+
+  const out = data.out || {};
+  try { window.__RB2_LAST_OUT = out; } catch (e) {}
+
+  console.log("[RB2 BACKEND OUT JSON]", JSON.stringify(out, null, 2));
+  console.log("[RB2 SAMPLE recommended[0]]", (out.recommended && out.recommended[0]) || null);
+  console.log("[RB2 SAMPLE optional[0]]", (out.optional && out.optional[0]) || null);
+
+  return {
+    recommended: Array.isArray(out.recommended) ? out.recommended : [],
+    optional: Array.isArray(out.optional) ? out.optional : [],
+    external: [],
+    hidden: Array.isArray(out.hidden) ? out.hidden : [],
+    meta: (out.meta && typeof out.meta === "object") ? out.meta : {}
+  };
+}
+
+
+
+
 // ================================
-// Backend Sitemap helpers (GLOBAL) — SINGLE COPY
-// IMPORTANT: ensure you do NOT define these elsewhere in app.js
+// URL / SITEMAP IMPORT (BACKEND)
 // ================================
 async function apiImportUrlsFile(file, workspaceId = "default") {
+  const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
   const fd = new FormData();
   fd.append("file", file);
 
-  const url = `${URLS_API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`;
+  const res = await fetch(
+    `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+    { method: "POST", body: fd }
+  );
 
-  const res = await fetch(url, { method: "POST", body: fd });
   const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-  }
-  return data; // { added, total, workspace_id }
+  if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  return data; // { ok, added, total, ... } (depends on backend)
 }
 
 async function apiLoadImportedUrls(workspaceId = "default", limit = 200000) {
-  const url = `${URLS_API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${limit}`;
-  const res = await fetch(url);
+  const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+  const res = await fetch(
+    `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${encodeURIComponent(limit)}`
+  );
 
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-  }
-  return Array.isArray(data.urls) ? data.urls : [];
+  if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+
+  // Be tolerant to backend field names
+  const arr =
+    (Array.isArray(data.urls) && data.urls) ||
+    (Array.isArray(data.items) && data.items) ||
+    [];
+
+  // Ensure it's an array of strings
+  return arr.map(x => String(x || "").trim()).filter(Boolean);
 }
+
+function setImportCount(value = 0) {
+  try {
+    const el = document.getElementById("importCount");
+    if (el) el.textContent = String(Number(value) || 0);
+  } catch {}
+}
+
+async function updateUnifiedImportCount(workspaceId = "default") {
+  try {
+    const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+
+    // A) URLs (sitemap/backup) count
+    const r1 = await fetch(`${base}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+    const d1 = await r1.json().catch(() => ({}));
+    const urlCount = (r1.ok && Array.isArray(d1.urls)) ? d1.urls.length : 0;
+
+    // B) Draft topics count
+    const r2 = await fetch(`${base}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+    const d2 = await r2.json().catch(() => ({}));
+    const draftCount = (r2.ok && Array.isArray(d2.topics)) ? d2.topics.length : 0;
+
+    // ? Unified total into the EXISTING badge
+    const el = document.getElementById("importCount");
+    setImportCount(urlCount + draftCount);
+
+    return { ok: true, urlCount, draftCount, total: urlCount + draftCount };
+  } catch (e) {
+    console.warn("[importCount] unified count failed:", e?.message || e);
+    return { ok: false, error: String(e) };
+  }
+}
+
 
 
 // Engine caps
@@ -156,11 +455,11 @@ const FLOORS = (PHASE === "publish")
 
 const CAPS = Object.freeze({ MAX_PER_SECTION: 4, MAX_PER_200W: 5, MAX_PER_TOPIC: 3 });
 
-// Spacing radius for mark placement (±words)
+// Spacing radius for mark placement (�words)
 const WINDOW_RADIUS_WORDS = 90;
 
 /* ==========================================================================
-   NEW: External V2 (local, rule-based) — mirrors internal placement logic
+   NEW: External V2 (local, rule-based) � mirrors internal placement logic
    ========================================================================== */
 const EXT_V2 = Object.freeze({
   ENABLED: true,
@@ -210,7 +509,7 @@ let APPLIED_LINKS = [];              // [{phrase, sectionIdx, topicId, title, ur
 
 let IMPORTED_URLS = new Set();       // raw list (legacy; still used)
 let PUBLISHED_TOPICS = new Map();    // url -> { id, url, title, slugTokens, inlinks?, depth?, aliases[] }
-let DRAFT_TOPICS = new Map();        // topicId -> { id, working_title, planned_slug, planned_url?, aliases[], priority?, canonical? }
+let DRAFT_TOPICS = new Map();
 
 let TITLE_INDEX = new Map();         // (kept for same-doc heuristics)
 let TITLE_ALIAS_MAP = new Map();
@@ -290,12 +589,14 @@ async function ensureExternalHelix() {
 const fileInput = $("file");
 const sitemapFile = $("sitemapFile");
 const draftFile = $("draftFile");
-const btnImportMap = $("btnImportMain"); // ✅ correct ID in your HTML
+const btnImportMap = $("btnImportMain"); // ? correct ID in your HTML
 const btnImportDraft = $("btnImportDraft");
 
 const allDocs = $("allDocs");
 const editor = $("editor");
 const viewerEl = $("doc-content");
+
+
 const topMeta = $("topMeta");
 const docMeta = $("docMeta");
 const docCountMeta = $("docCountMeta");
@@ -304,9 +605,9 @@ const toggleHighlight = $("toggleHighlight");
 const highlightCountBadge = $("highlightCountBadge");
 
 // ============================================================================
-// Draft + Sitemap Audit (Right Sidebar Card) — no new button
+// Draft + Sitemap Audit (Right Sidebar Card) � no new button
 // Combines:
-//  A) Draft ↔ Sitemap audit (backend truth)
+//  A) Draft ? Sitemap audit (backend truth)
 //  B) Topics NOT matched to a phrase (this doc/run) using LAST_ENGINE_OUTPUT
 // ============================================================================
 (function wireDraftSitemapAuditCard(){
@@ -358,7 +659,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </h3>
 
   <div id="auditStats" style="font-size:12px;color:#6b7280;margin-top:6px;">
-    Loading…
+    Loading�
   </div>
 
   <div id="auditList" style="margin-top:10px;">
@@ -366,7 +667,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </div>
 
   <div id="auditHint" style="margin-top:10px;font-size:12px;color:#6b7280;">
-    Tip: Use the filter to switch between draft gaps and sitemap topics that didn’t match any phrase in this doc.
+    Tip: Use the filter to switch between draft gaps and sitemap topics that didn�t match any phrase in this doc.
   </div>
 `;
 
@@ -377,72 +678,79 @@ const highlightCountBadge = $("highlightCountBadge");
   }
 
   async function fetchAudit(){
-    const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=default&limit=5000`);
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
     const data = await res.json().catch(()=>({}));
     if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
     return data;
   }
 
-  function renderDraftRows(rows, el, limit=50){
-    if (!el) return;
-    if (!Array.isArray(rows) || !rows.length) {
-      el.innerHTML = `<div style="opacity:.65">None</div>`;
-      return;
-    }
-    const cut = rows.slice(0, limit);
-    el.innerHTML = cut.map(r => {
-      const title = esc(r.working_title || r.topic_id || "");
-      const url = esc(r.planned_url || "");
-      return `
-        <div style="padding:6px 0;border-bottom:1px solid #f3f4f6;">
-          <div style="font-weight:600;font-size:12px;">${title}</div>
-          ${url ? `<div style="font-size:11px;opacity:.85;word-break:break-all;">${url}</div>` : ""}
-        </div>
-      `;
-    }).join("") + (rows.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${rows.length - limit} more…</div>` : "");
+ function renderDraftRows(rows, el, limit = 50) {
+  if (!el) return;
+
+  // ? HARDEN: rows must be an array
+  const safeRows = Array.isArray(rows) ? rows : [];
+
+  if (!safeRows.length) {
+    el.innerHTML = `<div style="opacity:.65">None</div>`;
+    return;
   }
 
-  function collectSuggestedUrls(){
+  // ? HARDEN: limit must be a finite number
+  const lim = Number.isFinite(Number(limit)) ? Number(limit) : 50;
 
-  function findBestPhraseForUrl(targetUrl){
-  const out = (typeof LAST_ENGINE_OUTPUT !== "undefined" && LAST_ENGINE_OUTPUT) ? LAST_ENGINE_OUTPUT : null;
-  if (!out) return null;
+  const cut = safeRows.slice(0, lim);
 
-  const target = normUrl(targetUrl);
-  if (!target) return null;
-
-  const pool = [];
-  const add = (arr) => {
-    if (!Array.isArray(arr)) return;
-    for (const it of arr){
-      const u = normUrl(it?.url || it?.href || "");
-      if (!u || u !== target) continue;
-
-      // Try common phrase fields
-      const phrase =
-        (it.phrase || it.keyword || it.text || it.anchor || it.phraseText || "").toString().trim();
-
-      if (!phrase) continue;
-
-      pool.push({
-        phrase,
-        score: Number(it.score ?? it.confidence ?? it.finalScore ?? 0) || 0,
-      });
-    }
-  };
-
-  add(out.recommended);
-  add(out.optional);
-  add(out.external);
-
-  if (!pool.length) return null;
-
-  pool.sort((a,b)=> b.score - a.score);
-  return pool[0].phrase;
+  el.innerHTML = (Array.isArray(cut)?cut:[]).map((r) => {
+    const title = esc((r && (r.working_title || r.topic_id)) || "");
+    const url = esc((r && r.planned_url) || "");
+    return `
+      <div style="padding:6px 0;border-bottom:1px solid #f3f4f6;">
+        <div style="font-weight:600;font-size:12px;">${title}</div>
+        ${url ? `<div style="font-size:11px;opacity:.85;word-break:break-all;">${url}</div>` : ""}
+      </div>
+    `;
+  }).join("");
 }
 
 
+   function findBestPhraseForUrl(targetUrl){
+    const out = (typeof LAST_ENGINE_OUTPUT !== "undefined" && LAST_ENGINE_OUTPUT) ? LAST_ENGINE_OUTPUT : null;
+    if (!out) return null;
 
+    const target = normUrl(targetUrl);
+    if (!target) return null;
+
+    const pool = [];
+    const add = (arr) => {
+      if (!Array.isArray(arr)) return;
+      for (const it of arr){
+        const u = normUrl(it?.url || it?.href || "");
+        if (!u || u !== target) continue;
+
+        const phrase =
+          (it.phrase || it.keyword || it.text || it.anchor || it.phraseText || "").toString().trim();
+
+        if (!phrase) continue;
+
+        pool.push({
+          phrase,
+          score: Number(it.score ?? it.confidence ?? it.finalScore ?? 0) || 0,
+        });
+      }
+    };
+
+    add(out.recommended);
+    add(out.optional);
+    add(out.external);
+
+    if (!pool.length) return null;
+
+    pool.sort((a,b)=> b.score - a.score);
+    return pool[0].phrase;
+  }
+
+  function collectSuggestedUrls(){
     // Reads from your global LAST_ENGINE_OUTPUT which your engine updates
     const out = (typeof LAST_ENGINE_OUTPUT !== "undefined" && LAST_ENGINE_OUTPUT) ? LAST_ENGINE_OUTPUT : null;
     const s = new Set();
@@ -463,6 +771,7 @@ const highlightCountBadge = $("highlightCountBadge");
 
     return s;
   }
+
 
   function renderUnmatchedTopics(el){
     if (!el) return;
@@ -488,7 +797,7 @@ const highlightCountBadge = $("highlightCountBadge");
     Unmatched: <strong>${unmatched.length}</strong>
   </div>` +
 
-cut.map(u => {
+(Array.isArray(cut)?cut:[]).map(u => {
   const phrase = findBestPhraseForUrl(u);
   const has = !!phrase;
 
@@ -512,8 +821,85 @@ cut.map(u => {
   `;
 }).join("")
  
-  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} more…</div>` : "");
+  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} more�</div>` : "");
   }
+
+
+function renderDraftRows(rows, mountEl, limit = 120){
+  try{
+    if (!mountEl) return;
+
+    const arr = Array.isArray(rows) ? rows : [];
+    const cut = arr.slice(0, Math.max(0, Number(limit) || 0));
+
+    if (!cut.length){
+      mountEl.innerHTML = `<div style="opacity:.65;font-size:12px;">None</div>`;
+      return;
+    }
+
+    mountEl.innerHTML = (Array.isArray(cut)?cut:[]).map((r) => {
+      // Support either string rows or object rows
+      const obj = (r && typeof r === "object") ? r : null;
+
+      const url =
+        obj && (obj.url || obj.href || obj.target_url || obj.targetUrl)
+          ? String(obj.url || obj.href || obj.target_url || obj.targetUrl).trim()
+          : (typeof r === "string" ? String(r).trim() : "");
+
+      const title =
+        obj && (obj.title || obj.h1 || obj.name)
+          ? String(obj.title || obj.h1 || obj.name).trim()
+          : "";
+
+      const phrase =
+        obj && (obj.phrase || obj.anchor || obj.keyword)
+          ? String(obj.phrase || obj.anchor || obj.keyword).trim()
+          : "";
+
+      const reason =
+        obj && (obj.reason || obj.status || obj.note)
+          ? String(obj.reason || obj.status || obj.note).trim()
+          : "";
+
+      const safeUrl = esc(url || "");
+      const safeTitle = esc(title || "");
+      const safePhrase = esc(phrase || "");
+      const safeReason = esc(reason || "");
+
+      // If we have a URL, make it clickable (same click handler you already wired)
+      const dataUrlAttr = url ? `data-audit-url="${safeUrl}"` : "";
+
+      const rightBadge = safePhrase
+        ? `<span style="font-size:10px;padding:2px 6px;border-radius:999px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;">${safePhrase}</span>`
+        : (safeReason
+            ? `<span style="font-size:10px;padding:2px 6px;border-radius:999px;border:1px solid #e5e7eb;background:#f9fafb;color:#6b7280;">${safeReason}</span>`
+            : `<span style="font-size:10px;padding:2px 6px;border-radius:999px;border:1px solid #e5e7eb;background:#f9fafb;color:#6b7280;">Draft</span>`);
+
+      const mainLine = safeTitle || safeUrl || `(unknown)`;
+
+      return `
+        <button
+          type="button"
+          class="ghost"
+          ${dataUrlAttr}
+          style="width:100%;text-align:left;padding:6px 8px;margin:0;border:0;background:transparent;border-bottom:1px solid #f3f4f6;cursor:${url ? "pointer" : "default"};">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <div style="font-size:11px;word-break:break-word;flex:1;line-height:1.25;">
+              <div style="font-weight:600;">${mainLine}</div>
+              ${safeUrl && safeTitle ? `<div style="opacity:.7;word-break:break-all;">${safeUrl}</div>` : ``}
+            </div>
+            ${rightBadge}
+          </div>
+        </button>
+      `;
+    }).join("");
+  } catch(e){
+    console.warn("[renderDraftRows] failed:", e?.message || e);
+    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">�</div>`;
+  }
+}
+
+
 
  async function refreshCard(){
   ensureCard();
@@ -527,16 +913,172 @@ cut.map(u => {
   if (!listEl) return;
 
   try {
-    if (stats) stats.textContent = "Loading…";
+    if (stats) stats.textContent = "Loading�";
 
     const data = await fetchAudit();
+
+            // -------------------------------------------------------------------
+    // FALLBACK MATCHER (client-side, self-contained)
+    // Matches drafts to imported sitemap URLs by final slug, ignoring:
+    // - "/drafts/" path segment in draft planned_url
+    // - "Drafts " prefix in working_title
+    // -------------------------------------------------------------------
+    (async function applyLocalAuditFallback(){
+      try {
+        // Only run fallback if backend has no matches
+        const matchedArr = Array.isArray(data?.matched) ? data.matched : [];
+        if (matchedArr.length > 0) return;
+
+        // Gather imports from the canonical place your backend hydrate uses
+        const importedSet =
+          (window.IMPORTED_URLS && window.IMPORTED_URLS instanceof Set) ? window.IMPORTED_URLS :
+          ((typeof IMPORTED_URLS !== "undefined" && IMPORTED_URLS instanceof Set) ? IMPORTED_URLS : null);
+
+        // If imports not ready, attempt one hydrate (race-proof)
+        if ((!importedSet || importedSet.size === 0) && typeof window.__LC_reloadFromBackend === "function") {
+          try { await window.__LC_reloadFromBackend(); } catch {}
+        }
+
+        const importedSet2 =
+          (window.IMPORTED_URLS && window.IMPORTED_URLS instanceof Set) ? window.IMPORTED_URLS :
+          ((typeof IMPORTED_URLS !== "undefined" && IMPORTED_URLS instanceof Set) ? IMPORTED_URLS : null);
+
+        const imported = importedSet2 ? Array.from(importedSet2) : [];
+        if (!imported.length) {
+          console.log("[AuditCard] FALLBACK skipped: no imported URLs available");
+          return;
+        }
+
+        // Drafts: prefer explicit list from payload; otherwise use "missing"
+        const missingArr = Array.isArray(data?.missing) ? data.missing : [];
+        const draftsRaw =
+          (Array.isArray(data?.drafts) ? data.drafts :
+          (Array.isArray(data?.draft_topics) ? data.draft_topics :
+          (Array.isArray(data?.topics) ? data.topics : [])));
+
+        const drafts = draftsRaw.length ? draftsRaw : missingArr;
+        if (!Array.isArray(drafts) || drafts.length === 0) {
+          console.log("[AuditCard] FALLBACK skipped: no drafts available");
+          return;
+        }
+
+        function normText(s){
+          return String(s || "")
+            .toLowerCase()
+            .replace(/&/g, " and ")
+            .replace(/['"]/g, "")
+            .replace(/[^a-z0-9\s-]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+        }
+
+        function slugifyLite(s){
+          return normText(s)
+            .replace(/\s+/g, "-")
+            .replace(/-+/g, "-")
+            .replace(/^-|-$/g, "");
+        }
+
+        function stripDraftsPrefix(title){
+          return String(title || "").replace(/^drafts?\s+/i, "").trim();
+        }
+
+        function urlLastSlug(u){
+          try{
+            const url = String(u || "").trim();
+            if (!url) return "";
+            const clean = url.split("#")[0].split("?")[0].replace(/\/+$/, "");
+            const parts = clean.split("/").filter(Boolean);
+            return String(parts[parts.length - 1] || "").toLowerCase();
+          } catch {
+            return "";
+          }
+        }
+
+        // Build imported slug -> url map
+        const importedSlugSet = new Set();
+        const slugToImportedUrl = new Map();
+
+        for (const u of imported) {
+          const slug = urlLastSlug(u);
+          if (!slug) continue;
+          importedSlugSet.add(slug);
+          if (!slugToImportedUrl.has(slug)) slugToImportedUrl.set(slug, u);
+        }
+
+        const outMatched = [];
+        const outMissing = [];
+
+        for (const d of drafts) {
+          const obj = (d && typeof d === "object") ? d : { working_title: String(d || "") };
+
+          const plannedUrl = String(obj.planned_url || obj.plannedUrl || obj.url || "").trim();
+          const slugFromPlanned = urlLastSlug(plannedUrl);
+
+          // 1) Match by planned_url slug (best)
+          if (slugFromPlanned && importedSlugSet.has(slugFromPlanned)) {
+            outMatched.push({
+              ...obj,
+              title: obj.working_title || obj.title || "",
+              url: slugToImportedUrl.get(slugFromPlanned) || "",
+              reason: "local-planned-url-slug-match"
+            });
+            continue;
+          }
+
+          // 2) Match by cleaned working_title
+          const rawTitle = String(obj.working_title || obj.title || obj.h1 || obj.name || obj.topic || "").trim();
+          const cleanTitle = stripDraftsPrefix(rawTitle);
+          const titleSlug = slugifyLite(cleanTitle);
+
+          if (titleSlug && importedSlugSet.has(titleSlug)) {
+            outMatched.push({
+              ...obj,
+              title: rawTitle,
+              url: slugToImportedUrl.get(titleSlug) || "",
+              reason: "local-title-slug-match"
+            });
+            continue;
+          }
+
+          outMissing.push({
+            ...obj,
+            title: rawTitle,
+            reason: "no-slug-match"
+          });
+        }
+
+        data.matched = outMatched;
+        data.missing = outMissing;
+
+        console.log("[AuditCard] FALLBACK applied:", {
+          imported: imported.length,
+          drafts: drafts.length,
+          matched: outMatched.length,
+          missing: outMissing.length
+        });
+
+      } catch (e) {
+        console.log("[AuditCard] FALLBACK failed:", e?.message || e);
+      }
+    })();
+
+
+
     const c = data.counts || {};
+
+        // If fallback modified matched/missing arrays, reflect that in the displayed stats
+    const uiMissing = Array.isArray(data?.missing) ? data.missing.length : (c.missing ?? "-");
+    const uiMatched = Array.isArray(data?.matched) ? data.matched.length : (c.matched ?? "-");
+
+
 
     if (stats){
       stats.innerHTML = `
         <div>Sitemap URLs: <strong>${c.sitemap_urls ?? "-"}</strong></div>
         <div>Draft topics: <strong>${c.draft_topics_total ?? "-"}</strong></div>
-        <div>Missing: <strong>${c.missing ?? "-"}</strong> | Matched: <strong>${c.matched ?? "-"}</strong></div>
+        <div>Missing: <strong>${uiMissing}</strong> | Matched: <strong>${uiMatched}</strong></div>
+
       `;
     }
 
@@ -585,7 +1127,7 @@ cut.map(u => {
   } catch(e){
     console.warn("[AuditCard] refresh failed:", e?.message || e);
     if (stats) stats.textContent = "Audit failed: " + (e?.message || e);
-    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">—</div>`;
+    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">�</div>`;
   }
 }
 
@@ -629,14 +1171,14 @@ if (card && card.dataset.urlClickBound !== "1") {
   if (urlInput) urlInput.value = url;
 
   if (bestPhrase) {
-    // ✅ URL MATCHED A PHRASE → PREFILL
+    // ? URL MATCHED A PHRASE ? PREFILL
     if (keywordChip) keywordChip.textContent = bestPhrase;
     if (textInput) textInput.value = bestPhrase;
     if (titleInput) titleInput.value = "";
 
     console.log("[AuditCard] Prefilled phrase:", bestPhrase, "for", url);
   } else {
-    // ❌ NO MATCH → LEAVE PHRASE EMPTY
+    // ? NO MATCH ? LEAVE PHRASE EMPTY
     if (keywordChip) keywordChip.textContent = "";
     if (textInput) textInput.value = "";
     if (titleInput) titleInput.value = "";
@@ -694,7 +1236,7 @@ const btnDownloadMenu = $("btnDownloadMenu");
 const downloadMenu = $("downloadMenu");
 let currentExport = "original";
 
-/* ✅ Correct Auto-Link button hook (matches HTML: id="btnAutoLinkMain") */
+/* ? Correct Auto-Link button hook (matches HTML: id="btnAutoLinkMain") */
 const btnAutoLinkMain = $("btnAutoLinkMain");
 
 /* Progress bar (present in HTML) */
@@ -731,7 +1273,7 @@ btnAutoLinkMain?.addEventListener("click", async () => {
   }
 
   try {
-    // For now: behave like the old Auto-Link — current doc only
+    // For now: behave like the old Auto-Link � current doc only
     await runPipelineAndHighlight({ append: true });
 
     updateHighlightBadge();
@@ -759,7 +1301,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
 
 
 // ==========================================================================
-// Session format helpers (upload/download lock to one format) — COLLISION-SAFE
+// Session format helpers (upload/download lock to one format) � COLLISION-SAFE
 // ==========================================================================
 (function(){
   const W = (typeof window !== "undefined") ? window : globalThis;
@@ -813,14 +1355,14 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
       menu.querySelectorAll("button[data-ext]").forEach(btn=>{
         const extAttr = (btn.getAttribute("data-ext") || "").toLowerCase();
 
-        // Never show “original” or “.htm”
+        // Never show �original� or �.htm�
         if (kill.has(extAttr)) { btn.style.display = "none"; return; }
 
         // If a session format is locked, show only that matching option
         if (sess){
           btn.style.display = allow.has(extAttr) ? "" : "none";
         } else {
-          // No session yet → show everything except killers
+          // No session yet ? show everything except killers
           btn.style.display = "";
         }
       });
@@ -845,10 +1387,40 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
 })();
 
 
+async function loadAndRenderDocByIndex(idx){
+  if (idx < 0 || idx >= (docs || []).length) return;
+  const d = docs[idx] || {};
+  const docId = String(d.doc_id || "");
+  if (!docId) { renderDoc(idx); return; }
+
+  try{
+    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+    
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+     const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+
+    // merge preview into the placeholder doc
+    docs[idx] = Object.assign({}, docs[idx], data, data.doc || {});
+    renderDoc(idx);
+
+    // keep dropdown in sync
+    try { if (allDocs) allDocs.value = docId; } catch {}
+  } catch(e){
+    console.error("[preview] failed:", e);
+    showToast?.(errorBox, "Preview failed: " + (e?.message || e), 2200);
+    renderDoc(idx); // fallback
+  }
+}
+
+
+
 /* ==========================================================================
    HELPERS
    ========================================================================== */
-const rxWord = /[\p{L}\p{N}’'-]+/gu;
+const rxWord = /[\p{L}\p{N}�'-]+/gu;
 const norm   = (s)=> String(s||"").toLowerCase().trim().replace(/\s+/g, " ");
 const tokens = (s)=> (String(s||"").toLowerCase().match(rxWord) || []).filter(Boolean);
 const uniq   = (a)=> Array.from(new Set(a));
@@ -869,7 +1441,7 @@ function extractHtmlPayload(rawHtml = "") {
     }
     doc.documentElement.innerHTML = rawHtml;
 
-    // Collect inline styles from <head> (ignore <link> for now—can’t fetch local files)
+    // Collect inline styles from <head> (ignore <link> for now�can�t fetch local files)
     const head = doc.querySelector("head");
     let styles = "";
     if (head) {
@@ -885,7 +1457,7 @@ function extractHtmlPayload(rawHtml = "") {
 }
 
 function markdownToHtml(md = "") {
-  // Minimal but solid MD → HTML (supports: headings, bold/italic, code, lists, tables, links/images)
+  // Minimal but solid MD ? HTML (supports: headings, bold/italic, code, lists, tables, links/images)
   // 1) Fence blocks
   const fences = [];
   md = md.replace(/```([\s\S]*?)```/g, (_, code) => {
@@ -893,7 +1465,7 @@ function markdownToHtml(md = "") {
     return `\uE000CODE${fences.length - 1}\uE000`;
   });
 
-  // 2) Escape HTML (so markdown can’t inject raw tags)
+  // 2) Escape HTML (so markdown can�t inject raw tags)
   const esc = s => String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -1221,7 +1793,7 @@ function importDraftFromText(text){
     });
     added++;
   }
-  saveDraftTopics();
+  saveDraftTopics(); // ? disabled: draft is backend-only
   return added;
 }
 
@@ -1351,7 +1923,19 @@ function refreshUploadMenuForSessionFormat(){
 
 
 
-btnUploadMain?.addEventListener("click", ()=> setAcceptAndOpen(currentAccept));
+btnUploadMain?.addEventListener("click", () => {
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+
+  if (!ws) {
+    showToast(errorBox, "Connect a domain first.", 1600);
+    return;
+  }
+
+  console.log("[Upload Workspace]", ws);
+  setAcceptAndOpen(currentAccept);
+});
+
+
 if (uploadMenu) uploadMenu.querySelectorAll("button").forEach(btn=>{
   btn.addEventListener("click", (e)=>{
     e.stopPropagation();
@@ -1377,7 +1961,7 @@ if (downloadMenu) downloadMenu.querySelectorAll("button").forEach(btn=>{
     hideMenu(downloadMenu, btnDownloadMenu);
 
     try{
-      // Prefer the locked session format; if not set yet, use the button’s request
+      // Prefer the locked session format; if not set yet, use the button�s request
       const sess = getSessionFormat(); // ".docx" | ".md" | ".txt" | ".html" | ""
       const requested = (btn.getAttribute("data-ext") || "").toLowerCase();
 
@@ -1456,23 +2040,29 @@ fileInput?.addEventListener("change", async()=>{
       const ext = extOf(file?.name || "");
       if (ext !== sessExt) { skipped++; continue; }
 
-      const data = await uploadFile(file);
+      const ws = (window.WORKSPACE_ID || localStorage.getItem("workspace_id") || "ws_betterhealthcheck_com").trim();
+      const data = await uploadFile(file, ws);
       getOrAssignCode(data);
       docs.push(data);
       accepted++;
     }
 
     if (accepted === 0) {
-      showToast(errorBox, `No files uploaded — session is locked to ${sessExt}.`, 2200);
+      showToast(errorBox, `No files uploaded � session is locked to ${sessExt}.`, 2200);
       fileInput.value = "";
       return;
     }
 
-    refreshDropdown();
-    rebuildTitleIndexFromDocs();
-    rebuildPublishedTopics();
-    renderDoc(docs.length - 1);
-    saveState();
+  refreshDropdown();
+rebuildTitleIndexFromDocs();
+rebuildPublishedTopics();
+renderDoc(docs.length - 1);
+
+// ? NEW: render using the backend preview contract (is_html)
+try { window.renderPreview?.(docs[docs.length - 1]); } catch {}
+
+saveState();
+
 
     const msg = skipped
       ? `Uploaded ${accepted} file(s). Skipped ${skipped} (not ${sessExt}).`
@@ -1500,8 +2090,16 @@ sitemapFile.addEventListener("change", async () => {
     const added = Number(r.added || 0);
 
     // 2) Load full saved set from backend into engine memory
-    const urls = await apiLoadImportedUrls("default", 200000);
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+const urls = ws ? await apiLoadImportedUrls(ws, 200000) : [];
     IMPORTED_URLS = new Set(urls);
+
+   // ? Update the badge in the top bar
+try {
+  const el = document.getElementById("importCount");
+  setImportCount(IMPORTED_URLS.size || 0);
+} catch {}
+
 
     // 3) Continue normal pipeline (no distortion)
     rebuildTitleIndexFromDocs();
@@ -1523,7 +2121,7 @@ sitemapFile.addEventListener("change", async () => {
 });
 
 
-/* Import Draft Map — BACKEND ONLY (single source of truth) */
+/* Import Draft Map � BACKEND ONLY (single source of truth) */
 if (btnImportDraft && draftFile) {
   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
 
@@ -1573,6 +2171,59 @@ if (btnImportDraft && draftFile) {
     console.log("[Draft] BACKEND loaded:", DRAFT_TOPICS.size);
   }
 
+   // ? Hydrate drafts from backend on initial load (so Draft BACKEND loaded is never 0 unless backend is empty)
+(async function hydrateDraftsOnLoad(){
+  try{
+    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+const url = `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+
+    const res = await fetch(url);
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+
+    // backend can return {topics:{}} or {items:[]} depending on your route version
+    const topicsObj = (data && typeof data.topics === "object" && data.topics) ? data.topics : null;
+    const itemsArr  = Array.isArray(data?.items) ? data.items : null;
+
+    // Normalize into DRAFT_TOPICS Map (url -> topic)
+    if (!window.DRAFT_TOPICS) window.DRAFT_TOPICS = new Map();
+    window.DRAFT_TOPICS.clear();
+
+    let count = 0;
+
+    if (topicsObj) {
+      // { url: {title,...}, ... }
+      for (const [u, meta] of Object.entries(topicsObj)) {
+        const url2 = String(u || "").trim();
+        if (!url2) continue;
+        window.DRAFT_TOPICS.set(url2, meta || {});
+        count++;
+      }
+    } else if (itemsArr) {
+      // [{planned_url,title,topic_id,...}, ...]
+      for (const r of itemsArr) {
+        const url2 = String(r?.planned_url || r?.url || "").trim();
+        if (!url2) continue;
+        window.DRAFT_TOPICS.set(url2, r);
+        count++;
+      }
+    }
+
+    // ? Update any Draft count element if you have one
+    try{
+      const el = document.getElementById("draftCount");
+      if (el) el.textContent = String(count);
+    }catch{}
+
+    console.log("[Draft] BACKEND loaded:", count);
+  }catch(e){
+    console.warn("[Draft] BACKEND hydrate failed:", e);
+  }
+})();
+
+
+
   btnImportDraft.addEventListener("click", () => {
     draftFile.value = "";
     draftFile.click();
@@ -1587,6 +2238,10 @@ if (btnImportDraft && draftFile) {
       const r = await apiImportDraftFile(f, "default");
       const rows = await apiLoadDraft("default", 200000);
       applyDraftToMemory(rows);
+      const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+if (ws) await updateUnifiedImportCount(ws);
+
+
 
       showToast(
         errorBox,
@@ -1641,7 +2296,7 @@ async function resolveExternalViaBackend(phrase, mark) {
 
   const base = String(window.LINKCRAFTOR_API_BASE || "").replace(/\/+$/,"");
   if (!base) {
-    console.warn("[ExtAutoLink] LINKCRAFTOR_API_BASE is empty — cannot call backend");
+    console.warn("[ExtAutoLink] LINKCRAFTOR_API_BASE is empty � cannot call backend");
     return null;
   }
 
@@ -1694,7 +2349,7 @@ async function logExternalLink(eventType, phrase, url, mark) {
       if (!base) return;
 
       console.log(
-        "[ExtAutoLink] POST /api/external/log →",
+        "[ExtAutoLink] POST /api/external/log ?",
         base + "/api/external/log",
         body
       );
@@ -1747,14 +2402,14 @@ async function enrichExternalMarksWithUrls(root) {
   console.log(
     "[ExtAutoLink] Enriching",
     marks.length,
-    "external marks with URLs…"
+    "external marks with URLs�"
   );
 
   for (const mark of marks) {
     try {
       const ds = mark.dataset || {};
 
-      // Already has URL → skip
+      // Already has URL ? skip
       if (ds.url) continue;
 
       // Phrase: prefer data-phrase, fallback to text
@@ -1784,25 +2439,25 @@ async function enrichExternalMarksWithUrls(root) {
         finalProviderName = backendResult.providerLabel;
         console.log(
           "[ExtAutoLink] Backend resolved phrase:",
-          `"${phrase}" → ${finalUrl} | provider:`,
+          `"${phrase}" ? ${finalUrl} | provider:`,
           finalProviderName || finalProviderId || "unknown"
         );
       }
 
       // -------------------------------------------
-// 2) If backend had no match → DO NOT LINK
+// 2) If backend had no match ? DO NOT LINK
 // (fallback is disabled by design)
 // -------------------------------------------
 if (!finalUrl) {
   console.log(
-    "[ExtAutoLink] No backend match → fallback DISABLED → leaving unlinked:",
+    "[ExtAutoLink] No backend match ? fallback DISABLED ? leaving unlinked:",
     `"${phrase}"`
   );
   return null;
 }
 
       // -------------------------
-      // 3) If we found a URL → set
+      // 3) If we found a URL ? set
       // -------------------------
       if (finalUrl) {
         mark.dataset.url = finalUrl;
@@ -1875,21 +2530,43 @@ editor?.addEventListener("input", () => {
   }
 });
 
-allDocs?.addEventListener("change", () => {
-  const fname = allDocs.value;
-  if (!fname) return;
-  const idx = docs.findIndex(d => d.filename === fname);
-  if (idx >= 0) renderDoc(idx);
+allDocs?.addEventListener("change", async () => {
+  const docId = allDocs.value;
+  if (!docId) return;
+
+  const idx = docs.findIndex(d => String(d.doc_id || "") === String(docId));
+  if (idx < 0) return;
+
+  try{
+    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+    
+   const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+
+    // Update the placeholder doc with real preview content
+    docs[idx] = Object.assign({}, docs[idx], data, data.doc || {});
+
+    // Render using the new preview contract
+    renderDoc(idx);
+  } catch(e){
+    console.error("[preview] failed:", e);
+    showToast?.(errorBox, "Preview failed: " + (e?.message || e), 2200);
+  }
 });
+
+
 
 const btnClearSession = $("btnClearSession");
 btnClearSession?.addEventListener("click", () => {
   clearState();
   docs.splice(0, docs.length);
   currentIndex = -1;
-  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing…";
+  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing�";
   safeSetText(topMeta, "No document loaded", "topMeta");
-  safeSetText(docMeta, "Code: —", "docMeta");
+  safeSetText(docMeta, "Code: �", "docMeta");
   safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
   allDocs && (allDocs.innerHTML = "<option value=''>All docs</option>");
   APPLIED_LINKS = [];
@@ -1914,15 +2591,14 @@ function applyStopwords() {
 
 /* Doc navigation */
 btnPrevDoc?.addEventListener("click", () => {
-  if (currentIndex > 0) renderDoc(currentIndex - 1);
+  if (currentIndex > 0) loadAndRenderDocByIndex(currentIndex - 1);
 });
 btnNextDoc?.addEventListener("click", () => {
-  if (currentIndex < docs.length - 1) renderDoc(currentIndex + 1);
+  if (currentIndex < docs.length - 1) loadAndRenderDocByIndex(currentIndex + 1);
 });
 
-
 /* ==========================================================================
-   BULK APPLY — TURN MARKS INTO UNDERLINED LINKS
+   BULK APPLY � TURN MARKS INTO UNDERLINED LINKS
    ========================================================================== */
 
 /**
@@ -2009,7 +2685,7 @@ async function bulkApplyInContainer(root) {
     if (!href) {
       skippedNoHref++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no href) — phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
+        `[BulkApply] MARK #${i}: SKIP (no href) � phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
       );
       continue;
     }
@@ -2018,7 +2694,7 @@ async function bulkApplyInContainer(root) {
     if (!text) {
       skippedNoText++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no text) — href="${href}", phrase="${phrase}"`
+        `[BulkApply] MARK #${i}: SKIP (no text) � href="${href}", phrase="${phrase}"`
       );
       continue;
     }
@@ -2032,7 +2708,7 @@ const isHttpUrl = /^https?:\/\//i.test(href);
 
 if (isExternalKind && isHttpUrl && typeof logExternalLink === "function") {
   const phraseText = String(text || phrase || (mark?.textContent || ""))
-  .replace(/[✓✕]/g, "")
+  .replace(/[??]/g, "")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -2046,7 +2722,7 @@ if (isExternalKind && isHttpUrl && typeof logExternalLink === "function") {
     const a = document.createElement("a");
     a.href = href;
     a.textContent = String(text || "")
-  .replace(/[✓✕]/g, "")
+  .replace(/[??]/g, "")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -2064,12 +2740,12 @@ if (isExternalKind && isHttpUrl && typeof logExternalLink === "function") {
     applied++;
 
     console.log(
-      `[BulkApply] MARK #${i}: APPLY — href="${href}", text="${text}"`
+      `[BulkApply] MARK #${i}: APPLY � href="${href}", text="${text}"`
     );
   }
 
   console.log(
-    "[BulkApply] SUMMARY (container) — applied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApply] SUMMARY (container) � applied=%d, skippedNoHref=%d, skippedNoText=%d",
     applied,
     skippedNoHref,
     skippedNoText
@@ -2084,8 +2760,8 @@ if (isExternalKind && isHttpUrl && typeof logExternalLink === "function") {
  * --------------------------
  * For each doc:
  *  1) renderDoc(i)
- *  2) runPipelineAndHighlight({ append: true })  → creates marks (+ external enrichment via wrapper)
- *  3) bulkApplyInContainer(viewerEl)            → turns marks into <a> links
+ *  2) runPipelineAndHighlight({ append: true })  ? creates marks (+ external enrichment via wrapper)
+ *  3) bulkApplyInContainer(viewerEl)            ? turns marks into <a> links
  *  4) save updated HTML/text back into docs[i]
  */
 async function bulkApplyAllDocs() {
@@ -2199,7 +2875,7 @@ async function bulkApplyAllDocs() {
   }
 
   console.log(
-    "[BulkApplyAll] DONE — totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApplyAll] DONE � totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
     totalApplied,
     totalSkippedNoHref,
     totalSkippedNoText
@@ -2207,11 +2883,11 @@ async function bulkApplyAllDocs() {
 }
 
 /* ------------------------------------------------------------------
- * Button wiring – ONE CLICK = BULK APPLY ACROSS ALL DOCS
+ * Button wiring � ONE CLICK = BULK APPLY ACROSS ALL DOCS
  * ------------------------------------------------------------------ */
 
 async function handleBulkApplyAllClick() {
-  console.log("[BulkApplyAll] Button clicked — bulk apply across *ALL* docs");
+  console.log("[BulkApplyAll] Button clicked � bulk apply across *ALL* docs");
   await bulkApplyAllDocs();
 
   // After the bulk, refresh UI for the currently visible doc
@@ -2256,6 +2932,7 @@ const HELIX = Object.freeze({
   ilrBand: Object.freeze({ base: 0.90, span: 0.10 }),
   embedDim: 192
 });
+
 
 /* ==========================================================================
    NEW: Entity features flags + caches (Entity Map / Graph / Content-Aware)
@@ -2358,6 +3035,45 @@ function paragraphContextSim01(sectionText, targetTitle){
     return clamp01(cosineSim(vs, vt));
   }catch{return 0;}
 }
+
+
+// ================================
+// loadAndRenderDocByIndex (declare-once; collision-safe)
+// ================================
+(function(){
+  const W = (typeof window !== "undefined") ? window : globalThis;
+
+  // If already defined, do nothing (prevents "already been declared")
+  if (typeof W.loadAndRenderDocByIndex === "function") return;
+
+  W.loadAndRenderDocByIndex = async function(idx){
+    if (idx < 0 || idx >= (docs || []).length) return;
+    const d = docs[idx] || {};
+    const docId = String(d.doc_id || "");
+    if (!docId) { renderDoc(idx); return; }
+
+    try{
+      const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+       
+      const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+      const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+
+      const data = await res.json().catch(()=>({}));
+      if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+
+      docs[idx] = Object.assign({}, docs[idx], data, data.doc || {});
+      renderDoc(idx);
+
+      try { if (allDocs) allDocs.value = docId; } catch {}
+    } catch(e){
+      console.error("[preview] failed:", e);
+      showToast?.(errorBox, "Preview failed: " + (e?.message || e), 2200);
+      renderDoc(idx);
+    }
+  };
+})();
+
+
 
 /* ============================
    HELIX helpers (authority/cluster)
@@ -2498,7 +3214,8 @@ function topicsFromOtherDocsH1(){
   return out;
 }
 
-/* ============================
+
+ /* ============================
    Candidate discovery + scoring helpers
    ============================ */
 function extractAnchorsFromText(text){
@@ -2549,7 +3266,7 @@ function anchorWordIndex(section, anchorText, startOffset){
 }
 
 /* ==========================================================================
-   HELIX Engine — with Entity Map, Entity Graph & Content-Aware nudges
+   HELIX Engine � with Entity Map, Entity Graph & Content-Aware nudges
    ========================================================================== */
 function helixRun(){
   if (!viewerEl) return { recommended:[], optional:[], external: [], hidden:[], meta:{} };
@@ -2572,7 +3289,7 @@ function helixRun(){
   const sectionTokensNL  = sections.map(s => tokensNL(s.text));
 
   // Build/refresh Entity Map from headings + visible text (lightweight)
-  // — keyed by canonical form
+  // � keyed by canonical form
   if (ENTITY_FEATURES.MAP) {
     ENTITY_MAP = new Map();
     const lexSeen = new Set();
@@ -2713,7 +3430,7 @@ function helixRun(){
         // Small bump for URL coverage
         score += Math.min(0.06, urlCov*0.12);
 
-        // Embedding similarity (content-aware ①)
+        // Embedding similarity (content-aware ?)
         try {
           const aText = anchorTokNL.join(" ");
           const tText = bestVar.nlTok.join(" ");
@@ -2852,7 +3569,7 @@ function helixRun(){
 function rb2Run(){ return helixRun(); }
 
 /* ==========================================================================
-   External Categories (pluggable) — dynamic import
+   External Categories (pluggable) � dynamic import
    ========================================================================== */
 let EXT_CAT = {
   API: null,            // the whole default export (object)
@@ -2889,7 +3606,7 @@ async function ensureExternalCategories(){
 }
 
 /* ==========================================================================
-   External V2 helpers (local) — mirrors internal logic for external cues
+   External V2 helpers (local) � mirrors internal logic for external cues
    ========================================================================== */
 function isAlphaPhrase(tokArr) {
   if (!tokArr || tokArr.length < EXT_V2.THRESHOLDS.MIN_TOKENS || tokArr.length > EXT_V2.THRESHOLDS.MAX_TOKENS) return false;
@@ -2974,7 +3691,7 @@ function cueSciMed(text){
   const t = text;
   const morph = /\b[\p{L}]{5,}(itis|osis|emia|algia|ectomy|opathy|genesis|omics)\b/iu.test(t);
   const gene  = /\b[A-Z]{2,}\d+(?:-\d+)?\b/.test(t);
-  const crispr = /\bCRISPR[-–]?[A-Za-z0-9]+\b/.test(t);
+  const crispr = /\bCRISPR[-�]?[A-Za-z0-9]+\b/.test(t);
   return morph || gene || crispr;
 }
 function cueCanonicalCollocation(tokRaw){
@@ -3050,7 +3767,7 @@ function detectPositiveCuesExternal(anchorText, tokRaw){
 }
 
 /* ==========================================================================
-   External V2 (local) — scoring and placement
+   External V2 (local) � scoring and placement
    ========================================================================== */
 function externalLocalRun(options = {}) {
   if (!viewerEl || !EXT_V2.ENABLED) return { suggestions: [], meta: { passed:0, filtered:0 } };
@@ -3081,7 +3798,7 @@ function externalLocalRun(options = {}) {
 
       const alphaOk = isAlphaPhrase(rawTok);
       const bucketWhitelisted = externalBucket.has(key);
-      // NEW: category gate — if it matches any recognizer or gazetteer we allow it through
+      // NEW: category gate � if it matches any recognizer or gazetteer we allow it through
       const catHits = externalCategoryHits(a);
       const categoryQualified = catHits.length > 0;
 
@@ -3132,7 +3849,7 @@ function externalLocalRun(options = {}) {
     const pos = detectPositiveCuesExternal(c.anchorText, c.anchorTokRaw);
     score += pos.bump;
 
-    // Tiering — but if user bucket-whitelisted it, never drop
+    // Tiering � but if user bucket-whitelisted it, never drop
     const tier = score >= EXT_V2.THRESHOLDS.STRONG ? "strong"
                : score >= EXT_V2.THRESHOLDS.OPTIONAL ? "optional" : "drop";
 
@@ -3216,7 +3933,7 @@ function underlineLinkedPhrases(){
   }
 }
 
-// Remove keyword marks around/inside headings (h1–h6) so titles are never highlighted
+// Remove keyword marks around/inside headings (h1�h6) so titles are never highlighted
 function stripMarksFromHeadings(root) {
   if (!root) return;
 
@@ -3280,8 +3997,7 @@ function applyMarksFromSuggestions(suggestions, opts = {}) {
     });
   }
 
-  // Remove only bucket marks (so buckets can repaint)
-  unwrapBucketMarksOnly();
+
 
   // Existing phrases already marked in the viewer
   const existingMarked = new Set(
@@ -3317,9 +4033,9 @@ function applyMarksFromSuggestions(suggestions, opts = {}) {
   const controlsHtml = `<span class="kw-ctl" aria-hidden="true"
       style="position:absolute;right:-8px;top:-8px;display:flex;gap:2px;opacity:0;pointer-events:none;">
     <button class="kw-btn kw-accept" title="Accept" 
-      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #10b981;color:#10b981;background:#fff;cursor:pointer;padding:0;">✓</button>
+      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #10b981;color:#10b981;background:#fff;cursor:pointer;padding:0;">?</button>
     <button class="kw-btn kw-reject" title="Reject" 
-      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #ef4444;color:#ef4444;background:#fff;cursor:pointer;padding:0;">✕</button>
+      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #ef4444;color:#ef4444;background:#fff;cursor:pointer;padding:0;">?</button>
   </span>`;
 
   window.REJECTED_SET = window.REJECTED_SET || new Set();
@@ -3329,21 +4045,25 @@ function applyMarksFromSuggestions(suggestions, opts = {}) {
   const phraseHits  = new Map();    // phraseNorm -> count in this document
 
   outer: for (const s of suggestions) {
-    const rawPhrase = (s.anchor && s.anchor.text) ? s.anchor.text : "";
+  const rawPhrase = (s.anchor && (s.anchor.paint || s.anchor.text)) ? (s.anchor.paint || s.anchor.text) : "";
+
     const phraseNorm = norm(rawPhrase);
 
-    // 1) No raw text → skip
+    // 1) No raw text ? skip
     if (!rawPhrase) continue;
 
     // 2) Use existing phrase filter (stopwords, length, etc.)
     if (!shouldHighlightPhrase(rawPhrase)) continue;
 
-    // 3) Score/tier gate using FLOORS
-    const bucket = (s.bucket === "strong" ? "strong" : "optional");
-    const score  = (typeof s.score === "number" ? s.score : 1.0);
+    // 3) Bucket comes from RB2 (backend) � DO NOT re-floor here.
+// RB2 already decided strong vs optional using its own thresholds.
+const bucket = (s.bucket === "strong" ? "strong" : "optional");
+const score  = (typeof s.score === "number" ? s.score : 1.0);
 
-    if (bucket === "strong"  && score < FLOORS.STRONG)   continue;
-    if (bucket === "optional" && score < FLOORS.OPTIONAL) continue;
+// Keep debug only (optional)
+// console.log("[MARKS CHECK]", { rawPhrase, bucket, score });
+
+
 
     // 4) Global guards
     if (!phraseNorm ||
@@ -3473,7 +4193,7 @@ function rebuildEngineHighlightsPanel() {
         <div class="kw-item" data-phrase="${escapeHtml(r.phrase)}" data-mode="${r.mode}" data-i="${i}">
           <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${r.dot};margin-right:6px;"></span>
           <button class="kw-jump" title="Find in doc" style="font-size:12px;">${escapeHtml(r.phrase)}</button>
-          <span class="qty" style="font-size:12px;color:#6b7280;">· ${r.tier} (Bucket)</span>
+          <span class="qty" style="font-size:12px;color:#6b7280;">� ${r.tier} (Bucket)</span>
         </div>
       `;
     }).join("");
@@ -3521,7 +4241,7 @@ function rebuildEngineHighlightsPanel() {
       <div class="kw-item" data-i="${i}">
         <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${dot};margin-right:6px;"></span>
         <button class="kw-jump" title="Jump to highlight" style="font-size:12px;">${escapeHtml(phrase)}</button>
-        <span class="qty" style="font-size:12px;color:#6b7280;">· ${tier}</span>
+        <span class="qty" style="font-size:12px;color:#6b7280;">� ${tier}</span>
       </div>
     `;
   }).join("");
@@ -3594,7 +4314,7 @@ function exportableInnerHTML(){
     if (href) {
       const a = document.createElement("a");
       a.textContent = String(text || "")
-  .replace(/[✓✕]/g, "")
+  .replace(/[??]/g, "")
   .replace(/\s+/g, " ")
   .trim();
 
@@ -3629,7 +4349,7 @@ function exportablePlainText(){
     span.parentNode.replaceChild(repl, span);
   });
 
-  // basic HTML→text layout
+  // basic HTML?text layout
   let html = root.innerHTML;
   html = html.replace(/<br\s*\/?>/gi, "\n")
              .replace(/<\/p>\s*<p>/gi, "\n\n")
@@ -3715,7 +4435,7 @@ async function fetchSitemapContent(urls) {
 
 async function downloadDocx() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3733,7 +4453,7 @@ async function downloadDocx() {
 
 function downloadHTML(ext = "html") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3754,7 +4474,7 @@ function downloadHTML(ext = "html") {
 
 function downloadText(ext = "txt") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3774,7 +4494,7 @@ function downloadText(ext = "txt") {
 
 async function downloadOriginal() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3959,7 +4679,7 @@ function fillExternalReferencesFromMark(markEl) {
   for (const r of list) {
     const opt = document.createElement("option");
     opt.value = r.url || "";
-    opt.textContent = r.title ? `${r.title} — ${r.domainRoot || r.domain || ""}` : (r.url || "");
+    opt.textContent = r.title ? `${r.title} � ${r.domainRoot || r.domain || ""}` : (r.url || "");
     opt.dataset.title = r.title || "";
     opt.dataset.provider = r.domainRoot || r.domain || "";
     extReferences.appendChild(opt);
@@ -3967,7 +4687,7 @@ function fillExternalReferencesFromMark(markEl) {
 }
 
 // ==========================================================================
-// HEADING CLEANUP — remove any marks from H1–H6 *and* heading-like <p> tags
+// HEADING CLEANUP � remove any marks from H1�H6 *and* heading-like <p> tags
 // ==========================================================================
 function cleanupMarksInHeadings(root) {
   if (!root) return;
@@ -3977,7 +4697,7 @@ function cleanupMarksInHeadings(root) {
     " mark.kwd-external, mark.kwd-int, mark.kwd-sem, mark.kwd-ext";
 
   // -------------------------------------------------
-  // A) Real heading tags: <h1>…<h6>
+  // A) Real heading tags: <h1>�<h6>
   // -------------------------------------------------
   const headings = root.querySelectorAll("h1, h2, h3, h4, h5, h6");
   headings.forEach(h => {
@@ -3991,7 +4711,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // B) Mark WRAPPING a heading:
-  //    <mark class="kwd-…"><h1>Heading</h1></mark>
+  //    <mark class="kwd-�"><h1>Heading</h1></mark>
   // -------------------------------------------------
   const allMarks = root.querySelectorAll(MARK_SELECTOR);
   allMarks.forEach(mark => {
@@ -4003,7 +4723,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // C) "Heading-like" paragraphs (your exact case):
-  //    <p><strong><span><mark …><span class="kw-core">Heading</span>…</mark></span></strong></p>
+  //    <p><strong><span><mark �><span class="kw-core">Heading</span>�</mark></span></strong></p>
   //    We treat short, mostly-bold <p> as headings and remove marks inside.
   // -------------------------------------------------
   const paras = root.querySelectorAll("p");
@@ -4040,86 +4760,202 @@ function cleanupMarksInHeadings(root) {
 
 
 /* ==========================================================================
-   PIPELINE (invoke engine) — internal + External V2 local
+   PIPELINE (invoke engine) � internal + External V2 local
    ========================================================================== */
 async function runPipelineAndHighlight(opts = {}) {
+
   if (!viewerEl) return 0;
 
   const append        = opts.append !== false;
   const perPassLimit  = opts.perPassLimit || MAX_UNIQUE_PHRASES;
   const silent        = !!opts.silent;
 
-  // Remove any old bucket-only marks
-  unwrapBucketMarksOnly();
+  
 
   // 1) Ensure external categories are loaded (so cues have your rules/tech)
   await ensureExternalCategories();
 
-  // 2) INTERNAL (Strong + Optional)
-  const out       = helixRun();
-  const internal  = [...out.recommended, ...out.optional];
-
-  const appliedInternal = highlightEnabled
-    ? applyMarksFromSuggestions(internal, { append: true, perPassLimit })
-    : 0;
-
-  // 3) EXTERNAL (V2 local)
-  const plain         = viewerEl?.textContent || "";
-  const reservedSpans = buildReservedSpansFromMarks(plain);
-
-  const extV2               = externalLocalRun({ internalPool: internal, reservedSpans });
-  const externalSuggestions = extV2.suggestions || [];
-
-  LAST_ENGINE_OUTPUT = {
-    ...out,
-    external: externalSuggestions,
-    meta: { ...out.meta, externalGating: extV2.meta }
-  };
-
-  const appliedExternal = highlightEnabled
-    ? applyMarksFromSuggestions(externalSuggestions, {
-        append: true,
-        perPassLimit: externalSuggestions.length || perPassLimit
-      })
-    : 0;
-
-  // 🔹 NEW: absolutely no marks are allowed inside H1–H6 (including
-  // "How to Calculate Conception Date" and all other headings)
-  cleanupMarksInHeadings(viewerEl);
-
-  // Post-processing visuals
-  underlineLinkedPhrases();
-  highlightBucketKeywords();
-  updateHighlightBadge();
-  rebuildEngineHighlightsPanel();
-
-  try { window.__LC_REFRESH_AUDIT_CARD__?.(); } catch {}
+ // 2) INTERNAL now comes from BACKEND engine
+const plainText = viewerEl?.textContent || "";
 
 
-  const added = appliedInternal + appliedExternal;
 
-  if (!silent) {
-    const g   = extV2.meta || { passed: 0, filtered: 0 };
-    const msg =
-      `Added ${added} · internal: ${internal.length} (${appliedInternal})` +
-      ` · external: ${externalSuggestions.length} (${appliedExternal})` +
-      ` · gates: ${g.passed} passed / ${g.filtered} filtered`;
-    showToast(errorBox, msg, 2600);
-  }
+// ? RB2 payload � source of truth (doc-root + Set/Map stores)
+const wsId = "default";
+const docId =
+  window.LC_ACTIVE_DOC_ID ||
+  docs?.[currentIndex]?.doc_id ||
+  docs?.[currentIndex]?.docId ||
+  null;
 
-  // Playbook banner logic
-  const total  = (out.recommended?.length || 0) + (out.optional?.length || 0);
-  const banner = $("playbookBanner");
-  if (banner) {
-    if (total < 3) {
-      banner.style.display = "block";
-      banner.innerHTML = "low yield detected, use the topic gap filler.";
-    } else {
-      banner.style.display = "none";
-    }
-  }
+// 1) Extract the real content node (viewer often renders inside .doc-root)
+const rootEl = (viewerEl?.querySelector?.(".doc-root")) || viewerEl;
 
-  return added;
+// 2) Robust HTML + TEXT
+let html = (rootEl?.innerHTML || "").trim();
+let text = (rootEl?.textContent || "").replace(/\u00A0/g, " ").trim(); // normalize nbsp
+
+// If doc is rendered as plaintext-ish content, convert to <p> blocks for better sectioning
+if (!/<p[\s>]/i.test(html) && text) {
+  const paras = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+  html = paras.map(p => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+}
+
+// 3) Targets: use your real structures (Maps/Sets), not Array.isArray(...)
+const urlsFromSet = (window.IMPORTED_URLS instanceof Set) ? Array.from(window.IMPORTED_URLS) : [];
+const draftFromMap = (window.DRAFT_TOPICS instanceof Map) ? Array.from(window.DRAFT_TOPICS.values()) : [];
+const publishedFromMap = (window.PUBLISHED_TOPICS instanceof Map) ? Array.from(window.PUBLISHED_TOPICS.values()) : [];
+
+// Prefer published + draft titles (best signals), else fallback to imported URLs
+let targets = [];
+
+if (publishedFromMap.length) {
+  targets.push(
+    ...publishedFromMap
+      .map(t => ({
+        url: String(t.url || t.planned_url || t.plannedUrl || "").trim(),
+        title: String(t.title || t.working_title || t.workingTitle || "").trim(),
+        aliases: Array.isArray(t.aliases) ? t.aliases : [],
+        inboundLinks: Number(t.inlinks || t.inboundLinks || 0) || 0
+      }))
+      .filter(x => x.url && x.title)
+  );
+}
+
+if (draftFromMap.length) {
+  targets.push(
+    ...draftFromMap
+      .map(t => ({
+        url: String(t.planned_url || t.url || "").trim(), // may be empty for drafts
+        title: String(t.working_title || t.title || "").trim(),
+        aliases: Array.isArray(t.aliases) ? t.aliases : [],
+        inboundLinks: 0
+      }))
+      .filter(x => x.title)
+  );
+}
+
+if (!targets.length && urlsFromSet.length) {
+  targets = urlsFromSet
+    .filter(Boolean)
+    .map(u => {
+      const url = String(u).trim();
+      const slug = url.split("/").filter(Boolean).slice(-1)[0] || url;
+      const title = slug.replace(/[-_]/g, " ");
+      return { url, title, aliases: [], inboundLinks: 0 };
+    });
+}
+
+const payload = {
+  workspaceId: wsId,
+  docId,
+  phase: (window.PHASE || "publish"),
+  html,
+  text,
+  targets
+};
+
+console.log("[PIPELINE] calling RB2 apiEngineRun now ?", {
+  highlightEnabled,
+  targetsLen: payload?.targets?.length,
+  hasHtml: !!(payload?.html && String(payload.html).trim()),
+  hasText: !!(payload?.text && String(payload.text).trim())
+});
+
+
+const out = await apiEngineRun(payload);
+console.log('[RB2 OUT COUNTS @PAINT]', { rec: (out?.recommended||[]).length, opt: (out?.optional||[]).length, hid: (out?.hidden||[]).length, meta: out?.meta||{} });
+/* ============================
+   INTERNAL HIGHLIGHTS (RB2)
+   ============================ */
+
+// ?? CLEAR OLD BUCKET MARKS ONCE
+unwrapBucketMarksOnly();
+
+// ?? STRONG (blue)
+const strongOnly = (out.recommended || []).map(s => ({
+  ...s,
+  bucket: "strong"
+}));
+
+
+
+const appliedStrong = highlightEnabled
+  ? applyMarksFromSuggestions(strongOnly, {
+      append: false,   // reset before strong
+      perPassLimit
+    })
+  : 0;
+
+
+
+// ?? OPTIONAL (yellow) � MUST be painted explicitly
+const optionalOnly = (out.optional || []).map(s => ({
+  ...s,
+  bucket: "optional"
+}));
+
+const appliedOptional = highlightEnabled
+  ? applyMarksFromSuggestions(optionalOnly, {
+      append: true,    // keep strong, add optional
+      perPassLimit
+    })
+  : [];
+
+console.log("[HIGHLIGHT APPLIED COUNTS]", {
+  strong: (appliedStrong || []).length,
+  optional: (appliedOptional || []).length
+});
+
+
+// ?? COMBINED INTERNAL POOL (for external + audit)
+const internalPool = [...strongOnly, ...optionalOnly];
+
+/* ============================
+   EXTERNAL HIGHLIGHTS
+   ============================ */
+
+const plain         = viewerEl?.textContent || "";
+const reservedSpans = buildReservedSpansFromMarks(plain);
+
+const extV2 = externalLocalRun({
+  internalPool,
+  reservedSpans
+});
+
+const externalSuggestions = extV2.suggestions || [];
+
+const appliedExternal = highlightEnabled
+  ? applyMarksFromSuggestions(externalSuggestions, {
+      append: true,
+      perPassLimit: externalSuggestions.length || perPassLimit
+    })
+  : 0;
+
+/* ============================
+   POST-PROCESSING
+   ============================ */
+
+cleanupMarksInHeadings(viewerEl);
+underlineLinkedPhrases();
+// highlightBucketKeywords();   // ? DISABLE HERE ONLY
+updateHighlightBadge();
+rebuildEngineHighlightsPanel();
+
+
+try { window.__LC_REFRESH_AUDIT_CARD__?.(); } catch {}
+
+const added = appliedStrong + appliedOptional + appliedExternal;
+
+console.log("[HIGHLIGHT RESULT]", {
+  strong_backend: out.recommended?.length || 0,
+  optional_backend: out.optional?.length || 0,
+  appliedStrong,
+  appliedOptional,
+  appliedExternal
+});
+
+return added;
 }
 
 
@@ -4144,7 +4980,7 @@ async function applyAllThisDoc(){
       await delay(30);
     }
   } finally {
-    showToast(errorBox, `Apply All (this doc) — added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
+    showToast(errorBox, `Apply All (this doc) � added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
     applyingAll = false;
     updateHighlightBadge();
     rebuildEngineHighlightsPanel();
@@ -4188,7 +5024,7 @@ async function applyAllAcrossDocs() {
         await delay(20);
       }
 
-      // ✅ NEW: persist highlights back into docs[i]
+      // ? NEW: persist highlights back into docs[i]
       if (viewerEl && docs[i]) {
         docs[i].html = viewerEl.innerHTML;
         docs[i].text = viewerEl.textContent || docs[i].text || "";
@@ -4206,7 +5042,7 @@ async function applyAllAcrossDocs() {
     applyingAll = false;
     showToast(
       errorBox,
-      `Apply All (all docs) — total added ${totalAdded}.`,
+      `Apply All (all docs) � total added ${totalAdded}.`,
       2300
     );
     updateHighlightBadge();
@@ -4338,7 +5174,7 @@ btnResetLinked?.addEventListener("click", () => {
 
 /* ==========================================================================
    Suggestion picker (for IL modal)
-   Uses LAST_ENGINE_OUTPUT only — stable and simple.
+   Uses LAST_ENGINE_OUTPUT only � stable and simple.
    ========================================================================== */
 function findEngineSuggestionsForPhrase(phrase) {
   const norm = (s) => String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
@@ -4399,7 +5235,7 @@ function buildPhraseContext(phraseText) {
     contextType: null
   };
 
-  // Optional hook – if you later define window.LC_getPhraseContext,
+  // Optional hook � if you later define window.LC_getPhraseContext,
   // it can enrich this context (entities, graphVector, contextType, etc.)
   if (typeof window.LC_getPhraseContext === "function") {
     try {
@@ -4789,7 +5625,7 @@ function renderDoc(i){
       } else if (safeText && safeText.trim()) {
         renderFromText(safeText);
       } else {
-        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing…</p></div>`;
+        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing�</p></div>`;
       }
     }
   } catch (e) {
@@ -4813,8 +5649,8 @@ function renderDoc(i){
       if (docs.length === 0) {
         currentIndex = -1;
         // Clear viewer + meta when no docs left
-        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing…</p></div>`;
-        safeSetText(topMeta, "File: —", "topMeta");
+        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing�</p></div>`;
+        safeSetText(topMeta, "File: �", "topMeta");
         safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
       } else {
         currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -4839,8 +5675,8 @@ function renderDoc(i){
           docs.splice(j, 1);
           if (docs.length === 0) {
             currentIndex = -1;
-            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing…</p></div>`;
-            safeSetText(topMeta, "File: —", "topMeta");
+            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing�</p></div>`;
+            safeSetText(topMeta, "File: �", "topMeta");
             safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
           } else {
             currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -4885,19 +5721,19 @@ function loadState(){
 }
 function clearState(){ try { localStorage.removeItem(STORAGE_KEY); } catch {} }
 function refreshDropdown(){
-  if(!allDocs) return;
-  allDocs.innerHTML = "<option value=''>All docs</option>";
   for(let i=0;i<docs.length;i++){
-    const code=docs[i]?(docs[i].docCode||getOrAssignCode(docs[i])):"";
-    const opt=document.createElement("option");
-    opt.value=docs[i].filename;
-    opt.textContent = `${docs[i].filename}${code?" ["+code+"]":""}`;
-    allDocs.appendChild(opt);
-  }
+  const code=docs[i]?(docs[i].docCode||getOrAssignCode(docs[i])):"";
+  const opt=document.createElement("option");
+  opt.value = String(docs[i].doc_id || docs[i].docId || "");
+  if (!opt.value) opt.value = String(i); // fallback only if doc_id missing
+  opt.textContent = `${docs[i].filename}${code?" ["+code+"]":""}`;
+  allDocs.appendChild(opt);
+}
+
 }
 
 // ==========================================================================
-// IMPORTED_URLS storage — BACKEND ONLY (localStorage disabled)
+// IMPORTED_URLS storage � BACKEND ONLY (localStorage disabled)
 // ==========================================================================
 
 async function saveImportedUrlsLocal(){
@@ -4909,7 +5745,8 @@ async function loadImportedUrlsLocal(){
   // Load from backend instead of localStorage
   try {
     const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const res = await fetch(`${base}/api/urls/list?workspace_id=default&limit=200000`);
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+const res = await fetch(`${base}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.detail || "Not Found");
 
@@ -4927,7 +5764,7 @@ async function loadImportedUrlsLocal(){
 
 
 // ================================
-// Draft Topics — BACKEND load on startup
+// Draft Topics � BACKEND load on startup
 // ================================
 async function loadDraftsFromBackend(workspaceId = "default") {
   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
@@ -4961,9 +5798,10 @@ async function loadDraftsFromBackend(workspaceId = "default") {
   return DRAFT_TOPICS;
 }
 
-loadDraftsFromBackend("default").catch(e => console.warn("[Draft] startup load failed:", e?.message || e));
-
-
+if (window.LINKCRAFTOR_WORKSPACE_ID) {
+  loadDraftsFromBackend(window.LINKCRAFTOR_WORKSPACE_ID)
+    .catch(e => console.warn("[Draft] startup load failed:", e?.message || e));
+}
 
 
 // === Imported topics store (titles/URLs from sitemap/drafts/external lists) ===
@@ -5014,7 +5852,8 @@ async function loadImportsFromBackend() {
         ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
         : "http://127.0.0.1:8001";
 
-    const url = `${base}/api/urls/list?workspace_id=default&limit=200000`;
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+const url = `${base}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
     const res = await fetch(url);
     const data = await res.json().catch(() => ({}));
 
@@ -5170,10 +6009,14 @@ function rebuildTitleUrlDatalists() {
  * Update the badge that shows total imported items.
  */
 function updateImportBadge() {
-  const el = document.getElementById("importCount");
-  if (!el) return;
-  el.textContent = String(IMPORTED_TOPICS.length);
+  // ? Unified total: (backend URLs) + (backend drafts)
+  try {
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  if (ws) updateUnifiedImportCount?.(ws);
+  else setImportCount(0);
+} catch {}
 }
+
 
 /**
  * Tiny helper used in boot() to know if we already have a sitemap.
@@ -5301,6 +6144,7 @@ async function boot() {
 
   loadLinkedSet();
   loadRejectedSet();
+  wireDecisionButtons();
   LINKED_MAP = new Map();
   loadImportedUrlsLocal();
 
@@ -5491,17 +6335,38 @@ async function boot() {
           return;
         }
 
-        if (action === "clear-imports") {
-          IMPORTED_TOPICS.length = 0;
-          IMPORT_TITLE_INDEX.clear();
-          IMPORT_URL_INDEX.clear();
-          rebuildTitleUrlDatalists();
-          updateImportBadge();
-          saveImportsToStorage();
-          closeMenu();
-          alert("Imported items cleared.");
-          return;
-        }
+       if (action === "clear-imports") {
+  (async () => {
+    try {
+      const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+      const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+
+      // 1) Clear sitemap/imported URLs (backend)
+      await fetch(`${base}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
+
+      // 2) Clear draft map (backend)  ?
+      const r2 = await fetch(`${base}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
+      const d2 = await r2.json().catch(() => ({}));
+      if (!r2.ok) throw new Error(d2?.detail || d2?.error || `HTTP ${r2.status}`);
+
+      // 3) Reload both backend stores to repaint UI immediately
+      await loadImportsFromBackend();
+      await loadDraftsFromBackend(ws);
+
+      // 4) Update unified badge
+      updateImportBadge();
+
+      closeMenu();
+      alert("Imported URLs + Draft map cleared (backend).");
+    } catch (e) {
+      console.error("[clear-imports] failed:", e);
+      alert("Clear failed: " + (e?.message || e));
+    }
+  })();
+
+  return;
+}
+
       });
 
       // Change handlers: call parsers + ingest
@@ -5545,33 +6410,77 @@ async function boot() {
       });
 
       inDraft?.addEventListener("change", async () => {
-        const file = inDraft.files?.[0];
-        if (!file) return;
+  const file = inDraft.files?.[0];
+  inDraft.value = "";
+  if (!file) return;
 
-        try {
-          let rows = [];
-          let src  = CURRENT_IMPORT_KIND === "external" ? "external" : "draft";
-
-          if (src === "external") {
-            rows = await parseExternalList(file);
-          } else {
-            rows = await parseDraftList(file);
-          }
-
-          ingestImportedRows(rows, src);
-          console.log("[Import Draft/External]", src, file.name, rows, "src=", src);
-          alert(`Parsed ${rows.length} item(s) from ${file.name}`);
-        } catch (err) {
-          console.error("Draft/External parse failed:", err);
-          alert("Failed to parse draft/external file.");
-        }
-      });
-    }
+  // ? Draft Map must be backend-only (so unified count works)
+  if (CURRENT_IMPORT_KIND !== "draft") {
+    alert("External URL import is disabled here. Use the External Resolver flow instead.");
+    return;
   }
+
+  try {
+  // Use the backend draft importer that already exists earlier in app.js
+  const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+
+  const fd = new FormData();
+  fd.append("file", file);
+
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+
+  const res = await fetch(
+    `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
+    { method: "POST", body: fd }
+  );
+  const r = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(r?.detail || r?.error || `HTTP ${res.status}`);
+
+  // Reload draft topics into memory (same logic you already use elsewhere)
+  const res2 = await fetch(
+    `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`
+  );
+  const data2 = await res2.json().catch(() => ({}));
+  if (!res2.ok) throw new Error(data2?.detail || data2?.error || `HTTP ${res2.status}`);
+
+  const rows = Array.isArray(data2.topics) ? data2.topics : [];
+
+  const activeDraftIds = rows.map((_, i) => `draft_${String(i + 1).padStart(4, "0")}`);
+
+await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    workspace_id: ws,
+    active_draft_ids: activeDraftIds
+  })
+});
+
+  // Reuse your existing mapper if present; otherwise keep it simple
+  try { applyDraftToMemory?.(rows); } catch {}
+
+// Update the single combined badge
+await updateUnifiedImportCount(ws);
+
+await fetch(
+  `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+  { method: "POST" }
+);
+
+alert(`Draft saved to backend. Total drafts: ${rows.length}`);
+
+
+} catch (err) {
+  console.error("[Draft backend import] failed:", err);
+  alert("Draft import failed: " + (err?.message || err));
 }
+});
 
+} 
+ 
+ } 
 
-updateImportBadge();
+  } updateImportBadge();
 
 
   // ---------------------------------------------------------------------------
@@ -5580,7 +6489,7 @@ updateImportBadge();
 function bootExtras() {
   console.log("APP.JS ACTIVE VERSION: HELLO FROM TOP");
 
-  // ⚠️ IMPORTANT:
+  // ?? IMPORTANT:
   // Keep whatever initialization you already had inside boot()
   // (wiring uploads, toolbar, loading saved docs, stopwords, buckets, etc.).
   // Do NOT remove your existing setup lines here.
@@ -5617,6 +6526,78 @@ function bootExtras() {
   try { rebuildLinkedPhrasesList(); } catch {}
 }
 
+// =====================================================
+// Layer 1.3 � Wire ? Accept / ? Reject buttons to /api/engine/decision
+// (Event delegation on viewerEl; no UI logic changes beyond emitting decisions)
+// =====================================================
+function wireDecisionButtons(){
+  if (!viewerEl) return;
+  if (viewerEl.dataset.decisionWired === "1") return;
+  viewerEl.dataset.decisionWired = "1";
+
+  viewerEl.addEventListener("click", async (e) => {
+    const btn = e.target?.closest?.("button.kw-btn.kw-accept, button.kw-btn.kw-reject");
+    if (!btn) return;
+
+    const mark = btn.closest("mark.kwd");
+    if (!mark) return;
+
+    // Identify event type
+    const isAccept = btn.classList.contains("kw-accept");
+    const eventType = isAccept ? "LINK_SUGGESTION_ACCEPTED" : "LINK_SUGGESTION_REJECTED";
+
+    // Phrase
+    let phrase = "";
+    try {
+      phrase = decodeURIComponent(mark.getAttribute("data-phrase") || "").trim();
+    } catch {
+      phrase = String(mark.getAttribute("data-phrase") || "").trim();
+    }
+    if (!phrase) phrase = (mark.textContent || "").replace(/[??]/g, "").trim();
+
+    // Build phraseCtx (reuse your existing helper)
+    const baseCtx = (typeof buildPhraseContext === "function") ? buildPhraseContext(phrase) : { phraseText: phrase };
+
+    const workspaceId = (window.LC_WORKSPACE_ID || "ws_demo");
+    const docId =
+      (window.LC_ACTIVE_DOC_ID || null) ||
+      (docs && currentIndex >= 0 && docs[currentIndex] ? (docs[currentIndex].doc_id || docs[currentIndex].docId || null) : null);
+
+    const phraseCtx = {
+      workspaceId,
+      docId,
+      phraseText: phrase,
+      contextType: baseCtx.contextType || null,
+      sectionType: "BODY",
+      intent: "INFO",
+      entities: Array.isArray(baseCtx.entities) ? baseCtx.entities : []
+    };
+
+    // Candidate (from mark dataset)
+    const kind = String(mark.getAttribute("data-kind") || "").toLowerCase();
+    const url  = String(mark.getAttribute("data-url") || "").trim();
+    const title = String(mark.getAttribute("data-title") || "").trim();
+    const topicId = String(mark.getAttribute("data-topic-id") || "").trim();
+
+    const candidate = {
+      id: topicId || "",
+      title: title || phrase,
+      url: url || "",
+      sourceType: kind || "engine",
+      isExternal: kind === "external",
+      entities: Array.isArray(baseCtx.entities) ? baseCtx.entities : []
+    };
+
+    // Emit decision (do not block UI)
+    await emitDecision(eventType, phraseCtx, candidate, {
+      uiControl: isAccept ? "kw-accept" : "kw-reject",
+      kind
+    });
+  }, true);
+}
+
+
+
 // DOM ready wrapper
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", () => { boot(); }, { once: true });
@@ -5632,7 +6613,7 @@ if (document.readyState === "loading") {
   // Hide disallowed options (and permanently removed ones) on load
   try { ensureDownloadMenuForSession(); } catch {}
 
-  menu.addEventListener("click", (e)=>{
+  menu.addEventListener("click", async (e) => {
     const btn = e.target.closest("button[data-ext]");
     if (!btn) return;
 
@@ -5663,7 +6644,9 @@ if (document.readyState === "loading") {
 
 
 /* ==========================================================================
-   FORCE Sitemap Import → BACKEND (single source of truth)
+   FORCE Sitemap Import ? BACKEND (single picker, hard takeover)
+   - Click: we open ONE picker in the same user gesture
+   - Change: we upload to backend and block legacy local parsing
    ========================================================================== */
 
 (function wireSitemapImportBackend() {
@@ -5672,85 +6655,371 @@ if (document.readyState === "loading") {
 
   const sitemapFile = document.getElementById("sitemapFile");
   if (!sitemapFile) {
-    console.error("[SITEMAP->BACKEND] sitemapFile not found");
+    console.error("[SITEMAP->BACKEND] sitemapFile not found (#sitemapFile)");
     return;
   }
 
-  // Find buttons by visible text
-  function findBtn(text) {
-    return [...document.querySelectorAll("button")]
-      .find(b => (b.textContent || "").toLowerCase().includes(text));
+  // Make sure it is truly a file input
+  if (String(sitemapFile.type || "").toLowerCase() !== "file") {
+    console.error("[SITEMAP->BACKEND] #sitemapFile is not <input type='file'>");
+    return;
   }
 
-  const btnXML = findBtn("xml");
-  const btnCSV = findBtn("csv");
-  const btnTXT = findBtn("txt");
+  const scope = document.getElementById("importMenu") || document;
+
+  function findBtnContains(txt) {
+    const t = String(txt || "").toLowerCase();
+    return [...scope.querySelectorAll("button")]
+      .find(b => (b.textContent || "").toLowerCase().includes(t));
+  }
+
+  const btnXML = findBtnContains("xml");
+  const btnCSV = findBtnContains("csv");
+  const btnTXT = findBtnContains("txt");
 
   if (!btnXML || !btnCSV || !btnTXT) {
-    console.error("[SITEMAP->BACKEND] Import buttons not found");
+    console.error("[SITEMAP->BACKEND] Import buttons not found (xml/csv/txt)");
     return;
   }
 
-  async function uploadToBackend(file) {
-    const fd = new FormData();
-    fd.append("file", file);
-
-    const res = await fetch(
-      `${API_BASE}/api/urls/import?workspace_id=default`,
-      { method: "POST", body: fd }
-    );
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || "Upload failed");
-
-    return data;
+  function toast(msg, ms = 2400) {
+    try { window.showToast?.(window.errorBox, msg, ms); } catch {}
+    console.log("[SITEMAP->BACKEND]", msg);
   }
+
+  function ensureImportedUrlsSet() {
+    if (!window.IMPORTED_URLS || !(window.IMPORTED_URLS instanceof Set)) {
+      window.IMPORTED_URLS = new Set();
+    }
+    return window.IMPORTED_URLS;
+  }
+
+ async function uploadToBackend(file) {
+  const fd = new FormData();
+  // Backend MUST be expecting UploadFile named "file"
+  fd.append("file", file, file.name);
+
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+  const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
+  const res = await fetch(url, { method: "POST", body: fd });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = data?.detail || data?.error || `HTTP ${res.status}`;
+    throw new Error(detail);
+  }
+  return data;
+}
 
   async function reloadFromBackend() {
-    const res = await fetch(
-      `${API_BASE}/api/urls/list?workspace_id=default&limit=200000`
-    );
-    const data = await res.json();
-    IMPORTED_URLS = new Set(data.urls || []);
-    console.log("[SITEMAP->BACKEND] Loaded:", IMPORTED_URLS.size);
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+  const res = await fetch(url);
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const detail = data?.detail || data?.error || `HTTP ${res.status}`;
+    throw new Error(detail);
   }
 
-  function bind(btn) {
-    btn.addEventListener("click", () => {
-      sitemapFile.value = "";
+  const set = ensureImportedUrlsSet();
+  const before = set.size;
+
+  const urls = Array.isArray(data?.urls) ? data.urls : [];
+
+  // ? GUARD: never wipe a non-empty in-memory set with an empty backend response
+  // This prevents the "82 then 0" flip you keep seeing.
+  if (urls.length === 0 && before > 0) {
+    console.warn("[Imports] BACKEND returned 0; keeping existing:", before);
+    return before;
+  }
+
+  // ? Normal replace when backend has data (or when we had nothing yet)
+  set.clear();
+  for (const u of urls) set.add(u);
+
+  return set.size;
+}
+
+// ? add this line:
+window.__LC_reloadFromBackend = reloadFromBackend;
+
+  // Hard-takeover click: stop legacy click handlers and open picker once
+  function takeoverClick(btn, accept) {
+    btn.addEventListener("click", (e) => {
+      // Block other handlers that might also call click() or set accept differently
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+
+      sitemapFile.setAttribute("accept", accept);
+
+      // ONE picker, opened in the same user gesture (no setTimeout)
       sitemapFile.click();
-    });
+    }, true); // capture-phase so we win
   }
 
-  bind(btnXML);
-  bind(btnCSV);
-  bind(btnTXT);
+  // More permissive accept strings (some browsers are picky)
+  takeoverClick(btnXML, ".xml,application/xml,text/xml");
+  takeoverClick(btnCSV, ".csv,text/csv,application/vnd.ms-excel");
+  takeoverClick(btnTXT, ".txt,text/plain");
 
-  sitemapFile.addEventListener("change", async () => {
+  // Hard-takeover change: upload to backend, block any legacy local-parse handlers
+  let uploading = false;
+
+  sitemapFile.addEventListener("change", async (e) => {
     const f = sitemapFile.files?.[0];
     if (!f) return;
 
+    // Prevent any other change listeners (legacy local parsing)
+e.stopImmediatePropagation();
+
+if (uploading) return;
+uploading = true;
+
+try {
+  const set = ensureImportedUrlsSet();
+  const before = set.size;
+
+  toast(`Uploading ${f.name} to backend...`, 1800);
+
+  await uploadToBackend(f);
+
+  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  const after = ws ? (await apiLoadImportedUrls(ws, 200000)).length : 0;
+
+  if (ws) await updateUnifiedImportCount(ws);
+
+  if (ws) {
     try {
-      const before = IMPORTED_URLS.size;
+      const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+      const importedUrls = await apiLoadImportedUrls(ws, 200000);
 
-      const r = await uploadToBackend(f);
-      await reloadFromBackend();
+          const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+  workspace_id: ws,
+  active_imported_urls: importedUrls
+})
+      });
 
-      rebuildTitleIndexFromDocs();
-      rebuildPublishedTopics();
+      const saveData = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) {
+        throw new Error(saveData?.detail || saveData?.error || `active_target_set/save failed: HTTP ${saveRes.status}`);
+      }
 
-      showToast(
-        errorBox,
-        `Imported ${IMPORTED_URLS.size - before} URLs (backend).`,
-        2200
+      const rebuildRes = await fetch(
+        `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+        { method: "POST" }
       );
-    } catch (e) {
-      showToast(errorBox, `Import failed: ${e.message}`, 2600);
-    } finally {
-      sitemapFile.value = "";
-    }
-  });
 
-  console.log("[SITEMAP->BACKEND] ✅ wired successfully");
+      const rebuildData = await rebuildRes.json().catch(() => ({}));
+      if (!rebuildRes.ok) {
+        throw new Error(rebuildData?.detail || rebuildData?.error || `rebuild_all failed: HTTP ${rebuildRes.status}`);
+      }
+
+      console.log("[SITEMAP->ACTIVE] save result:", saveData);
+      console.log("[SITEMAP->ACTIVE] rebuild result:", rebuildData);
+
+      console.log("[SITEMAP->ACTIVE] activated imported URLs:", importedUrls.length);
+    } catch (err) {
+      console.warn("[SITEMAP->ACTIVE] activation/rebuild failed:", err);
+    }
+  }
+
+  // Immediately update the existing count display
+  try {
+    const el = document.getElementById("importCount");
+    setImportCount(ws ? (after || 0) : 0);
+  } catch {}
+
+
+      // Optional rebuild hooks if present
+      try { window.rebuildTitleIndexFromDocs?.(); } catch {}
+      try { window.rebuildPublishedTopics?.(); } catch {}
+
+      const delta = after - before;
+      toast(`Imported ${delta >= 0 ? delta : 0} URLs (backend). Total: ${after}`, 2600);
+    } catch (err) {
+      const msg = err?.message || String(err);
+      toast(`Import failed: ${msg}`, 3200);
+      console.error("[SITEMAP->BACKEND] import failed:", err);
+    } finally {
+      // Reset so picking the same file again still triggers change
+      sitemapFile.value = "";
+      uploading = false;
+    }
+  }, true);
+
+  console.log("[SITEMAP->BACKEND] ? wired (click+change takeover, backend-only)");
 })();
 
+// Hydrate import count + imported URLs from backend on initial load
+(async function hydrateImportsOnLoad(){
+  try {
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+
+    if (!ws) {
+      const el = document.getElementById("importCount");
+      if (el) el.textContent = "0";
+      console.log("[Imports] BACKEND loaded:", 0);
+      return;
+    }
+
+    const after = await (window.__LC_reloadFromBackend
+      ? window.__LC_reloadFromBackend()
+      : window.reloadFromBackend());
+
+    await updateUnifiedImportCount(ws);
+
+    try {
+      const el = document.getElementById("importCount");
+      if (el) el.textContent = String(after || 0);
+    } catch {}
+
+    console.log("[Imports] BACKEND loaded:", after || 0);
+  } catch (e) {
+    console.warn("[Imports] BACKEND hydrate failed:", e);
+    try {
+      const el = document.getElementById("importCount");
+      if (el) el.textContent = "0";
+    } catch {}
+  }
+})();
+
+
+function updateConnectionStatus(domain = "") {
+  const connectionDot = document.getElementById("connectionDot");
+  const connectionText = document.getElementById("connectionText");
+
+  if (!connectionDot || !connectionText) return;
+
+  if (domain) {
+    connectionDot.classList.remove("disconnected");
+    connectionDot.classList.add("connected");
+    connectionText.textContent = "Connected";
+  } else {
+    connectionDot.classList.remove("connected");
+    connectionDot.classList.add("disconnected");
+    connectionText.textContent = "Disconnected";
+  }
+}
+
+
+// ===============================
+// DOMAIN CONNECT POPUP
+// ===============================
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  const domainModal = document.getElementById("domainModal");
+  const domainInput = document.getElementById("domainInput");
+  const btnConnectDomain = document.getElementById("btnConnectDomain");
+  const btnClearSession = document.getElementById("btnClearSession");
+
+  const savedDomain = localStorage.getItem("lc_domain") || "";
+
+  if (savedDomain) {
+  window.LINKCRAFTOR_WORKSPACE_ID = localStorage.getItem("lc_workspace_id") || "";
+  updateConnectionStatus(savedDomain);
+  if (domainModal) {
+    domainModal.style.display = "none";
+  }
+} else {
+  window.LINKCRAFTOR_WORKSPACE_ID = "";
+  updateConnectionStatus("");
+
+  const importCountEl = document.getElementById("importCount");
+  if (importCountEl) {
+    importCountEl.textContent = "0";
+  }
+
+  if (domainModal) {
+    domainModal.style.display = "flex";
+  }
+}
+
+  if (!btnConnectDomain) {
+    console.warn("Connect domain button not found");
+    return;
+  }
+
+  btnConnectDomain.addEventListener("click", async () => {
+
+    const domain = (domainInput.value || "").trim();
+
+    if (!domain) {
+      alert("Please enter a domain");
+      return;
+    }
+
+    try {
+
+      const res = await fetch(
+        `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ domain })
+        }
+      );
+
+      const data = await res.json();
+
+      if (!data.ok) {
+        alert("Could not connect domain");
+        return;
+      }
+
+      localStorage.setItem("lc_workspace_id", data.workspace_id);
+      localStorage.setItem("lc_domain", data.domain);
+
+      window.LINKCRAFTOR_WORKSPACE_ID = data.workspace_id;
+
+      updateConnectionStatus(data.domain);
+
+      console.log("[Workspace]", data.workspace_id);
+
+      if (domainModal) {
+        domainModal.style.display = "none";
+      }
+
+    } catch (err) {
+      console.error(err);
+      alert("Server connection failed");
+    }
+
+  });
+
+if (btnClearSession) {
+  btnClearSession.addEventListener("click", async () => {
+    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+
+    try {
+      await fetch(`${base}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
+      await fetch(`${base}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
+      await fetch(`${base}/api/site/target_pools/active_target_set/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
+      await fetch(`${base}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
+    } catch (err) {
+      console.error("Clear Session backend reset failed:", err);
+    }
+
+    localStorage.removeItem("lc_workspace_id");
+    localStorage.removeItem("lc_domain");
+    window.LINKCRAFTOR_WORKSPACE_ID = "";
+
+    updateConnectionStatus("");
+
+    if (domainInput) {
+      domainInput.value = "";
+    }
+
+    if (domainModal) {
+      domainModal.style.display = "flex";
+    }
+  });
+}
+
+});
