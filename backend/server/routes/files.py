@@ -1,8 +1,7 @@
 # backend/server/routes/files.py
 from __future__ import annotations
 
-from __future__ import annotations
-
+import io
 import os
 import json
 import uuid
@@ -17,8 +16,6 @@ from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Body
 from fastapi.responses import FileResponse
 
 import mammoth
-
-from backend.server.stores.upload_intel_store import build_upload_intelligence
 
 # ✅ Strict DOCX style-based H1 extraction (no fallbacks)
 try:
@@ -127,11 +124,21 @@ def _normalize_docx_title_in_place(stored_path: str) -> Dict[str, Any]:
         cur_style = ""
 
     if cur_style in ("Title", "Heading 1"):
-        return {"ok": True, "changed": False, "reason": f"already_{cur_style}", "para_index": target_i}
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": f"already_{cur_style}",
+            "para_index": target_i,
+        }
 
     ok, reason = _quality_gate_h1((getattr(target_p, "text", "") or "").strip())
     if not ok:
-        return {"ok": True, "changed": False, "reason": f"failed_quality_gate:{reason}", "para_index": target_i}
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": f"failed_quality_gate:{reason}",
+            "para_index": target_i,
+        }
 
     try:
         target_p.style = "Title"
@@ -391,22 +398,33 @@ def _extract_preview_from_bytes(filename: str, ext: str, raw: bytes) -> Dict[str
         is_html = True
 
     elif ext == ".docx":
-        import io
-        with io.BytesIO(raw) as buff:
-            result = mammoth.convert_to_html(buff)
-            html_out = result.value or ""
+        html_out = ""
+        text = ""
+        is_html = False
+
         try:
-            with io.BytesIO(raw) as buff2:
-                raw_text = mammoth.extract_raw_text(buff2)
-                text = (raw_text.value or "").strip()
+            with io.BytesIO(raw) as buff:
+                result = mammoth.convert_to_html(buff)
+                html_out = result.value or ""
+            text = _strip_tags(html_out)
+            is_html = True
         except Exception:
-            text = _strip_tags(html_out or "")
-        is_html = True
+            try:
+                text = raw.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                text = ""
+            html_out = "<pre>" + _html_escape(text) + "</pre>" if text else ""
+            is_html = False
 
     else:
-        text = _decode_text_bytes(raw)
-        html_out = "<pre>" + _html_escape(text) + "</pre>"
-        is_html = False
+        try:
+            text = _decode_text_bytes(raw)
+            html_out = "<pre>" + _html_escape(text) + "</pre>"
+            is_html = False
+        except Exception:
+            text = ""
+            html_out = ""
+            is_html = False
 
     if len(text) > TEXT_LIMIT:
         text = text[:TEXT_LIMIT]
@@ -512,7 +530,10 @@ def _update_index_h1(
 # API
 # -------------------------
 @router.post("/upload")
-async def upload_file(workspace_id: str = Query("ws_betterhealthcheck_com"), file: UploadFile = File(...)):
+async def upload_file(
+    workspace_id: str = Query("ws_betterhealthcheck_com"),
+    file: UploadFile = File(...),
+):
     if not file or not file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded.")
 
@@ -533,29 +554,9 @@ async def upload_file(workspace_id: str = Query("ws_betterhealthcheck_com"), fil
         preview_text=str(preview.get("text") or ""),
     )
 
-    @router.post("/upload")
-    async def upload_file(workspace_id: str = Query("ws_betterhealthcheck_com"), file: UploadFile = File(...)):
-     if not file or not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded.")
-
-    ext = _guess_ext(file.filename)
-    if ext not in ALLOWED_EXT:
-        raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
-
-    ws_norm = _ws(workspace_id)
-
-    raw = await file.read()
-    preview = _extract_preview_from_bytes(Path(file.filename).name, ext, raw)
-
-    meta = _store_and_index(
-        ws_norm,
-        file,
-        raw,
-        preview_html=str(preview.get("html") or ""),
-        preview_text=str(preview.get("text") or ""),
-    )
-
     try:
+        from backend.server.stores.upload_intel_store import build_upload_intelligence
+
         stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
         intel_result = build_upload_intelligence(
             workspace_id=ws_norm,
@@ -570,40 +571,19 @@ async def upload_file(workspace_id: str = Query("ws_betterhealthcheck_com"), fil
         print("[UPLOAD_INTEL_ERROR]", repr(e))
         traceback.print_exc()
 
-    _work_append(ws_norm, {
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "type": "upload",
-        "doc_id": meta.get("doc_id"),
-        "filename": meta.get("filename"),
-        "h1": meta.get("h1"),
-        "h1_source": meta.get("h1_source"),
-        "h1_error": meta.get("h1_error"),
-        "docx_normalize": meta.get("docx_normalize") or {},
-    })
-
-    return {
-        "ok": True,
-        "workspace_id": ws_norm,
-        "doc": meta,
-        "filename": preview.get("filename"),
-        "ext": preview.get("ext"),
-        "text": preview.get("text"),
-        "html": preview.get("html"),
-        "is_html": bool(preview.get("is_html")),
-        "truncated": bool(preview.get("truncated")),
-    }
-
-
-    _work_append(ws_norm, {
-        "ts": datetime.utcnow().isoformat() + "Z",
-        "type": "upload",
-        "doc_id": meta.get("doc_id"),
-        "filename": meta.get("filename"),
-        "h1": meta.get("h1"),
-        "h1_source": meta.get("h1_source"),
-        "h1_error": meta.get("h1_error"),
-        "docx_normalize": meta.get("docx_normalize") or {},
-    })
+    _work_append(
+        ws_norm,
+        {
+            "ts": datetime.utcnow().isoformat() + "Z",
+            "type": "upload",
+            "doc_id": meta.get("doc_id"),
+            "filename": meta.get("filename"),
+            "h1": meta.get("h1"),
+            "h1_source": meta.get("h1_source"),
+            "h1_error": meta.get("h1_error"),
+            "docx_normalize": meta.get("docx_normalize") or {},
+        },
+    )
 
     return {
         "ok": True,
@@ -628,15 +608,17 @@ def list_files(workspace_id: str = Query("ws_betterhealthcheck_com")):
     for it in items:
         if not isinstance(it, dict):
             continue
-        out.append({
-            "doc_id": it.get("doc_id"),
-            "filename": it.get("filename"),
-            "stored_name": it.get("stored_name"),
-            "uploaded_at": it.get("uploaded_at"),
-            "h1": it.get("h1") or "",
-            "h1_source": it.get("h1_source") or "",
-            "h1_error": it.get("h1_error") or "",
-        })
+        out.append(
+            {
+                "doc_id": it.get("doc_id"),
+                "filename": it.get("filename"),
+                "stored_name": it.get("stored_name"),
+                "uploaded_at": it.get("uploaded_at"),
+                "h1": it.get("h1") or "",
+                "h1_source": it.get("h1_source") or "",
+                "h1_error": it.get("h1_error") or "",
+            }
+        )
 
     return {"ok": True, "workspace_id": ws_norm, "items": out}
 
@@ -717,18 +699,20 @@ def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
             uploaded_at = datetime.utcnow().isoformat() + "Z"
             size_bytes = len(raw)
 
-        entries.append({
-            "doc_id": doc_id,
-            "filename": safe_name,
-            "ext": ext,
-            "bytes": size_bytes,
-            "content_type": "",
-            "uploaded_at": uploaded_at,
-            "stored_name": name,
-            "h1": h1,
-            "h1_source": h1_source,
-            "h1_error": h1_error,
-        })
+        entries.append(
+            {
+                "doc_id": doc_id,
+                "filename": safe_name,
+                "ext": ext,
+                "bytes": size_bytes,
+                "content_type": "",
+                "uploaded_at": uploaded_at,
+                "stored_name": name,
+                "h1": h1,
+                "h1_source": h1_source,
+                "h1_error": h1_error,
+            }
+        )
 
     entries.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
     idx_path = _index_path(ws_norm)
@@ -900,5 +884,8 @@ def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: 
 
 
 @legacy_router.post("/upload")
-async def legacy_upload(workspace_id: str = Query("ws_betterhealthcheck_com"), file: UploadFile = File(...)):
+async def legacy_upload(
+    workspace_id: str = Query("ws_betterhealthcheck_com"),
+    file: UploadFile = File(...),
+):
     return await upload_file(workspace_id=workspace_id, file=file)
