@@ -219,6 +219,65 @@ def _load_site_phrase_index(workspace_id: str) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
+def _draft_title_phrase_aliases(title: str) -> list[str]:
+    import re
+
+    s = str(title or "").strip()
+    if not s:
+        return []
+
+    if s.lower().startswith("drafts "):
+        s = s[7:].strip()
+
+    s = re.sub(r"\s+", " ", s).strip()
+    if not s:
+        return []
+
+    tokens = [t for t in re.findall(r"[A-Za-z0-9]+", s.lower()) if t]
+    if len(tokens) < 2:
+        return []
+
+    STOPWORDS = {
+    "and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with",
+    "by", "at", "from", "as", "is", "are", "was", "were", "be", "can",
+    "during"
+}
+
+    def is_valid_phrase(parts: list[str]) -> bool:
+        if len(parts) < 2 or len(parts) > 8:
+            return False
+
+        if parts[0] in STOPWORDS or parts[-1] in STOPWORDS:
+            return False
+
+        meaningful = [p for p in parts if p not in STOPWORDS]
+        if len(meaningful) < 2:
+            return False
+
+        return True
+
+    out: list[str] = []
+    seen = set()
+
+    n = len(tokens)
+    for i in range(n):
+        for j in range(i + 2, min(i + 9, n + 1)):
+            phrase_tokens = tokens[i:j]
+
+            if not is_valid_phrase(phrase_tokens):
+                continue
+
+            phrase = " ".join(phrase_tokens).strip()
+            if phrase and phrase not in seen:
+                seen.add(phrase)
+                out.append(phrase)
+
+    full = " ".join(tokens).strip()
+    if is_valid_phrase(tokens) and full not in seen:
+        out.insert(0, full)
+
+    return out
+
 
 def _load_site_pages(workspace_id: str) -> List[Dict[str, Any]]:
     """
@@ -340,16 +399,55 @@ def _build_candidate_pool(workspace_id: str, limit: int = 50000) -> List[Dict[st
                 origin="imported",
             )
 
-    # 2) Draft topics -> PAGE targets (planned_url)
+       # 2) Draft topics -> PAGE targets (planned_url)
     raw_drafts = _safe_read_json(draft_path)
     if isinstance(raw_drafts, list):
         for r in raw_drafts[:limit]:
             if not isinstance(r, dict):
                 continue
+
             topic_id = str(r.get("topic_id") or r.get("id") or "").strip()
-            title = str(r.get("working_title") or r.get("title") or "").strip()
+            raw_title = str(r.get("working_title") or r.get("title") or "").strip()
+
+            # remove "Drafts " prefix
+            if raw_title.lower().startswith("drafts "):
+                raw_title = raw_title[7:].strip()
+
+            title = raw_title
             planned_url = str(r.get("planned_url") or "").strip()
-            aliases = r.get("aliases") if isinstance(r.get("aliases"), list) else []
+            raw_aliases = r.get("aliases") if isinstance(r.get("aliases"), list) else []
+
+            base_aliases = [str(a).strip() for a in raw_aliases if str(a).strip()]
+            draft_aliases = _draft_title_phrase_aliases(title)
+
+            STOPWORDS = {
+                "and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with",
+                "by", "at", "from", "as", "is", "are", "was", "were", "be", "can",
+            }
+
+            def _keep_alias(p: str) -> bool:
+                parts = [x for x in str(p or "").lower().split() if x]
+                if len(parts) < 2 or len(parts) > 8:
+                    return False
+                if parts[0] in STOPWORDS or parts[-1] in STOPWORDS:
+                    return False
+                meaningful = [x for x in parts if x not in STOPWORDS]
+                return len(meaningful) >= 2
+
+            aliases = []
+            seen = set()
+
+            for a in base_aliases + draft_aliases:
+                a = str(a).strip()
+                if not a:
+                    continue
+                if not _keep_alias(a):
+                    continue
+                key = a.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                aliases.append(a)
 
             if not title and not planned_url:
                 continue
@@ -359,7 +457,7 @@ def _build_candidate_pool(workspace_id: str, limit: int = 50000) -> List[Dict[st
                 url=planned_url,
                 title=title or _title_from_url(planned_url) or planned_url,
                 origin="draft",
-                aliases=[str(a).strip() for a in aliases if str(a).strip()],
+                aliases=aliases,
                 meta={"topic_id": topic_id},
             )
 

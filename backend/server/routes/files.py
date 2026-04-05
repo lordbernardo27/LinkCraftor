@@ -526,6 +526,75 @@ def _update_index_h1(
     return None
 
 
+def _docs_index_path(workspace_id: str) -> Path:
+    ws = _ws(workspace_id)
+    return BASE_DIR / "data" / "docs" / ws / "index.json"
+
+
+def _append_to_docs_index(workspace_id: str, meta: Dict[str, Any]):
+    fp = _docs_index_path(workspace_id)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    if fp.exists():
+        try:
+            rows = json.loads(fp.read_text(encoding="utf-8"))
+            if not isinstance(rows, list):
+                rows = []
+        except Exception:
+            rows = []
+
+    rows.append({
+        "doc_id": meta.get("doc_id"),
+        "stored_name": meta.get("stored_name"),
+        "filename": meta.get("filename"),
+        "h1": meta.get("h1"),
+        "h1_source": meta.get("h1_source"),
+        "uploaded_at": datetime.utcnow().isoformat() + "Z"
+    })
+
+    fp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _active_target_set_path(workspace_id: str) -> Path:
+    return BASE_DIR / "data" / "target_pools" / f"active_target_set_{_ws(workspace_id)}.json"
+
+
+def _add_doc_id_to_active_target_set(workspace_id: str, doc_id: str) -> Dict[str, Any]:
+    ws_norm = _ws(workspace_id)
+    fp = _active_target_set_path(ws_norm)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+
+    obj: Dict[str, Any] = {
+        "workspace_id": ws_norm,
+        "active_document_ids": [],
+        "active_draft_ids": [],
+        "active_imported_urls": [],
+        "active_live_domain_urls": [],
+    }
+
+    if fp.exists():
+        try:
+            raw = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
+                obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
+                obj["active_draft_ids"] = list(raw.get("active_draft_ids") or [])
+                obj["active_imported_urls"] = list(raw.get("active_imported_urls") or [])
+                obj["active_live_domain_urls"] = list(raw.get("active_live_domain_urls") or [])
+        except Exception:
+            pass
+
+    doc_id = str(doc_id or "").strip()
+    if doc_id and doc_id not in obj["active_document_ids"]:
+        obj["active_document_ids"].append(doc_id)
+
+    obj["updated_at"] = datetime.utcnow().isoformat() + "Z"
+
+    fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    return obj
+
+
 # -------------------------
 # API
 # -------------------------
@@ -584,6 +653,21 @@ async def upload_file(
             "docx_normalize": meta.get("docx_normalize") or {},
         },
     )
+
+    try:
+        _append_to_docs_index(ws_norm, meta)
+    except Exception as e:
+        print("[DOC_INDEX_APPEND_ERROR]", repr(e))
+        traceback.print_exc()
+
+    try:
+        _add_doc_id_to_active_target_set(
+            workspace_id=ws_norm,
+            doc_id=str(meta.get("doc_id") or ""),
+        )
+    except Exception as e:
+        print("[ACTIVE_TARGET_SET_DOC_AUTOADD_ERROR]", repr(e))
+        traceback.print_exc()
 
     return {
         "ok": True,

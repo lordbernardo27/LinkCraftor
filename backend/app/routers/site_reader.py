@@ -761,11 +761,8 @@ def _workspace_id_from_domain(domain: str) -> str:
     clean = domain.replace(".", "_")
     return f"ws_{clean}"
 
-
-
 @router.post("/workspace/connect_domain")
 def connect_domain(payload: ConnectDomainPayload):
-
     domain = _normalize_domain(payload.domain)
 
     if not domain:
@@ -781,7 +778,6 @@ def connect_domain(payload: ConnectDomainPayload):
     created = False
 
     if not ws_meta_path.exists():
-
         obj = {
             "workspace_id": workspace_id,
             "domain": domain,
@@ -795,12 +791,59 @@ def connect_domain(payload: ConnectDomainPayload):
 
         created = True
 
+    pages_fp = Path(f"backend/server/data/site_pages_{workspace_id}.json")
+
+    urls = []
+    if pages_fp.exists():
+        try:
+            pages_obj = json.loads(pages_fp.read_text(encoding="utf-8"))
+            if isinstance(pages_obj, dict):
+                pages_dict = pages_obj.get("pages") or {}
+                if isinstance(pages_dict, dict):
+                    urls = [str(u).strip() for u in pages_dict.keys() if str(u).strip()]
+        except Exception:
+            urls = []
+
+    active_fp = _active_target_set_path(workspace_id)
+    active_fp.parent.mkdir(parents=True, exist_ok=True)
+
+    active_obj = {
+        "workspace_id": workspace_id,
+        "active_document_ids": [],
+        "active_draft_ids": [],
+        "active_imported_urls": [],
+        "active_live_domain_urls": urls,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    if active_fp.exists():
+        try:
+            old_obj = json.loads(active_fp.read_text(encoding="utf-8"))
+            if isinstance(old_obj, dict):
+                active_obj["active_document_ids"] = old_obj.get("active_document_ids") or []
+                active_obj["active_draft_ids"] = old_obj.get("active_draft_ids") or []
+                active_obj["active_imported_urls"] = old_obj.get("active_imported_urls") or []
+                active_obj["active_live_domain_urls"] = urls or (old_obj.get("active_live_domain_urls") or [])
+        except Exception:
+            pass
+
+    active_fp.write_text(
+        json.dumps(active_obj, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    try:
+        build_live_domain_target_pool(workspace_id)
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "workspace_id": workspace_id,
         "domain": domain,
         "created": created,
         "workspace_file": str(ws_meta_path),
+        "active_live_domain_urls_count": len(active_obj["active_live_domain_urls"]),
     }
 
 
