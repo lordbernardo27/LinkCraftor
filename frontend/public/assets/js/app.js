@@ -5,7 +5,7 @@ if (typeof window.reloadFromBackend !== "function") {
   window.reloadFromBackend = async function reloadFromBackend(){
     try { await window.loadImportedUrlsLocal?.(); } catch(e) {}
     try {
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  const ws = getCurrentWorkspaceId("");
   if (ws) await window.updateUnifiedImportCount?.(ws);
 } catch(e) {}
     try {
@@ -107,21 +107,33 @@ function lcImportSitemapXML(file, onDone) {
    ========================================================================== */
 const DEBUG = false;
 
-// Safe API_BASE: works even if window is missing or config not set
+
 const API_BASE =
   (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
     ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
     : "";
 
+function getCurrentWorkspaceId(fallback = "default") {
+  return String(
+    window.LINKCRAFTOR_WORKSPACE_ID ||
+    window.LC_WORKSPACE_ID ||
+    localStorage.getItem("lc_workspace_id") ||
+    localStorage.getItem("workspace_id") ||
+    fallback
+  ).trim();
+}
+
 // =====================================================
-// Layer 1.3 � UI ? Decision Ingestion (canonical Layer 0)
+// Layer 1.3 – UI → Decision Ingestion (canonical Layer 0)
 // Endpoint: POST /api/engine/decision
 // =====================================================
 const API_DECISION = "/api/engine/decision";
 
+
+
 async function emitDecision(eventType, phraseCtx, candidate, meta){
   try{
-    const ws = String((phraseCtx && phraseCtx.workspaceId) || window.LC_WORKSPACE_ID || "ws_demo").trim();
+    const ws = String((phraseCtx && phraseCtx.workspaceId) || getCurrentWorkspaceId("ws_demo")).trim();
 const doc = String((phraseCtx && phraseCtx.docId) || window.LC_ACTIVE_DOC_ID || "doc_demo_001").trim();
 const user = String(window.LC_USER_ID || "bernard").trim();
 
@@ -174,7 +186,7 @@ if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback !== "
       const eventType = String(data?.eventType || "").trim();
       if (!eventType) return { ok:false, error:"missing eventType" };
 
-      const workspaceId = String(data?.workspaceId || (window.LC_WORKSPACE_ID || "default")).trim();
+      const workspaceId = String(data?.workspaceId || getCurrentWorkspaceId("default")).trim();
       const docId       = String(data?.docId || window.LC_ACTIVE_DOC_ID || "").trim();
 
       const phraseText  = String(data?.phraseText || "").trim();
@@ -678,7 +690,7 @@ const highlightCountBadge = $("highlightCountBadge");
   }
 
   async function fetchAudit(){
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const ws = getCurrentWorkspaceId("default");
 const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
     const data = await res.json().catch(()=>({}));
     if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
@@ -1396,7 +1408,7 @@ async function loadAndRenderDocByIndex(idx){
   try{
     const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
     
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const ws = getCurrentWorkspaceId("default");
      const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
 
     const data = await res.json().catch(()=>({}));
@@ -1924,7 +1936,7 @@ function refreshUploadMenuForSessionFormat(){
 
 
 btnUploadMain?.addEventListener("click", () => {
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  const ws = getCurrentWorkspaceId("");
 
   if (!ws) {
     showToast(errorBox, "Connect a domain first.", 1600);
@@ -2040,7 +2052,7 @@ fileInput?.addEventListener("change", async()=>{
       const ext = extOf(file?.name || "");
       if (ext !== sessExt) { skipped++; continue; }
 
-      const ws = (window.WORKSPACE_ID || localStorage.getItem("workspace_id") || "ws_betterhealthcheck_com").trim();
+      const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
       const data = await uploadFile(file, ws);
       getOrAssignCode(data);
       docs.push(data);
@@ -2090,7 +2102,7 @@ sitemapFile.addEventListener("change", async () => {
     const added = Number(r.added || 0);
 
     // 2) Load full saved set from backend into engine memory
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+    const ws = getCurrentWorkspaceId("");
 const urls = ws ? await apiLoadImportedUrls(ws, 200000) : [];
     IMPORTED_URLS = new Set(urls);
 
@@ -2175,7 +2187,7 @@ if (btnImportDraft && draftFile) {
 (async function hydrateDraftsOnLoad(){
   try{
     const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const ws = getCurrentWorkspaceId("default");
 const url = `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
 
     const res = await fetch(url);
@@ -2238,7 +2250,7 @@ const url = `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&l
       const r = await apiImportDraftFile(f, "default");
       const rows = await apiLoadDraft("default", 200000);
       applyDraftToMemory(rows);
-      const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+      const ws = getCurrentWorkspaceId("");
 if (ws) await updateUnifiedImportCount(ws);
 
 
@@ -2540,7 +2552,7 @@ allDocs?.addEventListener("change", async () => {
   try{
     const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
     
-   const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+   const ws = getCurrentWorkspaceId("default");
 const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
 
     const data = await res.json().catch(()=>({}));
@@ -3055,7 +3067,7 @@ function paragraphContextSim01(sectionText, targetTitle){
     try{
       const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
        
-      const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+      const ws = getCurrentWorkspaceId("default");
       const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
 
       const data = await res.json().catch(()=>({}));
@@ -5745,7 +5757,7 @@ async function loadImportedUrlsLocal(){
   // Load from backend instead of localStorage
   try {
     const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const ws = getCurrentWorkspaceId("default");
 const res = await fetch(`${base}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.detail || "Not Found");
@@ -5798,8 +5810,9 @@ async function loadDraftsFromBackend(workspaceId = "default") {
   return DRAFT_TOPICS;
 }
 
-if (window.LINKCRAFTOR_WORKSPACE_ID) {
-  loadDraftsFromBackend(window.LINKCRAFTOR_WORKSPACE_ID)
+const startupWs = getCurrentWorkspaceId("");
+if (startupWs) {
+  loadDraftsFromBackend(startupWs)
     .catch(e => console.warn("[Draft] startup load failed:", e?.message || e));
 }
 
@@ -5852,7 +5865,7 @@ async function loadImportsFromBackend() {
         ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
         : "http://127.0.0.1:8001";
 
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const ws = getCurrentWorkspaceId("default");
 const url = `${base}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
     const res = await fetch(url);
     const data = await res.json().catch(() => ({}));
@@ -6011,7 +6024,7 @@ function rebuildTitleUrlDatalists() {
 function updateImportBadge() {
   // ? Unified total: (backend URLs) + (backend drafts)
   try {
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  const ws = getCurrentWorkspaceId("");
   if (ws) updateUnifiedImportCount?.(ws);
   else setImportCount(0);
 } catch {}
@@ -6339,7 +6352,7 @@ async function boot() {
   (async () => {
     try {
       const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-      const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+      const ws = getCurrentWorkspaceId("default");
 
       // 1) Clear sitemap/imported URLs (backend)
       await fetch(`${base}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
@@ -6427,7 +6440,7 @@ async function boot() {
   const fd = new FormData();
   fd.append("file", file);
 
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+  const ws = getCurrentWorkspaceId("default");
 
   const res = await fetch(
     `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
@@ -6452,7 +6465,8 @@ await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     workspace_id: ws,
-    active_draft_ids: activeDraftIds
+    active_draft_ids: activeDraftIds,
+    preserve_omitted_fields: true
   })
 });
 
@@ -6558,7 +6572,7 @@ function wireDecisionButtons(){
     // Build phraseCtx (reuse your existing helper)
     const baseCtx = (typeof buildPhraseContext === "function") ? buildPhraseContext(phrase) : { phraseText: phrase };
 
-    const workspaceId = (window.LC_WORKSPACE_ID || "ws_demo");
+    const workspaceId = getCurrentWorkspaceId("ws_demo");
     const docId =
       (window.LC_ACTIVE_DOC_ID || null) ||
       (docs && currentIndex >= 0 && docs[currentIndex] ? (docs[currentIndex].doc_id || docs[currentIndex].docId || null) : null);
@@ -6699,7 +6713,7 @@ if (document.readyState === "loading") {
   // Backend MUST be expecting UploadFile named "file"
   fd.append("file", file, file.name);
 
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+  const ws = getCurrentWorkspaceId("default");
   const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
   const res = await fetch(url, { method: "POST", body: fd });
 
@@ -6712,7 +6726,7 @@ if (document.readyState === "loading") {
 }
 
   async function reloadFromBackend() {
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+  const ws = getCurrentWorkspaceId("default");
 const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
   const res = await fetch(url);
 
@@ -6785,7 +6799,7 @@ try {
 
   await uploadToBackend(f);
 
-  const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+  const ws = getCurrentWorkspaceId("");
   const after = ws ? (await apiLoadImportedUrls(ws, 200000)).length : 0;
 
   if (ws) await updateUnifiedImportCount(ws);
@@ -6795,14 +6809,15 @@ try {
       const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
       const importedUrls = await apiLoadImportedUrls(ws, 200000);
 
-          const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-  workspace_id: ws,
-  active_imported_urls: importedUrls
-})
-      });
+    const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    workspace_id: ws,
+    active_imported_urls: importedUrls,
+    preserve_omitted_fields: true
+  })
+});
 
       const saveData = await saveRes.json().catch(() => ({}));
       if (!saveRes.ok) {
@@ -6858,7 +6873,7 @@ try {
 // Hydrate import count + imported URLs from backend on initial load
 (async function hydrateImportsOnLoad(){
   try {
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "";
+    const ws = getCurrentWorkspaceId("");
 
     if (!ws) {
       const el = document.getElementById("importCount");
@@ -6921,7 +6936,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const savedDomain = localStorage.getItem("lc_domain") || "";
 
   if (savedDomain) {
-  window.LINKCRAFTOR_WORKSPACE_ID = localStorage.getItem("lc_workspace_id") || "";
+  window.LINKCRAFTOR_WORKSPACE_ID = getCurrentWorkspaceId("");
   updateConnectionStatus(savedDomain);
   if (domainModal) {
     domainModal.style.display = "none";
@@ -6994,7 +7009,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
 if (btnClearSession) {
   btnClearSession.addEventListener("click", async () => {
-    const ws = window.LINKCRAFTOR_WORKSPACE_ID || "default";
+    const ws = getCurrentWorkspaceId("default");
     const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
 
     try {

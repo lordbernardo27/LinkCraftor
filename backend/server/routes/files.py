@@ -544,55 +544,140 @@ def _append_to_docs_index(workspace_id: str, meta: Dict[str, Any]):
         except Exception:
             rows = []
 
-    rows.append({
-        "doc_id": meta.get("doc_id"),
-        "stored_name": meta.get("stored_name"),
-        "filename": meta.get("filename"),
-        "h1": meta.get("h1"),
-        "h1_source": meta.get("h1_source"),
-        "uploaded_at": datetime.utcnow().isoformat() + "Z"
-    })
+    rows.append(
+        {
+            "doc_id": meta.get("doc_id"),
+            "stored_name": meta.get("stored_name"),
+            "filename": meta.get("filename"),
+            "h1": meta.get("h1"),
+            "h1_source": meta.get("h1_source"),
+            "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        }
+    )
 
     fp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# -------------------------
+# Active target set helpers (merge-safe)
+# -------------------------
 def _active_target_set_path(workspace_id: str) -> Path:
     return BASE_DIR / "data" / "target_pools" / f"active_target_set_{_ws(workspace_id)}.json"
 
 
-def _add_doc_id_to_active_target_set(workspace_id: str, doc_id: str) -> Dict[str, Any]:
-    ws_norm = _ws(workspace_id)
-    fp = _active_target_set_path(ws_norm)
-    fp.parent.mkdir(parents=True, exist_ok=True)
-
-    obj: Dict[str, Any] = {
-        "workspace_id": ws_norm,
+def _default_active_target_set(workspace_id: str) -> Dict[str, Any]:
+    return {
+        "workspace_id": _ws(workspace_id),
         "active_document_ids": [],
         "active_draft_ids": [],
         "active_imported_urls": [],
         "active_live_domain_urls": [],
+        "active_upload_ids": [],
+        "updated_at": datetime.utcnow().isoformat() + "Z",
     }
 
-    if fp.exists():
-        try:
-            raw = json.loads(fp.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
-                obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
-                obj["active_draft_ids"] = list(raw.get("active_draft_ids") or [])
-                obj["active_imported_urls"] = list(raw.get("active_imported_urls") or [])
-                obj["active_live_domain_urls"] = list(raw.get("active_live_domain_urls") or [])
-        except Exception:
-            pass
 
-    doc_id = str(doc_id or "").strip()
-    if doc_id and doc_id not in obj["active_document_ids"]:
-        obj["active_document_ids"].append(doc_id)
+def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
+    ws_norm = _ws(workspace_id)
+    fp = _active_target_set_path(ws_norm)
+    obj = _default_active_target_set(ws_norm)
 
-    obj["updated_at"] = datetime.utcnow().isoformat() + "Z"
+    if not fp.exists():
+        return obj
 
-    fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        raw = json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return obj
+
+    if not isinstance(raw, dict):
+        return obj
+
+        obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
+    obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
+    obj["active_draft_ids"] = list(raw.get("active_draft_ids") or [])
+    obj["active_imported_urls"] = list(
+        raw.get("active_imported_urls") or raw.get("active_import_ids") or []
+    )
+    obj["active_live_domain_urls"] = list(raw.get("active_live_domain_urls") or [])
+
+    raw_upload_ids = raw.get("active_upload_ids")
+    if isinstance(raw_upload_ids, list):
+        obj["active_upload_ids"] = list(raw_upload_ids)
+    else:
+        # Canonical fallback: uploaded docs are doc_ids
+        obj["active_upload_ids"] = list(obj["active_document_ids"])
+
+    obj["updated_at"] = str(raw.get("updated_at") or obj["updated_at"])
     return obj
+
+def _write_active_target_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str, Any]:
+    ws_norm = _ws(workspace_id)
+    fp = _active_target_set_path(ws_norm)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+
+    doc_ids = list(obj.get("active_document_ids") or [])
+    upload_ids = list(obj.get("active_upload_ids") or [])
+
+    if not upload_ids:
+        upload_ids = list(doc_ids)
+
+    out: Dict[str, Any] = {
+        "workspace_id": ws_norm,
+        "active_document_ids": doc_ids,
+        "active_draft_ids": list(obj.get("active_draft_ids") or []),
+        "active_imported_urls": list(obj.get("active_imported_urls") or []),
+        "active_live_domain_urls": list(obj.get("active_live_domain_urls") or []),
+        "active_upload_ids": upload_ids,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+
+    fp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out
+
+def _merge_active_target_set(
+    workspace_id: str,
+    *,
+    add_document_ids: List[str] | None = None,
+    add_draft_ids: List[str] | None = None,
+    add_imported_urls: List[str] | None = None,
+    add_live_domain_urls: List[str] | None = None,
+    add_upload_ids: List[str] | None = None,
+) -> Dict[str, Any]:
+    obj = _load_active_target_set(workspace_id)
+
+    def _merge_unique(existing: List[str], new_values: List[str] | None) -> List[str]:
+        out = [str(x).strip() for x in existing if str(x).strip()]
+        seen = set(out)
+        for v in new_values or []:
+            s = str(v).strip()
+            if s and s not in seen:
+                out.append(s)
+                seen.add(s)
+        return out
+
+    obj["active_document_ids"] = _merge_unique(
+        obj.get("active_document_ids") or [],
+        add_document_ids,
+    )
+    obj["active_draft_ids"] = _merge_unique(
+        obj.get("active_draft_ids") or [],
+        add_draft_ids,
+    )
+    obj["active_imported_urls"] = _merge_unique(
+        obj.get("active_imported_urls") or [],
+        add_imported_urls,
+    )
+    obj["active_live_domain_urls"] = _merge_unique(
+        obj.get("active_live_domain_urls") or [],
+        add_live_domain_urls,
+    )
+    obj["active_upload_ids"] = _merge_unique(
+        obj.get("active_upload_ids") or [],
+        add_upload_ids,
+    )
+
+    return _write_active_target_set(workspace_id, obj)
 
 
 # -------------------------
@@ -661,12 +746,14 @@ async def upload_file(
         traceback.print_exc()
 
     try:
-        _add_doc_id_to_active_target_set(
+        doc_id = str(meta.get("doc_id") or "").strip()
+        _merge_active_target_set(
             workspace_id=ws_norm,
-            doc_id=str(meta.get("doc_id") or ""),
+            add_document_ids=[doc_id] if doc_id else [],
+            add_upload_ids=[doc_id] if doc_id else [],
         )
     except Exception as e:
-        print("[ACTIVE_TARGET_SET_DOC_AUTOADD_ERROR]", repr(e))
+        print("[ACTIVE_TARGET_SET_UPLOAD_DOC_AUTOADD_ERROR]", repr(e))
         traceback.print_exc()
 
     return {
@@ -727,6 +814,30 @@ def list_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
         h1s.append(h)
 
     return {"ok": True, "workspace_id": ws_norm, "h1s": h1s}
+
+
+@router.get("/api/site/target_pools/active_target_set")
+def get_active_target_set(
+    workspace_id: str | None = Query(None),
+    workspaceId: str | None = Query(None),
+):
+    try:
+        ws = _ws(workspace_id or workspaceId or "default")
+        data = _load_active_target_set(ws)
+
+        return {
+            "ok": True,
+            "workspace_id": ws,
+            "workspaceId": ws,
+            "exists": _active_target_set_path(ws).exists(),
+            "active_target_set": data,
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+        }
 
 
 @router.post("/reindex_h1s")
@@ -955,15 +1066,15 @@ def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: 
         "ok": True,
         "workspace_id": ws_norm,
         "doc_id": hit.get("doc_id"),
-        "filename": hit.get("filename"),
-        "ext": ext,
-        "h1": (hit.get("h1") or ""),
-        "h1_source": (hit.get("h1_source") or ""),
-        "h1_error": (hit.get("h1_error") or ""),
+        "filename": preview.get("filename"),
+        "ext": preview.get("ext"),
         "text": preview.get("text"),
         "html": preview.get("html"),
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
+        "h1": hit.get("h1") or "",
+        "h1_source": hit.get("h1_source") or "",
+        "h1_error": hit.get("h1_error") or "",
     }
 
 

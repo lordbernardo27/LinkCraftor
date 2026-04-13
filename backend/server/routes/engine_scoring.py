@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 from .engine_decisions import get_aggregated_link_feedback
 from ..engine.scoring import score_candidates_for_phrase
+from ..engine.profiles import PROFILES, normalize_profile_id
+from ..stores.workspace_profile_store import get_workspace_profile, set_workspace_profile
 
 router = APIRouter(prefix="/api/engine", tags=["engine"])
 
@@ -49,34 +51,106 @@ class CandidateModel(BaseModel):
 class ScoreRequest(BaseModel):
     phraseCtx: PhraseContextModel
     candidates: List[CandidateModel]
+    profile: Optional[str] = None
+
+
+class WorkspaceProfileRequest(BaseModel):
+    workspaceId: str
+    profile: str
+
+
+@router.post("/workspace-profile")
+def set_workspace_profile_endpoint(payload: WorkspaceProfileRequest):
+    workspace_id = str(payload.workspaceId or "").strip()
+    profile = normalize_profile_id(payload.profile)
+
+    saved_profile = set_workspace_profile(workspace_id, profile)
+
+    return {
+        "ok": True,
+        "workspaceId": workspace_id,
+        "profile": saved_profile,
+    }
+
+
+@router.get("/workspace-profile/{workspace_id}")
+def get_workspace_profile_endpoint(workspace_id: str):
+    workspace_key = str(workspace_id or "").strip()
+    profile = get_workspace_profile(workspace_key)
+
+    return {
+        "ok": True,
+        "workspaceId": workspace_key,
+        "profile": profile,
+    }
+
+
+@router.get("/profiles")
+def list_profiles_endpoint():
+    preferred_order = ["general", "medical", "saas", "finance", "ecommerce"]
+
+    items = []
+    for profile_id in preferred_order:
+        profile = PROFILES.get(profile_id)
+        if not profile:
+            continue
+        items.append({
+            "id": profile_id,
+            "display_name": profile.get("display_name", profile_id),
+        })
+
+    for profile_id, profile in PROFILES.items():
+        if profile_id in preferred_order:
+            continue
+        items.append({
+            "id": profile_id,
+            "display_name": profile.get("display_name", profile_id),
+        })
+
+    return {
+        "ok": True,
+        "profiles": items,
+    }
 
 
 @router.post("/score")
 def score_endpoint(payload: ScoreRequest, debug: bool = False):
     phrase_ctx = payload.phraseCtx.model_dump()
     candidates = [c.model_dump() for c in payload.candidates]
+    workspace_id = phrase_ctx.get("workspaceId") or "default"
 
-    # Debug echo mode (no scoring) — verifies frontend payload shape fast
+    # Normal behavior: resolve profile from workspace only.
+    profile = normalize_profile_id(get_workspace_profile(workspace_id))
+
+    # Optional internal/testing override: only allowed in debug mode.
+    if debug and payload.profile:
+        profile = normalize_profile_id(payload.profile)
+
+    # Debug mode: keep extra payload, but still run scoring.
+    debug_payload = None
     if debug:
-        return {
-            "ok": True,
-            "debug": True,
+        debug_payload = {
             "phrase_ctx": phrase_ctx,
             "candidate_count": len(candidates),
             "candidates_sample": candidates[:3],
         }
 
     # ---- Decision Intelligence: load feedback memory for this workspace/doc ----
-    workspace_id = phrase_ctx.get("workspaceId") or "default"
-
     doc_id = phrase_ctx.get("docId")
-
     feedback_map = get_aggregated_link_feedback(workspaceId=workspace_id, docId=doc_id)
 
     out = score_candidates_for_phrase(
         phrase_ctx,
         candidates,
-        feedback_map=feedback_map
+        feedback_map=feedback_map,
+        profile=profile,
+        debug=debug,
     )
 
-    return {"ok": True, "results": out}
+    return {
+        "ok": True,
+        "results": out,
+        "profile": profile,
+        "debug": debug,
+        "debug_payload": debug_payload,
+    }

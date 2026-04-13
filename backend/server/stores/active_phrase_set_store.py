@@ -42,10 +42,10 @@ def _default_obj(workspace_id: str) -> Dict[str, Any]:
         "workspace_id": ws,
         "type": "active_phrase_set",
         "updated_at": datetime.now(timezone.utc).isoformat(),
-        "active_upload_ids": [],
+        "active_document_ids": [],
         "active_draft_ids": [],
         "active_live_domain_urls": [],
-        "active_import_ids": [],
+        "active_imported_urls": [],
     }
 
 
@@ -62,11 +62,18 @@ def load_active_phrase_set(workspace_id: str) -> Dict[str, Any]:
         return _default_obj(workspace_id)
 
     base = _default_obj(workspace_id)
+
+    # Backward-compatible migration from old keys
+    if "active_document_ids" not in obj and "active_upload_ids" in obj:
+        obj["active_document_ids"] = obj.get("active_upload_ids") or []
+    if "active_imported_urls" not in obj and "active_import_ids" in obj:
+        obj["active_imported_urls"] = obj.get("active_import_ids") or []
+
     for key in (
-        "active_upload_ids",
+        "active_document_ids",
         "active_draft_ids",
         "active_live_domain_urls",
-        "active_import_ids",
+        "active_imported_urls",
     ):
         raw = obj.get(key) or []
         base[key] = [str(x).strip() for x in raw if str(x).strip()]
@@ -80,11 +87,18 @@ def save_active_phrase_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str, 
     path.parent.mkdir(parents=True, exist_ok=True)
 
     base = _default_obj(workspace_id)
+
+    # Backward-compatible input mapping
+    if "active_document_ids" not in obj and "active_upload_ids" in obj:
+        obj["active_document_ids"] = obj.get("active_upload_ids") or []
+    if "active_imported_urls" not in obj and "active_import_ids" in obj:
+        obj["active_imported_urls"] = obj.get("active_import_ids") or []
+
     for key in (
-        "active_upload_ids",
+        "active_document_ids",
         "active_draft_ids",
         "active_live_domain_urls",
-        "active_import_ids",
+        "active_imported_urls",
     ):
         raw = obj.get(key) or []
         vals = [str(x).strip() for x in raw if str(x).strip()]

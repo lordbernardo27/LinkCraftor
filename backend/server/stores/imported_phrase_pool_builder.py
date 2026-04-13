@@ -126,12 +126,12 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
     out_path = _imported_phrase_index_path(ws)
 
     active_obj = load_active_phrase_set(ws)
-    active_import_ids = [
+    active_imported_urls = [
         str(x).strip()
-        for x in (active_obj.get("active_import_ids") or [])
+        for x in (active_obj.get("active_imported_urls") or [])
         if str(x).strip()
     ]
-    active_import_id_set = set(active_import_ids)
+    active_imported_url_set = set(active_imported_urls)
 
     csv_path = _csv_input_path(ws)
     txt_path = _txt_input_path(ws)
@@ -200,7 +200,7 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
             or ""
         ).strip()
 
-        if active_import_id_set and item_id not in active_import_id_set:
+        if active_imported_url_set and item_id not in active_imported_url_set:
             continue
 
         title = _clean_spaces(item.get("title") or item.get("topic") or item.get("name") or "")
@@ -244,8 +244,8 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
         "rows_seen": rows_seen,
         "rows_used": rows_used,
         "phrase_count": len(phrases),
-        "active_phrase_set_used": bool(active_import_id_set),
-        "active_import_ids_count": len(active_import_ids),
+        "active_phrase_set_used": bool(active_imported_url_set),
+        "active_imported_urls_count": len(active_imported_urls),
         "phrases": phrases,
     }
 
