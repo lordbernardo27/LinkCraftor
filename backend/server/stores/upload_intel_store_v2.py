@@ -7,6 +7,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from backend.server.stores.upload_normalizer import normalize_upload
+from backend.server.stores.upload_phrase_selector import select_upload_phrases
+
 
 WORD_RE = re.compile(r"[a-z0-9]{2,}", re.I)
 H_RE = re.compile(r"<h([1-6])[^>]*>(.*?)</h\1>", re.IGNORECASE | re.DOTALL)
@@ -242,31 +245,58 @@ def _looks_like_entity_phrase(phrase: str) -> bool:
         return True
     return any(seed in p for seed in ENTITY_SEEDS)
 
-
 def _accept_phrase(phrase: str) -> bool:
     p = _canonical_phrase(phrase)
     if not p:
         return False
+
     if _looks_like_ui_junk(p):
         return False
+
     if _fails_semantic_filter(p):
         return False
 
     tokens = _tokenize(p)
-    if len(tokens) < NGRAM_MIN_N or len(tokens) > NGRAM_MAX_N:
+
+    # must be between 2–5 tokens
+    if len(tokens) < 2 or len(tokens) > 5:
         return False
 
+    content = _content_tokens(tokens)
+
+    # HARD RULE: must have at least 2 meaningful words
+    if len(content) < 2:
+        return False
+
+    bad_starts = {"the", "this", "that", "these", "those", "your"}
+    narrative_verbs = {"is", "are", "was", "were", "can", "will", "would"}
+
+    if len(tokens) >= 4:
+        if tokens[0] in bad_starts:
+            return False
+
+        if len(tokens) > 1 and tokens[1] in narrative_verbs:
+            return False
+
+    # BLOCK weak generic verbs
+    weak_words = {"feel", "like", "make", "take", "get", "go", "come"}
+    if any(t in weak_words for t in tokens):
+        return False
+
+    # BLOCK incomplete endings
+    bad_endings = {"like", "such", "each", "one", "matter"}
+    if tokens[-1] in bad_endings:
+        return False
+
+    # ALLOW strong intent phrases
     if _looks_like_intent_phrase(p):
         return True
 
-    if _looks_like_entity_phrase(p) and len(_content_tokens(tokens)) >= 2:
+    # ALLOW entity phrases
+    if _looks_like_entity_phrase(p):
         return True
 
-    if len(_content_tokens(tokens)) >= 2:
-        return True
-
-    return False
-
+    return True
 
 def _generate_sentence_candidates(sentence: str) -> List[str]:
     s = _canonical_phrase(sentence)
@@ -281,7 +311,6 @@ def _generate_sentence_candidates(sentence: str) -> List[str]:
 
     out: List[str] = []
     seen: Set[str] = set()
-    made = 0
 
     for part in clause_parts:
         if not _is_valid_content_sentence(part):
@@ -291,10 +320,11 @@ def _generate_sentence_candidates(sentence: str) -> List[str]:
         if len(tokens) < NGRAM_MIN_N:
             continue
 
-        for n in range(NGRAM_MIN_N, NGRAM_MAX_N + 1):
-            if n > len(tokens):
-                break
+        max_n = min(NGRAM_MAX_N, len(tokens))
+        found_for_part = False
 
+        # only take the longest valid phrase for this part
+        for n in range(max_n, NGRAM_MIN_N - 1, -1):
             for i in range(0, len(tokens) - n + 1):
                 cand = " ".join(tokens[i:i + n]).strip()
 
@@ -312,9 +342,12 @@ def _generate_sentence_candidates(sentence: str) -> List[str]:
                 if cand not in seen:
                     out.append(cand)
                     seen.add(cand)
-                    made += 1
-                    if made >= MAX_NGRAMS_PER_SENTENCE:
-                        return out
+
+                found_for_part = True
+                break
+
+            if found_for_part:
+                break
 
     return out
 
@@ -447,7 +480,6 @@ def _upsert_phrase_record(
             "snippet": snippet[:160] + ("…" if len(snippet) > 160 else ""),
         })
 
-
 def build_upload_intelligence(
     workspace_id: str,
     doc_id: str,
@@ -460,22 +492,17 @@ def build_upload_intelligence(
     if not doc_id:
         raise ValueError("doc_id required")
 
-    # BLOCK NON-HTML FILES
-    if not stored_path.lower().endswith((".html", ".htm")):
+    normalized = normalize_upload(stored_path)
+    if not normalized.get("ok"):
         return {
             "ok": False,
-            "reason": "non-html file skipped",
+            "reason": normalized.get("reason", "normalize failed"),
             "doc_id": doc_id,
+            "stored_path": stored_path,
         }
 
-    # BLOCK BINARY / DOCX-LIKE CONTENT
-    html_preview = (html or "")[:200].lower()
-    if "pk" in html_preview and "xml" in (html or "").lower():
-        return {
-            "ok": False,
-            "reason": "binary/zip-like content skipped",
-            "doc_id": doc_id,
-        }
+    html = normalized.get("html", "") or ""
+    text = normalized.get("text", "") or ""
 
     paths = _paths_for_ws(ws)
 
@@ -508,43 +535,25 @@ def build_upload_intelligence(
     struct["updated_at"] = _now_iso()
     _write_json_atomic(paths["struct"], struct)
 
-    structured_candidates: List[Tuple[str, str, str, str]] = []
+    selected = select_upload_phrases(
+        workspace_id=ws,
+        doc_id=doc_id,
+        original_name=original_name,
+        html=html or "",
+        text=text or "",
+    )
 
-    if h1:
-        structured_candidates.append((h1, "heading_h1", "h1", h1))
+    for item in selected.get("phrases", []):
+        phrase = str(item.get("phrase") or "").strip()
+        source_type = str(item.get("source_type") or "selector")
+        section_id = str(item.get("section_id") or "")
+        snippet = str(item.get("snippet") or "")
 
-    for idx, h in enumerate(headings):
-        txt = str(h.get("text") or "").strip()
-        lvl = int(h.get("level") or 0)
-        if txt:
-            structured_candidates.append((txt, f"heading_h{lvl}", f"h{lvl}_{idx}", txt))
+        if not phrase:
+            continue
 
-    for idx, li in enumerate(list_items[:200]):
-        structured_candidates.append((li, "list_item", f"li_{idx}", li))
-
-    if original_name:
-        title_like = Path(original_name).stem.replace("_", " ").replace("-", " ")
-        structured_candidates.append((title_like, "title", "title_0", title_like))
-
-    for raw_text, source_type, section_id, snippet in structured_candidates:
-        phrase = _extract_canonical_core_phrase(raw_text) or _canonical_phrase(raw_text)
         _upsert_phrase_record(ph, phrase, source_type, doc_id, section_id, snippet)
 
-    for i, para in enumerate(paragraphs):
-        pid = f"p{i}"
-        sentence_candidates_all: List[str] = []
-
-        for sentence in _split_sentences(para):
-            if not _is_valid_content_sentence(sentence):
-                continue
-            sentence_candidates_all.extend(_generate_sentence_candidates(sentence))
-
-        seen_in_para: Set[str] = set()
-        for candidate in sentence_candidates_all:
-            if candidate in seen_in_para:
-                continue
-            seen_in_para.add(candidate)
-            _upsert_phrase_record(ph, candidate, "sentence", doc_id, pid, para)
 
     phrase_index["updated_at"] = _now_iso()
     _write_json_atomic(paths["phrases"], phrase_index)
