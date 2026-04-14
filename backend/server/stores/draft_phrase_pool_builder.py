@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set
-
+from backend.server.stores.draft_phrase_selector import select_draft_phrases
 
 def _data_dir() -> Path:
     here = Path(__file__).resolve()
@@ -156,45 +156,82 @@ def build_draft_phrase_index(workspace_id: str) -> Dict[str, Any]:
 
         working_title = _strip_drafts_prefix(item.get("working_title") or item.get("title") or "")
         aliases = item.get("aliases") if isinstance(item.get("aliases"), list) else []
-        planned_slug = _slug_to_text(item.get("planned_slug") or "")
-
-        text_sources: List[str] = []
-        if working_title:
-            text_sources.append(working_title)
-        for a in aliases:
-            a = _clean_spaces(a)
-            if a:
-                text_sources.append(a)
-        if planned_slug:
-            text_sources.append(planned_slug)
-
+        aliases = [_clean_spaces(a) for a in aliases if _clean_spaces(a)]
+        planned_slug_raw = str(item.get("planned_slug") or "").strip()
+        planned_slug = planned_slug_raw
         item_topic_id = str(item.get("topic_id") or item.get("id") or "").strip()
         item_url = str(item.get("planned_url") or "").strip()
+        summary = _clean_spaces(
+            item.get("summary")
+            or item.get("description")
+            or item.get("notes")
+            or item.get("excerpt")
+            or ""
+        )
 
         if active_draft_id_set and item_topic_id not in active_draft_id_set:
             continue
 
         item_added_any = False
 
-        for source_text in text_sources:
-            extracted = _extract_phrases_from_text(source_text)
-            for phrase in extracted:
-                rec = phrases.get(phrase)
-                if rec is None:
-                    phrases[phrase] = {
-                        "phrase": phrase,
-                        "source": "draft_topics",
-                        "topic_ids": [item_topic_id] if item_topic_id else [],
-                        "planned_urls": [item_url] if item_url else [],
-                        "occurrences": 1,
-                    }
-                else:
-                    rec["occurrences"] = int(rec.get("occurrences") or 0) + 1
-                    if item_topic_id and item_topic_id not in rec.get("topic_ids", []):
-                        rec.setdefault("topic_ids", []).append(item_topic_id)
-                    if item_url and item_url not in rec.get("planned_urls", []):
-                        rec.setdefault("planned_urls", []).append(item_url)
-                item_added_any = True
+        selected_obj = select_draft_phrases(
+            workspace_id=ws,
+            topic_id=item_topic_id or "draft_topic",
+            title=working_title,
+            slug=planned_slug,
+            planned_url=item_url,
+            summary=summary,
+            aliases=aliases,
+        )
+
+        extracted_items = selected_obj.get("phrases") or []
+        for phrase_obj in extracted_items:
+            if not isinstance(phrase_obj, dict):
+                continue
+
+            phrase = _clean_spaces(phrase_obj.get("phrase") or "")
+            if not phrase:
+                continue
+
+            rec = phrases.get(phrase)
+            if rec is None:
+                phrases[phrase] = {
+                    "phrase": phrase,
+                    "source": "draft_topics",
+                    "source_type": phrase_obj.get("source_type") or "unknown",
+                    "score": int(phrase_obj.get("score") or 0),
+                    "vertical": selected_obj.get("vertical") or "generic",
+                    "topic_ids": [item_topic_id] if item_topic_id else [],
+                    "planned_urls": [item_url] if item_url else [],
+                    "occurrences": 1,
+                    "section_ids": [phrase_obj.get("section_id")] if phrase_obj.get("section_id") else [],
+                    "snippets": [phrase_obj.get("snippet")] if phrase_obj.get("snippet") else [],
+                }
+            else:
+                rec["occurrences"] = int(rec.get("occurrences") or 0) + 1
+
+                existing_score = int(rec.get("score") or 0)
+                new_score = int(phrase_obj.get("score") or 0)
+                if new_score > existing_score:
+                    rec["score"] = new_score
+                    rec["source_type"] = phrase_obj.get("source_type") or rec.get("source_type") or "unknown"
+
+                if item_topic_id and item_topic_id not in rec.get("topic_ids", []):
+                    rec.setdefault("topic_ids", []).append(item_topic_id)
+
+                if item_url and item_url not in rec.get("planned_urls", []):
+                    rec.setdefault("planned_urls", []).append(item_url)
+
+                section_id = phrase_obj.get("section_id")
+                if section_id and section_id not in rec.get("section_ids", []):
+                    rec.setdefault("section_ids", []).append(section_id)
+
+                snippet = phrase_obj.get("snippet")
+                if snippet and snippet not in rec.get("snippets", []):
+                    rec.setdefault("snippets", []).append(snippet)
+
+            item_added_any = True
+
 
         if item_added_any:
             topics_used += 1

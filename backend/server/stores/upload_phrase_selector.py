@@ -4,6 +4,12 @@ import re
 from collections import Counter
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from backend.server.stores.phrase_vertical_policy import (
+    apply_vertical_policy_score,
+    detect_vertical,
+    get_vertical_min_score,
+)
+
 
 WORD_RE = re.compile(r"[a-z0-9]{2,}", re.I)
 TAG_RE = re.compile(r"<[^>]+>")
@@ -37,6 +43,8 @@ UI_JUNK_TERMS: Set[str] = {
     "about us", "privacy policy", "terms", "cookie", "login", "register", "subscribe", "follow us",
     "facebook", "instagram", "twitter", "youtube", "whatsapp", "telegram"
 }
+
+
 
 INTENT_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"^how to [a-z0-9\s\-]+$"),
@@ -384,17 +392,26 @@ def _select_noun_phrase_candidates(paragraphs: List[str]) -> List[Dict[str, Any]
 
     return out
 
-
-def _dedupe_and_rank(candidates: List[Dict[str, Any]], keep_threshold: int = 60) -> List[Dict[str, Any]]:
+def _dedupe_and_rank(
+    candidates: List[Dict[str, Any]],
+    vertical: str,
+) -> List[Dict[str, Any]]:
     counter = Counter(_canonical_phrase(c["phrase"]) for c in candidates if c.get("phrase"))
     best: Dict[str, Dict[str, Any]] = {}
+    keep_threshold = get_vertical_min_score(vertical)
 
     for c in candidates:
         phrase = _canonical_phrase(c.get("phrase", ""))
         if not phrase:
             continue
 
-        score = _score_candidate(phrase, str(c.get("source_type") or ""), counter.get(phrase, 1))
+        base_score = _score_candidate(
+            phrase,
+            str(c.get("source_type") or ""),
+            counter.get(phrase, 1),
+        )
+        score = apply_vertical_policy_score(phrase, base_score, vertical)
+
         if score < keep_threshold:
             continue
 
@@ -430,12 +447,16 @@ def select_upload_phrases(
     candidates.extend(_select_intent_candidates(paragraphs))
     candidates.extend(_select_noun_phrase_candidates(paragraphs))
 
-    selected = _dedupe_and_rank(candidates, keep_threshold=60)
+    combined_text = ((original_name or "") + "\n" + (text or "") + "\n" + (html or "")).lower()
+    vertical = detect_vertical(combined_text)
+
+    selected = _dedupe_and_rank(candidates, vertical=vertical)
 
     return {
         "ok": True,
         "workspace_id": workspace_id,
         "doc_id": doc_id,
+        "vertical": vertical,
         "paragraph_count": len(paragraphs),
         "candidate_count": len(candidates),
         "selected_count": len(selected),
