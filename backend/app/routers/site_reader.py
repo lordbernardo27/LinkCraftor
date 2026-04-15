@@ -29,6 +29,7 @@ from backend.server.pools.target_pools.draft_target_pool import build_draft_targ
 from backend.server.pools.target_pools.imported_target_pool import build_imported_target_pool
 from backend.server.pools.target_pools.live_domain_target_pool import build_live_domain_target_pool
 from backend.server.site_reader.html_extract import extract_headings_and_body
+from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
 from backend.server.site_reader.phrase_generators import (
     generate_phrase_bundle_for_page,
 )
@@ -601,11 +602,12 @@ def rebuild_all_target_pools(
         return err
 
     results: Dict[str, Any] = {
-        "document_registry": None,
-        "draft": None,
-        "imported": None,
-        "live_domain": None,
-    }
+    "document_registry": None,
+    "draft": None,
+    "imported": None,
+    "live_domain": None,
+    "upload": None,
+}
 
     try:
         doc_out = build_document_registry_pool(ws)
@@ -655,6 +657,21 @@ def rebuild_all_target_pools(
         }
     except Exception as e:
         results["live_domain"] = {
+            "ok": False,
+            "error": str(e)[:200],
+        }
+
+    try:
+        upload_out = build_upload_phrase_pool(ws)
+        results["upload"] = {
+            "ok": True,
+            "counts": {
+                "phrase_count": upload_out.get("phrase_count", 0),
+            },
+            "path": f"backend/server/data/phrase_pools/upload/upload_phrase_pool_{ws}.json",
+        }
+    except Exception as e:
+        results["upload"] = {
             "ok": False,
             "error": str(e)[:200],
         }
@@ -1081,6 +1098,49 @@ def preview_draft_target_pool(
         "items": slice_,
     }
 
+# -------------------------
+# Target Pools: Upload
+# -------------------------
+@router.get("/target_pools/upload/preview")
+def preview_upload_target_pool(
+    workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0, le=200000),
+):
+    ws, err = _ws_or_error(workspace_id)
+    if err:
+        return err
+
+    fp = Path(f"backend/server/data/phrase_pools/upload/upload_phrase_pool_{ws}.json")
+    if not fp.exists():
+        return {"ok": False, "workspace_id": ws, "error": "pool_file_missing"}
+
+    obj = json.loads(fp.read_text(encoding="utf-8"))
+    phrases = obj.get("phrases") or {}
+    if not isinstance(phrases, dict):
+        phrases = {}
+
+    phrase_keys = list(phrases.keys())
+    slice_keys = phrase_keys[offset : offset + limit]
+
+    items = []
+    for k in slice_keys:
+        rec = phrases.get(k)
+        if isinstance(rec, dict):
+            items.append(rec)
+
+    return {
+        "ok": True,
+        "workspace_id": ws,
+        "pool": "upload",
+        "total": len(phrases),
+        "limit": limit,
+        "offset": offset,
+        "items": items,
+        "phrase_count": int(obj.get("phrase_count", len(phrases))),
+    }
+
+
 @router.post("/target_pools/active_target_set/save")
 def save_active_target_set(payload: ActiveTargetSetPayload):
     ws, err = _ws_or_error(payload.workspace_id)
@@ -1110,14 +1170,26 @@ def save_active_target_set(payload: ActiveTargetSetPayload):
             pass
 
     def clean_list(value):
-        return [str(x).strip() for x in (value or []) if str(x).strip()]
+        out = []
+        seen = set()
+
+        for x in (value or []):
+            s = str(x).strip()
+            if not s:
+                continue
+            if s in seen:
+                continue
+            out.append(s)
+            seen.add(s)
+
+        return out
 
     obj = {
         "workspace_id": ws,
-        "active_document_ids": clean_list(payload.active_document_ids) if payload.active_document_ids is not None else existing["active_document_ids"],
-        "active_draft_ids": clean_list(payload.active_draft_ids) if payload.active_draft_ids is not None else existing["active_draft_ids"],
-        "active_imported_urls": clean_list(payload.active_imported_urls) if payload.active_imported_urls is not None else existing["active_imported_urls"],
-        "active_live_domain_urls": clean_list(payload.active_live_domain_urls) if payload.active_live_domain_urls is not None else existing["active_live_domain_urls"],
+        "active_document_ids": clean_list(payload.active_document_ids) if payload.active_document_ids is not None else clean_list(existing["active_document_ids"]),
+        "active_draft_ids": clean_list(payload.active_draft_ids) if payload.active_draft_ids is not None else clean_list(existing["active_draft_ids"]),
+        "active_imported_urls": clean_list(payload.active_imported_urls) if payload.active_imported_urls is not None else clean_list(existing["active_imported_urls"]),
+        "active_live_domain_urls": clean_list(payload.active_live_domain_urls) if payload.active_live_domain_urls is not None else clean_list(existing["active_live_domain_urls"]),
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 

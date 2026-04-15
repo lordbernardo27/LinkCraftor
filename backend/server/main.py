@@ -25,6 +25,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+# =========================
+# Router imports
+# =========================
+from .routes.imported_targets_urls_compat import router as imported_urls_router
+from .routes.draft_topics import router as draft_router
+from .routes.planning import router as planning_router
+from .routes.engine_scoring import router as engine_scoring_router
+from .routes.files import router as files_router
+from .routes.health import router as health_router
+from .routes.engine_run import router as engine_run_router
+from .routes.engine_decisions import router as engine_decisions_router
+
+from backend.app.routers.rb2_run import router as rb2_runner_router
+from backend.app.routers.document_registry import router as document_registry_router
+from backend.server.routes.workspace_health import router as workspace_health_router
+from backend.server.tms.routes import router as tms_router
+
 log = logging.getLogger("linkcraftor.server")
 logging.basicConfig(level=logging.INFO)
 
@@ -211,23 +228,6 @@ async def export_docx(payload: dict = Body(...)):
 
 
 # =========================
-# Router imports
-# =========================
-from .routes.imported_targets_urls_compat import router as imported_urls_router
-from .routes.draft_topics import router as draft_router
-from .routes.planning import router as planning_router
-from .routes.engine_scoring import router as engine_scoring_router
-from .routes.files import router as files_router
-from .routes.health import router as health_router
-from .routes.engine_run import router as engine_run_router
-from .routes.engine_decisions import router as engine_decisions_router
-
-from backend.app.routers.rb2_run import router as rb2_runner_router
-from backend.app.routers.document_registry import router as document_registry_router
-from backend.server.routes.workspace_health import router as workspace_health_router
-
-
-# =========================
 # Optional Site Reader
 # =========================
 site_reader_mount_error = None
@@ -278,6 +278,9 @@ if not _already_mounted("backend.app.routers.document_registry", "/api/site/targ
         prefix="/api/site/target_pools/document_registry",
         tags=["document-registry"],
     )
+
+if not _already_mounted("backend.server.tms.routes", "/api/tms"):
+    app.include_router(tms_router)
 
 if site_reader_router is not None:
     if not _already_mounted("backend.app.routers.site_reader", "/api/site"):
