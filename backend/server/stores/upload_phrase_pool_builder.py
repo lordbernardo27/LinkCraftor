@@ -5,7 +5,10 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Set
+
+from backend.server.stores.active_phrase_set_store import load_active_phrase_set
+from backend.server.utils.text_normalization import fix_mojibake_text
 
 
 def _data_dir() -> Path:
@@ -28,10 +31,6 @@ def _upload_phrase_pool_path(ws: str) -> Path:
     return _data_dir() / "phrase_pools" / "upload" / f"upload_phrase_pool_{_ws_safe(ws)}.json"
 
 
-def _active_upload_set_path(ws: str) -> Path:
-    return _data_dir() / f"active_upload_set_{_ws_safe(ws)}.json"
-
-
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -50,8 +49,42 @@ def _write_json(fp: Path, obj: Any) -> None:
     fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _clean_text(s: Any) -> str:
+    return fix_mojibake_text(str(s or "").strip())
+
+
+def _clean_aliases(v: Any) -> List[str]:
+    if not isinstance(v, list):
+        return []
+    out: List[str] = []
+    seen: Set[str] = set()
+    for item in v:
+        x = _clean_text(item)
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _clean_examples(v: Any) -> List[Dict[str, str]]:
+    if not isinstance(v, list):
+        return []
+    out: List[Dict[str, str]] = []
+    for ex in v:
+        if not isinstance(ex, dict):
+            continue
+        out.append(
+            {
+                "doc_id": _clean_text(ex.get("doc_id") or ""),
+                "section_id": _clean_text(ex.get("section_id") or ""),
+                "snippet": _clean_text(ex.get("snippet") or ""),
+            }
+        )
+    return out
+
+
 def _canonical_phrase(s: str) -> str:
-    s = (s or "").strip().lower()
+    s = _clean_text(s).lower()
     s = re.sub(r"\s+", " ", s)
     s = re.sub(r"^[\"'“”‘’\(\[\{]+|[\"'“”‘’\)\]\}:;,\.\!\?]+$", "", s).strip()
     return s
@@ -136,20 +169,28 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
 
         rec_docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
         for d, c in rec_docs.items():
-            docs[d] = int(docs.get(d) or 0) + int(c or 0)
+            docs[str(d)] = int(docs.get(str(d)) or 0) + int(c or 0)
 
         rec_sections = rec.get("sections") if isinstance(rec.get("sections"), list) else []
         for s in rec_sections:
-            if s not in sections:
-                sections.append(s)
+            x = _clean_text(s)
+            if x and x not in sections:
+                sections.append(x)
 
         rec_examples = rec.get("examples") if isinstance(rec.get("examples"), list) else []
         for ex in rec_examples:
             if len(examples) >= 5:
                 break
-            examples.append(ex)
+            if not isinstance(ex, dict):
+                continue
+            clean_ex = {
+                "doc_id": _clean_text(ex.get("doc_id") or ""),
+                "section_id": _clean_text(ex.get("section_id") or ""),
+                "snippet": _clean_text(ex.get("snippet") or ""),
+            }
+            examples.append(clean_ex)
 
-        candidate_aliases = []
+        candidate_aliases: List[str] = []
         old_phrase = _canonical_phrase(str(rec.get("phrase") or ""))
         old_canonical = _canonical_phrase(str(rec.get("canonical") or ""))
         if old_phrase and old_phrase != target_key:
@@ -217,13 +258,40 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
 
     src_path = _upload_phrase_index_path(ws)
     pool_path = _upload_phrase_pool_path(ws)
-    active_set_path = _active_upload_set_path(ws)
 
     src = _safe_read_json(src_path) or {}
-    phrases = src.get("phrases") if isinstance(src.get("phrases"), dict) else {}
+    raw_phrases = src.get("phrases") if isinstance(src.get("phrases"), dict) else {}
 
-    active = _safe_read_json(active_set_path) or {}
+    phrases: Dict[str, Any] = {}
+    for k, v in raw_phrases.items():
+        nk = _clean_text(k)
+        if not nk or not isinstance(v, dict):
+            continue
+
+        clean_rec = dict(v)
+
+        if "phrase" in clean_rec:
+            clean_rec["phrase"] = _clean_text(clean_rec.get("phrase"))
+
+        if "canonical" in clean_rec:
+            clean_rec["canonical"] = _clean_text(clean_rec.get("canonical"))
+
+        if isinstance(clean_rec.get("aliases"), list):
+            clean_rec["aliases"] = [_clean_text(x) for x in clean_rec["aliases"]]
+
+        if isinstance(clean_rec.get("sections"), list):
+            clean_rec["sections"] = [_clean_text(x) for x in clean_rec["sections"]]
+
+        if isinstance(clean_rec.get("examples"), list):
+            clean_rec["examples"] = _clean_examples(clean_rec["examples"])
+
+        phrases[nk] = clean_rec
+
+    active = load_active_phrase_set(ws)
     active_doc_ids = active.get("active_upload_ids") if isinstance(active.get("active_upload_ids"), list) else []
+    if not active_doc_ids:
+        active_doc_ids = active.get("active_document_ids") if isinstance(active.get("active_document_ids"), list) else []
+
     active_doc_ids = [str(x).strip() for x in active_doc_ids if str(x).strip()]
     active_doc_set = set(active_doc_ids)
 
@@ -236,11 +304,10 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
                 continue
             docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
             if any(doc_id in active_doc_set for doc_id in docs.keys()):
-                filtered[phrase] = rec
+                filtered[_clean_text(phrase)] = rec
     else:
-        filtered = dict(phrases)
+        filtered = {_clean_text(k): v for k, v in phrases.items()}
 
-    # FINAL CANONICAL MERGE HAPPENS HERE
     filtered = _canonical_merge_phrases(filtered)
 
     obj = {

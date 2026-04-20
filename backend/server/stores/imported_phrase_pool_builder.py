@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set
+from backend.server.stores.imported_phrase_selector import select_imported_phrases
 
 
 def _data_dir() -> Path:
@@ -48,6 +49,10 @@ def _xml_input_path(ws: str) -> Path:
 
 def _imported_phrase_index_path(ws: str) -> Path:
     return _data_dir() / f"imported_phrase_index_{_ws_safe(ws)}.json"
+
+
+def _imported_phrase_pool_path(ws: str) -> Path:
+    return _data_dir() / "phrase_pools" / "imported" / f"imported_phrase_pool_{_ws_safe(ws)}.json"
 
 
 def _safe_read_json(path: Path) -> Any:
@@ -205,35 +210,72 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
 
         title = _clean_spaces(item.get("title") or item.get("topic") or item.get("name") or "")
         url = str(item.get("url") or item.get("source_url") or "").strip()
-        slug_text = _slug_to_text(url)
-
-        text_sources: List[str] = []
-        if title:
-            text_sources.append(title)
-        if slug_text:
-            text_sources.append(slug_text)
+        summary = _clean_spaces(
+            item.get("summary")
+            or item.get("description")
+            or item.get("excerpt")
+            or item.get("notes")
+            or ""
+        )
 
         item_added_any = False
 
-        for source_text in text_sources:
-            extracted = _extract_phrases_from_text(source_text)
-            for phrase in extracted:
-                rec = phrases.get(phrase)
-                if rec is None:
-                    phrases[phrase] = {
-                        "phrase": phrase,
-                        "source": "imported_urls",
-                        "import_ids": [item_id] if item_id else [],
-                        "urls": [url] if url else [],
-                        "occurrences": 1,
-                    }
-                else:
-                    rec["occurrences"] = int(rec.get("occurrences") or 0) + 1
-                    if item_id and item_id not in rec.get("import_ids", []):
-                        rec.setdefault("import_ids", []).append(item_id)
-                    if url and url not in rec.get("urls", []):
-                        rec.setdefault("urls", []).append(url)
-                item_added_any = True
+        selected_obj = select_imported_phrases(
+            workspace_id=ws,
+            import_id=item_id or "import_row",
+            title=title,
+            url=url,
+            summary=summary,
+            aliases=[],
+        )
+
+        extracted_items = selected_obj.get("phrases") or []
+        for phrase_obj in extracted_items:
+            if not isinstance(phrase_obj, dict):
+                continue
+
+            phrase = _clean_spaces(phrase_obj.get("phrase") or "")
+            if not phrase:
+                continue
+
+            rec = phrases.get(phrase)
+            if rec is None:
+                phrases[phrase] = {
+                    "phrase": phrase,
+                    "source": "imported_urls",
+                    "source_type": phrase_obj.get("source_type") or "unknown",
+                    "score": int(phrase_obj.get("score") or 0),
+                    "vertical": selected_obj.get("vertical") or "generic",
+                    "import_ids": [item_id] if item_id else [],
+                    "urls": [url] if url else [],
+                    "occurrences": 1,
+                    "section_ids": [phrase_obj.get("section_id")] if phrase_obj.get("section_id") else [],
+                    "snippets": [phrase_obj.get("snippet")] if phrase_obj.get("snippet") else [],
+                }
+            else:
+                rec["occurrences"] = int(rec.get("occurrences") or 0) + 1
+
+                existing_score = int(rec.get("score") or 0)
+                new_score = int(phrase_obj.get("score") or 0)
+                if new_score > existing_score:
+                    rec["score"] = new_score
+                    rec["source_type"] = phrase_obj.get("source_type") or rec.get("source_type") or "unknown"
+
+                if item_id and item_id not in rec.get("import_ids", []):
+                    rec.setdefault("import_ids", []).append(item_id)
+
+                if url and url not in rec.get("urls", []):
+                    rec.setdefault("urls", []).append(url)
+
+                section_id = phrase_obj.get("section_id")
+                if section_id and section_id not in rec.get("section_ids", []):
+                    rec.setdefault("section_ids", []).append(section_id)
+
+                snippet = phrase_obj.get("snippet")
+                if snippet and snippet not in rec.get("snippets", []):
+                    rec.setdefault("snippets", []).append(snippet)
+
+            item_added_any = True
 
         if item_added_any:
             rows_used += 1
@@ -249,5 +291,67 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
         "phrases": phrases,
     }
 
+    out_path.write_text(json.dumps(out_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    return out_obj
+
+
+def build_imported_phrase_pool(workspace_id: str) -> Dict[str, Any]:
+    ws = _ws_safe(workspace_id)
+    src_path = _imported_phrase_index_path(ws)
+    out_path = _imported_phrase_pool_path(ws)
+
+    if not src_path.exists():
+        raise FileNotFoundError(f"Missing imported phrase index file: {src_path}")
+
+    raw = _safe_read_json(src_path)
+    if not isinstance(raw, dict):
+        raw = {}
+
+    source_phrases = raw.get("phrases") if isinstance(raw.get("phrases"), dict) else {}
+
+    active_obj = load_active_phrase_set(ws)
+    active_imported_urls = [
+        str(x).strip()
+        for x in (active_obj.get("active_imported_urls") or [])
+        if str(x).strip()
+    ]
+    active_imported_url_set = set(active_imported_urls)
+
+    phrases: Dict[str, Dict[str, Any]] = {}
+    source_phrase_count = 0
+    kept_phrase_count = 0
+
+    for phrase, rec in source_phrases.items():
+        if not isinstance(rec, dict):
+            continue
+
+        source_phrase_count += 1
+
+        urls = rec.get("urls") if isinstance(rec.get("urls"), list) else []
+        urls = [str(u).strip() for u in urls if str(u).strip()]
+
+        if active_imported_url_set:
+            matched_urls = [u for u in urls if u in active_imported_url_set]
+            if not matched_urls:
+                continue
+
+        key = str(phrase).strip()
+        if not key:
+            continue
+
+        phrases[key] = rec
+        kept_phrase_count += 1
+
+    out_obj = {
+        "workspace_id": ws,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "source_phrase_count": source_phrase_count,
+        "phrase_count": kept_phrase_count,
+        "active_phrase_set_used": bool(active_imported_url_set),
+        "active_imported_urls_count": len(active_imported_urls),
+        "phrases": phrases,
+    }
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(out_obj, ensure_ascii=False, indent=2), encoding="utf-8")
     return out_obj

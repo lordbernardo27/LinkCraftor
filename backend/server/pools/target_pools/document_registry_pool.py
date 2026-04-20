@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
+from backend.server.utils.text_normalization import fix_mojibake_text
+
 
 def _data_dir() -> Path:
     here = Path(__file__).resolve()
@@ -56,6 +58,7 @@ def _clean_text(s: str) -> str:
     s = str(s or "")
     s = re.sub(r"<[^>]+>", " ", s)
     s = s.replace("\ufeff", " ")
+    s = fix_mojibake_text(s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -69,6 +72,7 @@ def _norm_title(s: str) -> str:
 
 def _filename_to_title(name: str) -> str:
     name = Path(str(name or "")).stem
+    name = fix_mojibake_text(name)
     name = re.sub(r"[_\-]+", " ", name)
     name = re.sub(r"\s+", " ", name).strip()
     return name[:200]
@@ -170,6 +174,7 @@ def _pick_title(rec: Dict[str, Any], file_text: str) -> Dict[str, str]:
         return {"title": first_line, "title_source": "first_meaningful_line"}
 
     return {"title": "", "title_source": ""}
+
 
 def _safe_read_json(path: Path) -> Any:
     try:

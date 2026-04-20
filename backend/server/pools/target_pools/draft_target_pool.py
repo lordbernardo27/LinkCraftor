@@ -37,8 +37,49 @@ def _active_target_set_path(ws: str) -> Path:
     return _data_dir() / "target_pools" / f"active_target_set_{ws}.json"
 
 
+def _fix_mojibake_text(s: str) -> str:
+    s = str(s or "")
+    if not s:
+        return ""
+
+    replacements = {
+        "â€™": "'",
+        "â€˜": "'",
+        "â€œ": '"',
+        "â€": '"',
+        "â€“": "-",
+        "â€”": "-",
+        "â€¦": "...",
+        "Â ": " ",
+        "Â": "",
+        "\u2019": "'",
+        "\u2018": "'",
+        "\u201c": '"',
+        "\u201d": '"',
+        "\u2013": "-",
+        "\u2014": "-",
+        "\u00a0": " ",
+    }
+
+    for bad, good in replacements.items():
+        s = s.replace(bad, good)
+
+    try:
+        if any(x in s for x in ("â", "Â", "Ã")):
+            repaired = s.encode("latin1", errors="ignore").decode("utf-8", errors="ignore").strip()
+            if repaired:
+                s = repaired
+    except Exception:
+        pass
+
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def _clean(s: str) -> str:
-    return str(s or "").strip().strip("\ufeff").strip()
+    s = str(s or "").strip().strip("\ufeff").strip()
+    s = _fix_mojibake_text(s)
+    return s
 
 
 def _safe_read_json(path: Path) -> Any:
@@ -172,11 +213,12 @@ def build_draft_target_pool(
     seen: set[str] = set()
     uniq: List[str] = []
     for t in topics:
-        k = _clean(t).lower()
+        cleaned_topic = _clean(t)
+        k = cleaned_topic.lower()
         if not k or k in seen:
             continue
         seen.add(k)
-        uniq.append(_clean(t))
+        uniq.append(cleaned_topic)
 
     domain = _domain_from_sources_or_ws(ws)
     base = f"https://{domain}".rstrip("/")
@@ -205,12 +247,13 @@ def build_draft_target_pool(
         if active_fp.exists() and draft_topic_id not in active_draft_id_set:
             continue
 
-        slug = _slugify(topic)
+        clean_topic = _clean(topic)
+        slug = _slugify(clean_topic)
         url = f"{base}{dp}/{slug}"
         items.append(
             {
                 "draft_topic_id": draft_topic_id,
-                "topic": topic,
+                "topic": clean_topic,
                 "url": url,
             }
         )

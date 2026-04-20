@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any, Dict, List
 from urllib.parse import urlparse
 
+from backend.server.utils.text_normalization import fix_mojibake_text
+
 
 def _data_dir() -> Path:
     here = Path(__file__).resolve()
@@ -173,7 +175,7 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
         nu = _norm_url(u)
         rec = pages.get(u) or pages.get(nu) or pages.get(nu + "/") or {}
         h1 = (rec.get("h1") if isinstance(rec, dict) else "") or ""
-        h1 = str(h1).strip()
+        h1 = fix_mojibake_text(str(h1).strip())
         if not h1:
             missing_h1 += 1
             continue

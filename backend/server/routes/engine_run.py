@@ -5,14 +5,7 @@ from typing import Optional, List, Set, Dict, Tuple, Any
 import os
 import json
 import re
-import zlib
-import csv
-import xml.etree.ElementTree as ET
 
-
-# =========================
-# HELIX TOKEN-OVERLAP RULES
-# =========================
 
 PHASE_DEFAULT = "prepublish"
 
@@ -24,8 +17,8 @@ FLOORS_BY_PHASE = {
 MAX_UNIQUE_PHRASES = 30
 MAX_HITS_PER_PHRASE = 2
 
-
 WORD_RE = re.compile(r"[a-z0-9]{3,}")
+
 
 def tokenize(text: str) -> List[str]:
     return WORD_RE.findall((text or "").lower())
@@ -43,12 +36,8 @@ def token_overlap_score(anchor_tokens: List[str], doc_tokens_set: Set[str]) -> T
 
 
 router = APIRouter(prefix="/api/engine", tags=["engine-run"])
-ENGINE_RUN_BUILD = "2026-03-01-WS-TARGETS"
+ENGINE_RUN_BUILD = "2026-04-20-RB2-ACTIVE-PHRASE-POOL"
 
-
-# =========================
-# Workspace helpers
-# =========================
 
 def _ws_safe(ws: str) -> str:
     ws = (ws or "default").strip().lower()
@@ -59,75 +48,60 @@ def _data_dir() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
-# =========================
-# NEW: Imported Targets Loader
-# =========================
-
-def _load_imported_targets(ws: str) -> List[str]:
-    """
-    Reads:
-        imported_targets_<ws>.csv
-        imported_targets_<ws>.txt
-        imported_targets_<ws>.xml
-    Returns list of URLs.
-    """
-
-    ws_safe = _ws_safe(ws)
-    base = _data_dir()
-
-    urls: List[str] = []
-
-    # ---- CSV ----
-    csv_path = os.path.join(base, f"imported_targets_{ws_safe}.csv")
-    if os.path.exists(csv_path):
-        try:
-            with open(csv_path, newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    u = (row.get("URL") or row.get("url") or "").strip()
-                    if u:
-                        urls.append(u)
-        except Exception:
-            pass
-
-    # ---- TXT ----
-    txt_path = os.path.join(base, f"imported_targets_{ws_safe}.txt")
-    if os.path.exists(txt_path):
-        try:
-            with open(txt_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    u = line.strip()
-                    if u:
-                        urls.append(u)
-        except Exception:
-            pass
-
-    # ---- XML ----
-    xml_path = os.path.join(base, f"imported_targets_{ws_safe}.xml")
-    if os.path.exists(xml_path):
-        try:
-            tree = ET.parse(xml_path)
-            root = tree.getroot()
-            for el in root.findall(".//{*}loc"):
-                if el.text:
-                    urls.append(el.text.strip())
-        except Exception:
-            pass
-
-    # Deduplicate
-    seen = set()
-    clean = []
-    for u in urls:
-        if u and u not in seen:
-            seen.add(u)
-            clean.append(u)
-
-    return clean
+def _active_phrase_pool_path(ws: str) -> str:
+    return os.path.join(
+        _data_dir(),
+        "phrase_pools",
+        "active",
+        f"active_phrase_pool_{_ws_safe(ws)}.json",
+    )
 
 
-# =========================
-# Models
-# =========================
+def _safe_read_json(path: str) -> Any:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _phrase_tokens(phrase: str) -> List[str]:
+    return tokenize(phrase or "")
+
+
+def _best_url_from_record(rec: Dict[str, Any]) -> str:
+    if not isinstance(rec, dict):
+        return ""
+
+    for key in ("planned_urls", "urls"):
+        vals = rec.get(key)
+        if isinstance(vals, list):
+            for v in vals:
+                s = str(v or "").strip()
+                if s:
+                    return s
+
+    for key in ("source_url", "planned_url", "url", "link_target"):
+        s = str(rec.get(key) or "").strip()
+        if s:
+            return s
+
+    return ""
+
+
+def _best_title_from_record(phrase: str, rec: Dict[str, Any]) -> str:
+    if not isinstance(rec, dict):
+        return phrase.title()
+
+    snippets = rec.get("snippets")
+    if isinstance(snippets, list):
+        for s in snippets:
+            x = str(s or "").strip()
+            if x:
+                return x
+
+    return str(rec.get("phrase") or phrase).strip().title()
+
 
 class EngineRunRequest(BaseModel):
     workspaceId: Optional[str] = "default"
@@ -137,32 +111,6 @@ class EngineRunRequest(BaseModel):
     phase: Optional[str] = PHASE_DEFAULT
     limit: int = 2500
 
-
-# =========================
-# URL slug tokenizer
-# =========================
-
-def slug_tokens(url: str) -> List[str]:
-    u = (url or "").strip().lower()
-    if not u:
-        return []
-
-    u = u.split("#", 1)[0].split("?", 1)[0]
-
-    if "://" in u:
-        u = u.split("://", 1)[1]
-
-    path = u.split("/", 1)[1] if "/" in u else ""
-    path = re.sub(r"[^a-z0-9\-_ ]", " ", path)
-    parts = re.split(r"[\s\-_]+", path)
-
-    toks = [p for p in parts if len(p) >= 3]
-    return list(dict.fromkeys(toks))[:20]
-
-
-# ============================================================
-# ENGINE RUN (UPDATED TO NEW STORE)
-# ============================================================
 
 @router.post("/run")
 def engine_run(payload: EngineRunRequest = Body(...)):
@@ -179,18 +127,31 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     floors = FLOORS_BY_PHASE[phase]
 
-    # ✅ NEW STORE
-    urls = _load_imported_targets(ws)
+    pool_path = _active_phrase_pool_path(ws)
+    pool_obj = _safe_read_json(pool_path) if os.path.exists(pool_path) else None
+    phrases_obj = (
+        pool_obj.get("phrases")
+        if isinstance(pool_obj, dict) and isinstance(pool_obj.get("phrases"), dict)
+        else {}
+    )
 
-    limited_text = text[: max(0, int(payload.limit or 2500))]
+    source_text = html if html else text
+    limited_text = source_text[: max(0, int(payload.limit or 2500))]
     doc_tokens_set = set(tokenize(limited_text))
 
     combined = []
     phrase_hits: Dict[str, int] = {}
     unique_phrases: Set[str] = set()
 
-    for url in urls:
-        toks = slug_tokens(url)
+    for phrase, rec in phrases_obj.items():
+        if not isinstance(rec, dict):
+            continue
+
+        phrase_text = str(phrase or "").strip()
+        if not phrase_text:
+            continue
+
+        toks = _phrase_tokens(phrase_text)
         if not toks:
             continue
 
@@ -210,15 +171,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         else:
             continue
 
-        matched = [t for t in toks if t in doc_tokens_set]
-        if not matched:
-            continue
-
-        phrase = " ".join(matched[:6]).strip()
-        if not phrase:
-            continue
-
-        phrase_norm = phrase.lower()
+        phrase_norm = phrase_text.lower()
 
         if phrase_hits.get(phrase_norm, 0) >= MAX_HITS_PER_PHRASE:
             continue
@@ -226,33 +179,40 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         if phrase_norm not in unique_phrases and len(unique_phrases) >= MAX_UNIQUE_PHRASES:
             break
 
+        url = _best_url_from_record(rec)
+        title = _best_title_from_record(phrase_text, rec)
+
         phrase_hits[phrase_norm] = phrase_hits.get(phrase_norm, 0) + 1
         unique_phrases.add(phrase_norm)
 
         combined.append({
-            "phrase": phrase,
-            "title": phrase.title(),
+            "phrase": phrase_text,
+            "title": title,
             "url": url,
             "score": round(float(score), 4),
             "overlap": int(overlap),
             "strength": strength,
-            "source": "imported_targets",
+            "source": ",".join(rec.get("pool_sources", [])) if isinstance(rec.get("pool_sources"), list) else "active_phrase_pool",
+            "source_type": str(rec.get("source_type") or ""),
+            "vertical": str(rec.get("vertical") or ""),
         })
 
-    recommended = [x for x in combined if x["strength"] == "strong"]
-    optional = [x for x in combined if x["strength"] != "strong"]
+    internal_strong = [x for x in combined if x["strength"] == "strong"]
+    semantic_optional = [x for x in combined if x["strength"] != "strong"]
 
     return {
         "ok": True,
-        "engine": "HELIX",
+        "engine": "RB2",
         "workspaceId": ws,
-        "recommended": recommended,
-        "optional": optional,
-        "external": [],
+        "docId": payload.docId,
+        "internal_strong": internal_strong,
+        "semantic_optional": semantic_optional,
         "meta": {
             "build": ENGINE_RUN_BUILD,
-            "urls_count": len(urls),
+            "phrase_pool_count": len(phrases_obj),
             "internal_found": len(combined),
+            "internal_strong_count": len(internal_strong),
+            "semantic_optional_count": len(semantic_optional),
             "unique_phrases": len(unique_phrases),
             "floors": floors,
         }

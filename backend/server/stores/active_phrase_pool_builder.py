@@ -65,10 +65,16 @@ def build_active_phrase_pool(workspace_id: str) -> Dict[str, Any]:
     active_obj = load_active_phrase_set(ws)
 
     active_document_ids = [
-        str(x).strip()
-        for x in (active_obj.get("active_document_ids") or [])
-        if str(x).strip()
-    ]
+    str(x).strip()
+    for x in (
+        active_obj.get("active_upload_ids")
+        or active_obj.get("active_document_ids")
+        or []
+    )
+    if str(x).strip()
+]
+
+
     active_draft_ids = [
         str(x).strip()
         for x in (active_obj.get("active_draft_ids") or [])

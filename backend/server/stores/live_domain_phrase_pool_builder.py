@@ -4,9 +4,11 @@ import json
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set
+from backend.server.stores.live_phrase_selector import select_live_phrases
+from backend.server.utils.text_normalization import fix_mojibake_text
 
 
 def _data_dir() -> Path:
@@ -48,6 +50,37 @@ def _safe_read_json(path: Path) -> Any:
         return None
 
 
+def _clean_text(s: Any) -> str:
+    return fix_mojibake_text(str(s or "").strip())
+
+
+def _clean_aliases(v: Any) -> List[str]:
+    if not isinstance(v, list):
+        return []
+    out: List[str] = []
+    seen = set()
+    for item in v:
+        x = _clean_text(item)
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _rec_to_selector_entry(phrase: str, rec: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "phrase": _clean_text(phrase),
+        "norm": _clean_text(rec.get("norm") or phrase or ""),
+        "type": _clean_text(rec.get("type") or ""),
+        "bucket": _clean_text(rec.get("bucket") or ""),
+        "confidence": float(rec.get("confidence") or 0.0),
+        "aliases": _clean_aliases(rec.get("aliases")),
+        "source_url": _clean_text(rec.get("source_url") or ""),
+        "section_id": _clean_text(rec.get("section_id") or ""),
+        "snippet": _clean_text(rec.get("snippet") or rec.get("phrase") or phrase or ""),
+    }
+
+
 def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
     ws = _ws_safe(workspace_id)
     src_path = _site_phrase_index_path(ws)
@@ -64,15 +97,17 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
 
     active_obj = load_active_phrase_set(ws)
     active_live_domain_urls = [
-        str(x).strip()
+        _clean_text(x)
         for x in (active_obj.get("active_live_domain_urls") or [])
-        if str(x).strip()
+        if _clean_text(x)
     ]
     active_live_domain_url_set = set(active_live_domain_urls)
 
-    phrases: Dict[str, Dict[str, Any]] = {}
     source_phrase_count = 0
-    kept_phrase_count = 0
+    eligible_phrase_count = 0
+
+    entries_by_url: Dict[str, List[Dict[str, Any]]] = {}
+    record_by_phrase_and_url: Dict[tuple[str, str], Dict[str, Any]] = {}
 
     for phrase, rec in source_phrases.items():
         if not isinstance(rec, dict):
@@ -80,19 +115,64 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
 
         source_phrase_count += 1
 
-        source_url = str(rec.get("source_url") or "").strip()
+        source_url = _clean_text(rec.get("source_url") or "")
+        if not source_url:
+            continue
 
-        if active_live_domain_url_set:
-            if source_url not in active_live_domain_url_set:
-                continue
+        if active_live_domain_url_set and source_url not in active_live_domain_url_set:
+            continue
 
-        phrases[str(phrase)] = rec
-        kept_phrase_count += 1
+        eligible_phrase_count += 1
+
+        entry = _rec_to_selector_entry(str(phrase), rec)
+        entries_by_url.setdefault(source_url, []).append(entry)
+        record_by_phrase_and_url[(str(entry.get("norm") or "").strip(), source_url)] = rec
+
+    phrases: Dict[str, Dict[str, Any]] = {}
+    kept_phrase_count = 0
+
+    for source_url, entries in entries_by_url.items():
+        selected_obj = select_live_phrases(
+            workspace_id=ws,
+            source_url=source_url,
+            entries=entries,
+            page_text="",
+        )
+
+        for item in selected_obj.get("phrases") or []:
+            norm = _clean_text(item.get("norm") or item.get("phrase") or "")
+            original = record_by_phrase_and_url.get((norm, source_url), {})
+
+            merged = dict(original) if isinstance(original, dict) else {}
+            merged["phrase"] = _clean_text(item.get("phrase") or norm)
+            merged["norm"] = norm
+            merged["source_url"] = source_url
+            merged["type"] = _clean_text(item.get("type") or merged.get("type") or "unknown")
+            merged["bucket"] = _clean_text(item.get("bucket") or merged.get("bucket") or "unknown")
+            merged["confidence"] = (
+                item.get("confidence")
+                if item.get("confidence") is not None
+                else merged.get("confidence", 0.0)
+            )
+            merged["score"] = item.get("score", merged.get("score", 0))
+            merged["aliases"] = _clean_aliases(item.get("aliases") or merged.get("aliases") or [])
+            merged["section_id"] = _clean_text(item.get("section_id") or merged.get("section_id") or "")
+            merged["snippet"] = _clean_text(
+                item.get("snippet")
+                or merged.get("snippet")
+                or merged.get("phrase")
+                or norm
+            )
+            merged["vertical"] = _clean_text(item.get("vertical") or merged.get("vertical") or "")
+
+            phrases[norm] = merged
+            kept_phrase_count += 1
 
     out_obj = {
         "workspace_id": ws,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "source_phrase_count": source_phrase_count,
+        "eligible_phrase_count": eligible_phrase_count,
         "phrase_count": kept_phrase_count,
         "active_phrase_set_used": bool(active_live_domain_url_set),
         "active_live_domain_urls_count": len(active_live_domain_urls),

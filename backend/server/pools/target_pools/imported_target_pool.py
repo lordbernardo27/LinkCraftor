@@ -98,6 +98,64 @@ def _norm_url(u: str) -> str:
     return u[:-1] if u.endswith("/") else u
 
 
+def _clean_label(label: str) -> str:
+    label = _clean(label)
+    if not label:
+        return "Untitled"
+
+    label = label.replace("-", " ").replace("_", " ")
+    label = re.sub(r"\s+", " ", label).strip()
+
+    word_map = {
+        "whats": "What's",
+        "hcg": "HCG",
+        "ivf": "IVF",
+        "lmp": "LMP",
+        "c": "C",
+    }
+
+    small_words = {
+        "a", "an", "and", "as", "at", "by", "for", "in", "of", "on", "or", "the", "to", "vs"
+    }
+
+    parts = label.split(" ")
+    out: List[str] = []
+
+    for i, part in enumerate(parts):
+        low = part.lower()
+        if low in word_map:
+            out.append(word_map[low])
+        elif low == "section":
+            out.append("Section")
+        elif low == "api":
+            out.append("API")
+        elif low == "seo":
+            out.append("SEO")
+        elif low == "url":
+            out.append("URL")
+        elif low == "h1":
+            out.append("H1")
+        elif low == "h2":
+            out.append("H2")
+        elif low == "h3":
+            out.append("H3")
+        elif low in small_words and i != 0:
+            out.append(low)
+        elif low.isdigit():
+            out.append(low)
+        else:
+            out.append(low.capitalize())
+
+    cleaned = " ".join(out)
+
+    cleaned = re.sub(r"\bC Section\b", "C-Section", cleaned)
+    cleaned = re.sub(r"\bWeek (\d{1,2}) (\d{1,2})\b", r"Week \1-\2", cleaned)
+    cleaned = re.sub(r"\bWhat To\b", "What to", cleaned)
+    cleaned = re.sub(r"\bHow To\b", "How to", cleaned)
+
+    return cleaned or "Untitled"
+
+
 def _slug_label_from_url(url: str) -> str:
     try:
         u = urlparse((url or "").strip())
@@ -108,7 +166,7 @@ def _slug_label_from_url(url: str) -> str:
             return "Untitled"
         seg = seg.replace("-", " ").replace("_", " ").strip()
         seg = re.sub(r"\s+", " ", seg)
-        return seg or "Untitled"
+        return _clean_label(seg)
     except Exception:
         return "Untitled"
 
@@ -308,7 +366,7 @@ def build_imported_target_pool(
         if not _is_http_url(url):
             continue
 
-        label = title if title else _slug_label_from_url(url)
+        label = _clean_label(title) if title else _slug_label_from_url(url)
 
         existing = url_to_label.get(url)
         if existing is None:
@@ -321,7 +379,13 @@ def build_imported_target_pool(
     if active_fp.exists():
         filtered_urls = [u for u in filtered_urls if u in active_imported_url_set]
 
-    items = [{"url": u, "label": url_to_label[u]} for u in filtered_urls]
+    items = [
+        {"url": u, "label": _clean_label(url_to_label[u])}
+        for u in filtered_urls
+        if url_to_label[u].strip().lower() != "untitled"
+        and "example.com" not in u.lower()
+        and "openai.com" not in u.lower()
+    ]
 
     out: Dict[str, Any] = {
         "workspace_id": ws,
