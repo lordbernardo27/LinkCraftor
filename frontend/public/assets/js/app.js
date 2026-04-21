@@ -337,7 +337,8 @@ async function apiEngineRun(payload){
   // ---- END TARGET NORMALIZATION ----
 
   // ? IMPORTANT FIX: correct backend RB2 route
-  const res = await fetch(`${base}/api/rb2/run`, {
+  const res = await fetch(`${base}/api/engine/run`, {
+
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({
@@ -355,9 +356,9 @@ async function apiEngineRun(payload){
 
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-  if (!data || data.ok !== true || !data.out) throw new Error(data?.error || "RB2 backend returned ok:false");
+if (!data || data.ok !== true) throw new Error(data?.error || "RB2 backend returned ok:false");
 
-  const out = data.out || {};
+const out = data || {};
   try { window.__RB2_LAST_OUT = out; } catch (e) {}
 
   console.log("[RB2 BACKEND OUT JSON]", JSON.stringify(out, null, 2));
@@ -4044,11 +4045,11 @@ function applyMarksFromSuggestions(suggestions, opts = {}) {
 
   const controlsHtml = `<span class="kw-ctl" aria-hidden="true"
       style="position:absolute;right:-8px;top:-8px;display:flex;gap:2px;opacity:0;pointer-events:none;">
-    <button class="kw-btn kw-accept" title="Accept" 
-      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #10b981;color:#10b981;background:#fff;cursor:pointer;padding:0;">?</button>
-    <button class="kw-btn kw-reject" title="Reject" 
-      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #ef4444;color:#ef4444;background:#fff;cursor:pointer;padding:0;">?</button>
-  </span>`;
+    <button class="kw-btn kw-accept" title="Accept"
+      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #10b981;color:#10b981;background:#fff;cursor:pointer;padding:0;">✓</button>
+    <button class="kw-btn kw-reject" title="Reject"
+      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #ef4444;color:#ef4444;background:#fff;cursor:pointer;padding:0;">✕</button>
+    </span>`;
 
   window.REJECTED_SET = window.REJECTED_SET || new Set();
 
