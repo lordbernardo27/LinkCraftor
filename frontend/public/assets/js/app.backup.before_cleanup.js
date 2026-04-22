@@ -1,4 +1,4 @@
-﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
 // ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
@@ -19,12 +19,13 @@ if (typeof window.reloadFromBackend !== "function") {
 
 
 // -------------------------------------------------------------------------------------------
-// app.js � LinkCraftor (Full, updated)  
+// app.js � LinkCraftor (Full, updated)  ? wired to external_categories.js
 // -------------------------------------------------------------------------------------------
 
 import { KEYS, lsGet, lsSet, lsDel } from "./core/storage.js";
 import { renderDocInfoPanel as renderDocInfo } from "./sidebar/docinfo.js";
 import { initStopwordsUI } from "./ui/stopwords.js";
+import { scoreCandidatesForPhrase } from "./engine/scoring.js";
 import { shouldHighlightPhrase } from "./features/highlight-filter.js";
 
 // ?? Link Resolution panel (resolved / unresolved phrases)
@@ -94,6 +95,11 @@ function lcImportSitemapXML(file, onDone) {
 
   reader.readAsText(file);
 }
+
+
+
+// NOTE: removed static import that could crash the whole app
+// import { runExternalEngine } from "./engine/external_helix.js"
 
 
 /* ==========================================================================
@@ -338,7 +344,7 @@ async function apiEngineRun(payload){
     body: JSON.stringify({
       html: payload?.html || "",
       text: payload?.text || "",
-      workspace_id: "ws_betterhealthcheck_com",
+      workspace_id: payload?.workspace_id || "default",
       limit: payload?.limit || 50,
       targets: Array.isArray(payload?.targets) ? payload.targets : [],
       include: (payload?.include && typeof payload.include === "object") ? payload.include : {},
@@ -359,18 +365,13 @@ const out = data || {};
   console.log("[RB2 SAMPLE recommended[0]]", (out.recommended && out.recommended[0]) || null);
   console.log("[RB2 SAMPLE optional[0]]", (out.optional && out.optional[0]) || null);
 
- return {
-  recommended: Array.isArray(out.recommended)
-    ? out.recommended
-    : (Array.isArray(out.internal_strong) ? out.internal_strong : []),
-
-  optional: Array.isArray(out.optional)
-    ? out.optional
-    : (Array.isArray(out.semantic_optional) ? out.semantic_optional : []),
-
-  hidden: Array.isArray(out.hidden) ? out.hidden : [],
-  meta: (out.meta && typeof out.meta === "object") ? out.meta : {}
-};
+  return {
+    recommended: Array.isArray(out.recommended) ? out.recommended : [],
+    optional: Array.isArray(out.optional) ? out.optional : [],
+    external: [],
+    hidden: Array.isArray(out.hidden) ? out.hidden : [],
+    meta: (out.meta && typeof out.meta === "object") ? out.meta : {}
+  };
 }
 
 
@@ -548,7 +549,52 @@ function getLastEngineOutput() { return LAST_ENGINE_OUTPUT; } // not strictly re
 
 let highlightEnabled = true;
 
-let LAST_ENGINE_OUTPUT = { recommended: [], optional: [], hidden: [], meta: {} };
+let LAST_ENGINE_OUTPUT = { recommended: [], optional: [], external: [], hidden: [], meta: {} };
+
+// ---------------------------------------------------------------------------
+// External references bridge for IL modal
+// Uses window.LinkcraftorExternalRefs defined in external_helix.js
+// ---------------------------------------------------------------------------
+let REF_API = null;
+
+async function ensureReferencesModule() {
+  // If already loaded, reuse
+  if (REF_API) return REF_API;
+
+  // Prefer global from external_helix.js
+  if (window.LinkcraftorExternalRefs) {
+    REF_API = window.LinkcraftorExternalRefs;
+    console.log("[refs] using window.LinkcraftorExternalRefs");
+    return REF_API;
+  }
+
+  // Fallback: nothing available
+  console.warn("[refs] No external references module available");
+  return null;
+}
+
+
+
+// SAFE dynamic loader for the External HELIX engine (legacy; no longer used in pipeline)
+let RUN_EXT_ENGINE = null;
+let EXTERNAL_ENGINE_OK = false;
+async function ensureExternalHelix() {
+  if (RUN_EXT_ENGINE) return RUN_EXT_ENGINE;
+  try {
+    const mod = await import("./engine/external_helix.js");
+    RUN_EXT_ENGINE = mod.runExternalEngine || mod.default;
+    if (typeof RUN_EXT_ENGINE !== "function") {
+      throw new Error("runExternalEngine export missing");
+    }
+    EXTERNAL_ENGINE_OK = true;
+  } catch (e) {
+    EXTERNAL_ENGINE_OK = false;
+    console.warn("[external_helix] not available:", e);
+    // Fallback no-op; we no longer depend on this module
+    RUN_EXT_ENGINE = async () => ({ tokens: [] });
+  }
+  return RUN_EXT_ENGINE;
+}
 
 /* ==========================================================================
    UI HOOKS
@@ -1236,19 +1282,11 @@ async function runRB2PipelineAndHighlight(opts = {}) {
   const perPassLimit  = opts.perPassLimit || MAX_UNIQUE_PHRASES;
   const silent        = !!opts.silent;
 
-  
+  await ensureExternalCategories();
 
   const plainText = viewerEl?.textContent || "";
 
-  const wsId = "ws_betterhealthcheck_com";
-
- console.log("[RB2 WS CHECK]", {
-  wsId,
-  localImportedCount: (IMPORTED_URLS instanceof Set) ? IMPORTED_URLS.size : -1,
-  localDraftCount: (DRAFT_TOPICS instanceof Map) ? DRAFT_TOPICS.size : -1,
-  localPublishedCount: (PUBLISHED_TOPICS instanceof Map) ? PUBLISHED_TOPICS.size : -1
-});
-
+  const wsId = "default";
   const docId =
     window.LC_ACTIVE_DOC_ID ||
     docs?.[currentIndex]?.doc_id ||
@@ -1265,9 +1303,9 @@ async function runRB2PipelineAndHighlight(opts = {}) {
     html = paras.map(p => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
   }
 
-const urlsFromSet = (IMPORTED_URLS instanceof Set) ? Array.from(IMPORTED_URLS) : [];
-const draftFromMap = (DRAFT_TOPICS instanceof Map) ? Array.from(DRAFT_TOPICS.values()) : [];
-const publishedFromMap = (PUBLISHED_TOPICS instanceof Map) ? Array.from(PUBLISHED_TOPICS.values()) : [];
+  const urlsFromSet = (window.IMPORTED_URLS instanceof Set) ? Array.from(window.IMPORTED_URLS) : [];
+  const draftFromMap = (window.DRAFT_TOPICS instanceof Map) ? Array.from(window.DRAFT_TOPICS.values()) : [];
+  const publishedFromMap = (window.PUBLISHED_TOPICS instanceof Map) ? Array.from(window.PUBLISHED_TOPICS.values()) : [];
 
   let targets = [];
 
@@ -1370,11 +1408,12 @@ const publishedFromMap = (PUBLISHED_TOPICS instanceof Map) ? Array.from(PUBLISHE
   rebuildEngineHighlightsPanel();
 
   LAST_ENGINE_OUTPUT = {
-  recommended: out.recommended || [],
-  optional: out.optional || [],
-  hidden: out.hidden || [],
-  meta: out.meta || {}
-};
+    recommended: out.recommended || [],
+    optional: out.optional || [],
+    external: [],
+    hidden: out.hidden || [],
+    meta: out.meta || {}
+  };
 
   return (appliedStrong || 0) + (appliedOptional || 0);
 }
@@ -2196,7 +2235,7 @@ try {
     }
 
     showToast(errorBox, `Imported ${added} URL(s) from ${f.name}.`, 2000);
-    if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+    if (highlightsArmed) runPipelineAndHighlight({ append: true });
   } catch (e) {
     console.error("[SITEMAP->BACKEND] failed:", e);
     showToast(errorBox, `Import failed: ${e?.message || e}`, 2200);
@@ -2332,7 +2371,7 @@ if (ws) await updateUnifiedImportCount(ws);
         2400
       );
 
-      if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+      if (highlightsArmed) runPipelineAndHighlight({ append: true });
     } catch (e) {
       console.error("[Draft] import failed:", e);
       showToast(errorBox, `Draft import failed: ${e.message || e}`, 2400);
@@ -2352,7 +2391,7 @@ if (toolbar){
 }
 
 const updateDetectedDebounced = debounce(()=>{
-  if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+  if (highlightsArmed) runPipelineAndHighlight({ append: true });
   else { underlineLinkedPhrases(); highlightBucketKeywords(); updateHighlightBadge(); rebuildEngineHighlightsPanel(); }
 }, 200);
 
@@ -2370,6 +2409,198 @@ const EXTERNAL_API_BASE = "";
  * Backend returns an ARRAY of candidates (or []).
  * Returns { url, providerId, providerLabel, title } or null.
  */
+
+async function resolveExternalViaBackend(phrase, mark) {
+  const q = String(phrase || "").trim();
+  if (!q) return null;
+
+  console.log("[ExtAutoLink] resolveExternalViaBackend CALLED for:", q);
+
+  const base = String(window.LINKCRAFTOR_API_BASE || "").replace(/\/+$/,"");
+  if (!base) {
+    console.warn("[ExtAutoLink] LINKCRAFTOR_API_BASE is empty � cannot call backend");
+    return null;
+  }
+
+  const url = base + "/api/external/resolve?phrase=" + encodeURIComponent(q) + "&lang=en";
+
+
+
+  const res = await fetch(url, { method:"GET", headers:{ "Accept":"application/json" } });
+  if (!res.ok) return null;
+
+ const data = await res.json();
+
+// /engine/external/local returns { items: [...] }
+const arr = Array.isArray(data) ? data : [];
+if (!arr.length || !arr[0] || !arr[0].url) return null;
+
+const r = arr[0];
+return {
+  url: r.url,
+  providerId: r.providerId || r.source || null,
+  providerLabel: r.providerLabel || r.source || null,
+  title: r.title || q
+};
+}
+
+
+async function logExternalLink(eventType, phrase, url, mark) {
+  const ds = mark?.dataset || {};
+
+  const body = {
+    event: eventType,
+    phrase,
+    url,
+    providerId: ds.providerId || null,
+    providerLabel: ds.providerName || null,
+    docCode: ds.docCode || null,
+    docTitle: ds.docTitle || null,
+    lang: "en",
+    source: "auto_link"
+  };
+
+  // Ensure we log ONE AT A TIME (prevents 500s from concurrent writes)
+  window.__lcExternalLogQueue = window.__lcExternalLogQueue || Promise.resolve();
+
+  window.__lcExternalLogQueue = window.__lcExternalLogQueue.then(async () => {
+    try {
+      const base = (window.LINKCRAFTOR_API_BASE || EXTERNAL_API_BASE || "")
+        .replace(/\/+$/, "");
+
+      if (!base) return;
+
+      console.log(
+        "[ExtAutoLink] POST /api/external/log ?",
+        base + "/api/external/log",
+        body
+      );
+
+      await fetch(base + "/api/external/log", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+    } catch (err) {
+      console.warn("[ExtAutoLink] /log failed (non-blocking)", err);
+    }
+  });
+}
+
+
+/**
+ * For every external mark in a container, we now:
+ *   1) Try backend /api/external/resolve
+ *   2) If no match, fall back to LinkcraftorExternalRefs 24-provider search
+ *   3) Attach mark.dataset.url + provider info
+ *   4) (Later, when applied) /api/external/log will be called
+ */
+async function enrichExternalMarksWithUrls(root) {
+  const container = root || viewerEl;
+  if (!container) {
+    console.log("[ExtAutoLink] No container to enrich.");
+    return;
+  }
+
+  // We only care about external marks
+  const marks = Array.from(
+    container.querySelectorAll(
+      "mark[data-kind='external'], mark.kwd-ext, mark.kwd-external"
+    )
+  );
+
+  if (!marks.length) {
+    console.log("[ExtAutoLink] No external marks to enrich.");
+    return;
+  }
+
+  const engine = window.LinkcraftorExternalRefs;
+  if (!engine || typeof engine.getExternalReferences !== "function") {
+    console.warn(
+      "[ExtAutoLink] External engine not ready (LinkcraftorExternalRefs)."
+    );
+  }
+
+  console.log(
+    "[ExtAutoLink] Enriching",
+    marks.length,
+    "external marks with URLs�"
+  );
+
+  for (const mark of marks) {
+    try {
+      const ds = mark.dataset || {};
+
+      // Already has URL ? skip
+      if (ds.url) continue;
+
+      // Phrase: prefer data-phrase, fallback to text
+      let phrase = "";
+      if (ds.phrase) {
+        try {
+          phrase = decodeURIComponent(ds.phrase);
+        } catch {
+          phrase = ds.phrase;
+        }
+      } else {
+        phrase = (mark.textContent || "").trim();
+      }
+      if (!phrase) continue;
+
+      let finalUrl = null;
+      let finalProviderId = null;
+      let finalProviderName = null;
+
+      // -------------------------------
+      // 1) Try backend canonical resolve
+      // -------------------------------
+      const backendResult = await resolveExternalViaBackend(phrase, mark);
+      if (backendResult && backendResult.url) {
+        finalUrl = backendResult.url;
+        finalProviderId = backendResult.providerId;
+        finalProviderName = backendResult.providerLabel;
+        console.log(
+          "[ExtAutoLink] Backend resolved phrase:",
+          `"${phrase}" ? ${finalUrl} | provider:`,
+          finalProviderName || finalProviderId || "unknown"
+        );
+      }
+
+      // -------------------------------------------
+// 2) If backend had no match ? DO NOT LINK
+// (fallback is disabled by design)
+// -------------------------------------------
+if (!finalUrl) {
+  console.log(
+    "[ExtAutoLink] No backend match ? fallback DISABLED ? leaving unlinked:",
+    `"${phrase}"`
+  );
+  return null;
+}
+
+      // -------------------------
+      // 3) If we found a URL ? set
+      // -------------------------
+      if (finalUrl) {
+        mark.dataset.url = finalUrl;
+        if (finalProviderId) {
+          mark.dataset.providerId = finalProviderId;
+        }
+        if (finalProviderName) {
+          mark.dataset.providerName = finalProviderName;
+        }
+        // Title: keep whatever is there, or phrase
+        if (!mark.dataset.title) {
+          mark.dataset.title = phrase;
+        }
+      }
+    } catch (err) {
+      console.warn("[ExtAutoLink] Error enriching one external mark:", err);
+    }
+  }
+
+  console.log("[ExtAutoLink] Enrichment pass complete.");
+}
 
 
 
@@ -2474,6 +2705,7 @@ async function bulkApplyInContainer(root) {
   const marks = Array.from(
     root.querySelectorAll(
       "mark.kwd, mark.kwd-strong, mark.kwd-optional, " +
+      "mark.kwd-external, mark.kwd-ext, " +
       "mark.kwd-int, mark.kwd-sem"
     )
   );
@@ -2554,6 +2786,22 @@ async function bulkApplyInContainer(root) {
       continue;
     }
 
+   
+// ------------------------------
+// LOG EXTERNAL AUTO-APPLIED LINK (non-blocking)
+// ------------------------------
+const isExternalKind = kind === "external";
+const isHttpUrl = /^https?:\/\//i.test(href);
+
+if (isExternalKind && isHttpUrl && typeof logExternalLink === "function") {
+  const phraseText = String(text || phrase || (mark?.textContent || ""))
+  .replace(/[??]/g, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
+  logExternalLink("auto_apply", phraseText, href, mark);
+}
+
 
     // ------------------------------
     // Turn <mark> into an <a> link
@@ -2599,8 +2847,9 @@ async function bulkApplyInContainer(root) {
  * --------------------------
  * For each doc:
  *  1) renderDoc(i)
- *  2) bulkApplyInContainer(viewerEl)            ? turns marks into <a> links
- *  3) save updated HTML/text back into docs[i]
+ *  2) runPipelineAndHighlight({ append: true })  ? creates marks (+ external enrichment via wrapper)
+ *  3) bulkApplyInContainer(viewerEl)            ? turns marks into <a> links
+ *  4) save updated HTML/text back into docs[i]
  */
 async function bulkApplyAllDocs() {
   console.log("[BulkApplyAll] Starting bulk apply across ALL docs");
@@ -2639,12 +2888,15 @@ async function bulkApplyAllDocs() {
       continue;
     }
 
-        try {
+    // 2) ALWAYS run the highlight pipeline so marks exist in this doc.
+    //    The wrapper around runPipelineAndHighlight will also call
+    //    enrichExternalMarksWithUrls(viewerEl) for external URLs.
+    try {
       if (typeof runPipelineAndHighlight === "function") {
         console.log("[BulkApplyAll] Running highlight pipeline for doc %d", i);
-        await runRB2PipelineAndHighlight({ append: true });
+        await runPipelineAndHighlight({ append: true });
       } else {
-        console.log("[BulkApplyAll] No highlight pipeline defined, skipping mark generation.");
+        console.log("[BulkApplyAll] No runPipelineAndHighlight() defined, skipping mark generation.");
       }
     } catch (e) {
       console.warn(
@@ -3100,6 +3352,635 @@ function anchorWordIndex(section, anchorText, startOffset){
   return startOffset + wordsBefore;
 }
 
+/* ==========================================================================
+   HELIX Engine � with Entity Map, Entity Graph & Content-Aware nudges
+   ========================================================================== */
+function helixRun(){
+  if (!viewerEl) return { recommended:[], optional:[], external: [], hidden:[], meta:{} };
+
+  const floors = { strong: FLOORS.STRONG, optional: FLOORS.OPTIONAL, minOverlap: FLOORS.MIN_OVERLAP };
+
+  const headings = ensureHeadingIds(viewerEl);
+  const sections = extractSections(viewerEl);
+  const introCount = Math.min(2, sections.length);
+
+  const topics = [
+    ...topicsFromHeadings(headings),
+    ...topicsFromOtherDocsH1(),
+    ...topicsFromPublished(),
+    ...topicsFromDraft(),
+  ];
+
+  // Token caches
+  const sectionTokensRaw = sections.map(s => tokens(s.text));
+  const sectionTokensNL  = sections.map(s => tokensNL(s.text));
+
+  // Build/refresh Entity Map from headings + visible text (lightweight)
+  // � keyed by canonical form
+  if (ENTITY_FEATURES.MAP) {
+    ENTITY_MAP = new Map();
+    const lexSeen = new Set();
+    for (const h of headings){
+      const can = canonEntity(h.text);
+      if (can && !lexSeen.has(can)){
+        lexSeen.add(can);
+        ENTITY_MAP.set(can, {
+          title: h.text,
+          aliases: new Set(generateAliasesForTitle(h.text)),
+          kind: "heading",
+          slugTokens: tokenizeSlug(h.slug),
+          freq: 1
+        });
+      }
+    }
+    // Mine frequent capitalized multi-words (very light heuristic)
+    const rxCapMulti = /\b([A-Z][a-z0-9]+(?:\s+[A-Z][a-z0-9]+){1,4})\b/g;
+    const allText = (viewerEl.textContent||"").slice(0, 300000);
+    let m;
+    while ((m = rxCapMulti.exec(allText))){
+      const phrase = m[1].trim();
+      const can = canonEntity(phrase);
+      if (!can) continue;
+      const rec = ENTITY_MAP.get(can) || { title: phrase, aliases:new Set(), kind:"phrase", slugTokens:[], freq:0 };
+      rec.freq = (rec.freq||0) + 1;
+      ENTITY_MAP.set(can, rec);
+    }
+  }
+
+  // Build/refresh Entity Graph (co-occurrence within paragraphs)
+  if (ENTITY_FEATURES.GRAPH) {
+    ENTITY_GRAPH = new Map();
+    for (let sIdx=0; sIdx<sections.length; sIdx++){
+      const sec = sections[sIdx];
+      const toks = tokensNL(sec.text);
+      // pull entities present in this section
+      const present = [];
+      for (const can of ENTITY_MAP.keys()){
+        if (toks.join(" ").includes(can)) present.push(can);
+        if (present.length>30) break;
+      }
+      for (let i=0;i<present.length;i++){
+        for (let j=i+1;j<present.length;j++){
+          const a = present[i], b = present[j];
+          if (!a || !b || a===b) continue;
+          if (!ENTITY_GRAPH.has(a)) ENTITY_GRAPH.set(a, new Map());
+          if (!ENTITY_GRAPH.has(b)) ENTITY_GRAPH.set(b, new Map());
+          const rowA = ENTITY_GRAPH.get(a); rowA.set(b, (rowA.get(b)||0)+1);
+          const rowB = ENTITY_GRAPH.get(b); rowB.set(a, (rowB.get(a)||0)+1);
+        }
+      }
+    }
+    // light normalization (cap weights)
+    for (const [, row] of ENTITY_GRAPH.entries()){
+      for (const [k,w] of row.entries()){
+        row.set(k, Math.min(6, w)); // cap per-partner weight
+      }
+    }
+  }
+
+  // Prepare variant tokens for each topic title/aliases
+  const topicTitleVariants = new Map(); // id -> [{rawTok, nlTok, text}]
+  for (const t of topics){
+    const variants = [t.title, ...(t.aliases||[])].filter(Boolean);
+    const uniqV = Array.from(new Set(variants.map(v=>norm(v))));
+    topicTitleVariants.set(
+      t.id,
+      uniqV.map(v => ({ text: v, rawTok: tokens(v), nlTok: tokensNL(v) }))
+    );
+  }
+
+  const candidates = [];
+  const srcCluster = docClusterKey();
+
+  for (let sIdx=0; sIdx<sections.length; sIdx++){
+    const sec = sections[sIdx];
+    const secTokRaw = sectionTokensRaw[sIdx];
+    const secTokNL  = sectionTokensNL[sIdx];
+    const anchors = extractAnchorsFromText(sec.text);
+    const near = nearestHeadingSlug(headings, sec.el);
+    const nearTokensRaw = tokens(near.text);
+    const nearTokensNL  = tokensNL(near.text);
+
+    for (const anchor of anchors){
+      const anchorTokRaw = tokens(anchor);
+      const anchorTokNL  = tokensNL(anchor);
+      const aQ = noStopEdges(anchorTokRaw) ? contentRatio(anchorTokRaw) : 0;
+
+      for (const t of topics){
+        const variants = topicTitleVariants.get(t.id) || [];
+        if (!variants.length) continue;
+
+        let bestVar = variants[0];
+        let bestOverlap = 0;
+        for (const v of variants){
+          const ov = tokenOverlapRatio(anchorTokNL, v.nlTok);
+          if (ov > bestOverlap){ bestOverlap = ov; bestVar = v; }
+        }
+
+        const A = anchorTokNL.filter(w=>!isStop(w));
+        const Tset = new Set(bestVar.nlTok.filter(w=>!isStop(w)));
+        let overlapCt = 0; for (const w of A) if (Tset.has(w)) overlapCt++;
+        if (overlapCt < floors.minOverlap) continue;
+
+        const overlap = tokenOverlapRatio(anchorTokNL, bestVar.nlTok);
+        const cov = sectionCoverage(bestVar.nlTok, secTokNL);
+
+        // URL coverage (slug overlap)
+        let urlCov = 0;
+        if (t.origin === "published" || t.origin === "other-doc"){
+          const utoks = t.slugTokens || (t.url ? tokenizeUrl(t.url) : []); 
+          const Aset = new Set(A);
+          urlCov = utoks.length ? (utoks.reduce((acc,u)=> acc + (Aset.has(u)?1:0), 0) / utoks.length) : 0;
+        } else if (t.origin === "draft"){
+          const stoks = t.slugTokens || tokenizeSlug(t.planned_url || t.planned_slug || "");
+          const Aset = new Set(A);
+          urlCov = stoks.length ? (stoks.reduce((acc,u)=> acc + (Aset.has(u)?1:0), 0) / stoks.length) : 0;
+        }
+
+        // Base score
+        let score = RB2.W.overlap*overlap + RB2.W.anchorQ*aQ + RB2.W.coverage*cov;
+        if (sIdx < introCount) score += RB2.boostIntro;
+        if (nearTokensRaw.length && tokenOverlapRatio(bestVar.rawTok, nearTokensRaw) > 0) score += RB2.boostHeading;
+
+        if (t.origin === "draft"){
+          if (t.priority && t.priority>=4) score += 0.04;
+          if (t.canonical) score += 0.02;
+        }
+
+        const anchorNorm = norm(anchor);
+        if (t.origin !== "same-doc"){
+          const fullTitle = norm(t.title);
+          const exactAlias = (t.aliases||[]).some(a => norm(a) === anchorNorm);
+          if (anchorNorm === fullTitle || exactAlias) score -= RB2.titleEchoPenalty;
+        }
+
+        // Small bump for URL coverage
+        score += Math.min(0.06, urlCov*0.12);
+
+        // Embedding similarity (content-aware ?)
+        try {
+          const aText = anchorTokNL.join(" ");
+          const tText = bestVar.nlTok.join(" ");
+          const va = embedText(aText);
+          const vt = embedText(tText);
+          const cs = cosineSim(va, vt);
+          score += HELIX.W2.embedSim * cs;
+        } catch{}
+
+        // === NEW: Content-Aware nudges (entity overlap, graph neighbors, paragraph sim) ===
+        if (ENTITY_FEATURES.CONTENT_AWARE){
+          const entOv = entityOverlap01(anchorTokNL, ENTITY_MAP);                // 0..1
+          const graphB = graphNeighborBoost01(anchorTokNL, t.title, ENTITY_MAP, ENTITY_GRAPH, secTokNL); // 0..1
+          const paraCS = paragraphContextSim01(sec.text, t.title);               // 0..1
+          // blend (small, controlled)
+          score += 0.06 * entOv + 0.05 * graphB + 0.05 * paraCS;
+        }
+
+        // ILR band (authority)
+        const tUrl = t.origin==="same-doc" ? t.url
+                 : (t.origin==="published" || t.origin==="other-doc" ? (t.url || "") : (t.planned_url || ""));
+        const mult = HELIX.ilrBand.base + HELIX.ilrBand.span * ilr01(tUrl || "");
+        score *= clamp01(mult);
+
+        // Cluster dynamics
+        const tgtCluster = targetClusterKey(t);
+        if (isHubTarget(t)) score += HELIX.cluster.hubBoost;
+        if (srcCluster && tgtCluster){
+          if (srcCluster === tgtCluster) score += HELIX.cluster.sameClusterBoost;
+          else score -= HELIX.cluster.crossClusterPenalty;
+        }
+
+        candidates.push({
+          anchor: { text: anchor, sectionIdx: sIdx },
+          target: {
+            topicId: t.topicId || t.id,
+            title: t.title,
+            kind: t.origin,
+            url: tUrl,
+            planned_slug: t.planned_slug || ""
+          },
+          reason: { overlap, anchorQ: aQ, coverage: cov, urlCov },
+          rawScore: clamp01(score)
+        });
+      }
+    }
+  }
+
+  const rankKind = k => (k==="published"?3 : k==="other-doc"?2 : k==="draft"?1 : 0);
+
+  // Deduplicate per anchor (keep best score/kind)
+  const byAnchor = new Map();
+  for (const c of candidates){
+    const k = norm(c.anchor.text);
+    const prev = byAnchor.get(k);
+    if (!prev) { byAnchor.set(k, c); continue; }
+    if (c.rawScore > prev.rawScore) { byAnchor.set(k, c); continue; }
+    if (c.rawScore === prev.rawScore){
+      if (rankKind(c.target.kind) > rankKind(prev.target.kind)) byAnchor.set(k, c);
+    }
+  }
+  const deduped = Array.from(byAnchor.values());
+
+  // Visibility cut
+  const visible = deduped.filter(c => c.rawScore >= FLOORS.OPTIONAL);
+  const hidden  = deduped.filter(c => c.rawScore < FLOORS.OPTIONAL);
+  visible.sort((a,b)=> b.rawScore - a.rawScore);
+
+  // Placement caps + word windowing
+  const perTopic = new Map();
+  const perSection = new Map();
+  const placed = [];
+  const wordOff = cumulativeWordOffsets(extractSections(viewerEl));
+
+  function underWordWindow(idx){
+    const r = WINDOW_RADIUS_WORDS - 1;
+    const wStart = idx - r, wEnd = idx + r;
+    return placed.filter(p=> p.wordIdx>=wStart && p.wordIdx<=wEnd).length;
+  }
+
+  for (const c of visible){
+    const sIdx = c.anchor.sectionIdx;
+    const tId = c.target.topicId;
+    const tCnt = (perTopic.get(tId)||0); if (tCnt >= CAPS.MAX_PER_TOPIC) continue;
+    const sCnt = (perSection.get(sIdx)||0); if (sCnt >= CAPS.MAX_PER_SECTION) continue;
+
+    // recompute in fresh DOM (unchanged logic)
+    const sections2 = extractSections(viewerEl);
+    const idx = anchorWordIndex(sections2[sIdx], c.anchor.text, wordOff[sIdx]);
+    if (underWordWindow(idx) >= CAPS.MAX_PER_200W) continue;
+
+    placed.push({ wordIdx: idx, item: c });
+    perTopic.set(tId, tCnt+1);
+    perSection.set(sIdx, sCnt+1);
+  }
+
+  const picked = placed.map(p=>p.item);
+
+  const recommended = picked
+    .filter(c=> c.rawScore >= FLOORS.STRONG)
+    .map(c=> ({ ...c, bucket: "strong", finalScore: c.rawScore }));
+  const optional = picked
+    .filter(c=> c.rawScore < FLOORS.STRONG && c.rawScore >= FLOORS.OPTIONAL)
+    .map(c=> ({ ...c, bucket: "optional", finalScore: c.rawScore }));
+
+  // Gap candidates for playbook (no published URL)
+  const gapCandidates = deduped
+    .filter(c => c.target.kind !== "published" || !c.target.url)
+    .map(c => ({ anchor: c.anchor.text, title: c.target.title, kind: c.target.kind, url: c.target.url || "", score: c.rawScore }));
+
+  // Prepublish fallback
+  if (!recommended.length && !optional.length && PHASE === "prepublish"){
+    const fallback = deduped
+      .sort((a,b)=> b.rawScore - a.rawScore)
+      .slice(0,3)
+      .map(c=> ({ ...c, bucket:"optional", finalScore:c.rawScore, reason:{...c.reason, fallback:true} }));
+    return {
+      recommended: [],
+      optional: fallback,
+      external: [],
+      hidden,
+      meta: { floors: FLOORS, caps: CAPS, totals: { candidates: candidates.length, passed: visible.length, picked: fallback.length }, phase: PHASE, gapCandidates, engine:"HELIX" }
+    };
+  }
+
+  return {
+    recommended,
+    optional,
+    external: [],
+    hidden,
+    meta: { floors: FLOORS, caps: CAPS, totals: { candidates: candidates.length, passed: visible.length, picked: picked.length }, phase: PHASE, gapCandidates, engine:"HELIX" }
+  };
+}
+
+/* RB2 fallback (kept) */
+function rb2Run(){ return helixRun(); }
+
+/* ==========================================================================
+   External Categories (pluggable) � dynamic import
+   ========================================================================== */
+let EXT_CAT = {
+  API: null,            // the whole default export (object)
+  EXTERNAL_CATEGORY_SET: new Set(), // convenience cache
+};
+
+async function ensureExternalCategories(){
+  if (ensureExternalCategories.loaded) return EXT_CAT;
+  try {
+    // Load from /data/ (stable path)
+    const mod = await import("./data/external_categories.js");
+    const api = mod?.default || mod || {};
+    // sanity check
+    if (api && (api.EXTERNAL_CATEGORY_SET || api.EXTERNAL_CATEGORY_WHITELIST)) {
+      EXT_CAT.API = api;
+      EXT_CAT.EXTERNAL_CATEGORY_SET = api.EXTERNAL_CATEGORY_SET
+        ? api.EXTERNAL_CATEGORY_SET
+        : new Set((api.EXTERNAL_CATEGORY_WHITELIST || []).map(s => String(s||"").toLowerCase().trim()).filter(Boolean));
+      if (DEBUG) console.log("[external_categories] loaded:", {
+        categories: EXT_CAT.EXTERNAL_CATEGORY_SET.size
+      });
+    } else {
+      console.warn("[external_categories] present but missing expected fields; continuing with empty set.");
+      EXT_CAT.API = null;
+      EXT_CAT.EXTERNAL_CATEGORY_SET = new Set();
+    }
+  } catch (e){
+    console.warn("[external_categories] not available; using built-ins only.", e);
+    EXT_CAT.API = null;
+    EXT_CAT.EXTERNAL_CATEGORY_SET = new Set();
+  }
+  ensureExternalCategories.loaded = true;
+  return EXT_CAT;
+}
+
+/* ==========================================================================
+   External V2 helpers (local) � mirrors internal logic for external cues
+   ========================================================================== */
+function isAlphaPhrase(tokArr) {
+  if (!tokArr || tokArr.length < EXT_V2.THRESHOLDS.MIN_TOKENS || tokArr.length > EXT_V2.THRESHOLDS.MAX_TOKENS) return false;
+  if (!noStopEdges(tokArr)) return false;
+  return contentRatio(tokArr) >= EXT_V2.THRESHOLDS.MIN_CONTENT_RATIO;
+}
+function docTermFreq(text, phrase) {
+  try {
+    const rx = makeBoundaryRx(phrase);
+    let m, n = 0;
+    while ((m = rx.exec(text))) n++;
+    return n;
+  } catch { return 0; }
+}
+function nearHeadingBoost(headings, el) {
+  if (!el) return 0;
+  const near = nearestHeadingSlug(headings, el);
+  return near?.text ? EXT_V2.THRESHOLDS.HEADING_BOOST : 0;
+}
+function noveltyPenaltyVsInternal(anchorTokNL, internalPool) {
+  if (!internalPool || !internalPool.length) return 0;
+  let best = 0;
+  for (const it of internalPool) {
+    const tTok = tokensNL(it?.target?.title || "");
+    const ov = tokenOverlapRatio(anchorTokNL, tTok);
+    if (ov > best) best = ov;
+  }
+  return Math.min(EXT_V2.THRESHOLDS.NOVELTY_PENALTY, best * EXT_V2.THRESHOLDS.NOVELTY_PENALTY);
+}
+function makeWikiHeuristicSuggestion(anchor) {
+  const slug = anchor.trim().replace(/\s+/g, "_").replace(/[^\p{L}\p{N}_()-]/gu, "");
+  return {
+    title: anchor,
+    url: `https://en.wikipedia.org/wiki/${slug}`,
+    domainRoot: "wikipedia.org",
+    provider: "heuristic",
+    score: 0.5
+  };
+}
+
+/* === External Positive Cues (subset) ================= */
+function isTitleCaseWord(w){ return /^[A-Z][a-z0-9\-]*$/.test(w||""); }
+const BUILTIN_KNOWN_TECH = new Set([
+  "React","Angular","Vue","Svelte","Next.js","Nuxt","Kubernetes","Docker","Terraform","Ansible","Airflow","Spark","Hadoop","PostgreSQL","MySQL","MongoDB","Redis","Elasticsearch","Kibana","Grafana","Prometheus","PyTorch","TensorFlow","Scikit-learn","Pandas","NumPy","Django","Flask","Laravel","Symfony","FastAPI","Go","Rust","Node.js","Vite","Webpack","Babel","Tailwind","Bootstrap","jQuery","Sass","Keras","XGBoost","LightGBM","CatBoost","OpenAI","Hugging Face","LangChain","Celery","RabbitMQ","Kafka","Jenkins","GitLab","GitHub Actions"
+]);
+function cueProperNounMulti(tokRaw){
+  if (!tokRaw || tokRaw.length < 2) return false;
+  const tc = tokRaw.every(t => isTitleCaseWord(t) || /^[A-Z0-9\-]+$/.test(t));
+  const stopEdge = noStopEdges(tokRaw);
+  return tc && stopEdge;
+}
+function cueStandardsSpec(text){
+  const rx = /\b(?:ISO(?:\/IEC)?|IEC|NIST|PCI|SOC\s*2|SOC\s*1|RFC|IEEE|WCAG|FIPS|CSA|EN|BSI|ETSI)\s*[-:]?\s*\d{2,5}(?:[:\-]\d{2,4})?(?:\s*(?:v(?:er(?:sion)?)?\.?\s*\d+(?:\.\d+)*))?\b/i;
+  const rx2 = /\b(?:GDPR|HIPAA|CCPA)\b(?:.*?\b(?:Article|Section)\s*\d+[a-z]?)?/i;
+  return rx.test(text) || rx2.test(text);
+}
+function cueLibraryTool(text, tokRaw){
+  const KNOWN = BUILTIN_KNOWN_TECH;
+  const first = (tokRaw && tokRaw[0]) ? tokRaw[0] : "";
+  const normFirst = first.charAt(0).toUpperCase()+first.slice(1);
+  const cleaned = text.replace(/\s+\d+.*$/,"");
+  const hasKnown = KNOWN.has(normFirst) || KNOWN.has(cleaned);
+  const titleish = tokRaw && tokRaw.every(t => isTitleCaseWord(t) || /^[A-Za-z0-9\.\-]+$/.test(t));
+  const hasVersion = /\b(?:v(?:er(?:sion)?)?\.?\s*)?\d+(?:\.\d+)*\b/.test(text);
+  return (hasKnown || titleish) && (tokRaw?.length>=1) && (hasVersion || tokRaw.length>=2);
+}
+function cueProtocolFormat(text){
+  const t = text.toLowerCase();
+  if (/\boauth\s*2(\.0)?\b/.test(t)) return true;
+  if (/\bopenid\s+connect\b/.test(t)) return true;
+  if (/\bjson\s+schema\b/.test(t)) return true;
+  if (/\bopenapi\b/.test(t)) return true;
+  if (/\bgraphql\b/.test(t)) return true;
+  if (/\bgrpc\b/.test(t)) return true;
+  if (/\bsaml\b/.test(t)) return true;
+  if (/\bjwt\b/.test(t)) return true;
+  if (/\bhttp\/[23]\b/.test(t)) return true;
+  if (/\bwebsocket\b/.test(t)) return true;
+  return false;
+}
+function cueSciMed(text){
+  const t = text;
+  const morph = /\b[\p{L}]{5,}(itis|osis|emia|algia|ectomy|opathy|genesis|omics)\b/iu.test(t);
+  const gene  = /\b[A-Z]{2,}\d+(?:-\d+)?\b/.test(t);
+  const crispr = /\bCRISPR[-�]?[A-Za-z0-9]+\b/.test(t);
+  return morph || gene || crispr;
+}
+function cueCanonicalCollocation(tokRaw){
+  if (!tokRaw || tokRaw.length < 2 || tokRaw.length > 4) return false;
+  const ratio = contentRatio(tokRaw);
+  if (ratio < 0.75) return false;
+  const hasLower = tokRaw.some(t => /^[a-z]/.test(t));
+  return hasLower;
+}
+function cueAcronymExpansion(text){
+  const rx1 = /^\s*[A-Za-z][A-Za-z0-9&\-\s]{2,}\s*\(\s*[A-Z]{2,}\s*\)\s*$/;
+  const rx2 = /^\s*[A-Z]{2,}\s*\(\s*[A-Za-z][A-Za-z0-9&\-\s]{2,}\s*\)\s*$/;
+  return rx1.test(text) || rx2.test(text);
+}
+function cueRegulatory(text){
+  const t = text.toLowerCase();
+  if (/\b(gdpr|hipaa|ccpa|ferpa|sox|sarbanes[- ]oxley|coppa|fcpa)\b/.test(t)) return true;
+  if (/\b(article|section|rule|directive|regulation|act)\s*\d+[a-z]?\b/.test(t)) return true;
+  return false;
+}
+
+/* Category hits via external_categories.js (door 2 + door 1) */
+function externalCategoryHits(anchorText){
+  const out = [];
+  const api = EXT_CAT?.API;
+  if (!api) return out;
+
+  const cats = Array.from(EXT_CAT.EXTERNAL_CATEGORY_SET || []);
+  const phraseNorm = norm(anchorText);
+
+  for (const cat of cats){
+    try {
+      // (2) Exact match in category gazetteer
+      if (typeof api.inCategoryGazetteer === "function" && api.inCategoryGazetteer(cat, phraseNorm)) {
+        out.push(cat);
+        continue;
+      }
+      // (3) Match to a category recognizer regex
+      const recs = typeof api.recognizersFor === "function" ? (api.recognizersFor(cat) || []) : [];
+      if (recs.some(rx => { try { return rx.test(anchorText); } catch { return false; } })) {
+        out.push(cat);
+      }
+    } catch { /* ignore */ }
+  }
+  return out;
+}
+
+/* Replaces previous detectPositiveCuesExternal(...); includes category bumps */
+function detectPositiveCuesExternal(anchorText, tokRaw){
+  const cats = [];
+  try {
+    if (cueProperNounMulti(tokRaw))                               cats.push(["ProperNounMulti", 0.06]);
+    if (cueStandardsSpec(anchorText))                             cats.push(["StandardsSpecID", 0.10]);
+    if (cueLibraryTool(anchorText, tokRaw))                       cats.push(["LibraryToolProduct", 0.08]);
+    if (cueProtocolFormat(anchorText))                            cats.push(["ProtocolFormat", 0.08]);
+    if (cueSciMed(anchorText))                                    cats.push(["SciMed", 0.09]);
+    if (cueCanonicalCollocation(tokRaw))                          cats.push(["CanonicalCollocation", 0.06]);
+    if (cueAcronymExpansion(anchorText))                          cats.push(["AcronymExpansion", 0.10]);
+    if (cueRegulatory(anchorText))                                cats.push(["RegulatoryGov", 0.10]);
+
+    // NEW: category-based bumps
+    const hits = externalCategoryHits(anchorText);
+    const catBumpEach = 0.06;
+    const catCap = 0.18;
+    const catBump = Math.min(catCap, (hits.length * catBumpEach));
+    hits.forEach(h => cats.push([`cat:${h}`, catBumpEach]));
+
+  } catch {}
+
+  // total cap across all positives (legacy cap kept)
+  const bump = Math.min(0.18, cats.reduce((a, [,w]) => a + w, 0));
+  return { bump, categories: cats.map(([n])=>n) };
+}
+
+/* ==========================================================================
+   External V2 (local) � scoring and placement
+   ========================================================================== */
+function externalLocalRun(options = {}) {
+  if (!viewerEl || !EXT_V2.ENABLED) return { suggestions: [], meta: { passed:0, filtered:0 } };
+
+  const text = viewerEl.textContent || "";
+  const headings = ensureHeadingIds(viewerEl);
+  const sections = extractSections(viewerEl);
+
+  const internalPool = options.internalPool || [
+    ...(LAST_ENGINE_OUTPUT?.recommended || []),
+    ...(LAST_ENGINE_OUTPUT?.optional || [])
+  ];
+
+  const bucket = getBucketMap();
+  const externalBucket = bucket.external || new Set();
+
+  const seen = new Set();
+  const candidates = [];
+  for (let sIdx = 0; sIdx < sections.length; sIdx++) {
+    const sec = sections[sIdx];
+    const anchors = extractAnchorsFromText(sec.text);
+    for (const a of anchors) {
+      const rawTok = tokens(a);
+      const nlTok  = tokensNL(a);
+      const key = norm(a);
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const alphaOk = isAlphaPhrase(rawTok);
+      const bucketWhitelisted = externalBucket.has(key);
+      // NEW: category gate � if it matches any recognizer or gazetteer we allow it through
+      const catHits = externalCategoryHits(a);
+      const categoryQualified = catHits.length > 0;
+
+      // Gate: must be alpha phrase OR in bucket OR matched a category
+      if (!alphaOk && !bucketWhitelisted && !categoryQualified) continue;
+
+      if (EXT_V2.BLOCK_SINGLE_TOKEN_UPPERCASE && rawTok.length === 1 && /^[A-Z0-9\-]+$/.test(rawTok[0]) && !bucketWhitelisted && !categoryQualified) continue;
+      if (EXT_V2.RESPECT_REJECTIONS && isRejected("external", key)) continue;
+
+      candidates.push({ anchorTokRaw: rawTok, anchorTokNL: nlTok, anchorText: a, sectionIdx: sIdx, secEl: sec.el, catHits });
+    }
+  }
+
+  const textFull = text;
+  const sorted = candidates.sort((a,b) => {
+    const aKey = externalBucket.has(norm(a.anchorText)), bKey = externalBucket.has(norm(b.anchorText));
+    if (aKey !== bKey) return aKey ? -1 : 1;
+    const aQ = contentRatio(a.anchorTokRaw), bQ = contentRatio(b.anchorTokRaw);
+    const aF = docTermFreq(textFull, a.anchorText), bF = docTermFreq(textFull, b.anchorText);
+    return (bQ*bF) - (aQ*aF);
+  });
+
+  const wordOff = cumulativeWordOffsets(sections);
+  const placed = [];
+  let filtered = 0;
+
+  function underWordWindow(idx){
+    const wStart = idx - WINDOW_RADIUS_WORDS, wEnd = idx + WINDOW_RADIUS_WORDS;
+    return placed.filter(p=> p.wordIdx>=wStart && p.wordIdx<=wEnd).length;
+  }
+  const perSection = new Map();
+
+  for (const c of sorted) {
+    const key = norm(c.anchorText);
+    const aQ = contentRatio(c.anchorTokRaw);
+    const df = Math.max(0, Math.min(5, docTermFreq(textFull, c.anchorText)));
+    const dfNorm = df >= EXT_V2.THRESHOLDS.MIN_DOC_FREQ ? Math.min(1, df/3) : 0;
+
+    if (df < EXT_V2.THRESHOLDS.MIN_DOC_FREQ) { filtered++; continue; }
+
+    let score = 0;
+    score += 0.55 * aQ;
+    score += 0.20 * dfNorm;
+    score += nearHeadingBoost(headings, c.secEl);
+    score -= noveltyPenaltyVsInternal(c.anchorTokNL, internalPool);
+
+    // Positive cues (includes NEW category bumps)
+    const pos = detectPositiveCuesExternal(c.anchorText, c.anchorTokRaw);
+    score += pos.bump;
+
+    // Tiering � but if user bucket-whitelisted it, never drop
+    const tier = score >= EXT_V2.THRESHOLDS.STRONG ? "strong"
+               : score >= EXT_V2.THRESHOLDS.OPTIONAL ? "optional" : "drop";
+
+    if (tier === "drop" && !externalBucket.has(key)) { filtered++; continue; }
+
+    const idx = anchorWordIndex(sections[c.sectionIdx], c.anchorText, wordOff[c.sectionIdx]);
+    if (underWordWindow(idx) >= EXT_V2.CAPS.MAX_PER_200W) { filtered++; continue; }
+
+    const sCnt = (perSection.get(c.sectionIdx) || 0);
+    if (sCnt >= EXT_V2.CAPS.MAX_PER_SECTION) { filtered++; continue; }
+
+    placed.push({
+      wordIdx: idx,
+      item: c,
+      score,
+      tier,
+      posCats: pos.categories,
+      posBoost: pos.bump
+    });
+    perSection.set(c.sectionIdx, sCnt + 1);
+
+    if (placed.length >= EXT_V2.CAPS.MAX_TOTAL) break;
+  }
+
+  const suggestions = placed
+    .sort((a,b)=> b.score - a.score)
+    .map(p => ({
+      anchor: { text: p.item.anchorText, sectionIdx: p.item.sectionIdx },
+      target: {
+        topicId: `x:${norm(p.item.anchorText)}`,
+        title: p.item.anchorText,
+        kind: "external",
+        url: "" // picked later in modal
+      },
+      bucket: p.tier,
+      finalScore: Math.max(0, Math.min(1, p.score)),
+      posCues: p.posCats || [],
+      posBoost: p.posBoost || 0,
+      // keep the quick-start suggestion to Wikipedia
+      suggestions: [ makeWikiHeuristicSuggestion(p.item.anchorText) ]
+    }));
+
+  return { suggestions, meta: { passed: suggestions.length, filtered } };
+}
 
 /* ==========================================================================
    Bucket highlights + mark rendering helpers
@@ -3299,9 +4180,14 @@ const score  = (typeof s.score === "number" ? s.score : 1.0);
       const after  = tn.nodeValue.slice(m.index + m[0].length);
       const span   = document.createElement("span");
 
-      let cls = "kwd " + (s.bucket === "strong" ? "kwd-strong" : "kwd-optional");
-      const styleAttr = "position:relative;";
-      
+      const isExternal = (s.target?.kind || "").toLowerCase() === "external";
+      let cls = "kwd " + (isExternal ? "kwd-external kwd-ext" :
+                          (s.bucket === "strong" ? "kwd-strong" : "kwd-optional"));
+      const dataStrength = (s.bucket === "strong" ? "strong" : "optional");
+
+      const extStyle  = "background:rgba(16,185,129,.18);box-shadow:0 -2px 0 rgba(16,185,129,.45) inset;";
+      const styleAttr = isExternal ? `position:relative;${extStyle}` : "position:relative;";
+
       const suggAttr = s.suggestions
         ? ` data-suggestions="${escapeAttr(JSON.stringify((s.suggestions || []).slice(0,3)))}"`
         : "";
@@ -3790,8 +4676,29 @@ function domainRootOf(host) {
   const parts = h.split(".").filter(Boolean);
   return parts.length <= 2 ? h : parts.slice(-2).join(".");
 }
-
-
+async function searchProvidersShim({ anchor, context, limit = 6 }) {
+  const api = await ensureReferencesModule();
+  if (!api?.getExternalReferences) return [];
+  try {
+    const list = await api.getExternalReferences(anchor, { context, limit });
+    return (list||[]).map(r => {
+      const url = r.url || r.link || "";
+      let domain = r.domain || "";
+      try { if (!domain && url) domain = new URL(url).hostname; } catch {}
+      return {
+        title: r.title || r.name || domain || anchor,
+        url,
+        domain,
+        abstract: r.snippet || r.abstract || "",
+        pubYear: r.year || r.pubYear || null,
+        topicalScore: typeof r.score === "number" ? r.score
+                     : (typeof r.topicalScore === "number" ? r.topicalScore : 0.7),
+      };
+    });
+  } catch {
+    return [];
+  }
+}
 function internalSimilarityShim(anchor) {
   const anchorTok = tokensNL(anchor);
   const headings = viewerEl ? ensureHeadingIds(viewerEl) : [];
@@ -3939,6 +4846,192 @@ function cleanupMarksInHeadings(root) {
 }
 
 
+/* ==========================================================================
+   PIPELINE (invoke engine) � internal + External V2 local
+   ========================================================================== */
+async function runPipelineAndHighlight(opts = {}) {
+
+  if (!viewerEl) return 0;
+
+  const append        = opts.append !== false;
+  const perPassLimit  = opts.perPassLimit || MAX_UNIQUE_PHRASES;
+  const silent        = !!opts.silent;
+
+  
+
+  // 1) Ensure external categories are loaded (so cues have your rules/tech)
+  await ensureExternalCategories();
+
+ // 2) INTERNAL now comes from BACKEND engine
+const plainText = viewerEl?.textContent || "";
+
+
+
+// ? RB2 payload � source of truth (doc-root + Set/Map stores)
+const wsId = "default";
+const docId =
+  window.LC_ACTIVE_DOC_ID ||
+  docs?.[currentIndex]?.doc_id ||
+  docs?.[currentIndex]?.docId ||
+  null;
+
+// 1) Extract the real content node (viewer often renders inside .doc-root)
+const rootEl = (viewerEl?.querySelector?.(".doc-root")) || viewerEl;
+
+// 2) Robust HTML + TEXT
+let html = (rootEl?.innerHTML || "").trim();
+let text = (rootEl?.textContent || "").replace(/\u00A0/g, " ").trim(); // normalize nbsp
+
+// If doc is rendered as plaintext-ish content, convert to <p> blocks for better sectioning
+if (!/<p[\s>]/i.test(html) && text) {
+  const paras = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+  html = paras.map(p => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+}
+
+// 3) Targets: use your real structures (Maps/Sets), not Array.isArray(...)
+const urlsFromSet = (window.IMPORTED_URLS instanceof Set) ? Array.from(window.IMPORTED_URLS) : [];
+const draftFromMap = (window.DRAFT_TOPICS instanceof Map) ? Array.from(window.DRAFT_TOPICS.values()) : [];
+const publishedFromMap = (window.PUBLISHED_TOPICS instanceof Map) ? Array.from(window.PUBLISHED_TOPICS.values()) : [];
+
+// Prefer published + draft titles (best signals), else fallback to imported URLs
+let targets = [];
+
+if (publishedFromMap.length) {
+  targets.push(
+    ...publishedFromMap
+      .map(t => ({
+        url: String(t.url || t.planned_url || t.plannedUrl || "").trim(),
+        title: String(t.title || t.working_title || t.workingTitle || "").trim(),
+        aliases: Array.isArray(t.aliases) ? t.aliases : [],
+        inboundLinks: Number(t.inlinks || t.inboundLinks || 0) || 0
+      }))
+      .filter(x => x.url && x.title)
+  );
+}
+
+if (draftFromMap.length) {
+  targets.push(
+    ...draftFromMap
+      .map(t => ({
+        url: String(t.planned_url || t.url || "").trim(), // may be empty for drafts
+        title: String(t.working_title || t.title || "").trim(),
+        aliases: Array.isArray(t.aliases) ? t.aliases : [],
+        inboundLinks: 0
+      }))
+      .filter(x => x.title)
+  );
+}
+
+if (!targets.length && urlsFromSet.length) {
+  targets = urlsFromSet
+    .filter(Boolean)
+    .map(u => {
+      const url = String(u).trim();
+      const slug = url.split("/").filter(Boolean).slice(-1)[0] || url;
+      const title = slug.replace(/[-_]/g, " ");
+      return { url, title, aliases: [], inboundLinks: 0 };
+    });
+}
+
+const payload = {
+  workspaceId: wsId,
+  docId,
+  phase: (window.PHASE || "publish"),
+  html,
+  text,
+  targets
+};
+
+console.log("[PIPELINE] calling RB2 apiEngineRun now ?", {
+  highlightEnabled,
+  targetsLen: payload?.targets?.length,
+  hasHtml: !!(payload?.html && String(payload.html).trim()),
+  hasText: !!(payload?.text && String(payload.text).trim())
+});
+
+
+const out = await apiEngineRun(payload);
+console.log('[RB2 OUT COUNTS @PAINT]', { rec: (out?.recommended||[]).length, opt: (out?.optional||[]).length, hid: (out?.hidden||[]).length, meta: out?.meta||{} });
+/* ============================
+   INTERNAL HIGHLIGHTS (RB2)
+   ============================ */
+
+// ?? CLEAR OLD BUCKET MARKS ONCE
+unwrapBucketMarksOnly();
+
+const strongOnly = (out.recommended || []).map(s => ({
+  ...s,
+  bucket: "strong",
+  target: {
+    ...(s.target || {}),
+    kind: "internal"
+  }
+}));
+
+
+
+const appliedStrong = highlightEnabled
+  ? applyMarksFromSuggestions(strongOnly, {
+      append: false,   // reset before strong
+      perPassLimit
+    })
+  : 0;
+
+
+
+const optionalOnly = (out.optional || []).map(s => ({
+  ...s,
+  bucket: "optional",
+  target: {
+    ...(s.target || {}),
+    kind: "semantic"
+  }
+}));
+
+const appliedOptional = highlightEnabled
+  ? applyMarksFromSuggestions(optionalOnly, {
+      append: true,    // keep strong, add optional
+      perPassLimit
+    })
+  : 0;
+
+console.log("[HIGHLIGHT APPLIED COUNTS]", {
+  strong: appliedStrong || 0,
+  optional: appliedOptional || 0
+});
+
+
+// ?? COMBINED INTERNAL POOL (for external + audit)
+const internalPool = [...strongOnly, ...optionalOnly];
+
+
+/* ============================
+   POST-PROCESSING
+   ============================ */
+
+cleanupMarksInHeadings(viewerEl);
+underlineLinkedPhrases();
+// highlightBucketKeywords();   // ? DISABLE HERE ONLY
+updateHighlightBadge();
+rebuildEngineHighlightsPanel();
+
+
+try { window.__LC_REFRESH_AUDIT_CARD__?.(); } catch {}
+
+const added = appliedStrong + appliedOptional + appliedExternal;
+
+console.log("[HIGHLIGHT RESULT]", {
+  strong_backend: out.recommended?.length || 0,
+  optional_backend: out.optional?.length || 0,
+  appliedStrong,
+  appliedOptional,
+  appliedExternal
+});
+
+return added;
+}
+
+
 /** Apply All (this doc) */
 async function applyAllThisDoc(){
   if (applyingAll) return;
@@ -3951,7 +5044,7 @@ async function applyAllThisDoc(){
 
   try {
     while (passes < APPLY_ALL_PASS_LIMIT && getEngineMarkCount() < MAX_TOTAL_HIGHLIGHTS){
-      const added = await runRB2PipelineAndHighlight({ append: true, silent: true });
+      const added = await runPipelineAndHighlight({ append: true, silent: true });
       const nowMarks = getEngineMarkCount();
       const gained = Math.max(0, nowMarks - prevMarks);
       if (!added && gained === 0) break;
@@ -3988,10 +5081,10 @@ async function applyAllAcrossDocs() {
         passes < APPLY_ALL_PASS_LIMIT &&
         getEngineMarkCount() < MAX_TOTAL_HIGHLIGHTS
       ) {
-        const added = await runRB2PipelineAndHighlight({
+        const added = await runPipelineAndHighlight({
           append: true,
           silent: true
-       });
+        });
 
         const after  = getEngineMarkCount();
         const gained = Math.max(0, after - before);
@@ -4449,7 +5542,7 @@ applyStopwords();
 initStopwordsUI();
 window.addEventListener("lc:stopwords-updated", () => {
   applyStopwords();
-  if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+  if (highlightsArmed) runPipelineAndHighlight({ append: true });
 });
 
 /* ==========================================================================
@@ -5118,7 +6211,7 @@ async function parseExternalList(file) {
 
 // ========================== BOOT ===============================
 async function boot() {
-
+  await ensureExternalCategories();
 
   applyStopwords();
   loadSettingsFromStore();
@@ -5174,7 +6267,7 @@ async function boot() {
     toggleHighlight.addEventListener("change", () => {
       highlightEnabled = !!toggleHighlight.checked;
       localStorage.setItem(HILITE_KEY, String(highlightEnabled));
-      if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+      if (highlightsArmed) runPipelineAndHighlight({ append: true });
       else {
         underlineLinkedPhrases();
         highlightBucketKeywords();
@@ -5210,6 +6303,7 @@ async function boot() {
   initILModal({
     root: document,
     getViewerEl,
+    ensureReferencesModule,
     computeFinalUrl,
     slugifyHeading,
     findEngineSuggestionsForPhrase,
