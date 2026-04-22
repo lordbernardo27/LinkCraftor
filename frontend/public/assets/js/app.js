@@ -1,16 +1,16 @@
-﻿console.log("APP.JS ACTIVE VERSION: ROOTCHECK-001");
+﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
-// ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend()
+// ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
-  window.reloadFromBackend = async function reloadFromBackend() {
-    try { await window.loadImportedUrlsLocal?.(); } catch (e) {}
+  window.reloadFromBackend = async function reloadFromBackend(){
+    try { await window.loadImportedUrlsLocal?.(); } catch(e) {}
     try {
-      const ws = getCurrentWorkspaceId("");
-      if (ws) await window.updateUnifiedImportCount?.(ws);
-    } catch (e) {}
+  const ws = getCurrentWorkspaceId("");
+  if (ws) await window.updateUnifiedImportCount?.(ws);
+} catch(e) {}
     try {
       return (window.IMPORTED_URLS && window.IMPORTED_URLS.size) ? window.IMPORTED_URLS.size : 0;
-    } catch (e) {}
+    } catch(e) {}
     return 0;
   };
   console.log("[Imports] reloadFromBackend shim installed ");
@@ -344,7 +344,7 @@ async function apiEngineRun(payload){
     body: JSON.stringify({
       html: payload?.html || "",
       text: payload?.text || "",
-      workspaceId: payload?.workspaceId || getCurrentWorkspaceId("default"),
+      workspace_id: payload?.workspace_id || "default",
       limit: payload?.limit || 50,
       targets: Array.isArray(payload?.targets) ? payload.targets : [],
       include: (payload?.include && typeof payload.include === "object") ? payload.include : {},
@@ -362,17 +362,16 @@ const out = data || {};
   try { window.__RB2_LAST_OUT = out; } catch (e) {}
 
   console.log("[RB2 BACKEND OUT JSON]", JSON.stringify(out, null, 2));
-
-  console.log("[RB2 SAMPLE strong[0]]", (out.internal_strong && out.internal_strong[0]) || null);
-console.log("[RB2 SAMPLE optional[0]]", (out.semantic_optional && out.semantic_optional[0]) || null);
+  console.log("[RB2 SAMPLE recommended[0]]", (out.recommended && out.recommended[0]) || null);
+  console.log("[RB2 SAMPLE optional[0]]", (out.optional && out.optional[0]) || null);
 
   return {
-  recommended: Array.isArray(out.internal_strong) ? out.internal_strong : [],
-  optional: Array.isArray(out.semantic_optional) ? out.semantic_optional : [],
-  external: [],
-  hidden: Array.isArray(out.hidden) ? out.hidden : [],
-  meta: (out.meta && typeof out.meta === "object") ? out.meta : {}
-};
+    recommended: Array.isArray(out.recommended) ? out.recommended : [],
+    optional: Array.isArray(out.optional) ? out.optional : [],
+    external: [],
+    hidden: Array.isArray(out.hidden) ? out.hidden : [],
+    meta: (out.meta && typeof out.meta === "object") ? out.meta : {}
+  };
 }
 
 
@@ -1276,8 +1275,168 @@ function hideAutolinkProgress() {
   setTimeout(() => { autolinkProgressBox.style.display = "none"; updateAutolinkProgress(0); }, 400);
 }
 
+async function runRB2PipelineAndHighlight(opts = {}) {
+  if (!viewerEl) return 0;
 
+  const append        = opts.append !== false;
+  const perPassLimit  = opts.perPassLimit || MAX_UNIQUE_PHRASES;
+  const silent        = !!opts.silent;
 
+  await ensureExternalCategories();
+
+  const plainText = viewerEl?.textContent || "";
+
+  const wsId = "default";
+  const docId =
+    window.LC_ACTIVE_DOC_ID ||
+    docs?.[currentIndex]?.doc_id ||
+    docs?.[currentIndex]?.docId ||
+    null;
+
+  const rootEl = (viewerEl?.querySelector?.(".doc-root")) || viewerEl;
+
+  let html = (rootEl?.innerHTML || "").trim();
+  let text = (rootEl?.textContent || "").replace(/\u00A0/g, " ").trim();
+
+  if (!/<p[\s>]/i.test(html) && text) {
+    const paras = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
+    html = paras.map(p => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+  }
+
+  const urlsFromSet = (window.IMPORTED_URLS instanceof Set) ? Array.from(window.IMPORTED_URLS) : [];
+  const draftFromMap = (window.DRAFT_TOPICS instanceof Map) ? Array.from(window.DRAFT_TOPICS.values()) : [];
+  const publishedFromMap = (window.PUBLISHED_TOPICS instanceof Map) ? Array.from(window.PUBLISHED_TOPICS.values()) : [];
+
+  let targets = [];
+
+  if (publishedFromMap.length) {
+    targets.push(
+      ...publishedFromMap
+        .map(t => ({
+          url: String(t.url || t.planned_url || t.plannedUrl || "").trim(),
+          title: String(t.title || t.working_title || t.workingTitle || "").trim(),
+          aliases: Array.isArray(t.aliases) ? t.aliases : [],
+          inboundLinks: Number(t.inlinks || t.inboundLinks || 0) || 0
+        }))
+        .filter(x => x.url && x.title)
+    );
+  }
+
+  if (draftFromMap.length) {
+    targets.push(
+      ...draftFromMap
+        .map(t => ({
+          url: String(t.planned_url || t.url || "").trim(),
+          title: String(t.working_title || t.title || "").trim(),
+          aliases: Array.isArray(t.aliases) ? t.aliases : [],
+          inboundLinks: 0
+        }))
+        .filter(x => x.title)
+    );
+  }
+
+  if (!targets.length && urlsFromSet.length) {
+    targets = urlsFromSet
+      .filter(Boolean)
+      .map(u => {
+        const url = String(u).trim();
+        const slug = url.split("/").filter(Boolean).slice(-1)[0] || url;
+        const title = slug.replace(/[-_]/g, " ");
+        return { url, title, aliases: [], inboundLinks: 0 };
+      });
+  }
+
+  const payload = {
+    workspaceId: wsId,
+    docId,
+    phase: (window.PHASE || "publish"),
+    html,
+    text,
+    targets
+  };
+
+  console.log("[RB2 PIPELINE] calling apiEngineRun now", {
+    highlightEnabled,
+    targetsLen: payload?.targets?.length,
+    hasHtml: !!(payload?.html && String(payload.html).trim()),
+    hasText: !!(payload?.text && String(payload.text).trim())
+  });
+
+  const out = await apiEngineRun(payload);
+
+  console.log("[RB2 OUT COUNTS @PAINT]", {
+    rec: (out?.recommended || []).length,
+    opt: (out?.optional || []).length,
+    hid: (out?.hidden || []).length,
+    meta: out?.meta || {}
+  });
+
+  unwrapBucketMarksOnly();
+
+  const strongOnly = (out.recommended || []).map(s => ({
+    ...s,
+    bucket: "strong"
+  }));
+
+  const appliedStrong = highlightEnabled
+    ? applyMarksFromSuggestions(strongOnly, {
+        append: false,
+        perPassLimit
+      })
+    : 0;
+
+  const optionalOnly = (out.optional || []).map(s => ({
+    ...s,
+    bucket: "optional"
+  }));
+
+  const appliedOptional = highlightEnabled
+    ? applyMarksFromSuggestions(optionalOnly, {
+        append: true,
+        perPassLimit
+      })
+    : 0;
+
+  console.log("[HIGHLIGHT APPLIED COUNTS]", {
+    strong: appliedStrong || 0,
+    optional: appliedOptional || 0
+  });
+
+  cleanupMarksInHeadings(viewerEl);
+  underlineLinkedPhrases();
+  updateHighlightBadge();
+  rebuildEngineHighlightsPanel();
+
+  LAST_ENGINE_OUTPUT = {
+    recommended: out.recommended || [],
+    optional: out.optional || [],
+    external: [],
+    hidden: out.hidden || [],
+    meta: out.meta || {}
+  };
+
+  return (appliedStrong || 0) + (appliedOptional || 0);
+}
+
+// === Auto-Link main button: run engine on CURRENT document ===
+btnAutoLinkMain?.addEventListener("click", async () => {
+  console.log("[AutoLink] Bulk Auto-Link button clicked");
+  highlightsArmed = true;
+
+  if (!docs || !docs.length) {
+    showToast(errorBox, "Upload at least one document first.", 2000);
+    return;
+  }
+
+  try {
+    // For now: behave like the old Auto-Link — current doc only
+    await runRB2PipelineAndHighlight({ append: true });
+
+  } catch (e) {
+    console.error("[AutoLink] failed:", e);
+    showToast(errorBox, "Auto-Link failed: " + (e?.message || e), 2500);
+  }
+});
 
 /* ==========================================================================
    STORAGE KEYS
@@ -1853,17 +2012,9 @@ document.addEventListener("keydown", (e) => {
 btnUploadMenu?.addEventListener("click", () => toggleMenu(uploadMenu, btnUploadMenu));
 btnDownloadMenu?.addEventListener("click", () => toggleMenu(downloadMenu, btnDownloadMenu));
 
-btnAutoLinkMain?.addEventListener("click", async () => {
-  console.log("[RB2 CLICK] btnAutoLinkMain fired");
 
-  if (!docs || !docs.length) {
-    showToast(errorBox, "Upload at least one document first.", 2000);
-    return;
-  }
 
-  highlightsArmed = true;
-  await runPipelineAndHighlight({ append: true });
-});
+
 
 /* Uploads */
 function setAcceptAndOpen(acceptList) {
@@ -2450,6 +2601,7 @@ if (!finalUrl) {
 
   console.log("[ExtAutoLink] Enrichment pass complete.");
 }
+
 
 
 /* ==========================================================================
@@ -3980,11 +4132,7 @@ function applyMarksFromSuggestions(suggestions, opts = {}) {
   const phraseHits  = new Map();    // phraseNorm -> count in this document
 
   outer: for (const s of suggestions) {
-
-    const rawPhrase =
-  (s.anchor && (s.anchor.paint || s.anchor.text)) ||
-  s.phrase ||
-  "";
+  const rawPhrase = (s.anchor && (s.anchor.paint || s.anchor.text)) ? (s.anchor.paint || s.anchor.text) : "";
 
     const phraseNorm = norm(rawPhrase);
 
@@ -4706,35 +4854,83 @@ async function runPipelineAndHighlight(opts = {}) {
   if (!viewerEl) return 0;
 
   const append        = opts.append !== false;
-const perPassLimit  = opts.perPassLimit || MAX_UNIQUE_PHRASES;
-const silent        = !!opts.silent;
+  const perPassLimit  = opts.perPassLimit || MAX_UNIQUE_PHRASES;
+  const silent        = !!opts.silent;
+
+  
+
+  // 1) Ensure external categories are loaded (so cues have your rules/tech)
+  await ensureExternalCategories();
+
+ // 2) INTERNAL now comes from BACKEND engine
+const plainText = viewerEl?.textContent || "";
 
 
-const wsId = getCurrentWorkspaceId("default");
+
+// ? RB2 payload � source of truth (doc-root + Set/Map stores)
+const wsId = "default";
 const docId =
   window.LC_ACTIVE_DOC_ID ||
   docs?.[currentIndex]?.doc_id ||
   docs?.[currentIndex]?.docId ||
   null;
 
-const rootEl =
-  viewerEl.querySelector(".doc-root") ||
-  viewerEl.querySelector("[contenteditable='true']") ||
-  viewerEl.querySelector(".editor") ||
-  viewerEl;
+// 1) Extract the real content node (viewer often renders inside .doc-root)
+const rootEl = (viewerEl?.querySelector?.(".doc-root")) || viewerEl;
 
-console.log("[RB2 ROOTEL TAG]", rootEl?.tagName || null);
-console.log("[RB2 ROOTEL CLASS]", rootEl?.className || "");
-console.log("[RB2 ROOTEL TEXTLEN]", (rootEl?.textContent || "").trim().length);
-console.log("[RB2 ROOTEL HTMLLEN]", (rootEl?.innerHTML || "").trim().length);
-
-
+// 2) Robust HTML + TEXT
 let html = (rootEl?.innerHTML || "").trim();
-let text = (rootEl?.textContent || "").replace(/\u00A0/g, " ").trim();
+let text = (rootEl?.textContent || "").replace(/\u00A0/g, " ").trim(); // normalize nbsp
 
+// If doc is rendered as plaintext-ish content, convert to <p> blocks for better sectioning
 if (!/<p[\s>]/i.test(html) && text) {
   const paras = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
   html = paras.map(p => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
+}
+
+// 3) Targets: use your real structures (Maps/Sets), not Array.isArray(...)
+const urlsFromSet = (window.IMPORTED_URLS instanceof Set) ? Array.from(window.IMPORTED_URLS) : [];
+const draftFromMap = (window.DRAFT_TOPICS instanceof Map) ? Array.from(window.DRAFT_TOPICS.values()) : [];
+const publishedFromMap = (window.PUBLISHED_TOPICS instanceof Map) ? Array.from(window.PUBLISHED_TOPICS.values()) : [];
+
+// Prefer published + draft titles (best signals), else fallback to imported URLs
+let targets = [];
+
+if (publishedFromMap.length) {
+  targets.push(
+    ...publishedFromMap
+      .map(t => ({
+        url: String(t.url || t.planned_url || t.plannedUrl || "").trim(),
+        title: String(t.title || t.working_title || t.workingTitle || "").trim(),
+        aliases: Array.isArray(t.aliases) ? t.aliases : [],
+        inboundLinks: Number(t.inlinks || t.inboundLinks || 0) || 0
+      }))
+      .filter(x => x.url && x.title)
+  );
+}
+
+if (draftFromMap.length) {
+  targets.push(
+    ...draftFromMap
+      .map(t => ({
+        url: String(t.planned_url || t.url || "").trim(), // may be empty for drafts
+        title: String(t.working_title || t.title || "").trim(),
+        aliases: Array.isArray(t.aliases) ? t.aliases : [],
+        inboundLinks: 0
+      }))
+      .filter(x => x.title)
+  );
+}
+
+if (!targets.length && urlsFromSet.length) {
+  targets = urlsFromSet
+    .filter(Boolean)
+    .map(u => {
+      const url = String(u).trim();
+      const slug = url.split("/").filter(Boolean).slice(-1)[0] || url;
+      const title = slug.replace(/[-_]/g, " ");
+      return { url, title, aliases: [], inboundLinks: 0 };
+    });
 }
 
 const payload = {
@@ -4742,26 +4938,20 @@ const payload = {
   docId,
   phase: (window.PHASE || "publish"),
   html,
-  text
+  text,
+  targets
 };
 
 console.log("[PIPELINE] calling RB2 apiEngineRun now ?", {
-  workspaceId: wsId,
-  docId,
   highlightEnabled,
+  targetsLen: payload?.targets?.length,
   hasHtml: !!(payload?.html && String(payload.html).trim()),
   hasText: !!(payload?.text && String(payload.text).trim())
 });
 
+
 const out = await apiEngineRun(payload);
-
-
-console.log("[RB2 OUT COUNTS @PAINT]", {
-  strong_backend: (out?.internal_strong || []).length,
-  optional_backend: (out?.semantic_optional || []).length,
-  meta: out?.meta || {}
-});
-
+console.log('[RB2 OUT COUNTS @PAINT]', { rec: (out?.recommended||[]).length, opt: (out?.optional||[]).length, hid: (out?.hidden||[]).length, meta: out?.meta||{} });
 /* ============================
    INTERNAL HIGHLIGHTS (RB2)
    ============================ */
@@ -4769,58 +4959,47 @@ console.log("[RB2 OUT COUNTS @PAINT]", {
 // ?? CLEAR OLD BUCKET MARKS ONCE
 unwrapBucketMarksOnly();
 
-// ?? STRONG (blue)
 const strongOnly = (out.recommended || []).map(s => ({
   ...s,
-  bucket: "strong"
+  bucket: "strong",
+  target: {
+    ...(s.target || {}),
+    kind: "internal"
+  }
 }));
 
 
-console.log("[PAINT INPUT STRONG COUNT]", strongOnly.length);
+
 const appliedStrong = highlightEnabled
   ? applyMarksFromSuggestions(strongOnly, {
-      container: rootEl,
-      append: false,
+      append: false,   // reset before strong
       perPassLimit
     })
   : 0;
 
 
 
-// ?? OPTIONAL (yellow) � MUST be painted explicitly
 const optionalOnly = (out.optional || []).map(s => ({
   ...s,
-  bucket: "optional"
+  bucket: "optional",
+  target: {
+    ...(s.target || {}),
+    kind: "semantic"
+  }
 }));
 
-
-console.log("[PAINT INPUT OPTIONAL COUNT]", optionalOnly.length);
 const appliedOptional = highlightEnabled
   ? applyMarksFromSuggestions(optionalOnly, {
-      container: rootEl,
-      append: true,
+      append: true,    // keep strong, add optional
       perPassLimit
     })
   : 0;
 
 console.log("[HIGHLIGHT APPLIED COUNTS]", {
-  strong: Number(appliedStrong || 0),
-  optional: Number(appliedOptional || 0)
+  strong: appliedStrong || 0,
+  optional: appliedOptional || 0
 });
 
-console.log(
-  "[DOM MARK COUNT AFTER PAINT]",
-  rootEl.querySelectorAll(".kwd").length
-);
-
-
-console.log(
-  "[PAINTED PHRASES]",
-  Array.from(rootEl.querySelectorAll("mark.kwd")).map(m =>
-    decodeURIComponent(m.getAttribute("data-phrase") || "").trim() ||
-    (m.textContent || "").trim()
-  )
-);
 
 // ?? COMBINED INTERNAL POOL (for external + audit)
 const internalPool = [...strongOnly, ...optionalOnly];
@@ -4830,7 +5009,7 @@ const internalPool = [...strongOnly, ...optionalOnly];
    POST-PROCESSING
    ============================ */
 
-cleanupMarksInHeadings(rootEl);
+cleanupMarksInHeadings(viewerEl);
 underlineLinkedPhrases();
 // highlightBucketKeywords();   // ? DISABLE HERE ONLY
 updateHighlightBadge();
@@ -4839,14 +5018,14 @@ rebuildEngineHighlightsPanel();
 
 try { window.__LC_REFRESH_AUDIT_CARD__?.(); } catch {}
 
-const added = appliedStrong + appliedOptional;
+const added = appliedStrong + appliedOptional + appliedExternal;
 
 console.log("[HIGHLIGHT RESULT]", {
-  strong_backend: (out?.recommended || []).length,
-  optional_backend: (out?.optional || []).length,
-  appliedStrong: Number(appliedStrong || 0),
-  appliedOptional: Number(appliedOptional || 0),
-  appliedExternal: 0
+  strong_backend: out.recommended?.length || 0,
+  optional_backend: out.optional?.length || 0,
+  appliedStrong,
+  appliedOptional,
+  appliedExternal
 });
 
 return added;

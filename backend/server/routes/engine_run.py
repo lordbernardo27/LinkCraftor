@@ -8,7 +8,6 @@ import json
 import re
 
 from backend.server.engine.rb2_adapter import build_rb2_phrase_contexts
-from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
 
 
 PHASE_DEFAULT = "prepublish"
@@ -219,7 +218,8 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         phase = PHASE_DEFAULT
     floors = FLOORS_BY_PHASE[phase]
 
-    pool_obj = build_active_phrase_pool(ws)
+    pool_path = _active_phrase_pool_path(ws)
+    pool_obj = _safe_read_json(pool_path) if os.path.exists(pool_path) else None
     phrases_obj = (
         pool_obj.get("phrases")
         if isinstance(pool_obj, dict) and isinstance(pool_obj.get("phrases"), dict)
