@@ -356,24 +356,17 @@ const out = data || {};
   try { window.__RB2_LAST_OUT = out; } catch (e) {}
 
   console.log("[RB2 BACKEND OUT JSON]", JSON.stringify(out, null, 2));
-  console.log("[RB2 SAMPLE recommended[0]]", (out.recommended && out.recommended[0]) || null);
-  console.log("[RB2 SAMPLE optional[0]]", (out.optional && out.optional[0]) || null);
+ 
+console.log("[RB2 SAMPLE internal_strong[0]]", (out.internal_strong && out.internal_strong[0]) || null);
+console.log("[RB2 SAMPLE semantic_optional[0]]", (out.semantic_optional && out.semantic_optional[0]) || null);
 
- return {
-  recommended: Array.isArray(out.recommended)
-    ? out.recommended
-    : (Array.isArray(out.internal_strong) ? out.internal_strong : []),
-
-  optional: Array.isArray(out.optional)
-    ? out.optional
-    : (Array.isArray(out.semantic_optional) ? out.semantic_optional : []),
-
+return {
+  internal_strong: Array.isArray(out.internal_strong) ? out.internal_strong : [],
+  semantic_optional: Array.isArray(out.semantic_optional) ? out.semantic_optional : [],
   hidden: Array.isArray(out.hidden) ? out.hidden : [],
   meta: (out.meta && typeof out.meta === "object") ? out.meta : {}
 };
 }
-
-
 
 
 // ================================
@@ -548,7 +541,7 @@ function getLastEngineOutput() { return LAST_ENGINE_OUTPUT; } // not strictly re
 
 let highlightEnabled = true;
 
-let LAST_ENGINE_OUTPUT = { recommended: [], optional: [], hidden: [], meta: {} };
+let LAST_ENGINE_OUTPUT = { internal_strong: [], semantic_optional: [], hidden: [], meta: {} };
 
 /* ==========================================================================
    UI HOOKS
@@ -707,8 +700,8 @@ const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${enc
       }
     };
 
-    add(out.recommended);
-    add(out.optional);
+    add(out.internal_strong);
+    add(out.semantic_optional);
     add(out.external);
 
     if (!pool.length) return null;
@@ -732,9 +725,8 @@ const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${enc
       }
     }
 
-    add(out.recommended);
-    add(out.optional);
-    add(out.external);
+    add(out.internal_strong);
+    add(out.semantic_optional);
 
     return s;
   }
@@ -1317,66 +1309,66 @@ const publishedFromMap = (PUBLISHED_TOPICS instanceof Map) ? Array.from(PUBLISHE
     targets
   };
 
-  console.log("[RB2 PIPELINE] calling apiEngineRun now", {
-    highlightEnabled,
-    targetsLen: payload?.targets?.length,
-    hasHtml: !!(payload?.html && String(payload.html).trim()),
-    hasText: !!(payload?.text && String(payload.text).trim())
-  });
+console.log("[RB2 PIPELINE] calling apiEngineRun now", {
+  highlightEnabled,
+  targetsLen: payload?.targets?.length,
+  hasHtml: !!(payload?.html && String(payload.html).trim()),
+  hasText: !!(payload?.text && String(payload.text).trim())
+});
 
-  const out = await apiEngineRun(payload);
+const out = await apiEngineRun(payload);
 
-  console.log("[RB2 OUT COUNTS @PAINT]", {
-    rec: (out?.recommended || []).length,
-    opt: (out?.optional || []).length,
-    hid: (out?.hidden || []).length,
-    meta: out?.meta || {}
-  });
+console.log("[RB2 OUT COUNTS @PAINT]", {
+  strong: (out?.internal_strong || []).length,
+  optional: (out?.semantic_optional || []).length,
+  hid: (out?.hidden || []).length,
+  meta: out?.meta || {}
+});
 
-  unwrapBucketMarksOnly();
+unwrapBucketMarksOnly();
 
-  const strongOnly = (out.recommended || []).map(s => ({
-    ...s,
-    bucket: "strong"
-  }));
+const strongOnly = (out.internal_strong || []).map(s => ({
+  ...s,
+  bucket: "strong"
+}));
 
-  const appliedStrong = highlightEnabled
-    ? applyMarksFromSuggestions(strongOnly, {
-        append: false,
-        perPassLimit
-      })
-    : 0;
+const appliedStrong = highlightEnabled
+  ? applyMarksFromSuggestions(strongOnly, {
+      append: false,
+      perPassLimit
+    })
+  : 0;
 
-  const optionalOnly = (out.optional || []).map(s => ({
-    ...s,
-    bucket: "optional"
-  }));
+const optionalOnly = (out.semantic_optional || []).map(s => ({
+  ...s,
+  bucket: "optional"
+}));
 
-  const appliedOptional = highlightEnabled
-    ? applyMarksFromSuggestions(optionalOnly, {
-        append: true,
-        perPassLimit
-      })
-    : 0;
+const appliedOptional = highlightEnabled
+  ? applyMarksFromSuggestions(optionalOnly, {
+      append: true,
+      perPassLimit
+    })
+  : 0;
 
-  console.log("[HIGHLIGHT APPLIED COUNTS]", {
-    strong: appliedStrong || 0,
-    optional: appliedOptional || 0
-  });
+console.log("[HIGHLIGHT APPLIED COUNTS]", {
+  strong: appliedStrong || 0,
+  optional: appliedOptional || 0
+});
 
-  cleanupMarksInHeadings(viewerEl);
-  underlineLinkedPhrases();
-  updateHighlightBadge();
-  rebuildEngineHighlightsPanel();
+cleanupMarksInHeadings(viewerEl);
+underlineLinkedPhrases();
+updateHighlightBadge();
+rebuildEngineHighlightsPanel();
 
-  LAST_ENGINE_OUTPUT = {
-  recommended: out.recommended || [],
-  optional: out.optional || [],
+LAST_ENGINE_OUTPUT = {
+  internal_strong: out.internal_strong || [],
+  semantic_optional: out.semantic_optional || [],
   hidden: out.hidden || [],
   meta: out.meta || {}
 };
 
-  return (appliedStrong || 0) + (appliedOptional || 0);
+return (appliedStrong || 0) + (appliedOptional || 0);
 }
 
 // === Auto-Link main button: run engine on CURRENT document ===
@@ -1390,9 +1382,7 @@ btnAutoLinkMain?.addEventListener("click", async () => {
   }
 
   try {
-    // For now: behave like the old Auto-Link — current doc only
     await runRB2PipelineAndHighlight({ append: true });
-
   } catch (e) {
     console.error("[AutoLink] failed:", e);
     showToast(errorBox, "Auto-Link failed: " + (e?.message || e), 2500);
@@ -3185,164 +3175,90 @@ function unwrapMark(el){
   return tn;
 }
 
-/* Apply engine/bucket marks to DOM */
-function applyMarksFromSuggestions(suggestions, opts = {}) {
-  const append       = opts.append !== false;
+function applyMarksFromSuggestions(items = [], opts = {}) {
+  const root = document.getElementById("doc-content");
+  if (!root) return 0;
+
+  const append = opts.append !== false;
   const perPassLimit = opts.perPassLimit || MAX_UNIQUE_PHRASES;
-  if (!viewerEl) return 0;
 
-  // If not appending, unwrap existing engine marks first
   if (!append) {
-    viewerEl.querySelectorAll("mark.kwd").forEach(m => {
-      const core = m.querySelector?.(".kw-core");
-      const t = document.createTextNode((core?.textContent ?? m.textContent) || "");
-      // GUARD 1: parent may be null if DOM changed
-      if (m.parentNode) {
-        m.parentNode.replaceChild(t, m);
-      }
+    root.querySelectorAll("mark.kwd").forEach(el => {
+      el.replaceWith(document.createTextNode(el.textContent || ""));
     });
+    root.normalize();
   }
-
-
-
-  // Existing phrases already marked in the viewer
-  const existingMarked = new Set(
-    Array.from(viewerEl.querySelectorAll("mark.kwd")).map(m => {
-      const p = decodeURIComponent(m.getAttribute("data-phrase") || "").trim() ||
-                (m.textContent || "").trim();
-      return norm(p);
-    })
-  );
-
-  // Collect eligible text nodes
-  const walker = document.createTreeWalker(viewerEl, NodeFilter.SHOW_TEXT, {
-    acceptNode(node){
-      if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-      let p = node.parentNode;
-      while (p && p !== viewerEl) {
-        if (p.nodeType === 1) {
-          if (p.tagName === "A" || p.tagName === "MARK" || p.classList?.contains("lc-underlined")) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          if (/^(H1|H2|H3|H4|H5|H6|NAV|ASIDE|HEADER|FOOTER)$/i.test(p.tagName)) {
-            return NodeFilter.FILTER_REJECT;
-          }
-        }
-        p = p.parentNode;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    }
-  });
-  const nodes = [];
-  while (walker.nextNode()) nodes.push(walker.currentNode);
-
-  const controlsHtml = `<span class="kw-ctl" aria-hidden="true"
-      style="position:absolute;right:-8px;top:-8px;display:flex;gap:2px;opacity:0;pointer-events:none;">
-    <button class="kw-btn kw-accept" title="Accept"
-      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #10b981;color:#10b981;background:#fff;cursor:pointer;padding:0;">✓</button>
-    <button class="kw-btn kw-reject" title="Reject"
-      style="font-size:11px;width:16px;height:16px;border-radius:999px;border:1px solid #ef4444;color:#ef4444;background:#fff;cursor:pointer;padding:0;">✕</button>
-    </span>`;
-
-  window.REJECTED_SET = window.REJECTED_SET || new Set();
 
   let applied = 0;
-  const usedAnchors = new Set();    // phraseNorm -> already used once
-  const phraseHits  = new Map();    // phraseNorm -> count in this document
+  const phraseHits = new Map();
+  const list = Array.isArray(items) ? items : [];
 
-  outer: for (const s of suggestions) {
-  const rawPhrase = (s.anchor && (s.anchor.paint || s.anchor.text)) ? (s.anchor.paint || s.anchor.text) : "";
+  for (const item of list) {
+    const phrase = String(item?.phrase || "").trim();
+    if (!phrase) continue;
 
-    const phraseNorm = norm(rawPhrase);
+    const phraseNorm = norm(phrase);
+    if (!phraseNorm) continue;
+    if (!shouldHighlightPhrase(phrase)) continue;
+    if ((phraseHits.get(phraseNorm) || 0) >= perPassLimit) continue;
+    if (getEngineMarkCount() >= MAX_TOTAL_HIGHLIGHTS) break;
 
-    // 1) No raw text ? skip
-    if (!rawPhrase) continue;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
 
-    // 2) Use existing phrase filter (stopwords, length, etc.)
-    if (!shouldHighlightPhrase(rawPhrase)) continue;
+        let p = node.parentNode;
+        while (p && p !== root) {
+          if (p.nodeType === 1) {
+            const tag = p.tagName;
+            if (tag === "MARK" || tag === "A" || /^H[1-6]$/.test(tag)) {
+              return NodeFilter.FILTER_REJECT;
+            }
+          }
+          p = p.parentNode;
+        }
 
-    // 3) Bucket comes from RB2 (backend) � DO NOT re-floor here.
-// RB2 already decided strong vs optional using its own thresholds.
-const bucket = (s.bucket === "strong" ? "strong" : "optional");
-const score  = (typeof s.score === "number" ? s.score : 1.0);
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
 
-// Keep debug only (optional)
-// console.log("[MARKS CHECK]", { rawPhrase, bucket, score });
+    let node;
+    let matched = false;
 
+    while ((node = walker.nextNode())) {
+      const text = node.nodeValue;
+      const idx = text.toLowerCase().indexOf(phrase.toLowerCase());
+      if (idx === -1) continue;
 
+      const before = text.slice(0, idx);
+      const hit = text.slice(idx, idx + phrase.length);
+      const after = text.slice(idx + phrase.length);
 
-    // 4) Global guards
-    if (!phraseNorm ||
-        usedAnchors.has(phraseNorm) ||
-        LINKED_SET.has(phraseNorm) ||
-        existingMarked.has(phraseNorm) ||
-        isRejected("engine", phraseNorm)) {
-      continue;
+      const mark = document.createElement("mark");
+      mark.className = item.bucket === "strong" ? "kwd kwd-strong" : "kwd kwd-optional";
+      mark.dataset.strength = item.bucket === "strong" ? "strong" : "optional";
+      mark.dataset.phrase = encodeURIComponent(phraseNorm);
+      mark.textContent = hit;
+
+      const frag = document.createDocumentFragment();
+      if (before) frag.appendChild(document.createTextNode(before));
+      frag.appendChild(mark);
+      if (after) frag.appendChild(document.createTextNode(after));
+
+      node.parentNode.replaceChild(frag, node);
+
+      applied++;
+      phraseHits.set(phraseNorm, (phraseHits.get(phraseNorm) || 0) + 1);
+      matched = true;
+      break;
     }
 
-    // 5) Cap total marks
-    if (getEngineMarkCount() + applied >= MAX_TOTAL_HIGHLIGHTS) break outer;
-
-    const rx = makeBoundaryRx(phraseNorm);
-
-    for (const tn of nodes) {
-      // GUARD 2: node may be detached by previous replacements
-      if (!tn || !tn.parentNode) continue;
-
-      rx.lastIndex = 0;
-      const m = rx.exec(tn.nodeValue);
-      if (!m) continue;
-
-      const preLen = m.index + (m[1] ? m[1].length : 0);
-      const before = tn.nodeValue.slice(0, preLen);
-      const core   = m[2];
-      const after  = tn.nodeValue.slice(m.index + m[0].length);
-      const span   = document.createElement("span");
-
-      let cls = "kwd " + (s.bucket === "strong" ? "kwd-strong" : "kwd-optional");
-      const styleAttr = "position:relative;";
-      
-      const suggAttr = s.suggestions
-        ? ` data-suggestions="${escapeAttr(JSON.stringify((s.suggestions || []).slice(0,3)))}"`
-        : "";
-      const posAttr  = (s.posCues && s.posCues.length)
-        ? ` data-poscues="${escapeAttr(JSON.stringify(s.posCues))}" data-posboost="${String(s.posBoost || 0)}"`
-        : "";
-
-      span.innerHTML =
-        `${escapeHtml(before)}<mark class="${cls}" data-strength="${dataStrength}"` +
-        ` data-phrase="${encodeURIComponent(phraseNorm)}"` +
-        ` data-topic-id="${escapeAttr(s.target?.topicId || "")}"` +
-        ` data-kind="${escapeAttr(s.target?.kind || "")}"` +
-        ` data-url="${escapeAttr(s.target?.url || "")}"` +
-        ` data-title="${escapeAttr(s.target?.title || "")}"` +
-        `${suggAttr}${posAttr} tabindex="0" style="${styleAttr}">` +
-          `<span class="kw-core">${escapeHtml(core)}</span>${controlsHtml}` +
-        `</mark>${escapeHtml(after)}`;
-
-      tn.parentNode.replaceChild(span, tn);
-
-      usedAnchors.add(phraseNorm);
-      applied++;
-
-      const count = phraseHits.get(phraseNorm) || 0;
-      phraseHits.set(phraseNorm, count + 1);
-
-      // Per-phrase cap for this pass
-      if (phraseHits.get(phraseNorm) >= perPassLimit) {
-        continue outer;
-      }
-
-      // Global cap
-      if (getEngineMarkCount() + applied >= MAX_TOTAL_HIGHLIGHTS) {
-        break outer;
-      }
-
-      // Move to next suggestion after first replacement in this node
-      break;
+    if (!matched) {
+      // no-op
     }
   }
 
+  console.log("[PAINTER STABLE] applied =", applied);
   return applied;
 }
 

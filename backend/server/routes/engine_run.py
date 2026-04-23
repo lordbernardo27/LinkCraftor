@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Body
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Optional, List, Set, Dict, Any, Tuple
 import os
 import json
@@ -29,12 +29,15 @@ router = APIRouter(prefix="/api/engine", tags=["engine-run"])
 
 
 class EngineRunRequest(BaseModel):
-    workspaceId: Optional[str] = "default"
+    workspaceId: Optional[str] = Field(default="default", alias="workspace_id")
     docId: Optional[str] = None
     html: Optional[str] = None
     text: Optional[str] = None
     phase: Optional[str] = PHASE_DEFAULT
     limit: int = 2500
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 def _ws_safe(ws: str) -> str:
@@ -51,7 +54,7 @@ def _active_phrase_pool_path(ws: str) -> str:
         _data_dir(),
         "phrase_pools",
         "active",
-        f"active_phrase_set_{_ws_safe(ws)}.json",
+        f"active_phrase_pool_{_ws_safe(ws)}.json",
     )
 
 
@@ -210,7 +213,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
     if not html and not text:
         return {"ok": False, "error": "Provide 'html' or 'text' in request body."}
 
-    ws = payload.workspaceId or "default"
+    ws = _ws_safe(payload.workspaceId or "default")
     doc_id = str(payload.docId or "doc_runtime")
 
     phase = (payload.phase or PHASE_DEFAULT).strip().lower()
@@ -220,11 +223,15 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     pool_path = _active_phrase_pool_path(ws)
     pool_obj = _safe_read_json(pool_path) if os.path.exists(pool_path) else None
-    phrases_obj = (
-        pool_obj.get("phrases")
-        if isinstance(pool_obj, dict) and isinstance(pool_obj.get("phrases"), dict)
-        else {}
-    )
+
+    phrases_obj: Dict[str, Any] = {}
+    if isinstance(pool_obj, dict):
+        if isinstance(pool_obj.get("phrases"), dict):
+            phrases_obj = pool_obj.get("phrases") or {}
+        elif isinstance(pool_obj.get("items"), dict):
+            phrases_obj = pool_obj.get("items") or {}
+        elif isinstance(pool_obj.get("entries"), dict):
+            phrases_obj = pool_obj.get("entries") or {}
 
     rb2_doc = build_rb2_phrase_contexts(
         doc_id,
@@ -330,5 +337,6 @@ def engine_run(payload: EngineRunRequest = Body(...)):
                 "joined_text_len": len(limited_joined_text),
             },
             "hidden_sample": hidden_debug[:10],
+            "pool_path": pool_path,
         },
     }
