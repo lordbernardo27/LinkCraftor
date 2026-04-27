@@ -473,14 +473,9 @@ def _is_list_style_stack(tokens: List[str]) -> bool:
 
     return False
 
-
 def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
+    if len(tokens) < 4:
         return False
-    
-    tail_cut = _cut_semantic_tail(tokens)
-    if tail_cut != tokens:
-        return tail_cut
 
     if _is_query_style_long_anchor(tokens):
         return False
@@ -493,6 +488,9 @@ def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if connector_count >= 2:
         return False
 
+    if _is_action_phrase(tokens) and len(tokens) >= 4:
+        return True
+
     if _has_action_chain_tail(tokens):
         return True
 
@@ -502,13 +500,10 @@ def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if _is_multi_cluster_phrase(tokens):
         return True
 
-    if _is_action_phrase(tokens) and len(tokens) >= 5:
-        return True
-
     return False
 
 def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
-    if len(tokens) < 5:
+    if len(tokens) < 4:
         return tokens
 
     tail_cut = _cut_semantic_tail(tokens)
@@ -532,6 +527,8 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
 
             score = float(result.get("score") or 0.0)
 
+            starts_with_action = span[0] in ACTION_STARTS
+
             specificity = 0.0
 
             if span[0] in ACTION_STARTS:
@@ -543,6 +540,9 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
             specificity += 0.02 * len(span)
 
             canonical_bonus = 0.0
+
+            if starts_with_action:
+             canonical_bonus -= 0.12
 
             if len(span) in {2, 3}:
                 head = span[-1]
