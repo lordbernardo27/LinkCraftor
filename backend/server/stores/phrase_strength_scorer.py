@@ -477,6 +477,10 @@ def _is_list_style_stack(tokens: List[str]) -> bool:
 def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if len(tokens) < 5:
         return False
+    
+    tail_cut = _cut_semantic_tail(tokens)
+    if tail_cut != tokens:
+        return tail_cut
 
     if _is_query_style_long_anchor(tokens):
         return False
@@ -503,10 +507,13 @@ def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
 
     return False
 
-
 def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
     if len(tokens) < 5:
         return tokens
+
+    tail_cut = _cut_semantic_tail(tokens)
+    if tail_cut != tokens:
+        return tail_cut
 
     best_span = tokens
     best_rank = -1.0
@@ -526,15 +533,30 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
             score = float(result.get("score") or 0.0)
 
             specificity = 0.0
+
             if span[0] in ACTION_STARTS:
-             specificity -= 0.20
+                specificity -= 0.20
+
             specificity += 0.04 * sum(1 for t in span if t in STRONG_MODIFIER_WORDS)
             specificity += 0.03 * sum(1 for t in span if t in STRONG_CONCEPT_HEADS)
             specificity += 0.03 * sum(1 for t in span if t in INTENT_CONNECTORS)
             specificity += 0.02 * len(span)
 
-            # Prefer meaningful specific spans, not blindly shortest spans.
-            rank = score + specificity
+            canonical_bonus = 0.0
+
+            if len(span) in {2, 3}:
+                head = span[-1]
+
+                if head in STRONG_CONCEPT_HEADS or head in NEUTRAL_NOUN_LIKE_HEADS:
+                    canonical_bonus += 0.18
+
+                if any(t in STRONG_MODIFIER_WORDS for t in span[:-1]):
+                    canonical_bonus += 0.10
+
+                if not any(t in STOPWORDS for t in span):
+                    canonical_bonus += 0.08
+
+            rank = score + specificity + canonical_bonus
 
             if rank > best_rank:
                 best_rank = rank
@@ -983,6 +1005,30 @@ def _cohesion_penalty(tokens: List[str]) -> tuple[float, List[str]]:
             reasons.append("weak_cohesion_chain")
 
     return score, reasons
+
+def _cut_semantic_tail(tokens: List[str]) -> List[str]:
+    if len(tokens) < 4:
+        return tokens
+
+    # If first 3 tokens form a strong complete concept, cut noisy trailing action/object tail.
+    first_three = tokens[:3]
+    first_two = tokens[:2]
+
+    first_three_result = score_phrase_strength(
+        " ".join(first_three),
+        allow_trim=False,
+    )
+    if first_three_result.get("keep") and len(tokens) > 3:
+        return first_three
+
+    first_two_result = score_phrase_strength(
+        " ".join(first_two),
+        allow_trim=False,
+    )
+    if first_two_result.get("keep") and len(tokens) > 2:
+        return first_two
+
+    return tokens
 
 
 def _domain_cohesion_score(tokens: List[str]) -> tuple[float, List[str]]:
