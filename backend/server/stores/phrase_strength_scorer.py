@@ -473,6 +473,73 @@ def _is_list_style_stack(tokens: List[str]) -> bool:
 
     return False
 
+
+def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
+    if len(tokens) < 5:
+        return False
+
+    # Keep true query-style long anchors
+    if _is_query_style_long_anchor(tokens):
+        return False
+
+    # Keep connector-rich unified phrases
+    connector_count = sum(
+        1 for t in tokens
+        if t in INTENT_CONNECTORS or t in SAFE_LONG_CONNECTORS
+    )
+    if connector_count >= 2:
+        return False
+
+    # Trim only obvious action/list/chained phrases
+    if _is_long_list_chain(tokens):
+        return True
+
+    if _is_multi_cluster_phrase(tokens):
+        return True
+
+    if _is_action_phrase(tokens) and len(tokens) >= 5:
+        return True
+
+    return False
+
+
+def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
+    if len(tokens) < 5:
+        return tokens
+
+    best_span = tokens
+    best_rank = -1.0
+
+    max_window = min(5, len(tokens))
+
+    for size in range(2, max_window + 1):
+        for i in range(0, len(tokens) - size + 1):
+            span = tokens[i:i + size]
+            phrase = " ".join(span)
+
+            result = score_phrase_strength(phrase)
+
+            if not result.get("keep"):
+                continue
+
+            score = float(result.get("score") or 0.0)
+
+            specificity = 0.0
+            specificity += 0.04 * sum(1 for t in span if t in STRONG_MODIFIER_WORDS)
+            specificity += 0.03 * sum(1 for t in span if t in STRONG_CONCEPT_HEADS)
+            specificity += 0.03 * sum(1 for t in span if t in INTENT_CONNECTORS)
+            specificity += 0.02 * len(span)
+
+            # Prefer meaningful specific spans, not blindly shortest spans.
+            rank = score + specificity
+
+            if rank > best_rank:
+                best_rank = rank
+                best_span = span
+
+    return best_span
+
+
 def _is_short_orphan_collision(tokens: List[str]) -> bool:
     if len(tokens) not in {2, 3}:
         return False
@@ -963,8 +1030,12 @@ def _fragment_penalty(tokens: List[str], p: str) -> tuple[float, List[str]]:
 
     return score, reasons
 
-
-def score_phrase_strength(phrase: str, *, source_type: str = "") -> Dict[str, Any]:
+def score_phrase_strength(
+    phrase: str,
+    *,
+    source_type: str = "",
+    allow_trim: bool = True,
+) -> Dict[str, Any]:
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
 
@@ -974,13 +1045,19 @@ def score_phrase_strength(phrase: str, *, source_type: str = "") -> Dict[str, An
     if len(tokens) > 10:
         return {"keep": False, "score": 0.0, "reason": "too_long"}
 
+    if _should_trim_bad_long_phrase(tokens):
+        trimmed = trim_bad_long_phrase(tokens)
+        if trimmed != tokens:
+            p = " ".join(trimmed)
+            tokens = trimmed
+
     if _is_long_list_chain(tokens):
         return {
             "keep": False,
             "score": 0.0,
             "reason": "long_list_chain",
         }
-     
+
     if _is_multi_cluster_phrase(tokens):
         return {
             "keep": False,
@@ -1089,5 +1166,6 @@ def score_phrase_strength(phrase: str, *, source_type: str = "") -> Dict[str, An
     return {
         "keep": keep,
         "score": score,
+        "phrase": p,
         "reason": "+".join(reasons) if reasons else "neutral",
-    }
+}
