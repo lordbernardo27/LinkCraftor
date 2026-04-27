@@ -478,19 +478,20 @@ def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if len(tokens) < 5:
         return False
 
-    # Keep true query-style long anchors
     if _is_query_style_long_anchor(tokens):
         return False
 
-    # Keep connector-rich unified phrases
     connector_count = sum(
         1 for t in tokens
         if t in INTENT_CONNECTORS or t in SAFE_LONG_CONNECTORS
     )
+
     if connector_count >= 2:
         return False
 
-    # Trim only obvious action/list/chained phrases
+    if _has_action_chain_tail(tokens):
+        return True
+
     if _is_long_list_chain(tokens):
         return True
 
@@ -517,7 +518,7 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
             span = tokens[i:i + size]
             phrase = " ".join(span)
 
-            result = score_phrase_strength(phrase)
+            result = score_phrase_strength(phrase, allow_trim=False)
 
             if not result.get("keep"):
                 continue
@@ -525,6 +526,8 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
             score = float(result.get("score") or 0.0)
 
             specificity = 0.0
+            if span[0] in ACTION_STARTS:
+             specificity -= 0.20
             specificity += 0.04 * sum(1 for t in span if t in STRONG_MODIFIER_WORDS)
             specificity += 0.03 * sum(1 for t in span if t in STRONG_CONCEPT_HEADS)
             specificity += 0.03 * sum(1 for t in span if t in INTENT_CONNECTORS)
@@ -538,6 +541,23 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
                 best_span = span
 
     return best_span
+
+def _has_action_chain_tail(tokens: List[str]) -> bool:
+    if len(tokens) < 5:
+        return False
+
+    if tokens[0] in ACTION_STARTS:
+        return True
+
+    action_like_words = {
+        "define", "send", "monitor", "track", "review", "manage",
+        "create", "build", "check", "compare", "choose", "improve",
+        "optimize", "reduce", "increase",
+    }
+
+    action_hits = sum(1 for t in tokens if t in action_like_words)
+
+    return action_hits >= 2
 
 
 def _is_short_orphan_collision(tokens: List[str]) -> bool:
@@ -1045,7 +1065,7 @@ def score_phrase_strength(
     if len(tokens) > 10:
         return {"keep": False, "score": 0.0, "reason": "too_long"}
 
-    if _should_trim_bad_long_phrase(tokens):
+    if allow_trim and _should_trim_bad_long_phrase(tokens):
         trimmed = trim_bad_long_phrase(tokens)
         if trimmed != tokens:
             p = " ".join(trimmed)
