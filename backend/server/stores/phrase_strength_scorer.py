@@ -179,6 +179,8 @@ LIST_CHAIN_WORDS: Set[str] = {
     "expenses", "vacancy", "losses", "products", "services", "fees",
     "pricing", "data", "equipment", "software", "inventory",
     "suppliers", "customers", "marketing", "payroll", "invoices",
+    "screening", "agreement", "agreements", "property", "late",
+    "landlord", "landlords", "lease", "leases",
 }
 
 SAFE_LONG_CONNECTORS: Set[str] = {
@@ -263,32 +265,65 @@ def _has_long_clause_leakage(tokens: List[str]) -> bool:
 
     return any(t in LONG_CLAUSE_LEAK_WORDS for t in tokens)
 
-
 def _is_multi_cluster_phrase(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
+    if len(tokens) < 4:
         return False
 
-    mini_clusters = 0
+    if _is_query_style_long_anchor(tokens):
+        return False
 
-    for i in range(0, len(tokens) - 1):
+    connector_count = sum(
+        1 for t in tokens
+        if t in SAFE_LONG_CONNECTORS or t in INTENT_CONNECTORS
+    )
+
+    pair_hits = 0
+    total_pairs = max(1, len(tokens) - 1)
+
+    for i in range(len(tokens) - 1):
         a = tokens[i]
         b = tokens[i + 1]
 
-        is_cluster = (
-            (a in STRONG_MODIFIER_WORDS and b in STRONG_CONCEPT_HEADS)
-            or (a in STRONG_MODIFIER_WORDS and b in NEUTRAL_NOUN_LIKE_HEADS)
-            or (b in STRONG_CONCEPT_HEADS and a not in STOPWORDS)
+        if a in STOPWORDS or b in STOPWORDS:
+            continue
+
+        noun_like_a = (
+            a in STRONG_MODIFIER_WORDS
+            or a in STRONG_CONCEPT_HEADS
+            or a in NEUTRAL_NOUN_LIKE_HEADS
+            or a in LIST_CHAIN_WORDS
         )
 
-        if is_cluster:
-            mini_clusters += 1
+        noun_like_b = (
+            b in STRONG_CONCEPT_HEADS
+            or b in NEUTRAL_NOUN_LIKE_HEADS
+            or b in LIST_CHAIN_WORDS
+        )
 
-    connector_count = sum(1 for t in tokens if t in SAFE_LONG_CONNECTORS or t in INTENT_CONNECTORS)
+        if noun_like_a and noun_like_b:
+            pair_hits += 1
 
-    if mini_clusters >= 3 and connector_count == 0:
+    ratio = pair_hits / total_pairs
+
+    if len(tokens) >= 4 and ratio >= 0.75 and connector_count == 0:
         return True
 
-    if mini_clusters >= 4 and connector_count <= 1:
+    if len(tokens) >= 5 and ratio >= 0.67 and connector_count <= 1:
+        return True
+
+    return False
+
+def _has_orphan_tail_start(tokens: List[str]) -> bool:
+    if len(tokens) < 3:
+        return False
+
+    orphan_starts = {
+        "agreements", "payments", "costs", "responsibilities",
+        "terms", "rules", "expenses", "taxes", "invoices",
+        "fees", "services", "products", "landlords",
+    }
+
+    if tokens[0] in orphan_starts:
         return True
 
     return False
@@ -438,6 +473,80 @@ def _is_list_style_stack(tokens: List[str]) -> bool:
 
     return False
 
+def _is_short_orphan_collision(tokens: List[str]) -> bool:
+    if len(tokens) not in {2, 3}:
+        return False
+
+    if _is_query_style_long_anchor(tokens):
+        return False
+
+    phrase_tuple = tuple(tokens)
+
+    safe_pairs = {
+        ("cash", "flow"),
+        ("lease", "agreement"),
+        ("late", "payment"),
+        ("late", "fee"),
+        ("fee", "policy"),
+        ("rental", "income"),
+        ("rental", "property"),
+        ("property", "management"),
+        ("property", "maintenance"),
+        ("payment", "reminders"),
+        ("mortgage", "payments"),
+        ("insurance", "costs"),
+        ("emergency", "repairs"),
+        ("keyword", "research"),
+        ("content", "optimization"),
+        ("internal", "linking"),
+        ("conversion", "rate"),
+        ("risk", "management"),
+        ("customer", "service"),
+        ("data", "security"),
+    }
+
+    safe_triples = {
+        ("late", "fee", "policy"),
+        ("rental", "property", "management"),
+        ("internal", "linking", "strategy"),
+        ("content", "optimization", "strategy"),
+        ("customer", "service", "workflow"),
+        ("risk", "management", "framework"),
+        ("data", "security", "policy"),
+    }
+
+    if phrase_tuple in safe_pairs or phrase_tuple in safe_triples:
+        return False
+
+    orphan_starts = {
+        "agreements", "payments", "costs", "responsibilities",
+        "terms", "rules", "expenses", "taxes", "invoices",
+        "fees", "services", "products", "landlords",
+        "schedule", "tenancy", "serious", "previous",
+    }
+
+    if tokens[0] in orphan_starts:
+        return True
+
+    noun_like_count = 0
+    for t in tokens:
+        if (
+            t in STRONG_CONCEPT_HEADS
+            or t in NEUTRAL_NOUN_LIKE_HEADS
+            or t in LIST_CHAIN_WORDS
+            or t in STITCH_RISK_HEADS
+        ):
+            noun_like_count += 1
+
+    if noun_like_count == len(tokens):
+        has_strong_modifier = any(t in STRONG_MODIFIER_WORDS for t in tokens[:-1])
+        has_natural_head = tokens[-1] in STRONG_CONCEPT_HEADS or tokens[-1] in NEUTRAL_NOUN_LIKE_HEADS
+
+        if not has_strong_modifier and has_natural_head:
+            return True
+
+    return False
+
 
 def _has_vague_action_modifier(tokens: List[str]) -> bool:
     if len(tokens) < 3:
@@ -448,6 +557,48 @@ def _has_vague_action_modifier(tokens: List[str]) -> bool:
 
     return any(t in VAGUE_ACTION_MODIFIERS for t in tokens[1:-1])
 
+
+def _is_prefix_suffix_spillover(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    if tokens[0] in STOPWORDS:
+        return True
+
+    if len(tokens) >= 3 and tokens[1] in WEAK_ADJECTIVE_STARTS:
+        return True
+
+    if len(tokens) == 3:
+        first_two = tuple(tokens[:2])
+        last_two = tuple(tokens[1:])
+
+        known_safe_pairs = {
+            ("cash", "flow"),
+            ("lease", "agreement"),
+            ("late", "payment"),
+            ("late", "fee"),
+            ("fee", "policy"),
+            ("rental", "income"),
+            ("rental", "property"),
+            ("property", "management"),
+            ("property", "maintenance"),
+            ("payment", "reminders"),
+            ("mortgage", "payments"),
+            ("insurance", "costs"),
+            ("emergency", "repairs"),
+            ("keyword", "research"),
+            ("content", "optimization"),
+            ("internal", "linking"),
+            ("conversion", "rate"),
+            ("risk", "management"),
+            ("customer", "service"),
+            ("data", "security"),
+        }
+
+        if first_two in known_safe_pairs and last_two not in known_safe_pairs:
+            return True
+
+    return False
 
 def _has_structural_signal(tokens: List[str], source_type: str) -> tuple[bool, List[str]]:
     signals: List[str] = []
@@ -835,6 +986,28 @@ def score_phrase_strength(phrase: str, *, source_type: str = "") -> Dict[str, An
             "keep": False,
             "score": 0.0,
             "reason": "multi_cluster_phrase",
+        }
+    
+
+    if _is_short_orphan_collision(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "reason": "short_orphan_collision",
+        }
+    
+    if _is_prefix_suffix_spillover(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "reason": "prefix_suffix_spillover",
+        }
+
+    if _has_orphan_tail_start(tokens):
+         return {
+            "keep": False,
+            "score": 0.0,
+            "reason": "orphan_tail_start",
         }
 
     if _has_boundary_spillover(tokens):
