@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set
+from backend.server.stores.upload_phrase_selector import is_strong_upload_phrase
 from backend.server.utils.text_normalization import fix_mojibake_text
 
 
@@ -53,33 +54,19 @@ def _clean_text(s: Any) -> str:
     return fix_mojibake_text(str(s or "").strip())
 
 
-def _clean_aliases(v: Any) -> List[str]:
-    if not isinstance(v, list):
-        return []
-    out: List[str] = []
-    seen: Set[str] = set()
-    for item in v:
-        x = _clean_text(item)
-        if x and x not in seen:
-            seen.add(x)
-            out.append(x)
-    return out
-
-
 def _clean_examples(v: Any) -> List[Dict[str, str]]:
     if not isinstance(v, list):
         return []
+
     out: List[Dict[str, str]] = []
     for ex in v:
         if not isinstance(ex, dict):
             continue
-        out.append(
-            {
-                "doc_id": _clean_text(ex.get("doc_id") or ""),
-                "section_id": _clean_text(ex.get("section_id") or ""),
-                "snippet": _clean_text(ex.get("snippet") or ""),
-            }
-        )
+        out.append({
+            "doc_id": _clean_text(ex.get("doc_id") or ""),
+            "section_id": _clean_text(ex.get("section_id") or ""),
+            "snippet": _clean_text(ex.get("snippet") or ""),
+        })
     return out
 
 
@@ -97,6 +84,7 @@ def _extract_canonical_core_phrase(s: str) -> str:
 
     intent_markers = [
         "how to ",
+        "how many ",
         "when do ",
         "what is ",
         "what are ",
@@ -116,19 +104,39 @@ def _extract_canonical_core_phrase(s: str) -> str:
     if starts:
         s = s[min(starts):].strip()
 
-    lead_patterns = [
+        lead_patterns = [
         r"^people often ask\s+",
         r"^many people ask\s+",
-        r"^many women ask\s+",
-        r"^women often ask\s+",
-        r"^doctors are often asked\s+",
+        r"^users often ask\s+",
+        r"^many users ask\s+",
+        r"^readers often ask\s+",
+        r"^many readers ask\s+",
+        r"^customers often ask\s+",
+        r"^many customers ask\s+",
+        r"^clients often ask\s+",
+        r"^many clients ask\s+",
+        r"^students often ask\s+",
+        r"^many students ask\s+",
+        r"^parents often ask\s+",
+        r"^many parents ask\s+",
+        r"^patients often ask\s+",
+        r"^many patients ask\s+",
+        r"^business owners often ask\s+",
+        r"^many business owners ask\s+",
+        r"^teams often ask\s+",
+        r"^many teams ask\s+",
+        r"^professionals often ask\s+",
+        r"^many professionals ask\s+",
+        r"^creators often ask\s+",
+        r"^many creators ask\s+",
         r"^you may wonder\s+",
         r"^you might wonder\s+",
         r"^you may ask\s+",
         r"^you might ask\s+",
         r"^you may be asking\s+",
         r"^often ask\s+",
-    ]
+     ]
+
     for pat in lead_patterns:
         s = re.sub(pat, "", s).strip()
 
@@ -139,6 +147,7 @@ def _extract_canonical_core_phrase(s: str) -> str:
         r"^(signs of [a-z0-9\s\-]{1,80}?)(?:\s+in\b.*|\s+during\b.*)$",
         r"^(symptoms of [a-z0-9\s\-]{1,80}?)(?:\s+in\b.*|\s+during\b.*)$",
     ]
+
     for pat in trailing_cut_patterns:
         m = re.match(pat, s)
         if m:
@@ -159,7 +168,7 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
     examples: List[Dict[str, Any]] = []
     aliases: List[str] = []
     seen_aliases: Set[str] = set()
-    source_type = first.get("source_type", "sentence")
+    source_type = first.get("source_type", "unknown")
     tier = first.get("tier", "C")
     first_seen_vals: List[str] = []
     last_seen_vals: List[str] = []
@@ -183,23 +192,27 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
                 break
             if not isinstance(ex, dict):
                 continue
-            clean_ex = {
+            examples.append({
                 "doc_id": _clean_text(ex.get("doc_id") or ""),
                 "section_id": _clean_text(ex.get("section_id") or ""),
                 "snippet": _clean_text(ex.get("snippet") or ""),
-            }
-            examples.append(clean_ex)
+            })
 
         candidate_aliases: List[str] = []
         old_phrase = _canonical_phrase(str(rec.get("phrase") or ""))
         old_canonical = _canonical_phrase(str(rec.get("canonical") or ""))
-        if old_phrase and old_phrase != target_key:
+
+        if old_phrase and old_phrase != target_key and is_strong_upload_phrase(old_phrase, str(rec.get("source_type") or "")):
             candidate_aliases.append(old_phrase)
-        if old_canonical and old_canonical != target_key:
+
+        if old_canonical and old_canonical != target_key and is_strong_upload_phrase(old_canonical, str(rec.get("source_type") or "")):
             candidate_aliases.append(old_canonical)
 
         rec_aliases = rec.get("aliases") if isinstance(rec.get("aliases"), list) else []
-        candidate_aliases.extend([_canonical_phrase(a) for a in rec_aliases])
+        for a in rec_aliases:
+            aa = _canonical_phrase(str(a or ""))
+            if aa and aa != target_key and is_strong_upload_phrase(aa, str(rec.get("source_type") or "")):
+                candidate_aliases.append(aa)
 
         for a in candidate_aliases:
             if a and a != target_key and a not in seen_aliases:
@@ -207,7 +220,7 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
                 seen_aliases.add(a)
 
         rec_source_type = str(rec.get("source_type") or "")
-        if rec_source_type in {"title", "heading_h1", "heading_h2", "heading_h3", "list_item"}:
+        if rec_source_type in {"title", "heading_h1", "heading_h2", "heading_h3", "list_item", "entity", "intent"}:
             source_type = rec_source_type
 
         rec_tier = str(rec.get("tier") or "")
@@ -241,9 +254,16 @@ def _canonical_merge_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
     for old_key, rec in phrases.items():
         if not isinstance(rec, dict):
             continue
+
+        source_type = _clean_text(rec.get("source_type") or "")
         target_key = _extract_canonical_core_phrase(old_key) or _canonical_phrase(old_key)
+
         if not target_key:
             continue
+
+        if not is_strong_upload_phrase(target_key, source_type):
+            continue
+
         grouped.setdefault(target_key, []).append(rec)
 
     merged: Dict[str, Any] = {}
@@ -263,6 +283,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     raw_phrases = src.get("phrases") if isinstance(src.get("phrases"), dict) else {}
 
     phrases: Dict[str, Any] = {}
+
     for k, v in raw_phrases.items():
         nk = _clean_text(k)
         if not nk or not isinstance(v, dict):
@@ -270,25 +291,50 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
 
         clean_rec = dict(v)
 
-        if "phrase" in clean_rec:
-            clean_rec["phrase"] = _clean_text(clean_rec.get("phrase"))
+        phrase_text = _clean_text(clean_rec.get("phrase") or nk)
+        canonical_text = _clean_text(clean_rec.get("canonical") or phrase_text)
+        source_type = _clean_text(clean_rec.get("source_type") or "")
 
-        if "canonical" in clean_rec:
-            clean_rec["canonical"] = _clean_text(clean_rec.get("canonical"))
+        phrase_text = _extract_canonical_core_phrase(phrase_text) or _canonical_phrase(phrase_text)
+        canonical_text = _extract_canonical_core_phrase(canonical_text) or _canonical_phrase(canonical_text)
+
+        if not is_strong_upload_phrase(phrase_text, source_type):
+            continue
+
+        clean_rec["phrase"] = phrase_text
+        clean_rec["canonical"] = canonical_text if is_strong_upload_phrase(canonical_text, source_type) else phrase_text
 
         if isinstance(clean_rec.get("aliases"), list):
-            clean_rec["aliases"] = [_clean_text(x) for x in clean_rec["aliases"]]
+            clean_aliases: List[str] = []
+            seen_aliases: Set[str] = set()
+
+            for x in clean_rec["aliases"]:
+                ax = _extract_canonical_core_phrase(_clean_text(x)) or _canonical_phrase(_clean_text(x))
+                if not ax:
+                    continue
+                if ax == phrase_text:
+                    continue
+                if not is_strong_upload_phrase(ax, source_type):
+                    continue
+                if ax in seen_aliases:
+                    continue
+
+                clean_aliases.append(ax)
+                seen_aliases.add(ax)
+
+            clean_rec["aliases"] = clean_aliases[:5]
 
         if isinstance(clean_rec.get("sections"), list):
-            clean_rec["sections"] = [_clean_text(x) for x in clean_rec["sections"]]
+            clean_rec["sections"] = [_clean_text(x) for x in clean_rec["sections"] if _clean_text(x)]
 
         if isinstance(clean_rec.get("examples"), list):
             clean_rec["examples"] = _clean_examples(clean_rec["examples"])
 
-        phrases[nk] = clean_rec
+        phrases[phrase_text] = clean_rec
 
     active = load_active_phrase_set(ws)
     active_doc_ids = active.get("active_upload_ids") if isinstance(active.get("active_upload_ids"), list) else []
+
     if not active_doc_ids:
         active_doc_ids = active.get("active_document_ids") if isinstance(active.get("active_document_ids"), list) else []
 
@@ -298,22 +344,25 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     active_phrase_set_used = bool(active_doc_set)
 
     filtered: Dict[str, Any] = {}
+
     if active_phrase_set_used:
         for phrase, rec in phrases.items():
             if not isinstance(rec, dict):
                 continue
+
             docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
             if any(doc_id in active_doc_set for doc_id in docs.keys()):
                 filtered[_clean_text(phrase)] = rec
     else:
-        filtered = {_clean_text(k): v for k, v in phrases.items()}
+        filtered = {_clean_text(k): v for k, v in phrases.items() if _clean_text(k)}
 
     filtered = _canonical_merge_phrases(filtered)
 
     obj = {
         "workspace_id": ws,
         "updated_at": _now_iso(),
-        "source_phrase_count": len(phrases),
+        "source_phrase_count": len(raw_phrases),
+        "quality_filtered_source_count": len(phrases),
         "phrase_count": len(filtered),
         "active_phrase_set_used": active_phrase_set_used,
         "active_document_ids_count": len(active_doc_set),
