@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, Iterable, List, Set
+from typing import Any, Dict, List, Set, Tuple
 
 
 try:
@@ -31,18 +31,258 @@ STOPWORDS: Set[str] = {
     "through", "up", "down", "out", "off", "too", "very", "also",
 }
 
+VERTICAL_KEYWORD_MAP: Dict[str, Set[str]] = {
+    "finance": {"cash", "flow", "revenue", "profit", "invoice", "invoices", "payroll", "tax", "taxes", "loan", "loans", "credit", "banking", "investment", "insurance", "accounting"},
+    "real_estate": {"property", "mortgage", "lease", "rent", "tenant", "landlord", "listing", "home", "buyer", "seller", "appraisal", "closing"},
+    "legal": {"law", "legal", "contract", "compliance", "court", "attorney", "lawyer", "claim", "liability", "agreement", "clause"},
+    "ecommerce": {"product", "products", "cart", "checkout", "shopify", "woocommerce", "marketplace", "category", "pages", "inventory", "orders"},
+    "saas": {"software", "subscription", "platform", "dashboard", "workflow", "crm", "analytics", "integration", "automation", "users"},
+    "marketing": {"seo", "content", "campaign", "conversion", "keyword", "keywords", "brand", "email", "traffic", "search", "intent"},
+    "small_business": {"business", "cash", "flow", "payroll", "operations", "customers", "suppliers", "expenses", "forecast", "invoicing"},
+    "hr_recruiting": {"hiring", "recruiting", "onboarding", "payroll", "benefits", "employee", "employees", "performance", "staffing"},
+    "medical_healthcare": {"health", "blood", "pressure", "diagnosis", "treatment", "symptoms", "clinic", "patient", "screening", "condition"},
+    "pharmacy": {"medication", "medicine", "dose", "dosing", "side", "effects", "prescription", "otc", "adherence", "pharmacist"},
+    "mental_health": {"anxiety", "therapy", "counseling", "stress", "depression", "mental", "health", "wellbeing", "support"},
+    "fitness": {"exercise", "training", "strength", "mobility", "workout", "endurance", "muscle", "recovery", "fitness"},
+    "nutrition": {"diet", "nutrition", "meal", "meals", "protein", "calories", "supplements", "weight", "healthy", "eating"},
+    "beauty_skincare": {"skin", "skincare", "hair", "cosmetics", "dermatology", "grooming", "acne", "moisturizer"},
+    "home_improvement": {"plumbing", "roofing", "hvac", "painting", "remodeling", "repair", "tools", "contractor"},
+    "interior_design": {"furniture", "decor", "layout", "renovation", "lighting", "style", "room", "design"},
+    "gardening": {"plants", "garden", "landscaping", "lawn", "soil", "irrigation", "pest", "compost"},
+    "parenting_family": {"pregnancy", "baby", "child", "children", "parenting", "family", "development", "school"},
+    "pets": {"dog", "dogs", "cat", "cats", "pet", "pets", "training", "grooming", "veterinary", "food"},
+    "food_recipes": {"recipe", "recipes", "cooking", "baking", "kitchen", "meal", "restaurant", "ingredients"},
+    "travel": {"flight", "hotel", "visa", "itinerary", "tourism", "destination", "travel", "guide", "booking"},
+    "automotive": {"car", "cars", "auto", "repair", "vehicle", "ev", "insurance", "detailing", "maintenance"},
+    "education": {"school", "student", "students", "course", "exam", "tutoring", "lesson", "study", "learning"},
+    "careers": {"resume", "interview", "salary", "career", "freelancing", "job", "promotion", "skills"},
+    "professional_training": {"certification", "license", "training", "continuing", "education", "professional", "exam"},
+    "consumer_tech": {"phone", "laptop", "gadget", "wearable", "accessory", "device", "tablet", "smartphone"},
+    "it_cybersecurity": {"network", "cloud", "security", "cybersecurity", "infrastructure", "compliance", "server", "endpoint"},
+    "programming_development": {"code", "coding", "api", "database", "framework", "devops", "frontend", "backend", "deployment"},
+    "ai_machine_learning": {"ai", "machine", "learning", "model", "models", "prompt", "automation", "dataset", "training"},
+    "gaming": {"game", "gaming", "console", "pc", "mobile", "esports", "guide", "level", "players"},
+    "sports": {"sports", "team", "teams", "player", "players", "training", "match", "league", "equipment"},
+    "entertainment": {"movie", "movies", "tv", "celebrity", "streaming", "series", "show", "culture"},
+    "music": {"music", "artist", "artists", "instrument", "production", "lesson", "gear", "song"},
+    "manufacturing": {"manufacturing", "production", "machinery", "quality", "supply", "chain", "factory", "materials"},
+    "construction": {"construction", "contractor", "materials", "bidding", "project", "site", "building"},
+    "logistics": {"shipping", "freight", "warehouse", "warehousing", "fleet", "delivery", "logistics", "carrier"},
+    "agriculture": {"farming", "livestock", "crops", "irrigation", "soil", "agritech", "harvest", "farm"},
+    "energy": {"solar", "energy", "utilities", "sustainability", "oil", "gas", "renewable", "grid"},
+    "telecom": {"internet", "mobile", "network", "telecom", "broadband", "provider", "device", "signal"},
+    "government": {"permit", "policy", "public", "service", "services", "program", "government", "license"},
+    "nonprofit": {"donation", "fundraising", "volunteer", "outreach", "nonprofit", "charity", "community"},
+    "religion_faith": {"faith", "ministry", "church", "teaching", "religion", "community", "worship"},
+    "local_services": {"dentist", "plumber", "cleaner", "lawyer", "contractor", "local", "service", "nearby"},
+    "blogging": {"blog", "blogging", "affiliate", "content", "authority", "niche", "publisher", "posts"},
+    "youtube_video_creators": {"youtube", "video", "thumbnail", "script", "monetization", "creator", "channel"},
+    "influencers_personal_brands": {"influencer", "brand", "audience", "sponsorship", "community", "followers"},
+    "courses_info_products": {"course", "courses", "membership", "coaching", "digital", "product", "products", "lesson"},
+    "web3_crypto": {"crypto", "blockchain", "wallet", "token", "tokens", "defi", "nft", "web3"},
+    "sustainability": {"green", "carbon", "eco", "sustainable", "sustainability", "climate", "recycling"},
+    "remote_work": {"remote", "work", "distributed", "team", "teams", "home", "digital", "nomad"},
+    "multi_niche_publishers": {"publisher", "publishers", "content", "network", "topics", "authority", "articles"},
+}
+
+VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
+    ("cash", "flow"),
+    ("blood", "pressure"),
+    ("internal", "linking"),
+    ("external", "linking"),
+    ("search", "intent"),
+    ("supply", "chain"),
+    ("remote", "work"),
+    ("content", "marketing"),
+    ("email", "marketing"),
+    ("social", "media"),
+    ("machine", "learning"),
+    ("artificial", "intelligence"),
+    ("real", "estate"),
+    ("credit", "card"),
+    ("credit", "cards"),
+    ("interest", "rate"),
+    ("interest", "rates"),
+    ("rental", "agreement"),
+    ("lease", "agreement"),
+    ("category", "pages"),
+    ("product", "pages"),
+    ("side", "effects"),
+    ("risk", "management"),
+    ("customer", "service"),
+    ("data", "security"),
+    ("keyword", "research"),
+    ("content", "optimization"),
+    ("conversion", "rate"),
+    ("payment", "schedule"),
+    ("late", "payment"),
+    ("late", "fee"),
+}
+
+REVERSED_ORDERED_PAIRS: Set[Tuple[str, str]] = {
+    (b, a) for a, b in VALID_ORDERED_PAIRS
+}
+
+CANONICAL_ANCHOR_PHRASES: Set[str] = {
+    "cash flow",
+    "cash flow management",
+    "blood pressure",
+    "blood pressure control",
+    "internal linking",
+    "internal linking strategy",
+    "external linking",
+    "search intent",
+    "ecommerce category pages",
+    "category pages",
+    "product pages",
+    "rental agreement",
+    "lease agreement",
+    "side effects",
+    "supply chain",
+    "remote work",
+    "content marketing",
+    "email marketing",
+    "machine learning",
+    "risk management",
+    "customer service",
+    "data security",
+    "keyword research",
+    "content optimization",
+    "conversion rate",
+    "payment schedule",
+    "late payment",
+    "late fee",
+}
+
+EDU_ACTION_FRAGMENT_STARTS: Set[str] = {
+    "explaining",
+    "teaching",
+    "learning",
+    "reviewing",
+    "studying",
+    "covering",
+    "revising",
+}
+
+EDU_VALID_PATTERN_PHRASES: Set[str] = {
+    # 1. Exam preparation
+    "exam preparation",
+    "exam format",
+    "mock exams",
+    "past questions",
+    "practice questions",
+    "timed practice",
+    "revision schedule",
+    "exam performance",
+
+    # 2. Online learning
+    "online course",
+    "virtual classroom",
+    "learning platform",
+    "video lesson",
+    "course module",
+    "digital learning",
+
+    # 3. Student productivity
+    "study plan",
+    "study schedule",
+    "time blocking",
+    "study environment",
+    "progress tracking",
+    "academic goals",
+
+    # 4. Tutoring
+    "tutoring session",
+    "private tutor",
+    "math tutor",
+    "reading tutor",
+    "student support",
+    "learning gaps",
+
+    # 5. Study skills
+    "active learning methods",
+    "spaced repetition",
+    "retrieval practice",
+    "summary notes",
+    "flashcards",
+    "memory recall",
+    "learning strategy",
+}
+
+EDU_WEAK_PREFIXES: Set[str] = {
+    "one", "same", "each", "another", "average", "light", "lighter",
+    "extreme", "some", "many", "several", "different", "various",
+    "general", "basic", "simple", "clear", "strong", "weak",
+}
+
+EDU_GENERIC_HEADS: Set[str] = {
+    "topic", "topics", "subject", "subjects", "chapter", "chapters",
+    "review", "reviews", "schedule", "system", "systems", "method",
+    "methods", "performance", "skills", "tools", "material",
+    "materials", "content", "lesson", "lessons",
+}
+
+EDU_ACTION_FRAGMENT_STARTS: Set[str] = {
+    "explaining", "teaching", "learning", "reviewing", "studying",
+    "covering", "revising", "reading", "writing", "practicing",
+}
+
+EDU_GENERIC_OBJECT_HEADS: Set[str] = {
+    "topic",
+    "topics",
+    "subject",
+    "subjects",
+    "chapter",
+    "chapters",
+    "material",
+    "materials",
+    "content",
+}
+
+VALID_EDUCATION_PHRASES: Set[str] = {
+    "effective study plan",
+    "exam preparation",
+    "study plan",
+    "active learning methods",
+    "spaced repetition",
+    "past questions",
+    "mock exams",
+    "past questions and mock exams",
+    "academic assessment",
+    "exam format",
+    "practice questions",
+    "retrieval practice",
+    "study environment",
+    "timed practice",
+}
+
+BAD_EDUCATION_FRAGMENTS: Set[str] = {
+    "students time motivation system",
+    "study biology today",
+    "preparation exam",
+    "learning new material to revision",
+    "students time",
+    "motivation system",
+    "subjects topic",
+    "explaining topics",
+    "influence learning performance",
+    "study science",
+}
+
 WEAK_STARTS: Set[str] = {
     "because", "based", "with", "without", "before", "after", "during",
     "inside", "outside", "back", "such", "most", "many", "some", "few",
     "this", "that", "these", "those", "your", "people", "everyone",
-    "someone", "anyone", "rather",
+    "someone", "anyone", "rather", "quickly", "slowly", "face", "facing",
+    "thing", "things", "various", "different",
 }
 
 WEAK_ENDINGS: Set[str] = {
     "the", "a", "an", "of", "to", "for", "with", "without", "from", "into",
     "on", "at", "by", "because", "afterward", "afterwards", "later",
     "monthly", "financial", "unnecessary", "important", "clear", "short",
-    "long", "near", "most",
+    "long", "near", "most", "thing", "things", "way", "ways", "area",
+    "areas", "part", "parts",
 }
 
 WEAK_HEADS: Set[str] = {
@@ -63,6 +303,7 @@ STITCH_RISK_HEADS: Set[str] = {
 BOUNDARY_SPILLOVER_STARTS: Set[str] = {
     "previous", "next", "some", "many", "good", "better", "strongest",
     "cosmetic", "serious", "minor", "major", "important", "clear",
+    "quickly", "face", "facing", "thing", "things", "various", "different",
 }
 
 LONG_CLAUSE_LEAK_WORDS: Set[str] = {
@@ -70,7 +311,6 @@ LONG_CLAUSE_LEAK_WORDS: Set[str] = {
     "be", "been", "being", "become", "becomes", "handled", "follow",
     "follows", "pay", "pays", "need", "needs", "know", "knows",
 }
-
 
 COHESION_WEAK_CHAIN_WORDS: Set[str] = {
     "expectations", "benefits", "performance", "information",
@@ -132,6 +372,35 @@ STRONG_MODIFIER_WORDS: Set[str] = {
     "sustainability", "accounts", "receivable", "payable",
     "interest", "risk", "late", "rental", "employment", "workplace",
     "unfair", "clinical", "commercial", "residential", "technical",
+    "blood", "pressure", "remote", "machine", "learning", "supply",
+    "chain", "ecommerce", "category",
+}
+
+WEAK_EDU_PREFIXES: Set[str] = {
+    "one",
+    "same",
+    "each",
+    "another",
+    "average",
+    "light",
+    "lighter",
+    "extreme",
+    "some",
+    "many",
+}
+
+GENERIC_EDU_HEADS: Set[str] = {
+    "topic",
+    "topics",
+    "review",
+    "reviews",
+    "schedule",
+    "system",
+    "method",
+    "methods",
+    "performance",
+    "skills",
+    "tools",
 }
 
 WEAK_ADJECTIVE_STARTS: Set[str] = {
@@ -180,7 +449,8 @@ LIST_CHAIN_WORDS: Set[str] = {
     "pricing", "data", "equipment", "software", "inventory",
     "suppliers", "customers", "marketing", "payroll", "invoices",
     "screening", "agreement", "agreements", "property", "late",
-    "landlord", "landlords", "lease", "leases",
+    "landlord", "landlords", "lease", "leases", "loan", "loans",
+    "revenue", "cash", "flow",
 }
 
 SAFE_LONG_CONNECTORS: Set[str] = {
@@ -211,7 +481,7 @@ LIST_CONTEXT_WORDS: Set[str] = {
     "funds", "cash", "reserves", "taxes", "software", "equipment",
     "payroll", "invoices", "suppliers", "customers", "marketing",
     "inventory", "products", "services", "fees", "renewal", "schedule",
-    "payment", "data", "pricing", "plans",
+    "payment", "data", "pricing", "plans", "loan", "loans", "rent",
 }
 
 BAD_FRAGMENT_PATTERNS = (
@@ -231,6 +501,16 @@ BAD_FRAGMENT_PATTERNS = (
     r"\bhelps?\s+\w+\b",
 )
 
+INTENT_CONNECTORS: Set[str] = {
+    "for", "to", "at", "before", "after", "with", "without", "during",
+    "in", "on", "near", "between", "among", "against",
+}
+
+QUERY_STYLE_STARTS: Set[str] = {
+    "best", "how", "when", "what", "why", "where", "which",
+    "can", "should", "does", "do", "is", "are",
+}
+
 
 def canonical_phrase(text: str) -> str:
     s = (text or "").strip().lower()
@@ -240,8 +520,160 @@ def canonical_phrase(text: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+
+def tokenize(text: str) -> List[str]:
+    return [t.lower() for t in WORD_RE.findall(text or "")]
+
+
+def phrase_key(phrase: str) -> str:
+    return " ".join(tokenize(canonical_phrase(phrase)))
+
+
+def _content_tokens(tokens: List[str]) -> List[str]:
+    return [t for t in tokens if t not in STOPWORDS]
+
+
+def _has_bad_fragment_pattern(p: str) -> bool:
+    return any(re.search(pat, p) for pat in BAD_FRAGMENT_PATTERNS)
+
+
+def _phrase_from_tokens(tokens: List[str]) -> str:
+    return " ".join(tokens)
+
+
+def _vertical_keyword_hits(tokens: List[str]) -> int:
+    token_set = set(tokens)
+    hits = 0
+    for terms in VERTICAL_KEYWORD_MAP.values():
+        if token_set & terms:
+            hits += 1
+    return hits
+
+
+def _vertical_term_total_hits(tokens: List[str]) -> int:
+    token_set = set(tokens)
+    total = 0
+    for terms in VERTICAL_KEYWORD_MAP.values():
+        total += len(token_set & terms)
+    return total
+
+
+def _has_valid_ordered_pair(tokens: List[str]) -> bool:
+    return any(pair in VALID_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
+
+
+def _has_reversed_ordered_pair(tokens: List[str]) -> bool:
+    return any(pair in REVERSED_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
+
+
+def _contains_canonical_anchor(tokens: List[str]) -> str:
+    phrase = _phrase_from_tokens(tokens)
+    for core in sorted(CANONICAL_ANCHOR_PHRASES, key=lambda x: len(x.split()), reverse=True):
+        if core in phrase:
+            return core
+    return ""
+
+
+def _is_exact_canonical_anchor(tokens: List[str]) -> bool:
+    return _phrase_from_tokens(tokens) in CANONICAL_ANCHOR_PHRASES
+
+
+def _is_cross_niche_stitched_stack(tokens: List[str]) -> bool:
+    if len(tokens) < 4:
+        return False
+
+    if _is_query_style_long_anchor(tokens):
+        return False
+
+    if _contains_canonical_anchor(tokens):
+        return False
+
+    connector_count = sum(1 for t in tokens if t in INTENT_CONNECTORS or t in SAFE_LONG_CONNECTORS)
+    if connector_count > 0:
+        return False
+
+    vertical_hits = _vertical_keyword_hits(tokens)
+    total_term_hits = _vertical_term_total_hits(tokens)
+
+    return vertical_hits >= 3 and total_term_hits >= 4
+
+def _is_valid_education_pattern_phrase(tokens: List[str]) -> bool:
+    return " ".join(tokens) in EDU_VALID_PATTERN_PHRASES
+
+
+def _is_weak_education_pattern(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    if _is_valid_education_pattern_phrase(tokens):
+        return False
+
+    first = tokens[0]
+    last = tokens[-1]
+
+    if first in EDU_WEAK_PREFIXES and last in EDU_GENERIC_HEADS:
+        return True
+
+    if first in EDU_ACTION_FRAGMENT_STARTS and last in EDU_GENERIC_HEADS:
+        return True
+
+    return False
+
+
+def _universal_precision_score(tokens: List[str]) -> tuple[float, List[str]]:
+    score = 0.0
+    reasons: List[str] = []
+
+    if _has_reversed_ordered_pair(tokens):
+        score -= 0.80
+        reasons.append("reversed_ordered_pair")
+
+    if _has_valid_ordered_pair(tokens):
+        score += 0.18
+        reasons.append("valid_ordered_pair")
+
+    if _is_exact_canonical_anchor(tokens):
+        score += 0.25
+        reasons.append("canonical_anchor_exact")
+
+    elif _contains_canonical_anchor(tokens):
+        score += 0.08
+        reasons.append("canonical_anchor_contained")
+
+        if len(tokens) >= 5:
+            score -= 0.22
+            reasons.append("wrapper_inflation_risk")
+
+    if _is_cross_niche_stitched_stack(tokens):
+        score -= 0.75
+        reasons.append("cross_niche_stitched_stack")
+
+    vertical_hits = _vertical_keyword_hits(tokens)
+    if vertical_hits == 1 and len(tokens) in {2, 3, 4}:
+        score += 0.06
+        reasons.append("single_vertical_signal")
+    elif vertical_hits >= 2 and len(tokens) in {2, 3, 4}:
+        score += 0.10
+        reasons.append("multi_vertical_signal")
+    elif vertical_hits >= 3 and len(tokens) >= 5:
+        score -= 0.12
+        reasons.append("vertical_overstack_risk")
+
+    return score, reasons
+
+def _is_valid_education_phrase(tokens: List[str]) -> bool:
+    return " ".join(tokens) in VALID_EDUCATION_PHRASES
+
+
+def _is_bad_education_fragment(tokens: List[str]) -> bool:
+    return " ".join(tokens) in BAD_EDUCATION_FRAGMENTS
+
+
 def _has_boundary_spillover(tokens: List[str]) -> bool:
     if len(tokens) < 4:
+        return False
+
+    if _contains_canonical_anchor(tokens) and len(tokens) <= 5:
         return False
 
     if tokens[0] in BOUNDARY_SPILLOVER_STARTS:
@@ -255,6 +687,15 @@ def _has_boundary_spillover(tokens: List[str]) -> bool:
 
     return False
 
+def _is_education_action_fragment(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    if " ".join(tokens) in VALID_EDUCATION_PHRASES:
+        return False
+
+    return tokens[0] in EDU_ACTION_FRAGMENT_STARTS and tokens[-1] in EDU_GENERIC_OBJECT_HEADS
+
 
 def _has_long_clause_leakage(tokens: List[str]) -> bool:
     if len(tokens) < 5:
@@ -263,7 +704,11 @@ def _has_long_clause_leakage(tokens: List[str]) -> bool:
     if _is_query_style_long_anchor(tokens):
         return False
 
+    if _contains_canonical_anchor(tokens) and len(tokens) <= 5:
+        return False
+
     return any(t in LONG_CLAUSE_LEAK_WORDS for t in tokens)
+
 
 def _is_multi_cluster_phrase(tokens: List[str]) -> bool:
     if len(tokens) < 4:
@@ -272,10 +717,10 @@ def _is_multi_cluster_phrase(tokens: List[str]) -> bool:
     if _is_query_style_long_anchor(tokens):
         return False
 
-    connector_count = sum(
-        1 for t in tokens
-        if t in SAFE_LONG_CONNECTORS or t in INTENT_CONNECTORS
-    )
+    if _contains_canonical_anchor(tokens):
+        return False
+
+    connector_count = sum(1 for t in tokens if t in SAFE_LONG_CONNECTORS or t in INTENT_CONNECTORS)
 
     pair_hits = 0
     total_pairs = max(1, len(tokens) - 1)
@@ -313,6 +758,7 @@ def _is_multi_cluster_phrase(tokens: List[str]) -> bool:
 
     return False
 
+
 def _has_orphan_tail_start(tokens: List[str]) -> bool:
     if len(tokens) < 3:
         return False
@@ -323,22 +769,14 @@ def _has_orphan_tail_start(tokens: List[str]) -> bool:
         "fees", "services", "products", "landlords",
     }
 
-    if tokens[0] in orphan_starts:
-        return True
-
-    return False
-
-
-def tokenize(text: str) -> List[str]:
-    return [t.lower() for t in WORD_RE.findall(text or "")]
-
-
-def phrase_key(phrase: str) -> str:
-    return " ".join(tokenize(canonical_phrase(phrase)))
+    return tokens[0] in orphan_starts
 
 
 def _is_long_list_chain(tokens: List[str]) -> bool:
     if len(tokens) < 5:
+        return False
+
+    if _contains_canonical_anchor(tokens):
         return False
 
     chain_hits = sum(1 for t in tokens if t in LIST_CHAIN_WORDS)
@@ -352,43 +790,19 @@ def _is_long_list_chain(tokens: List[str]) -> bool:
 
     return False
 
+def _is_weak_education_pattern(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    first = tokens[0]
+    last = tokens[-1]
+
+    return first in WEAK_EDU_PREFIXES and last in GENERIC_EDU_HEADS
+
+
 def _is_action_phrase(tokens: List[str]) -> bool:
     return bool(tokens and tokens[0] in ACTION_STARTS)
 
-
-def _content_tokens(tokens: List[str]) -> List[str]:
-    return [t for t in tokens if t not in STOPWORDS]
-
-
-def _has_bad_fragment_pattern(p: str) -> bool:
-    return any(re.search(pat, p) for pat in BAD_FRAGMENT_PATTERNS)
-
-
-INTENT_CONNECTORS: Set[str] = {
-    "for", "to", "at", "before", "after", "with", "without", "during",
-    "in", "on", "near", "between", "among", "against",
-}
-
-QUERY_STYLE_STARTS: Set[str] = {
-    "best", "how", "when", "what", "why", "where", "which",
-    "can", "should", "does", "do", "is", "are",
-}
-
-
-def _has_mid_stopword(tokens: List[str]) -> bool:
-    if len(tokens) < 3:
-        return False
-
-    middle = tokens[1:-1]
-
-    if len(tokens) >= 5:
-        bad_middle = [
-            t for t in middle
-            if t in STOPWORDS and t not in INTENT_CONNECTORS
-        ]
-        return bool(bad_middle)
-
-    return any(t in STOPWORDS for t in middle)
 
 def _is_query_style_long_anchor(tokens: List[str]) -> bool:
     if len(tokens) < 5:
@@ -404,6 +818,20 @@ def _is_query_style_long_anchor(tokens: List[str]) -> bool:
 
     return has_intent_connector and content_count >= 3
 
+
+def _has_mid_stopword(tokens: List[str]) -> bool:
+    if len(tokens) < 3:
+        return False
+
+    middle = tokens[1:-1]
+
+    if len(tokens) >= 5:
+        bad_middle = [t for t in middle if t in STOPWORDS and t not in INTENT_CONNECTORS]
+        return bool(bad_middle)
+
+    return any(t in STOPWORDS for t in middle)
+
+
 def _has_clause_verb_leakage(tokens: List[str]) -> bool:
     if not tokens:
         return True
@@ -417,11 +845,15 @@ def _has_clause_verb_leakage(tokens: List[str]) -> bool:
 def _is_weak_adjective_phrase(tokens: List[str]) -> bool:
     if not tokens:
         return True
+
     if tokens[0] not in WEAK_ADJECTIVE_STARTS:
         return False
-    
+
     if _is_query_style_long_anchor(tokens):
-     return False
+        return False
+
+    if _is_exact_canonical_anchor(tokens):
+        return False
 
     strong_mods = sum(1 for t in tokens[1:-1] if t in STRONG_MODIFIER_WORDS)
     has_strong_head = bool(tokens and tokens[-1] in STRONG_CONCEPT_HEADS)
@@ -431,6 +863,9 @@ def _is_weak_adjective_phrase(tokens: List[str]) -> bool:
 
 def _is_list_pair_fragment(tokens: List[str]) -> bool:
     if len(tokens) != 2:
+        return False
+
+    if tuple(tokens) in VALID_ORDERED_PAIRS:
         return False
 
     left, right = tokens
@@ -449,6 +884,9 @@ def _is_list_pair_fragment(tokens: List[str]) -> bool:
 
 def _is_list_style_stack(tokens: List[str]) -> bool:
     if len(tokens) < 3:
+        return False
+
+    if _contains_canonical_anchor(tokens):
         return False
 
     if _is_action_phrase(tokens):
@@ -473,6 +911,24 @@ def _is_list_style_stack(tokens: List[str]) -> bool:
 
     return False
 
+
+def _has_action_chain_tail(tokens: List[str]) -> bool:
+    if len(tokens) < 5:
+        return False
+
+    if tokens[0] in ACTION_STARTS:
+        return True
+
+    action_like_words = {
+        "define", "send", "monitor", "track", "review", "manage",
+        "create", "build", "check", "compare", "choose", "improve",
+        "optimize", "reduce", "increase",
+    }
+
+    action_hits = sum(1 for t in tokens if t in action_like_words)
+    return action_hits >= 2
+
+
 def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if len(tokens) < 4:
         return False
@@ -480,13 +936,13 @@ def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if _is_query_style_long_anchor(tokens):
         return False
 
-    connector_count = sum(
-        1 for t in tokens
-        if t in INTENT_CONNECTORS or t in SAFE_LONG_CONNECTORS
-    )
+    connector_count = sum(1 for t in tokens if t in INTENT_CONNECTORS or t in SAFE_LONG_CONNECTORS)
 
     if connector_count >= 2:
         return False
+
+    if _contains_canonical_anchor(tokens) and len(tokens) >= 5:
+        return True
 
     if _is_action_phrase(tokens) and len(tokens) >= 4:
         return True
@@ -500,7 +956,33 @@ def _should_trim_bad_long_phrase(tokens: List[str]) -> bool:
     if _is_multi_cluster_phrase(tokens):
         return True
 
+    if _is_cross_niche_stitched_stack(tokens):
+        return True
+
     return False
+
+
+def _cut_semantic_tail(tokens: List[str]) -> List[str]:
+    if len(tokens) < 4:
+        return tokens
+
+    core = _contains_canonical_anchor(tokens)
+    if core:
+        return core.split()
+
+    first_three = tokens[:3]
+    first_two = tokens[:2]
+
+    first_three_result = score_phrase_strength(" ".join(first_three), allow_trim=False)
+    if first_three_result.get("keep") and len(tokens) > 3:
+        return first_three
+
+    first_two_result = score_phrase_strength(" ".join(first_two), allow_trim=False)
+    if first_two_result.get("keep") and len(tokens) > 2:
+        return first_two
+
+    return tokens
+
 
 def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
     if len(tokens) < 4:
@@ -518,15 +1000,13 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
     for size in range(2, max_window + 1):
         for i in range(0, len(tokens) - size + 1):
             span = tokens[i:i + size]
-            phrase = " ".join(span)
 
-            result = score_phrase_strength(phrase, allow_trim=False)
+            result = score_phrase_strength(" ".join(span), allow_trim=False)
 
             if not result.get("keep"):
                 continue
 
             score = float(result.get("score") or 0.0)
-
             starts_with_action = span[0] in ACTION_STARTS
 
             specificity = 0.0
@@ -542,7 +1022,12 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
             canonical_bonus = 0.0
 
             if starts_with_action:
-             canonical_bonus -= 0.12
+                canonical_bonus -= 0.12
+
+            if _is_exact_canonical_anchor(span):
+                canonical_bonus += 0.30
+            elif _has_valid_ordered_pair(span):
+                canonical_bonus += 0.18
 
             if len(span) in {2, 3}:
                 head = span[-1]
@@ -564,23 +1049,6 @@ def trim_bad_long_phrase(tokens: List[str]) -> List[str]:
 
     return best_span
 
-def _has_action_chain_tail(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
-        return False
-
-    if tokens[0] in ACTION_STARTS:
-        return True
-
-    action_like_words = {
-        "define", "send", "monitor", "track", "review", "manage",
-        "create", "build", "check", "compare", "choose", "improve",
-        "optimize", "reduce", "increase",
-    }
-
-    action_hits = sum(1 for t in tokens if t in action_like_words)
-
-    return action_hits >= 2
-
 
 def _is_short_orphan_collision(tokens: List[str]) -> bool:
     if len(tokens) not in {2, 3}:
@@ -589,7 +1057,11 @@ def _is_short_orphan_collision(tokens: List[str]) -> bool:
     if _is_query_style_long_anchor(tokens):
         return False
 
-    phrase_tuple = tuple(tokens)
+    if tuple(tokens) in VALID_ORDERED_PAIRS:
+        return False
+
+    if _is_exact_canonical_anchor(tokens):
+        return False
 
     safe_pairs = {
         ("cash", "flow"),
@@ -623,6 +1095,8 @@ def _is_short_orphan_collision(tokens: List[str]) -> bool:
         ("risk", "management", "framework"),
         ("data", "security", "policy"),
     }
+
+    phrase_tuple = tuple(tokens)
 
     if phrase_tuple in safe_pairs or phrase_tuple in safe_triples:
         return False
@@ -671,6 +1145,9 @@ def _is_prefix_suffix_spillover(tokens: List[str]) -> bool:
     if len(tokens) < 2:
         return False
 
+    if _is_exact_canonical_anchor(tokens):
+        return False
+
     if tokens[0] in STOPWORDS:
         return True
 
@@ -681,33 +1158,13 @@ def _is_prefix_suffix_spillover(tokens: List[str]) -> bool:
         first_two = tuple(tokens[:2])
         last_two = tuple(tokens[1:])
 
-        known_safe_pairs = {
-            ("cash", "flow"),
-            ("lease", "agreement"),
-            ("late", "payment"),
-            ("late", "fee"),
-            ("fee", "policy"),
-            ("rental", "income"),
-            ("rental", "property"),
-            ("property", "management"),
-            ("property", "maintenance"),
-            ("payment", "reminders"),
-            ("mortgage", "payments"),
-            ("insurance", "costs"),
-            ("emergency", "repairs"),
-            ("keyword", "research"),
-            ("content", "optimization"),
-            ("internal", "linking"),
-            ("conversion", "rate"),
-            ("risk", "management"),
-            ("customer", "service"),
-            ("data", "security"),
-        }
+        known_safe_pairs = VALID_ORDERED_PAIRS
 
         if first_two in known_safe_pairs and last_two not in known_safe_pairs:
             return True
 
     return False
+
 
 def _has_structural_signal(tokens: List[str], source_type: str) -> tuple[bool, List[str]]:
     signals: List[str] = []
@@ -717,6 +1174,12 @@ def _has_structural_signal(tokens: List[str], source_type: str) -> tuple[bool, L
 
     head = tokens[-1]
     modifiers = tokens[:-1]
+
+    if _is_exact_canonical_anchor(tokens):
+        signals.append("structural_canonical_anchor")
+
+    if _has_valid_ordered_pair(tokens):
+        signals.append("structural_valid_ordered_pair")
 
     if head in STRONG_CONCEPT_HEADS:
         signals.append("structural_strong_head")
@@ -772,6 +1235,10 @@ def _long_phrase_naturalness_score(tokens: List[str], source_type: str) -> tuple
     if _is_long_list_chain(tokens):
         score -= 0.95
         reasons.append("long_list_chain")
+
+    if _is_cross_niche_stitched_stack(tokens):
+        score -= 0.75
+        reasons.append("long_cross_niche_stitch")
 
     content_count = len(_content_tokens(tokens))
     head = tokens[-1]
@@ -832,7 +1299,7 @@ def _modifier_quality_score(tokens: List[str]) -> tuple[float, List[str]]:
         score += 0.10
         reasons.append("multi_specific_modifier")
 
-    if weak_adj_count >= 1:
+    if weak_adj_count >= 1 and not _has_valid_ordered_pair(tokens):
         score -= 0.20
         reasons.append("weak_modifier")
 
@@ -855,6 +1322,10 @@ def _head_quality_score(tokens: List[str]) -> tuple[float, List[str]]:
         return -1.0, ["missing_head"]
 
     head = tokens[-1]
+
+    if _is_exact_canonical_anchor(tokens):
+        score += 0.25
+        reasons.append("canonical_head_phrase")
 
     if head in STRONG_CONCEPT_HEADS:
         score += 0.35
@@ -954,30 +1425,21 @@ def _cohesion_penalty(tokens: List[str]) -> tuple[float, List[str]]:
     if len(tokens) < 2:
         return score, reasons
 
-    natural_patterns = (
-        ("lease", "agreement"),
-        ("rental", "contract"),
+    natural_patterns = tuple(VALID_ORDERED_PAIRS) + (
         ("late", "fee", "policy"),
         ("contract", "risk", "management"),
-        ("risk", "management"),
         ("invoice", "schedule"),
         ("employment", "policy"),
         ("workplace", "policy"),
         ("unfair", "treatment"),
-        ("cash", "flow"),
         ("budget", "review"),
-        ("conversion", "rate"),
         ("setup", "checklist"),
         ("pricing", "strategy"),
-        ("payment", "schedule"),
         ("product", "pricing"),
-        ("customer", "service"),
         ("renewal", "schedule"),
         ("subscription", "pricing"),
-        ("data", "security"),
         ("internal", "linking", "strategy"),
-        ("keyword", "research"),
-        ("content", "optimization"),
+        ("content", "optimization", "strategy"),
     )
 
     for pattern in natural_patterns:
@@ -1005,30 +1467,6 @@ def _cohesion_penalty(tokens: List[str]) -> tuple[float, List[str]]:
             reasons.append("weak_cohesion_chain")
 
     return score, reasons
-
-def _cut_semantic_tail(tokens: List[str]) -> List[str]:
-    if len(tokens) < 4:
-        return tokens
-
-    # If first 3 tokens form a strong complete concept, cut noisy trailing action/object tail.
-    first_three = tokens[:3]
-    first_two = tokens[:2]
-
-    first_three_result = score_phrase_strength(
-        " ".join(first_three),
-        allow_trim=False,
-    )
-    if first_three_result.get("keep") and len(tokens) > 3:
-        return first_three
-
-    first_two_result = score_phrase_strength(
-        " ".join(first_two),
-        allow_trim=False,
-    )
-    if first_two_result.get("keep") and len(tokens) > 2:
-        return first_two
-
-    return tokens
 
 
 def _domain_cohesion_score(tokens: List[str]) -> tuple[float, List[str]]:
@@ -1071,8 +1509,9 @@ def _fragment_penalty(tokens: List[str], p: str) -> tuple[float, List[str]]:
         reasons.append("mid_stopword_fragment")
 
     if _has_clause_verb_leakage(tokens):
-        score -= 0.55
-        reasons.append("clause_verb_leakage")
+        if not (_contains_canonical_anchor(tokens) and len(tokens) <= 5):
+            score -= 0.55
+            reasons.append("clause_verb_leakage")
 
     if _is_list_pair_fragment(tokens):
         score -= 0.50
@@ -1096,6 +1535,7 @@ def _fragment_penalty(tokens: List[str], p: str) -> tuple[float, List[str]]:
 
     return score, reasons
 
+
 def score_phrase_strength(
     phrase: str,
     *,
@@ -1105,11 +1545,67 @@ def score_phrase_strength(
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
 
+    if _is_valid_education_pattern_phrase(tokens):
+        return {
+            "keep": True,
+            "score": 0.88,
+            "phrase": p,
+            "reason": "valid_education_pattern_phrase",
+        }
+
+    if _is_weak_education_pattern(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": p,
+            "reason": "weak_education_pattern",
+        }
+
+    if _is_education_action_fragment(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": p,
+            "reason": "education_action_fragment",
+        }
+
+    if _is_weak_education_pattern(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": p,
+            "reason": "weak_education_pattern",
+        }
+
+    if _is_bad_education_fragment(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": p,
+            "reason": "bad_education_fragment",
+        }
+
+    if _is_valid_education_phrase(tokens):
+        return {
+            "keep": True,
+            "score": 0.88,
+            "phrase": p,
+            "reason": "valid_education_phrase",
+        }
+
     if not p or len(tokens) < 2:
         return {"keep": False, "score": 0.0, "reason": "too_short"}
 
     if len(tokens) > 10:
         return {"keep": False, "score": 0.0, "reason": "too_long"}
+
+    if _has_reversed_ordered_pair(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": p,
+            "reason": "reversed_ordered_pair",
+        }
 
     if allow_trim and _should_trim_bad_long_phrase(tokens):
         trimmed = trim_bad_long_phrase(tokens)
@@ -1117,10 +1613,19 @@ def score_phrase_strength(
             p = " ".join(trimmed)
             tokens = trimmed
 
+    if _is_cross_niche_stitched_stack(tokens):
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": p,
+            "reason": "cross_niche_stitched_stack",
+        }
+
     if _is_long_list_chain(tokens):
         return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "long_list_chain",
         }
 
@@ -1128,28 +1633,31 @@ def score_phrase_strength(
         return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "multi_cluster_phrase",
         }
-    
 
     if _is_short_orphan_collision(tokens):
         return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "short_orphan_collision",
         }
-    
+
     if _is_prefix_suffix_spillover(tokens):
         return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "prefix_suffix_spillover",
         }
 
     if _has_orphan_tail_start(tokens):
-         return {
+        return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "orphan_tail_start",
         }
 
@@ -1157,6 +1665,7 @@ def score_phrase_strength(
         return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "boundary_spillover",
         }
 
@@ -1164,16 +1673,15 @@ def score_phrase_strength(
         return {
             "keep": False,
             "score": 0.0,
+            "phrase": p,
             "reason": "long_clause_leakage",
         }
 
+    if tokens[0] in WEAK_STARTS and not _is_exact_canonical_anchor(tokens):
+        return {"keep": False, "score": 0.10, "phrase": p, "reason": "weak_start"}
 
-
-    if tokens[0] in WEAK_STARTS:
-        return {"keep": False, "score": 0.10, "reason": "weak_start"}
-
-    if tokens[-1] in WEAK_ENDINGS:
-        return {"keep": False, "score": 0.10, "reason": "weak_ending"}
+    if tokens[-1] in WEAK_ENDINGS and not _is_exact_canonical_anchor(tokens):
+        return {"keep": False, "score": 0.10, "phrase": p, "reason": "weak_ending"}
 
     score = 0.40
     reasons: List[str] = []
@@ -1187,6 +1695,7 @@ def score_phrase_strength(
     action_score, action_reasons = _action_object_score(tokens)
     short_window_score, short_window_reasons = _short_window_structure_penalty(tokens, source_type)
     long_phrase_score, long_phrase_reasons = _long_phrase_naturalness_score(tokens, source_type)
+    universal_score, universal_reasons = _universal_precision_score(tokens)
 
     score += head_score
     score += modifier_score
@@ -1197,6 +1706,7 @@ def score_phrase_strength(
     score += action_score
     score += short_window_score
     score += long_phrase_score
+    score += universal_score
 
     reasons.extend(head_reasons)
     reasons.extend(modifier_reasons)
@@ -1207,6 +1717,7 @@ def score_phrase_strength(
     reasons.extend(action_reasons)
     reasons.extend(short_window_reasons)
     reasons.extend(long_phrase_reasons)
+    reasons.extend(universal_reasons)
 
     score = max(0.0, min(1.0, round(score, 3)))
 
@@ -1215,6 +1726,14 @@ def score_phrase_strength(
         if content_count >= 4:
             score = max(score, 0.78)
             reasons.append("query_style_score_floor")
+
+    if _is_exact_canonical_anchor(tokens):
+        score = max(score, 0.84)
+        reasons.append("canonical_score_floor")
+
+    elif _has_valid_ordered_pair(tokens) and len(tokens) in {2, 3, 4}:
+        score = max(score, 0.80)
+        reasons.append("ordered_pair_score_floor")
 
     threshold = 0.72
 
@@ -1234,4 +1753,4 @@ def score_phrase_strength(
         "score": score,
         "phrase": p,
         "reason": "+".join(reasons) if reasons else "neutral",
-}
+    }

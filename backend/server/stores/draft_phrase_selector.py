@@ -1,9 +1,11 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from collections import Counter
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from backend.server.stores.candidate_window_guard import candidate_window_guard
+from backend.server.stores.phrase_strength_scorer import score_phrase_strength
 from backend.server.stores.phrase_vertical_policy import (
     apply_vertical_policy_score,
     detect_vertical,
@@ -45,6 +47,35 @@ UI_JUNK_TERMS: Set[str] = {
     "twitter", "youtube", "whatsapp", "telegram"
 }
 
+BAD_FRAGMENT_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(\w+)\s+\1\b", re.I),
+    re.compile(r"\brather than\b", re.I),
+    re.compile(r"\bthan someone\b", re.I),
+    re.compile(r"\banswer depends\b", re.I),
+    re.compile(r"\bresult depends\b", re.I),
+    re.compile(r"\bdo this\b", re.I),
+    re.compile(r"\bcan show\b", re.I),
+    re.compile(r"\bend up\b", re.I),
+    re.compile(r"\blean more\b", re.I),
+    re.compile(r"\bblends three\b", re.I),
+    re.compile(r"\boften falls\b", re.I),
+    re.compile(r"\boften lands\b", re.I),
+    re.compile(r"\bhas likely\b", re.I),
+    re.compile(r"\bfixed number\b", re.I),
+    re.compile(r"\bpeople often ask\b", re.I),
+    re.compile(r"\bmany people ask\b", re.I),
+    re.compile(r"\bmany users say\b", re.I),
+    re.compile(r"\bbecause they\b", re.I),
+    re.compile(r"\bbecause you\b", re.I),
+    re.compile(r"\bwith \d+\b", re.I),
+    re.compile(r"\bwithout an\b", re.I),
+    re.compile(r"\bwithout a\b", re.I),
+    re.compile(r"\bwith an\b", re.I),
+    re.compile(r"\bwith a\b", re.I),
+    re.compile(r"\bbefore getting\b", re.I),
+    re.compile(r"\bafter getting\b", re.I),
+)
+
 INTENT_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"^how to [a-z0-9\s\-]+$"),
     re.compile(r"^how many [a-z0-9\s\-]+$"),
@@ -70,14 +101,14 @@ DRAFT_ALIAS_MAP: Dict[str, List[str]] = {
 
 def _canonical_phrase(s: str) -> str:
     s = (s or "").strip().lower()
-    s = s.replace("’", "'").replace("“", '"').replace("”", '"')
+    s = s.replace("â€™", "'").replace("â€œ", '"').replace("â€", '"')
     s = s.replace("_", " ").replace("/", " ").replace("\\", " ")
     s = re.sub(r"\bc[-\s]?section\b", "csection", s)
     s = re.sub(r"\bcesarean section\b", "csection", s)
     s = re.sub(r"\bcesarean\b", "csection", s)
     s = NON_ALNUM_RE.sub(" ", s)
-    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[•\-–]\s+)", "", s)
-    s = re.sub(r"^[\"'“”‘’\(\[\{]+|[\"'“”‘’\)\]\}:;,\.\!\?]+$", "", s).strip()
+    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[â€¢\-â€“]\s+)", "", s)
+    s = re.sub(r"^[\"'â€œâ€â€˜â€™\(\[\{]+|[\"'â€œâ€â€˜â€™\)\]\}:;,\.\!\?]+$", "", s).strip()
     s = SPACE_RE.sub(" ", s).strip()
 
     lead_words = (
@@ -85,6 +116,7 @@ def _canonical_phrase(s: str) -> str:
         "can", "will", "would", "should", "could", "may", "might",
         "the", "a", "an", "vs"
     )
+
     changed = True
     while changed and s:
         changed = False
@@ -95,6 +127,7 @@ def _canonical_phrase(s: str) -> str:
                 changed = True
 
     tail_words = ("and", "or", "but", "as", "to", "from", "with", "by", "vs")
+
     changed = True
     while changed and s:
         changed = False
@@ -104,8 +137,7 @@ def _canonical_phrase(s: str) -> str:
                 s = s[:-len(suffix)].strip()
                 changed = True
 
-    s = SPACE_RE.sub(" ", s).strip()
-    return s
+    return SPACE_RE.sub(" ", s).strip()
 
 
 def _tokenize(text: str) -> List[str]:
@@ -138,6 +170,7 @@ def _extract_canonical_core_phrase(s: str) -> str:
         "signs of ", "symptoms of ", "causes of ", "treatment for ",
         "best time ", "best way ",
     ]
+
     starts = [s.find(m) for m in markers if s.find(m) != -1]
     if starts:
         s = s[min(starts):].strip()
@@ -155,10 +188,50 @@ def _extract_canonical_core_phrase(s: str) -> str:
         r"^you may be asking\s+",
         r"^often ask\s+",
     ]
+
     for pat in lead_patterns:
         s = re.sub(pat, "", s).strip()
 
     return _canonical_phrase(s)
+
+
+def _compress_wrapper_phrase(phrase: str) -> str:
+    p = _canonical_phrase(phrase)
+    if not p:
+        return ""
+
+    wrapper_patterns = (
+        r"^how to\s+",
+        r"^how do you\s+",
+        r"^how can you\s+",
+        r"^how many\s+",
+        r"^when do\s+",
+        r"^when does\s+",
+        r"^what is\s+",
+        r"^what are\s+",
+        r"^why does\s+",
+        r"^why do\s+",
+        r"^best way to\s+",
+        r"^best time to\s+",
+        r"^guide to\s+",
+        r"^complete guide to\s+",
+        r"^beginner guide to\s+",
+    )
+
+    compressed = p
+    for pat in wrapper_patterns:
+        compressed = re.sub(pat, "", compressed).strip()
+
+    compressed = _canonical_phrase(compressed)
+
+    original_tokens = _tokenize(p)
+    compressed_tokens = _tokenize(compressed)
+
+    if len(compressed_tokens) >= 2 and len(compressed_tokens) < len(original_tokens):
+        if len(_content_tokens(compressed_tokens)) >= 2:
+            return compressed
+
+    return p
 
 
 def _looks_like_intent_phrase(phrase: str) -> bool:
@@ -166,9 +239,17 @@ def _looks_like_intent_phrase(phrase: str) -> bool:
     return any(rx.match(p) for rx in INTENT_PATTERNS)
 
 
+def _has_bad_fragment_pattern(phrase: str) -> bool:
+    p = _canonical_phrase(phrase)
+    return any(rx.search(p) for rx in BAD_FRAGMENT_PATTERNS)
+
+
 def _is_link_worthy_shape(phrase: str) -> bool:
     p = _canonical_phrase(phrase)
     if not p or _looks_like_ui_junk(p):
+        return False
+
+    if _has_bad_fragment_pattern(p):
         return False
 
     tokens = _tokenize(p)
@@ -177,6 +258,9 @@ def _is_link_worthy_shape(phrase: str) -> bool:
 
     content = _content_tokens(tokens)
     if len(content) < 2:
+        return False
+
+    if len(set(tokens)) < len(tokens):
         return False
 
     if tokens[0] in WEAK_STARTS and not _looks_like_intent_phrase(p):
@@ -198,12 +282,16 @@ def _reject_weak_draft_fragment(phrase: str, full_title: str) -> bool:
     if not p:
         return True
 
+    if _has_bad_fragment_pattern(p):
+        return True
+
     tokens = _tokenize(p)
     if len(tokens) < 2:
         return True
 
     if tokens[0] in {"after", "before", "with", "for", "from", "by"}:
         return True
+
     if tokens[-1] in {"after", "before", "with", "for", "from", "by"}:
         return True
 
@@ -235,47 +323,11 @@ def _reject_weak_title_subphrase(phrase: str, full_title: str) -> bool:
     if len(pt) < 2:
         return True
 
-    # reject incomplete edge fragments from a longer title
     if len(ft) >= 4 and len(pt) < len(ft):
         if full.startswith(p):
             if pt[-1] in {"during", "with", "for", "after", "before", "and", "in", "of", "to"}:
                 return True
-        if full.endswith(p):
-            if pt[0] in {"during", "with", "for", "after", "before", "and", "in", "of", "to"}:
-                return True
 
-    # reject weak educational/explanatory tails when detached
-    if pt[-1] in {"explained", "basics", "guide"} and len(pt) <= 3:
-        return True
-
-    # reject very generic 2-word fragments unless clearly intent-like
-    if len(pt) == 2 and not _looks_like_intent_phrase(p):
-        content = _content_tokens(pt)
-        if len(content) < 2:
-            return True
-
-    return False
-
-def _reject_weak_title_subphrase(phrase: str, full_title: str) -> bool:
-    p = _canonical_phrase(phrase)
-    full = _canonical_phrase(full_title)
-
-    if not p:
-        return True
-
-    if _reject_weak_draft_fragment(p, full):
-        return True
-
-    pt = _tokenize(p)
-    ft = _tokenize(full)
-
-    if len(pt) < 2:
-        return True
-
-    if len(ft) >= 4 and len(pt) < len(ft):
-        if full.startswith(p):
-            if pt[-1] in {"during", "with", "for", "after", "before", "and", "in", "of", "to"}:
-                return True
         if full.endswith(p):
             if pt[0] in {"during", "with", "for", "after", "before", "and", "in", "of", "to"}:
                 return True
@@ -291,8 +343,7 @@ def _reject_weak_title_subphrase(phrase: str, full_title: str) -> bool:
     return False
 
 
-
-def _score_candidate(phrase: str, source_type: str, freq: int = 1) -> int:
+def _fallback_score_candidate(phrase: str, source_type: str, freq: int = 1) -> int:
     p = _canonical_phrase(phrase)
     if not p:
         return 0
@@ -343,6 +394,138 @@ def _score_candidate(phrase: str, source_type: str, freq: int = 1) -> int:
     return score
 
 
+def _call_strength_scorer(
+    phrase: str,
+    source_type: str,
+    vertical: str,
+    freq: int,
+) -> int:
+    fallback = _fallback_score_candidate(phrase, source_type, freq)
+
+    try:
+        result = score_phrase_strength(
+            phrase=phrase,
+            source_type=source_type,
+            vertical=vertical,
+            frequency=freq,
+            fallback_score=fallback,
+        )
+    except TypeError:
+        try:
+            result = score_phrase_strength(
+                phrase=phrase,
+                source_type=source_type,
+                vertical=vertical,
+                frequency=freq,
+            )
+        except TypeError:
+            try:
+                result = score_phrase_strength(phrase, source_type, vertical, freq)
+            except Exception:
+                return fallback
+        except Exception:
+            return fallback
+    except Exception:
+        return fallback
+
+    if isinstance(result, dict):
+        for key in ("score", "strength", "final_score", "quality_score"):
+            if key in result:
+                try:
+                    return int(float(result[key]))
+                except Exception:
+                    return fallback
+
+    try:
+        return int(float(result))
+    except Exception:
+        return fallback
+
+
+def _call_candidate_window_guard(
+    candidates: List[Dict[str, Any]],
+    vertical: str,
+    max_keep: int = 50,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    try:
+        guarded = candidate_window_guard(
+            candidates=candidates,
+            vertical=vertical,
+            max_keep=max_keep,
+        )
+    except TypeError:
+        try:
+            guarded = candidate_window_guard(candidates, vertical, max_keep)
+        except TypeError:
+            try:
+                guarded = candidate_window_guard(candidates)
+            except Exception:
+                return candidates[:max_keep]
+        except Exception:
+            return candidates[:max_keep]
+    except Exception:
+        return candidates[:max_keep]
+
+    if isinstance(guarded, dict):
+        for key in ("candidates", "selected", "phrases", "items", "kept"):
+            value = guarded.get(key)
+            if isinstance(value, list):
+                return value[:max_keep]
+        return candidates[:max_keep]
+
+    if isinstance(guarded, list):
+        return guarded[:max_keep]
+
+    return candidates[:max_keep]
+
+
+def _final_quality_gate(item: Dict[str, Any], vertical: str) -> bool:
+    phrase = _canonical_phrase(str(item.get("phrase") or ""))
+    if not phrase:
+        return False
+
+    tokens = _tokenize(phrase)
+    content = _content_tokens(tokens)
+
+    if len(tokens) < 2 or len(tokens) > 6:
+        return False
+
+    if len(content) < 2:
+        return False
+
+    if len(set(tokens)) < len(tokens):
+        return False
+
+    if _looks_like_ui_junk(phrase):
+        return False
+
+    if _has_bad_fragment_pattern(phrase):
+        return False
+
+    if tokens[0] in WEAK_STARTS and not _looks_like_intent_phrase(phrase):
+        return False
+
+    if tokens[-1] in WEAK_ENDINGS:
+        return False
+
+    if len(tokens) >= 2 and tokens[1] in NARRATIVE_VERBS and not _looks_like_intent_phrase(phrase):
+        return False
+
+    min_score = get_vertical_min_score(vertical)
+    try:
+        score = int(float(item.get("score", 0)))
+    except Exception:
+        score = 0
+
+    if score < min_score:
+        return False
+
+    return True
+
+
 def _title_to_slugish(title: str) -> str:
     return _canonical_phrase(title).replace(" ", "-")
 
@@ -357,6 +540,8 @@ def _slug_to_phrase(slug: str) -> str:
 
 def _extract_title_candidates(title: str) -> List[Dict[str, Any]]:
     full = _extract_canonical_core_phrase(title) or _canonical_phrase(title)
+    full = _compress_wrapper_phrase(full)
+
     if not full:
         return []
 
@@ -374,22 +559,22 @@ def _extract_title_candidates(title: str) -> List[Dict[str, Any]]:
         for n in (2, 3, 4):
             if len(tokens) >= n:
                 spans.add(" ".join(tokens[:n]))
-
-        for n in (2, 3, 4):
-            if len(tokens) >= n:
                 spans.add(" ".join(tokens[-n:]))
 
         for n in (2, 3, 4):
             if len(tokens) >= n:
                 for i in range(0, len(tokens) - n + 1):
-                    chunk = " ".join(tokens[i:i+n])
-                    spans.add(chunk)
+                    spans.add(" ".join(tokens[i:i + n]))
 
         for sp in sorted(spans):
+            sp = _compress_wrapper_phrase(sp)
+
             if sp == full:
                 continue
+
             if _reject_weak_title_subphrase(sp, full):
                 continue
+
             out.append({
                 "phrase": sp,
                 "source_type": "draft_title_subphrase",
@@ -402,10 +587,13 @@ def _extract_title_candidates(title: str) -> List[Dict[str, Any]]:
 
 def _extract_slug_candidates(slug: str, full_title: str) -> List[Dict[str, Any]]:
     slug_phrase = _slug_to_phrase(slug)
+    slug_phrase = _compress_wrapper_phrase(slug_phrase)
+
     if not slug_phrase:
         return []
 
     out: List[Dict[str, Any]] = []
+
     if slug_phrase != _canonical_phrase(full_title):
         out.append({
             "phrase": slug_phrase,
@@ -416,16 +604,21 @@ def _extract_slug_candidates(slug: str, full_title: str) -> List[Dict[str, Any]]
 
     tokens = _tokenize(slug_phrase)
     spans: Set[str] = set()
+
     for n in (2, 3, 4):
         if len(tokens) >= n:
             spans.add(" ".join(tokens[:n]))
             spans.add(" ".join(tokens[-n:]))
 
     for sp in sorted(spans):
+        sp = _compress_wrapper_phrase(sp)
+
         if sp == slug_phrase:
             continue
+
         if _reject_weak_title_subphrase(sp, full_title):
             continue
+
         out.append({
             "phrase": sp,
             "source_type": "draft_slug",
@@ -442,12 +635,17 @@ def _extract_alias_candidates(title: str, slug: str) -> List[Dict[str, Any]]:
         return []
 
     out: List[Dict[str, Any]] = []
+
     for canonical, variants in DRAFT_ALIAS_MAP.items():
         if canonical in source or any(_canonical_phrase(v) in source for v in variants):
             all_forms = {canonical, *[_canonical_phrase(v) for v in variants]}
+
             for form in all_forms:
+                form = _compress_wrapper_phrase(form)
+
                 if not form:
                     continue
+
                 out.append({
                     "phrase": form,
                     "source_type": "draft_alias",
@@ -465,6 +663,7 @@ def _extract_summary_candidates(summary: str) -> List[Dict[str, Any]]:
 
     for i, sent in enumerate(_split_sentences(summary)):
         sent_core = _extract_canonical_core_phrase(sent)
+        sent_core = _compress_wrapper_phrase(sent_core)
 
         if sent_core and _looks_like_intent_phrase(sent_core):
             intent_tokens = _tokenize(sent_core)
@@ -485,11 +684,15 @@ def _extract_summary_candidates(summary: str) -> List[Dict[str, Any]]:
                 continue
 
             for j in range(0, len(tokens) - n + 1):
-                cand = _canonical_phrase(" ".join(tokens[j:j+n]))
+                cand = _canonical_phrase(" ".join(tokens[j:j + n]))
+                cand = _compress_wrapper_phrase(cand)
+
                 if not cand:
                     continue
+
                 if _reject_weak_draft_fragment(cand, sent):
                     continue
+
                 if not _is_link_worthy_shape(cand):
                     continue
 
@@ -507,39 +710,89 @@ def _dedupe_and_rank(
     candidates: List[Dict[str, Any]],
     vertical: str,
 ) -> List[Dict[str, Any]]:
-    counter = Counter(_canonical_phrase(c["phrase"]) for c in candidates if c.get("phrase"))
+    normalized_candidates: List[Dict[str, Any]] = []
+
+    for c in candidates:
+        phrase = _compress_wrapper_phrase(str(c.get("phrase") or ""))
+        if not phrase:
+            continue
+
+        if not _is_link_worthy_shape(phrase):
+            continue
+
+        item = dict(c)
+        item["phrase"] = phrase
+        item["canonical"] = phrase
+        normalized_candidates.append(item)
+
+    counter = Counter(
+        _canonical_phrase(c["phrase"])
+        for c in normalized_candidates
+        if c.get("phrase")
+    )
+
     best: Dict[str, Dict[str, Any]] = {}
     keep_threshold = get_vertical_min_score(vertical)
 
-    for c in candidates:
+    for c in normalized_candidates:
         phrase = _canonical_phrase(c.get("phrase", ""))
         if not phrase:
             continue
 
-        base_score = _score_candidate(
-            phrase,
-            str(c.get("source_type") or ""),
-            counter.get(phrase, 1),
+        source_type = str(c.get("source_type") or "unknown")
+        freq = counter.get(phrase, 1)
+
+        base_score = _call_strength_scorer(
+            phrase=phrase,
+            source_type=source_type,
+            vertical=vertical,
+            freq=freq,
         )
+
         score = apply_vertical_policy_score(phrase, base_score, vertical)
 
         if score < keep_threshold:
             continue
 
-        current = best.get(phrase)
         item = {
             "phrase": phrase,
             "canonical": phrase,
-            "source_type": c.get("source_type", "unknown"),
-            "score": score,
+            "source_type": source_type,
+            "score": int(score),
             "section_id": c.get("section_id", ""),
             "snippet": c.get("snippet", ""),
+            "frequency": freq,
         }
 
-        if current is None or item["score"] > current["score"]:
+        if not _final_quality_gate(item, vertical):
+            continue
+
+        current = best.get(phrase)
+        if current is None or int(item["score"]) > int(current["score"]):
             best[phrase] = item
 
-    return sorted(best.values(), key=lambda x: (-int(x["score"]), x["phrase"]))
+    ranked = sorted(best.values(), key=lambda x: (-int(x["score"]), x["phrase"]))
+    guarded = _call_candidate_window_guard(ranked, vertical=vertical, max_keep=50)
+
+    final: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    for item in guarded:
+        phrase = _canonical_phrase(str(item.get("phrase") or ""))
+        if not phrase or phrase in seen:
+            continue
+
+        item = dict(item)
+        item["phrase"] = phrase
+        item["canonical"] = phrase
+
+        if not _final_quality_gate(item, vertical):
+            continue
+
+        seen.add(phrase)
+        final.append(item)
+
+    return sorted(final, key=lambda x: (-int(x.get("score", 0)), x["phrase"]))
 
 
 def select_draft_phrases(
@@ -561,12 +814,14 @@ def select_draft_phrases(
         slug = planned_url.rstrip("/").split("/")[-1]
 
     candidates: List[Dict[str, Any]] = []
+
     candidates.extend(_extract_title_candidates(title))
     candidates.extend(_extract_slug_candidates(slug, title))
     candidates.extend(_extract_alias_candidates(title + " " + " ".join(aliases), slug))
 
     for idx, alias in enumerate(aliases):
-        alias_p = _canonical_phrase(alias)
+        alias_p = _compress_wrapper_phrase(alias)
+
         if alias_p and not _reject_weak_draft_fragment(alias_p, title or alias_p):
             candidates.append({
                 "phrase": alias_p,

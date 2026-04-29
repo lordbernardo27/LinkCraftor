@@ -13,7 +13,7 @@ from backend.server.stores.imported_phrase_selector import select_imported_phras
 
 def _data_dir() -> Path:
     here = Path(__file__).resolve()
-    server_dir = here.parents[1]  # .../backend/server
+    server_dir = here.parents[1]
     return server_dir / "data"
 
 
@@ -32,6 +32,7 @@ def _ws_safe(ws: str) -> str:
     s = re.sub(r"_+", "_", s).strip("_")
     if not s:
         s = "workspace"
+
     return f"ws_{s}"[:80]
 
 
@@ -62,82 +63,65 @@ def _safe_read_json(path: Path) -> Any:
         return None
 
 
-def _clean_spaces(s: str) -> str:
+def _clean_spaces(s: Any) -> str:
     return re.sub(r"\s+", " ", str(s or "")).strip()
 
 
-def _slug_to_text(slug_or_url: str) -> str:
-    s = str(slug_or_url or "").strip()
-    s = s.rsplit("/", 1)[-1]
-    s = s.strip("/")
-    s = s.replace("-", " ").replace("_", " ")
-    return _clean_spaces(s)
+def _canonical_phrase(s: Any) -> str:
+    s = _clean_spaces(s).lower()
+    s = s.replace("_", " ").replace("-", " ")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
-def _tokenize(text: str) -> List[str]:
-    return [t for t in re.findall(r"[A-Za-z0-9]+", (text or "").lower()) if t]
-
-
-STOPWORDS = {
-    "and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with",
-    "by", "at", "from", "as", "is", "are", "was", "were", "be", "can",
-    "during"
-}
-
-
-def _is_meaningful_phrase(tokens: List[str]) -> bool:
-    if len(tokens) < 2 or len(tokens) > 8:
-        return False
-    if tokens[0] in STOPWORDS or tokens[-1] in STOPWORDS:
-        return False
-
-    meaningful = [t for t in tokens if t not in STOPWORDS]
-    if len(meaningful) < 2:
-        return False
-
-    return True
-
-
-def _extract_phrases_from_text(text: str) -> List[str]:
-    tokens = _tokenize(text)
-    if len(tokens) < 2:
+def _clean_list(values: Any) -> List[str]:
+    if not isinstance(values, list):
         return []
 
     out: List[str] = []
     seen = set()
 
-    if _is_meaningful_phrase(tokens):
-        full = " ".join(tokens)
-        seen.add(full)
-        out.append(full)
-
-    n = len(tokens)
-    for size in range(2, min(8, n) + 1):
-        for i in range(0, n - size + 1):
-            gram = tokens[i:i + size]
-            if not _is_meaningful_phrase(gram):
-                continue
-            phrase = " ".join(gram)
-            if phrase in seen:
-                continue
-            seen.add(phrase)
-            out.append(phrase)
+    for v in values:
+        x = _clean_spaces(v)
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
 
     return out
 
 
-def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
-    ws = _ws_safe(workspace_id)
-    out_path = _imported_phrase_index_path(ws)
+def _quality_gate_phrase(phrase: str, rec: Dict[str, Any]) -> bool:
+    p = _canonical_phrase(phrase)
+    if not p:
+        return False
 
-    active_obj = load_active_phrase_set(ws)
-    active_imported_urls = [
-        str(x).strip()
-        for x in (active_obj.get("active_imported_urls") or [])
-        if str(x).strip()
-    ]
-    active_imported_url_set = set(active_imported_urls)
+    toks = p.split()
 
+    if len(toks) < 2 or len(toks) > 8:
+        return False
+
+    if len(set(toks)) < len(toks):
+        return False
+
+    weak = {
+        "the", "and", "for", "with", "from", "after",
+        "before", "that", "this", "those", "these"
+    }
+
+    if toks[0] in weak:
+        return False
+
+    if toks[-1] in weak:
+        return False
+
+    score = int(rec.get("score", 0))
+    if score <= 0:
+        return False
+
+    return True
+
+
+def _load_rows(ws: str) -> List[Dict[str, Any]]:
     csv_path = _csv_input_path(ws)
     txt_path = _txt_input_path(ws)
     xml_path = _xml_input_path(ws)
@@ -150,17 +134,27 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
             for r in reader:
                 if not isinstance(r, dict):
                     continue
+
+                url = _clean_spaces(
+                    r.get("url") or r.get("URL") or r.get("link") or ""
+                )
+
+                title = _clean_spaces(
+                    r.get("title") or r.get("Title") or r.get("topic") or ""
+                )
+
                 rows.append({
-                    "id": str(r.get("url") or r.get("URL") or r.get("link") or "").strip(),
-                    "title": str(r.get("title") or r.get("Title") or r.get("topic") or "").strip(),
-                    "url": str(r.get("url") or r.get("URL") or r.get("link") or "").strip(),
+                    "id": url,
+                    "title": title,
+                    "url": url,
                 })
 
     elif txt_path.exists():
         for line in txt_path.read_text(encoding="utf-8").splitlines():
-            u = str(line or "").strip()
+            u = _clean_spaces(line)
             if not u:
                 continue
+
             rows.append({
                 "id": u,
                 "title": "",
@@ -169,11 +163,13 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
 
     elif xml_path.exists():
         xml_text = xml_path.read_text(encoding="utf-8", errors="ignore")
-        locs = re.findall(r"<loc>(.*?)</loc>", xml_text, flags=re.IGNORECASE)
+        locs = re.findall(r"<loc>(.*?)</loc>", xml_text, flags=re.I)
+
         for u in locs:
-            u = str(u or "").strip()
+            u = _clean_spaces(u)
             if not u:
                 continue
+
             rows.append({
                 "id": u,
                 "title": "",
@@ -182,34 +178,55 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
 
     else:
         raise FileNotFoundError(
-            f"Missing imported input file. Looked for: {csv_path.name}, {txt_path.name}, {xml_path.name}"
+            f"Missing imported input file. Looked for: "
+            f"{csv_path.name}, {txt_path.name}, {xml_path.name}"
         )
 
-    raw = rows
+    return rows
+
+
+def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
+    ws = _ws_safe(workspace_id)
+    out_path = _imported_phrase_index_path(ws)
+
+    active_obj = load_active_phrase_set(ws)
+
+    active_imported_urls = [
+        str(x).strip()
+        for x in (active_obj.get("active_imported_urls") or [])
+        if str(x).strip()
+    ]
+    active_imported_url_set = set(active_imported_urls)
+
+    rows = _load_rows(ws)
 
     phrases: Dict[str, Dict[str, Any]] = {}
     rows_seen = 0
     rows_used = 0
 
-    for item in raw:
+    for item in rows:
         if not isinstance(item, dict):
             continue
 
         rows_seen += 1
 
-        item_id = str(
+        item_id = _clean_spaces(
             item.get("id")
             or item.get("import_id")
             or item.get("url")
             or item.get("source_url")
             or ""
-        ).strip()
+        )
 
         if active_imported_url_set and item_id not in active_imported_url_set:
             continue
 
-        title = _clean_spaces(item.get("title") or item.get("topic") or item.get("name") or "")
-        url = str(item.get("url") or item.get("source_url") or "").strip()
+        title = _clean_spaces(
+            item.get("title") or item.get("topic") or item.get("name") or ""
+        )
+
+        url = _clean_spaces(item.get("url") or item.get("source_url") or "")
+
         summary = _clean_spaces(
             item.get("summary")
             or item.get("description")
@@ -217,8 +234,6 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
             or item.get("notes")
             or ""
         )
-
-        item_added_any = False
 
         selected_obj = select_imported_phrases(
             workspace_id=ws,
@@ -229,69 +244,91 @@ def build_imported_phrase_index(workspace_id: str) -> Dict[str, Any]:
             aliases=[],
         )
 
-        extracted_items = selected_obj.get("phrases") or []
-        for phrase_obj in extracted_items:
+        item_added_any = False
+
+        for phrase_obj in selected_obj.get("phrases") or []:
             if not isinstance(phrase_obj, dict):
                 continue
 
-            phrase = _clean_spaces(phrase_obj.get("phrase") or "")
+            phrase = _canonical_phrase(phrase_obj.get("phrase") or "")
             if not phrase:
                 continue
 
+            score = int(phrase_obj.get("score") or 0)
+            source_type = _clean_spaces(phrase_obj.get("source_type") or "unknown")
+            section_id = _clean_spaces(phrase_obj.get("section_id") or "")
+            snippet = _clean_spaces(phrase_obj.get("snippet") or "")
+            vertical = _clean_spaces(selected_obj.get("vertical") or "generic")
+
             rec = phrases.get(phrase)
+
             if rec is None:
-                phrases[phrase] = {
+                rec = {
                     "phrase": phrase,
                     "source": "imported_urls",
-                    "source_type": phrase_obj.get("source_type") or "unknown",
-                    "score": int(phrase_obj.get("score") or 0),
-                    "vertical": selected_obj.get("vertical") or "generic",
+                    "source_type": source_type,
+                    "score": score,
+                    "vertical": vertical,
                     "import_ids": [item_id] if item_id else [],
                     "urls": [url] if url else [],
                     "occurrences": 1,
-                    "section_ids": [phrase_obj.get("section_id")] if phrase_obj.get("section_id") else [],
-                    "snippets": [phrase_obj.get("snippet")] if phrase_obj.get("snippet") else [],
+                    "section_ids": [section_id] if section_id else [],
+                    "snippets": [snippet] if snippet else [],
                 }
+                phrases[phrase] = rec
             else:
-                rec["occurrences"] = int(rec.get("occurrences") or 0) + 1
+                rec["occurrences"] = int(rec.get("occurrences", 0)) + 1
 
-                existing_score = int(rec.get("score") or 0)
-                new_score = int(phrase_obj.get("score") or 0)
-                if new_score > existing_score:
-                    rec["score"] = new_score
-                    rec["source_type"] = phrase_obj.get("source_type") or rec.get("source_type") or "unknown"
+                if score > int(rec.get("score", 0)):
+                    rec["score"] = score
+                    rec["source_type"] = source_type
 
-                if item_id and item_id not in rec.get("import_ids", []):
-                    rec.setdefault("import_ids", []).append(item_id)
+                if item_id and item_id not in rec["import_ids"]:
+                    rec["import_ids"].append(item_id)
 
-                if url and url not in rec.get("urls", []):
-                    rec.setdefault("urls", []).append(url)
+                if url and url not in rec["urls"]:
+                    rec["urls"].append(url)
 
-                section_id = phrase_obj.get("section_id")
-                if section_id and section_id not in rec.get("section_ids", []):
-                    rec.setdefault("section_ids", []).append(section_id)
+                if section_id and section_id not in rec["section_ids"]:
+                    rec["section_ids"].append(section_id)
 
-                snippet = phrase_obj.get("snippet")
-                if snippet and snippet not in rec.get("snippets", []):
-                    rec.setdefault("snippets", []).append(snippet)
+                if snippet and snippet not in rec["snippets"]:
+                    rec["snippets"].append(snippet)
 
             item_added_any = True
 
         if item_added_any:
             rows_used += 1
 
+    gated: Dict[str, Dict[str, Any]] = {}
+
+    for phrase, rec in phrases.items():
+        if _quality_gate_phrase(phrase, rec):
+            gated[phrase] = rec
+
+    sorted_items = sorted(
+        gated.items(),
+        key=lambda kv: (-int(kv[1].get("score", 0)), kv[0])
+    )
+
+    final_phrases = {k: v for k, v in sorted_items}
+
     out_obj = {
         "workspace_id": ws,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "rows_seen": rows_seen,
         "rows_used": rows_used,
-        "phrase_count": len(phrases),
+        "phrase_count": len(final_phrases),
         "active_phrase_set_used": bool(active_imported_url_set),
         "active_imported_urls_count": len(active_imported_urls),
-        "phrases": phrases,
+        "phrases": final_phrases,
     }
 
-    out_path.write_text(json.dumps(out_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(out_obj, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
     return out_obj
 
 
@@ -307,9 +344,12 @@ def build_imported_phrase_pool(workspace_id: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
 
-    source_phrases = raw.get("phrases") if isinstance(raw.get("phrases"), dict) else {}
+    source_phrases = raw.get("phrases")
+    if not isinstance(source_phrases, dict):
+        source_phrases = {}
 
     active_obj = load_active_phrase_set(ws)
+
     active_imported_urls = [
         str(x).strip()
         for x in (active_obj.get("active_imported_urls") or [])
@@ -319,7 +359,6 @@ def build_imported_phrase_pool(workspace_id: str) -> Dict[str, Any]:
 
     phrases: Dict[str, Dict[str, Any]] = {}
     source_phrase_count = 0
-    kept_phrase_count = 0
 
     for phrase, rec in source_phrases.items():
         if not isinstance(rec, dict):
@@ -327,31 +366,56 @@ def build_imported_phrase_pool(workspace_id: str) -> Dict[str, Any]:
 
         source_phrase_count += 1
 
-        urls = rec.get("urls") if isinstance(rec.get("urls"), list) else []
-        urls = [str(u).strip() for u in urls if str(u).strip()]
+        urls = _clean_list(rec.get("urls"))
 
         if active_imported_url_set:
-            matched_urls = [u for u in urls if u in active_imported_url_set]
-            if not matched_urls:
+            matched = [u for u in urls if u in active_imported_url_set]
+            if not matched:
                 continue
 
-        key = str(phrase).strip()
+        key = _canonical_phrase(phrase)
         if not key:
             continue
 
-        phrases[key] = rec
-        kept_phrase_count += 1
+        clean_rec = dict(rec)
+        clean_rec["phrase"] = key
+        clean_rec["urls"] = urls
+        clean_rec["import_ids"] = _clean_list(rec.get("import_ids"))
+        clean_rec["section_ids"] = _clean_list(rec.get("section_ids"))
+        clean_rec["snippets"] = _clean_list(rec.get("snippets"))
+        clean_rec["source_type"] = _clean_spaces(rec.get("source_type"))
+        clean_rec["vertical"] = _clean_spaces(rec.get("vertical"))
+
+        if _quality_gate_phrase(key, clean_rec):
+            existing = phrases.get(key)
+
+            if existing is None:
+                phrases[key] = clean_rec
+            else:
+                if int(clean_rec.get("score", 0)) > int(existing.get("score", 0)):
+                    phrases[key] = clean_rec
+
+    sorted_items = sorted(
+        phrases.items(),
+        key=lambda kv: (-int(kv[1].get("score", 0)), kv[0])
+    )
+
+    final_phrases = {k: v for k, v in sorted_items}
 
     out_obj = {
         "workspace_id": ws,
         "updated_at": datetime.now(timezone.utc).isoformat(),
         "source_phrase_count": source_phrase_count,
-        "phrase_count": kept_phrase_count,
+        "phrase_count": len(final_phrases),
         "active_phrase_set_used": bool(active_imported_url_set),
         "active_imported_urls_count": len(active_imported_urls),
-        "phrases": phrases,
+        "phrases": final_phrases,
     }
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(out_obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    out_path.write_text(
+        json.dumps(out_obj, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
     return out_obj

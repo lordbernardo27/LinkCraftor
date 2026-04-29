@@ -1,8 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Set
 
+from backend.server.stores.candidate_window_guard import candidate_window_guard
+from backend.server.stores.phrase_strength_scorer import score_phrase_strength
 from backend.server.stores.phrase_vertical_policy import (
     apply_vertical_policy_score,
     detect_vertical,
@@ -23,30 +25,46 @@ STOPWORDS: Set[str] = {
 }
 
 GENERIC_HEADINGS: Set[str] = {
-    "key points to remember",
-    "other helpful tools",
-    "your result and what it means",
-    "faqs",
-    "faq",
-    "frequently asked questions",
-    "conclusion",
-    "summary",
-    "final thoughts",
-    "table of contents",
+    "key points to remember", "other helpful tools", "your result and what it means",
+    "faqs", "faq", "frequently asked questions", "conclusion", "summary",
+    "final thoughts", "table of contents",
 }
 
 WEAK_STARTS: Set[str] = {
     "the", "this", "that", "these", "those", "your", "is", "are", "was", "were",
-    "while", "so", "then"
+    "while", "so", "then", "with", "for", "from", "by", "after", "before"
 }
 
 WEAK_ENDINGS: Set[str] = {
     "about", "around", "roughly", "always", "usually", "often", "matter", "like",
-    "such", "each", "one", "better", "works", "remember"
+    "such", "each", "one", "better", "works", "remember", "with", "for", "from",
+    "by", "after", "before"
 }
+
+BAD_FRAGMENT_PATTERNS = (
+    re.compile(r"\b(\w+)\s+\1\b", re.I),
+    re.compile(r"\brather than\b", re.I),
+    re.compile(r"\bthan someone\b", re.I),
+    re.compile(r"\banswer depends\b", re.I),
+    re.compile(r"\bresult depends\b", re.I),
+    re.compile(r"\bdo this\b", re.I),
+    re.compile(r"\bcan show\b", re.I),
+    re.compile(r"\bend up\b", re.I),
+    re.compile(r"\blean more\b", re.I),
+    re.compile(r"\boften falls\b", re.I),
+    re.compile(r"\boften lands\b", re.I),
+    re.compile(r"\bbecause they\b", re.I),
+    re.compile(r"\bbecause you\b", re.I),
+    re.compile(r"\bwith \d+\b", re.I),
+    re.compile(r"\bwithout an\b", re.I),
+    re.compile(r"\bwithout a\b", re.I),
+    re.compile(r"\bwith an\b", re.I),
+    re.compile(r"\bwith a\b", re.I),
+)
 
 QUESTION_PATTERNS: List[re.Pattern[str]] = [
     re.compile(r"^what is [a-z0-9\s\-\?]+$"),
+    re.compile(r"^what are [a-z0-9\s\-\?]+$"),
     re.compile(r"^why [a-z0-9\s\-\?]+$"),
     re.compile(r"^how [a-z0-9\s\-\?]+$"),
     re.compile(r"^who [a-z0-9\s\-\?]+$"),
@@ -57,12 +75,11 @@ QUESTION_PATTERNS: List[re.Pattern[str]] = [
 
 def _canonical_phrase(s: str) -> str:
     s = (s or "").strip().lower()
-    s = s.replace("’", "'").replace("“", '"').replace("”", '"')
+    s = s.replace("â€™", "'").replace("â€œ", '"').replace("â€", '"')
     s = s.replace("_", " ").replace("/", " ").replace("\\", " ")
     s = NON_ALNUM_RE.sub(" ", s)
     s = re.sub(r"^\s*\d+[\.\)]\s*", "", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
+    return SPACE_RE.sub(" ", s).strip()
 
 
 def _tokenize(text: str) -> List[str]:
@@ -76,6 +93,47 @@ def _content_tokens(tokens: List[str]) -> List[str]:
 def _looks_like_question_or_intent(p: str) -> bool:
     p = _canonical_phrase(p)
     return any(rx.match(p) for rx in QUESTION_PATTERNS)
+
+
+def _has_bad_fragment_pattern(p: str) -> bool:
+    p = _canonical_phrase(p)
+    return any(rx.search(p) for rx in BAD_FRAGMENT_PATTERNS)
+
+
+def _compress_wrapper_phrase(phrase: str) -> str:
+    p = _canonical_phrase(phrase)
+    if not p:
+        return ""
+
+    wrappers = (
+        r"^how to\s+",
+        r"^how do you\s+",
+        r"^how can you\s+",
+        r"^what is\s+",
+        r"^what are\s+",
+        r"^why does\s+",
+        r"^why do\s+",
+        r"^best way to\s+",
+        r"^best time to\s+",
+        r"^guide to\s+",
+        r"^complete guide to\s+",
+        r"^beginner guide to\s+",
+        r"^faqs about\s+",
+    )
+
+    compressed = p
+    for rx in wrappers:
+        compressed = re.sub(rx, "", compressed).strip()
+
+    compressed = _canonical_phrase(compressed)
+    original_tokens = _tokenize(p)
+    compressed_tokens = _tokenize(compressed)
+
+    if len(compressed_tokens) >= 2 and len(compressed_tokens) < len(original_tokens):
+        if len(_content_tokens(compressed_tokens)) >= 2:
+            return compressed
+
+    return p
 
 
 def _is_generic_heading(p: str) -> bool:
@@ -95,16 +153,18 @@ def _is_low_value_single_word(p: str) -> bool:
     toks = _tokenize(p)
     if len(toks) != 1:
         return False
+
     keep = {
         "pregnancy", "ovulation", "fertility", "conception", "implantation",
-        "ivf", "lmp", "ultrasound", "miscarriage", "postpartum"
+        "ivf", "lmp", "ultrasound", "miscarriage", "postpartum",
+        "seo", "cashflow", "revenue", "analytics", "marketing",
     }
-    # single words are usually too broad for live phrase pool unless clearly high-signal
+
     return toks[0] not in keep
 
 
 def _is_link_worthy_shape(p: str) -> bool:
-    p = _canonical_phrase(p)
+    p = _compress_wrapper_phrase(p)
     if not p:
         return False
 
@@ -114,8 +174,15 @@ def _is_link_worthy_shape(p: str) -> bool:
     if _is_low_value_single_word(p):
         return False
 
+    if _has_bad_fragment_pattern(p):
+        return False
+
     toks = _tokenize(p)
+
     if len(toks) < 2 or len(toks) > 10:
+        return False
+
+    if len(set(toks)) < len(toks):
         return False
 
     content = _content_tokens(toks)
@@ -131,8 +198,13 @@ def _is_link_worthy_shape(p: str) -> bool:
     return True
 
 
-def _reject_live_phrase(phrase: str, phrase_type: str = "", bucket: str = "", confidence: float = 0.0) -> bool:
-    p = _canonical_phrase(phrase)
+def _reject_live_phrase(
+    phrase: str,
+    phrase_type: str = "",
+    bucket: str = "",
+    confidence: float = 0.0,
+) -> bool:
+    p = _compress_wrapper_phrase(phrase)
     toks = _tokenize(p)
 
     if not p:
@@ -153,7 +225,7 @@ def _reject_live_phrase(phrase: str, phrase_type: str = "", bucket: str = "", co
     if p.startswith("faqs about"):
         return True
 
-    if p == "what you need to calculate?":
+    if p == "what you need to calculate":
         return True
 
     if phrase_type in {"heading_h2", "heading_h3"} and len(toks) < 3 and not _looks_like_question_or_intent(p):
@@ -209,6 +281,141 @@ def _base_score(phrase: str, phrase_type: str = "", bucket: str = "", confidence
     return score
 
 
+def _call_strength_scorer(
+    phrase: str,
+    source_type: str,
+    vertical: str,
+    confidence: float,
+    bucket: str,
+) -> int:
+    fallback = _base_score(
+        phrase=phrase,
+        phrase_type=source_type,
+        bucket=bucket,
+        confidence=confidence,
+    )
+
+    try:
+        result = score_phrase_strength(
+            phrase=phrase,
+            source_type=source_type,
+            vertical=vertical,
+            confidence=confidence,
+            bucket=bucket,
+            fallback_score=fallback,
+        )
+    except TypeError:
+        try:
+            result = score_phrase_strength(
+                phrase=phrase,
+                source_type=source_type,
+                vertical=vertical,
+                fallback_score=fallback,
+            )
+        except TypeError:
+            try:
+                result = score_phrase_strength(phrase, source_type, vertical)
+            except Exception:
+                return fallback
+        except Exception:
+            return fallback
+    except Exception:
+        return fallback
+
+    if isinstance(result, dict):
+        for key in ("score", "strength", "final_score", "quality_score"):
+            if key in result:
+                try:
+                    return int(float(result[key]))
+                except Exception:
+                    return fallback
+
+    try:
+        return int(float(result))
+    except Exception:
+        return fallback
+
+
+def _call_candidate_window_guard(
+    candidates: List[Dict[str, Any]],
+    vertical: str,
+    max_keep: int = 80,
+) -> List[Dict[str, Any]]:
+    if not candidates:
+        return []
+
+    try:
+        guarded = candidate_window_guard(
+            candidates=candidates,
+            vertical=vertical,
+            max_keep=max_keep,
+        )
+    except TypeError:
+        try:
+            guarded = candidate_window_guard(candidates, vertical, max_keep)
+        except TypeError:
+            try:
+                guarded = candidate_window_guard(candidates)
+            except Exception:
+                return candidates[:max_keep]
+        except Exception:
+            return candidates[:max_keep]
+    except Exception:
+        return candidates[:max_keep]
+
+    if isinstance(guarded, dict):
+        for key in ("candidates", "selected", "phrases", "items", "kept"):
+            value = guarded.get(key)
+            if isinstance(value, list):
+                return value[:max_keep]
+        return candidates[:max_keep]
+
+    if isinstance(guarded, list):
+        return guarded[:max_keep]
+
+    return candidates[:max_keep]
+
+
+def _final_quality_gate(item: Dict[str, Any], vertical: str) -> bool:
+    phrase = _compress_wrapper_phrase(str(item.get("phrase") or ""))
+    if not phrase:
+        return False
+
+    toks = _tokenize(phrase)
+
+    if len(toks) < 2 or len(toks) > 10:
+        return False
+
+    if len(set(toks)) < len(toks):
+        return False
+
+    if _is_generic_heading(phrase):
+        return False
+
+    if _has_bad_fragment_pattern(phrase):
+        return False
+
+    if toks[0] in WEAK_STARTS and not _looks_like_question_or_intent(phrase):
+        return False
+
+    if toks[-1] in WEAK_ENDINGS and not _looks_like_question_or_intent(phrase):
+        return False
+
+    content = _content_tokens(toks)
+    if len(content) < 2 and not _looks_like_question_or_intent(phrase):
+        return False
+
+    try:
+        score = int(float(item.get("score") or 0))
+    except Exception:
+        score = 0
+
+    if score < get_vertical_min_score(vertical):
+        return False
+
+    return True
+
+
 def select_live_phrases(
     workspace_id: str,
     source_url: str,
@@ -226,7 +433,7 @@ def select_live_phrases(
             continue
 
         raw_phrase = str(entry.get("phrase") or entry.get("norm") or "").strip()
-        phrase = _canonical_phrase(raw_phrase)
+        phrase = _compress_wrapper_phrase(raw_phrase)
         phrase_type = str(entry.get("type") or "").strip()
         bucket = str(entry.get("bucket") or "").strip()
         confidence = float(entry.get("confidence") or 0.0)
@@ -260,14 +467,19 @@ def select_live_phrases(
     best: Dict[str, Dict[str, Any]] = {}
 
     for c in candidates:
-        phrase = c["phrase"]
-        base = _base_score(
+        phrase = _compress_wrapper_phrase(c["phrase"])
+        if not phrase:
+            continue
+
+        base_score = _call_strength_scorer(
             phrase=phrase,
-            phrase_type=str(c.get("source_type") or ""),
-            bucket=str(c.get("bucket") or ""),
+            source_type=str(c.get("source_type") or ""),
+            vertical=vertical,
             confidence=float(c.get("confidence") or 0.0),
+            bucket=str(c.get("bucket") or ""),
         )
-        final_score = apply_vertical_policy_score(phrase, base, vertical)
+
+        final_score = apply_vertical_policy_score(phrase, base_score, vertical)
 
         if final_score < min_keep:
             continue
@@ -279,17 +491,41 @@ def select_live_phrases(
             "type": c.get("source_type") or "unknown",
             "bucket": c.get("bucket") or "unknown",
             "confidence": c.get("confidence") or 0.0,
-            "score": final_score,
+            "score": int(final_score),
             "aliases": c.get("aliases") or [],
             "section_id": c.get("section_id") or "",
             "snippet": c.get("snippet") or "",
         }
 
+        if not _final_quality_gate(item, vertical):
+            continue
+
         existing = best.get(phrase)
         if existing is None or int(item["score"]) > int(existing["score"]):
             best[phrase] = item
 
-    selected = sorted(best.values(), key=lambda x: (-int(x["score"]), x["phrase"]))
+    ranked = sorted(best.values(), key=lambda x: (-int(x["score"]), x["phrase"]))
+    guarded = _call_candidate_window_guard(ranked, vertical=vertical, max_keep=80)
+
+    final: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    for item in guarded:
+        phrase = _compress_wrapper_phrase(str(item.get("phrase") or ""))
+        if not phrase or phrase in seen:
+            continue
+
+        item = dict(item)
+        item["phrase"] = phrase
+        item["norm"] = phrase
+
+        if not _final_quality_gate(item, vertical):
+            continue
+
+        seen.add(phrase)
+        final.append(item)
+
+    selected = sorted(final, key=lambda x: (-int(x["score"]), x["phrase"]))
 
     return {
         "ok": True,
@@ -297,6 +533,7 @@ def select_live_phrases(
         "source_url": source_url,
         "vertical": vertical,
         "candidate_count": len(entries or []),
+        "raw_candidate_count": len(candidates),
         "selected_count": len(selected),
         "phrases": selected,
     }
