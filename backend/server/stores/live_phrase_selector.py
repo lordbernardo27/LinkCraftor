@@ -25,9 +25,16 @@ STOPWORDS: Set[str] = {
 }
 
 GENERIC_HEADINGS: Set[str] = {
-    "key points to remember", "other helpful tools", "your result and what it means",
-    "faqs", "faq", "frequently asked questions", "conclusion", "summary",
-    "final thoughts", "table of contents",
+    "key points to remember",
+    "other helpful tools",
+    "your result and what it means",
+    "faqs",
+    "faq",
+    "frequently asked questions",
+    "conclusion",
+    "summary",
+    "final thoughts",
+    "table of contents",
 }
 
 WEAK_STARTS: Set[str] = {
@@ -39,6 +46,16 @@ WEAK_ENDINGS: Set[str] = {
     "about", "around", "roughly", "always", "usually", "often", "matter", "like",
     "such", "each", "one", "better", "works", "remember", "with", "for", "from",
     "by", "after", "before"
+}
+
+UTILITY_WEAK_WORDS: Set[str] = {
+    "what", "need", "needs", "calculate", "result", "results",
+    "means", "meaning", "guide", "tools", "tool", "helpful",
+    "things", "stuff", "steps", "summary",
+}
+
+GENERIC_HEAD_NOUNS: Set[str] = {
+    "date", "guide", "tips", "care", "plan", "tool", "calculator",
 }
 
 BAD_FRAGMENT_PATTERNS = (
@@ -75,6 +92,7 @@ QUESTION_PATTERNS: List[re.Pattern[str]] = [
 
 def _canonical_phrase(s: str) -> str:
     s = (s or "").strip().lower()
+    s = s.replace("’", "'").replace("“", '"').replace("”", '"')
     s = s.replace("â€™", "'").replace("â€œ", '"').replace("â€", '"')
     s = s.replace("_", " ").replace("/", " ").replace("\\", " ")
     s = NON_ALNUM_RE.sub(" ", s)
@@ -138,6 +156,7 @@ def _compress_wrapper_phrase(phrase: str) -> str:
 
 def _is_generic_heading(p: str) -> bool:
     p = _canonical_phrase(p)
+
     if p in GENERIC_HEADINGS:
         return True
     if p.startswith("key points"):
@@ -146,6 +165,7 @@ def _is_generic_heading(p: str) -> bool:
         return True
     if p.startswith("faqs about") and len(_tokenize(p)) <= 4:
         return True
+
     return False
 
 
@@ -161,6 +181,58 @@ def _is_low_value_single_word(p: str) -> bool:
     }
 
     return toks[0] not in keep
+
+
+def _is_article_leading_fragment(tokens: List[str]) -> bool:
+    if not tokens:
+        return False
+
+    return len(tokens) <= 5 and tokens[0] in {"a", "an", "the"}
+
+
+def _is_vague_utility_heading(tokens: List[str]) -> bool:
+    if not tokens or len(tokens) > 6:
+        return False
+
+    hits = sum(1 for t in tokens if t in UTILITY_WEAK_WORDS)
+    return hits >= 2
+
+
+def _is_generic_two_word_phrase(tokens: List[str]) -> bool:
+    if len(tokens) != 2:
+        return False
+
+    if tokens[1] in GENERIC_HEAD_NOUNS:
+        return True
+
+    return False
+
+
+def _is_plural_generic_heading(tokens: List[str]) -> bool:
+    if len(tokens) < 2 or len(tokens) > 4:
+        return False
+
+    last = tokens[-1]
+    if not last.endswith("s"):
+        return False
+
+    singular_last = last[:-1]
+    return singular_last in GENERIC_HEAD_NOUNS
+
+
+def _is_utility_led_generic_phrase(tokens: List[str]) -> bool:
+    if not tokens:
+        return False
+
+    utility_starts = {"using", "use", "uses", "calculate", "calculating"}
+
+    if tokens[0] in utility_starts and len(tokens) <= 6:
+        return True
+
+    if tokens[0] in {"a", "an", "the"} and len(tokens) <= 6:
+        return True
+
+    return False
 
 
 def _is_link_worthy_shape(p: str) -> bool:
@@ -183,6 +255,21 @@ def _is_link_worthy_shape(p: str) -> bool:
         return False
 
     if len(set(toks)) < len(toks):
+        return False
+
+    if _is_article_leading_fragment(toks):
+        return False
+
+    if _is_vague_utility_heading(toks):
+        return False
+
+    if _is_generic_two_word_phrase(toks):
+        return False
+
+    if _is_plural_generic_heading(toks):
+        return False
+
+    if _is_utility_led_generic_phrase(toks):
         return False
 
     content = _content_tokens(toks)
@@ -216,16 +303,25 @@ def _reject_live_phrase(
     if re.match(r"^\d+[\.\)]\s*", phrase or ""):
         return True
 
-    if p in {"other helpful tools", "key points to remember", "your result and what it means"}:
-        return True
-
     if p.endswith("to remember"):
         return True
 
     if p.startswith("faqs about"):
         return True
 
-    if p == "what you need to calculate":
+    if _is_article_leading_fragment(toks):
+        return True
+
+    if _is_vague_utility_heading(toks):
+        return True
+
+    if _is_generic_two_word_phrase(toks):
+        return True
+
+    if _is_plural_generic_heading(toks):
+        return True
+
+    if _is_utility_led_generic_phrase(toks):
         return True
 
     if phrase_type in {"heading_h2", "heading_h3"} and len(toks) < 3 and not _looks_like_question_or_intent(p):
@@ -393,6 +489,21 @@ def _final_quality_gate(item: Dict[str, Any], vertical: str) -> bool:
         return False
 
     if _has_bad_fragment_pattern(phrase):
+        return False
+
+    if _is_article_leading_fragment(toks):
+        return False
+
+    if _is_vague_utility_heading(toks):
+        return False
+
+    if _is_generic_two_word_phrase(toks):
+        return False
+
+    if _is_plural_generic_heading(toks):
+        return False
+
+    if _is_utility_led_generic_phrase(toks):
         return False
 
     if toks[0] in WEAK_STARTS and not _looks_like_question_or_intent(phrase):

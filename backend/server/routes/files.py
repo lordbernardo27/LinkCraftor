@@ -709,7 +709,7 @@ async def upload_file(
     )
 
     try:
-        from backend.server.stores.upload_intel_store import build_upload_intelligence
+        from backend.server.stores.upload_intel_store_v2 import build_upload_intelligence
 
         stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
         intel_result = build_upload_intelligence(

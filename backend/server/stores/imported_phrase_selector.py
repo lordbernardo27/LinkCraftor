@@ -288,6 +288,55 @@ def _reject_weak_imported_fragment(phrase: str, full_title: str) -> bool:
 
     return False
 
+def _is_detached_generic_middle_fragment(tokens: List[str], full_tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    generic_starts = {
+        "development", "expect", "guide", "health", "symptoms",
+        "problems", "positions", "supply", "tips"
+    }
+
+    generic_ends = {
+        "trimester", "delivery", "period", "naturally", "safely",
+        "guide", "health", "symptoms"
+    }
+
+    starts_inside_title = bool(full_tokens) and tokens[0] != full_tokens[0]
+    ends_inside_title = bool(full_tokens) and tokens[-1] != full_tokens[-1]
+
+    if starts_inside_title and tokens[0] in generic_starts:
+        return True
+
+    if ends_inside_title and tokens[-1] in generic_ends and len(tokens) <= 4:
+        return True
+
+    return False
+
+def _is_truncated_tail_fragment(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    dangling_endings = {
+        "what", "new", "first", "second", "third", "missed",
+        "preparing", "for", "to", "in", "of", "with", "after",
+    }
+
+    if tokens[-1] in dangling_endings:
+        return True
+
+    if len(tokens) <= 4 and tokens[-2:] in [
+        ["for", "new"],
+        ["in", "the"],
+        ["the", "first"],
+        ["the", "second"],
+        ["the", "third"],
+        ["before", "missed"],
+    ]:
+        return True
+
+    return False
+
 
 def _reject_weak_imported_subphrase(phrase: str, full_title: str) -> bool:
     p = _compress_wrapper_phrase(phrase)
@@ -301,6 +350,12 @@ def _reject_weak_imported_subphrase(phrase: str, full_title: str) -> bool:
 
     pt = _tokenize(p)
     ft = _tokenize(full)
+
+    if _is_detached_generic_middle_fragment(pt, ft):
+        return True
+    
+    if _is_truncated_tail_fragment(pt):
+        return True
 
     if len(pt) < 2:
         return True
@@ -591,9 +646,15 @@ def _extract_title_candidates(title: str) -> List[Dict[str, Any]]:
                 spans.add(" ".join(tokens[-n:]))
 
         for n in (2, 3, 4, 5):
-            if len(tokens) >= n:
-                for i in range(0, len(tokens) - n + 1):
-                    spans.add(" ".join(tokens[i:i + n]))
+         if len(tokens) >= n:
+          for i in range(0, len(tokens) - n + 1):
+            j = i + n
+
+            is_prefix = i == 0
+            is_suffix = j == len(tokens)
+
+            if is_prefix or is_suffix:
+                spans.add(" ".join(tokens[i:j]))
 
         for sp in sorted(spans):
             sp = _compress_wrapper_phrase(sp)

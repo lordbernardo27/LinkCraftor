@@ -480,6 +480,52 @@ def _upsert_phrase_record(
             "snippet": snippet[:160] + ("…" if len(snippet) > 160 else ""),
         })
 
+def _remove_doc_phrases(ph: Dict[str, Any], doc_id: str) -> None:
+    if not doc_id:
+        return
+
+    to_delete: List[str] = []
+
+    for phrase, rec in list(ph.items()):
+        if not isinstance(rec, dict):
+            continue
+
+        docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
+
+        if doc_id not in docs:
+            continue
+
+        docs.pop(doc_id, None)
+        rec["docs"] = docs
+
+        if not docs:
+            to_delete.append(phrase)
+            continue
+
+        count_total = 0
+        for c in docs.values():
+            try:
+                count_total += int(c or 0)
+            except Exception:
+                continue
+
+        rec["count_total"] = count_total
+
+        sections = rec.get("sections") if isinstance(rec.get("sections"), list) else []
+        rec["sections"] = [
+            s for s in sections
+            if not str(s).startswith(f"{doc_id}:")
+        ]
+
+        examples = rec.get("examples") if isinstance(rec.get("examples"), list) else []
+        rec["examples"] = [
+            ex for ex in examples
+            if not isinstance(ex, dict) or str(ex.get("doc_id") or "") != doc_id
+        ][:MAX_EXAMPLES_PER_PHRASE]
+
+    for phrase in to_delete:
+        ph.pop(phrase, None)
+
 def build_upload_intelligence(
     workspace_id: str,
     doc_id: str,
@@ -517,6 +563,8 @@ def build_upload_intelligence(
         phrase_index = {"workspace_id": ws, "updated_at": _now_iso(), "phrases": {}}
     ph = phrase_index.get("phrases") if isinstance(phrase_index.get("phrases"), dict) else {}
     phrase_index["phrases"] = ph
+
+    _remove_doc_phrases(ph, doc_id)
 
     h1, headings = _extract_headings(html or "")
     list_items = _extract_list_items(html or "")

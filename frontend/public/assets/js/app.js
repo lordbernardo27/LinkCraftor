@@ -408,8 +408,6 @@ async function apiLoadImportedUrls(workspaceId = "default", limit = 200000) {
 
 function setImportCount(value = 0) {
   try {
-    const el = document.getElementById("importCount");
-    if (el) el.textContent = String(Number(value) || 0);
   } catch {}
 }
 
@@ -2170,7 +2168,6 @@ const urls = ws ? await apiLoadImportedUrls(ws, 200000) : [];
    // ? Update the badge in the top bar
 try {
   const el = document.getElementById("importCount");
-  setImportCount(IMPORTED_URLS.size || 0);
 } catch {}
 
 
@@ -5773,7 +5770,6 @@ try {
 
     try {
       const el = document.getElementById("importCount");
-      if (el) el.textContent = String(after || 0);
     } catch {}
 
     console.log("[Imports] BACKEND loaded:", after || 0);
@@ -5804,39 +5800,32 @@ function updateConnectionStatus(domain = "") {
   }
 }
 
-
 // ===============================
 // DOMAIN CONNECT POPUP
 // ===============================
 
 document.addEventListener("DOMContentLoaded", () => {
-
   const domainModal = document.getElementById("domainModal");
   const domainInput = document.getElementById("domainInput");
   const btnConnectDomain = document.getElementById("btnConnectDomain");
-  const btnClearSession = document.getElementById("btnClearSession");
 
   const savedDomain = localStorage.getItem("lc_domain") || "";
 
   if (savedDomain) {
-  window.LINKCRAFTOR_WORKSPACE_ID = getCurrentWorkspaceId("");
-  updateConnectionStatus(savedDomain);
-  if (domainModal) {
-    domainModal.style.display = "none";
-  }
-} else {
-  window.LINKCRAFTOR_WORKSPACE_ID = "";
-  updateConnectionStatus("");
+    window.LINKCRAFTOR_WORKSPACE_ID = getCurrentWorkspaceId("");
+    updateConnectionStatus(savedDomain);
 
-  const importCountEl = document.getElementById("importCount");
-  if (importCountEl) {
-    importCountEl.textContent = "0";
-  }
+    if (domainModal) {
+      domainModal.style.display = "none";
+    }
+  } else {
+    window.LINKCRAFTOR_WORKSPACE_ID = "";
+    updateConnectionStatus("");
 
-  if (domainModal) {
-    domainModal.style.display = "flex";
+    if (domainModal) {
+      domainModal.style.display = "flex";
+    }
   }
-}
 
   if (!btnConnectDomain) {
     console.warn("Connect domain button not found");
@@ -5844,7 +5833,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   btnConnectDomain.addEventListener("click", async () => {
-
     const domain = (domainInput.value || "").trim();
 
     if (!domain) {
@@ -5853,7 +5841,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     try {
-
       const res = await fetch(
         `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
         {
@@ -5870,54 +5857,31 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      localStorage.setItem("lc_workspace_id", data.workspace_id);
-      localStorage.setItem("lc_domain", data.domain);
+      const fallbackWorkspaceId =
+        "ws_" +
+        domain
+          .replace(/[^a-zA-Z0-9]+/g, "_")
+          .replace(/^_+|_+$/g, "")
+          .toLowerCase();
 
-      window.LINKCRAFTOR_WORKSPACE_ID = data.workspace_id;
+      const workspaceId = data.workspace_id || data.workspaceId || fallbackWorkspaceId;
+      const cleanDomain = data.domain || domain;
 
-      updateConnectionStatus(data.domain);
+      localStorage.setItem("lc_workspace_id", workspaceId);
+      localStorage.setItem("lc_domain", cleanDomain);
 
-      console.log("[Workspace]", data.workspace_id);
+      window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+
+      updateConnectionStatus(cleanDomain);
 
       if (domainModal) {
         domainModal.style.display = "none";
       }
 
+      console.log("[Domain Connect] Saved workspace:", workspaceId, cleanDomain);
     } catch (err) {
       console.error(err);
       alert("Server connection failed");
     }
-
   });
-
-if (btnClearSession) {
-  btnClearSession.addEventListener("click", async () => {
-    const ws = getCurrentWorkspaceId("default");
-    const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-
-    try {
-      await fetch(`${base}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
-      await fetch(`${base}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
-      await fetch(`${base}/api/site/target_pools/active_target_set/clear?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
-      await fetch(`${base}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`, { method: "POST" });
-    } catch (err) {
-      console.error("Clear Session backend reset failed:", err);
-    }
-
-    localStorage.removeItem("lc_workspace_id");
-    localStorage.removeItem("lc_domain");
-    window.LINKCRAFTOR_WORKSPACE_ID = "";
-
-    updateConnectionStatus("");
-
-    if (domainInput) {
-      domainInput.value = "";
-    }
-
-    if (domainModal) {
-      domainModal.style.display = "flex";
-    }
-  });
-}
-
 });

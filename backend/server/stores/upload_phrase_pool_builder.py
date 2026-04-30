@@ -188,6 +188,10 @@ def _quality_gate_phrase(phrase: str, source_type: str = "") -> str:
     return _canonical_phrase(str(scored.get("phrase") or guarded_phrase))
 
 
+def _light_normalize_phrase(phrase: str) -> str:
+    return _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+
+
 def _record_score(rec: Dict[str, Any]) -> float:
     for key in ("score", "quality_score", "strength_score"):
         try:
@@ -247,11 +251,12 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
             if cleaned_ex["doc_id"] or cleaned_ex["section_id"] or cleaned_ex["snippet"]:
                 examples.append(cleaned_ex)
 
-        candidate_aliases: List[str] = []
         rec_source_type = str(rec.get("source_type") or "")
 
-        old_phrase = _quality_gate_phrase(str(rec.get("phrase") or ""), rec_source_type)
-        old_canonical = _quality_gate_phrase(str(rec.get("canonical") or ""), rec_source_type)
+        old_phrase = _light_normalize_phrase(str(rec.get("phrase") or ""))
+        old_canonical = _light_normalize_phrase(str(rec.get("canonical") or ""))
+
+        candidate_aliases: List[str] = []
 
         if old_phrase and old_phrase != target_key:
             candidate_aliases.append(old_phrase)
@@ -261,7 +266,7 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
 
         rec_aliases = rec.get("aliases") if isinstance(rec.get("aliases"), list) else []
         for a in rec_aliases:
-            aa = _quality_gate_phrase(str(a or ""), rec_source_type)
+            aa = _light_normalize_phrase(str(a or ""))
             if aa and aa != target_key:
                 candidate_aliases.append(aa)
 
@@ -307,8 +312,7 @@ def _canonical_merge_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(rec, dict):
             continue
 
-        source_type = _clean_text(rec.get("source_type") or "")
-        target_key = _quality_gate_phrase(old_key, source_type)
+        target_key = _light_normalize_phrase(str(old_key))
 
         if not target_key:
             continue
@@ -356,21 +360,18 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         clean_rec = dict(v)
         source_type = _clean_text(clean_rec.get("source_type") or "")
 
-        phrase_text = _clean_text(clean_rec.get("phrase") or nk)
-        canonical_text = _clean_text(clean_rec.get("canonical") or phrase_text)
-
-        phrase_text = _extract_canonical_core_phrase(phrase_text) or _canonical_phrase(phrase_text)
+        phrase_text = _light_normalize_phrase(_clean_text(clean_rec.get("phrase") or nk))
         if not phrase_text:
             continue
 
-        canonical_text = _extract_canonical_core_phrase(canonical_text) or _canonical_phrase(canonical_text)
+        canonical_text = _light_normalize_phrase(_clean_text(clean_rec.get("canonical") or phrase_text))
         if not canonical_text:
             canonical_text = phrase_text
 
         scored_check = score_phrase_strength(
-           phrase=phrase_text,
-           source_type=source_type or "",
-)
+            phrase=phrase_text,
+            source_type=source_type or "",
+        )
 
         clean_rec["phrase"] = phrase_text
         clean_rec["canonical"] = canonical_text
@@ -387,7 +388,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
             seen_aliases: Set[str] = set()
 
             for x in clean_rec["aliases"]:
-                ax = _extract_canonical_core_phrase(str(x or "")) or _canonical_phrase(str(x or ""))
+                ax = _light_normalize_phrase(str(x or ""))
 
                 if not ax or ax == phrase_text or ax in seen_aliases:
                     continue
@@ -442,7 +443,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
             docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
 
             if any(str(doc_id) in usable_active_ids for doc_id in docs.keys()):
-                gated_phrase = _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+                gated_phrase = _light_normalize_phrase(phrase)
                 if gated_phrase:
                     filtered[gated_phrase] = rec
     else:
@@ -450,7 +451,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
             if not isinstance(rec, dict):
                 continue
 
-            gated_phrase = _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+            gated_phrase = _light_normalize_phrase(phrase)
             if gated_phrase:
                 filtered[gated_phrase] = rec
 

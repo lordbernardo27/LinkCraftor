@@ -3,9 +3,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
+from ..stores.link_decision_store import save_link_decision
+
 from .engine_decisions import get_aggregated_link_feedback
 from ..engine.scoring import score_candidates_for_phrase
 from ..engine.profiles import PROFILES, normalize_profile_id
+from ..engine.link_decision_builder import build_link_decision
 from ..stores.workspace_profile_store import get_workspace_profile, set_workspace_profile
 
 router = APIRouter(prefix="/api/engine", tags=["engine"])
@@ -147,10 +150,18 @@ def score_endpoint(payload: ScoreRequest, debug: bool = False):
         debug=debug,
     )
 
+    built_decision = None
+    if out:
+        built_decision = build_link_decision(phrase_ctx, out)
+
+    if built_decision and not debug:
+      save_link_decision(workspace_id, built_decision)
+
     return {
         "ok": True,
         "results": out,
         "profile": profile,
         "debug": debug,
         "debug_payload": debug_payload,
+        "built_decision": built_decision if debug else None,
     }
