@@ -54,3 +54,18 @@ class TicketMessageResponse(BaseModel):
     body: str
     is_customer_visible: bool
     created_at: datetime
+
+class TicketStatusUpdateRequest(BaseModel):
+    status: str = Field(..., min_length=1, max_length=50)
+    changed_by_staff_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class TicketStatusUpdateResponse(BaseModel):
+    ok: bool = True
+    ticket_id: str
+    from_status: str
+    to_status: str
+    changed_by_staff_id: Optional[str] = None
+    reason: Optional[str] = None
+    updated_at: datetime

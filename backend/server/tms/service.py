@@ -4,12 +4,14 @@ from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import uuid4
 
-from .models import Ticket, TicketMessage
+from .models import Ticket, TicketMessage, TicketStatusEvent
 from .schemas import (
     TicketCreateRequest,
     TicketCreateResponse,
     TicketMessageCreateRequest,
     TicketMessageResponse,
+    TicketStatusUpdateRequest,
+    TicketStatusUpdateResponse,
 )
 from .ticket_store import (
     load_messages,
@@ -18,6 +20,8 @@ from .ticket_store import (
     save_messages,
     save_meta,
     save_tickets,
+    load_status_events,
+    save_status_events,
 )
 
 
@@ -25,25 +29,36 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+ALLOWED_TICKET_STATUSES = {
+    "new",
+    "open",
+    "in_review",
+    "waiting_on_customer",
+    "waiting_on_linkcraftor",
+    "pending_engineering",
+    "pending_billing",
+    "pending_qa",
+    "resolved",
+    "closed",
+}
+
+
 class TicketService:
     """
     JSON-backed TMS service.
-
-    Phase 1 persistence:
-    - tickets stored in backend/server/data/tms/tickets.json
-    - messages stored in backend/server/data/tms/messages.json
-    - ticket counter stored in backend/server/data/tms/meta.json
     """
 
     def __init__(self) -> None:
         self._tickets: Dict[str, Ticket] = load_tickets()
         self._messages: Dict[str, List[TicketMessage]] = load_messages()
+        self._status_events: Dict[str, List[TicketStatusEvent]] = load_status_events()
         self._ticket_counter: int = load_meta()
 
     def _persist(self) -> None:
-        save_tickets(self._tickets)
-        save_messages(self._messages)
-        save_meta(self._ticket_counter)
+     save_tickets(self._tickets)
+     save_messages(self._messages)
+     save_status_events(self._status_events)
+     save_meta(self._ticket_counter)
 
     def _next_ticket_number(self) -> str:
         self._ticket_counter += 1
@@ -122,8 +137,62 @@ class TicketService:
             created_at=message.created_at,
         )
 
+    def update_ticket_status(
+        self,
+        ticket_id: str,
+        payload: TicketStatusUpdateRequest,
+    ) -> TicketStatusUpdateResponse:
+        ticket = self._tickets.get(ticket_id)
+        if ticket is None:
+            raise KeyError(f"ticket_not_found: {ticket_id}")
+
+        new_status = payload.status.strip().lower()
+
+        if new_status not in ALLOWED_TICKET_STATUSES:
+            raise ValueError(f"invalid_ticket_status: {new_status}")
+
+        old_status = ticket.status
+        ticket.status = new_status
+        ticket.updated_at = utc_now()
+
+        status_event = TicketStatusEvent(
+            event_id=f"status_{uuid4().hex}",
+            ticket_id=ticket_id,
+            from_status=old_status,
+            to_status=new_status,
+            changed_by_staff_id=payload.changed_by_staff_id,
+            reason=payload.reason,
+        )
+        self._status_events.setdefault(ticket_id, []).append(status_event)
+
+        if new_status in {"resolved", "closed"}:
+            ticket.closed_at = ticket.updated_at
+        else:
+            ticket.closed_at = None
+
+        self._persist()
+
+        return TicketStatusUpdateResponse(
+            ticket_id=ticket.ticket_id,
+            from_status=old_status,
+            to_status=ticket.status,
+            changed_by_staff_id=payload.changed_by_staff_id,
+            reason=payload.reason,
+            updated_at=ticket.updated_at,
+        )
+
+    def list_tickets(self) -> List[Ticket]:
+        return sorted(
+            self._tickets.values(),
+            key=lambda t: t.created_at,
+            reverse=True,
+        )
+
     def get_ticket(self, ticket_id: str) -> Ticket | None:
         return self._tickets.get(ticket_id)
+
+    def list_status_events(self, ticket_id: str) -> List[TicketStatusEvent]:
+        return list(self._status_events.get(ticket_id, []))
 
     def list_messages(self, ticket_id: str) -> List[TicketMessage]:
         return list(self._messages.get(ticket_id, []))

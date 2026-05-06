@@ -408,7 +408,11 @@ async function apiLoadImportedUrls(workspaceId = "default", limit = 200000) {
 
 function setImportCount(value = 0) {
   try {
-  } catch {}
+    const el = document.getElementById("importCount");
+    if (el) el.textContent = String(Number(value) || 0);
+  } catch (e) {
+    console.warn("[importCount] set failed:", e);
+  }
 }
 
 async function updateUnifiedImportCount(workspaceId = "default") {
@@ -421,9 +425,21 @@ async function updateUnifiedImportCount(workspaceId = "default") {
     const urlCount = (r1.ok && Array.isArray(d1.urls)) ? d1.urls.length : 0;
 
     // B) Draft topics count
-    const r2 = await fetch(`${base}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
-    const d2 = await r2.json().catch(() => ({}));
-    const draftCount = (r2.ok && Array.isArray(d2.topics)) ? d2.topics.length : 0;
+const r2 = await fetch(`${base}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+const d2 = await r2.json().catch(() => ({}));
+
+let draftCount = 0;
+
+if (r2.ok) {
+  if (typeof d2.count === "number") {
+    draftCount = d2.count;
+  } else if (Array.isArray(d2.topics)) {
+    draftCount = d2.topics.length;
+  } else if (d2.topics && typeof d2.topics === "object") {
+    draftCount = Object.keys(d2.topics).length;
+  }
+}
+
 
     // ? Unified total into the EXISTING badge
     const el = document.getElementById("importCount");
@@ -548,7 +564,6 @@ const fileInput = $("file");
 const sitemapFile = $("sitemapFile");
 const draftFile = $("draftFile");
 const btnImportMap = $("btnImportMain"); // ? correct ID in your HTML
-const btnImportDraft = $("btnImportDraft");
 
 const allDocs = $("allDocs");
 const editor = $("editor");
@@ -2191,143 +2206,6 @@ try {
 });
 
 
-/* Import Draft Map � BACKEND ONLY (single source of truth) */
-if (btnImportDraft && draftFile) {
-  const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-
-  async function apiImportDraftFile(file, workspaceId = "default") {
-    const fd = new FormData();
-    fd.append("file", file);
-
-    const res = await fetch(
-      `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(workspaceId)}`,
-      { method: "POST", body: fd }
-    );
-
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-    return data; // { ok, added, updated, total }
-  }
-
-  async function apiLoadDraft(workspaceId = "default", limit = 200000) {
-    const res = await fetch(
-      `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${limit}`
-    );
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-    return Array.isArray(data.topics) ? data.topics : [];
-  }
-
-  function applyDraftToMemory(rows) {
-    // Convert backend list -> your in-memory DRAFT_TOPICS map
-    const next = new Map();
-    for (const r of (rows || [])) {
-      const topic_id = String(r.topic_id || "").trim();
-      const working_title = String(r.working_title || "").trim();
-      if (!topic_id || !working_title) continue;
-
-      next.set(topic_id, {
-        id: `d:${topic_id}`,
-        topic_id,
-        working_title,
-        planned_slug: r.planned_slug || "",
-        planned_url: r.planned_url || "",
-        aliases: Array.isArray(r.aliases) ? r.aliases : [],
-        priority: Number(r.priority || 0) || 0,
-        canonical: Boolean(r.canonical),
-      });
-    }
-    DRAFT_TOPICS = next;
-    console.log("[Draft] BACKEND loaded:", DRAFT_TOPICS.size);
-  }
-
-   // ? Hydrate drafts from backend on initial load (so Draft BACKEND loaded is never 0 unless backend is empty)
-(async function hydrateDraftsOnLoad(){
-  try{
-    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const ws = getCurrentWorkspaceId("default");
-const url = `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
-
-    const res = await fetch(url);
-    const data = await res.json().catch(()=>({}));
-    if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-
-    // backend can return {topics:{}} or {items:[]} depending on your route version
-    const topicsObj = (data && typeof data.topics === "object" && data.topics) ? data.topics : null;
-    const itemsArr  = Array.isArray(data?.items) ? data.items : null;
-
-    // Normalize into DRAFT_TOPICS Map (url -> topic)
-    if (!window.DRAFT_TOPICS) window.DRAFT_TOPICS = new Map();
-    window.DRAFT_TOPICS.clear();
-
-    let count = 0;
-
-    if (topicsObj) {
-      // { url: {title,...}, ... }
-      for (const [u, meta] of Object.entries(topicsObj)) {
-        const url2 = String(u || "").trim();
-        if (!url2) continue;
-        window.DRAFT_TOPICS.set(url2, meta || {});
-        count++;
-      }
-    } else if (itemsArr) {
-      // [{planned_url,title,topic_id,...}, ...]
-      for (const r of itemsArr) {
-        const url2 = String(r?.planned_url || r?.url || "").trim();
-        if (!url2) continue;
-        window.DRAFT_TOPICS.set(url2, r);
-        count++;
-      }
-    }
-
-    // ? Update any Draft count element if you have one
-    try{
-      const el = document.getElementById("draftCount");
-      if (el) el.textContent = String(count);
-    }catch{}
-
-    console.log("[Draft] BACKEND loaded:", count);
-  }catch(e){
-    console.warn("[Draft] BACKEND hydrate failed:", e);
-  }
-})();
-
-
-
-  btnImportDraft.addEventListener("click", () => {
-    draftFile.value = "";
-    draftFile.click();
-  });
-
-  draftFile.addEventListener("change", async () => {
-    const f = draftFile.files && draftFile.files[0];
-    draftFile.value = "";
-    if (!f) return;
-
-    try {
-      const r = await apiImportDraftFile(f, "default");
-      const rows = await apiLoadDraft("default", 200000);
-      applyDraftToMemory(rows);
-      const ws = getCurrentWorkspaceId("");
-if (ws) await updateUnifiedImportCount(ws);
-
-
-
-      showToast(
-        errorBox,
-        `Draft saved (backend): +${r.added || 0} added, ${r.updated || 0} updated. Total: ${r.total || DRAFT_TOPICS.size}`,
-        2400
-      );
-
-      if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
-    } catch (e) {
-      console.error("[Draft] import failed:", e);
-      showToast(errorBox, `Draft import failed: ${e.message || e}`, 2400);
-    }
-  });
-}
-
-
 /* Toolbar basics */
 const toolbar = $("toolbar");
 function ensureViewerFocus(){ try{ viewerEl?.focus(); }catch{} }
@@ -2408,6 +2286,7 @@ btnClearSession?.addEventListener("click", () => {
   docs.splice(0, docs.length);
   currentIndex = -1;
   if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing�";
+  if (editor) editor.innerHTML = "";
   safeSetText(topMeta, "No document loaded", "topMeta");
   safeSetText(docMeta, "Code: �", "docMeta");
   safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
@@ -3236,6 +3115,25 @@ function applyMarksFromSuggestions(items = [], opts = {}) {
       mark.dataset.strength = item.bucket === "strong" ? "strong" : "optional";
       mark.dataset.phrase = encodeURIComponent(phraseNorm);
       mark.textContent = hit;
+
+const ctl = document.createElement("span");
+ctl.className = "kw-ctl";
+
+const acceptBtn = document.createElement("button");
+acceptBtn.type = "button";
+acceptBtn.className = "kw-btn kw-accept";
+acceptBtn.title = "Accept suggestion";
+acceptBtn.textContent = "✓";
+
+const rejectBtn = document.createElement("button");
+rejectBtn.type = "button";
+rejectBtn.className = "kw-btn kw-reject";
+rejectBtn.title = "Reject suggestion";
+rejectBtn.textContent = "×";
+
+ctl.appendChild(acceptBtn);
+ctl.appendChild(rejectBtn);
+mark.appendChild(ctl);
 
       const frag = document.createDocumentFragment();
       if (before) frag.appendChild(document.createTextNode(before));
@@ -5380,42 +5278,32 @@ alert(`Draft saved to backend. Total drafts: ${rows.length}`);
   // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-function bootExtras() {
+async function bootExtras() {
   console.log("APP.JS ACTIVE VERSION: HELLO FROM TOP");
 
-  // ?? IMPORTANT:
-  // Keep whatever initialization you already had inside boot()
-  // (wiring uploads, toolbar, loading saved docs, stopwords, buckets, etc.).
-  // Do NOT remove your existing setup lines here.
-  //
-  // Just make sure the following three sidebar initialisers are ALSO called
-  // somewhere inside this boot() function.
+  const ws = getCurrentWorkspaceId("");
+  if (ws) {
+    await updateUnifiedImportCount(ws);
+  }
 
-  // 1) Manage rejections panel (right sidebar)
   initRejectionsUI({
     onChange: () => {
-      // Whenever rejections change, keep related panels in sync
       try { LR_rebuild(); } catch {}
       try { rebuildLinkedPhrasesList(); } catch {}
     }
   });
 
-  // 2) Linked phrases list (per-phrase Undo)
   initLinkedPhrasesUI({
     onUndoPhrase: (phrase) => {
-      // Hook where you can also update LINKED_SET / LINKED_MAP later
       console.log("[LinkedPhrases] undo phrase:", phrase);
     },
     onChange: () => {
-      // After undoing a phrase, refresh Link Resolution panel
       try { LR_rebuild(); } catch {}
     }
   });
 
-  // 3) Link Resolution panel (resolved vs unresolved phrases)
   initLinkResolutionPanel();
 
-  // Optionally ensure rejections panel is painted once at boot
   try { rebuildRejectionsPanel(); } catch {}
   try { rebuildLinkedPhrasesList(); } catch {}
 }

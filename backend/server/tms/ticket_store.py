@@ -6,12 +6,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .models import Ticket, TicketMessage
+from .models import Ticket, TicketMessage, TicketStatusEvent
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TMS_DATA_DIR = BASE_DIR / "data" / "tms"
+
 TICKETS_FP = TMS_DATA_DIR / "tickets.json"
 MESSAGES_FP = TMS_DATA_DIR / "messages.json"
+STATUS_EVENTS_FP = TMS_DATA_DIR / "status_events.json"
 META_FP = TMS_DATA_DIR / "meta.json"
 
 
@@ -81,6 +83,7 @@ def load_tickets() -> Dict[str, Ticket]:
             updated_at=_parse_dt(obj.get("updated_at")) or datetime.now(),
             closed_at=_parse_dt(obj.get("closed_at")),
         )
+
     return out
 
 
@@ -109,6 +112,36 @@ def load_messages() -> Dict[str, List[TicketMessage]]:
             )
             for obj in items
         ]
+
+    return out
+
+
+def save_status_events(status_events: Dict[str, List[TicketStatusEvent]]) -> None:
+    payload = {
+        ticket_id: [asdict(event) for event in items]
+        for ticket_id, items in status_events.items()
+    }
+    _write_json(STATUS_EVENTS_FP, payload)
+
+
+def load_status_events() -> Dict[str, List[TicketStatusEvent]]:
+    raw = _read_json(STATUS_EVENTS_FP, {})
+    out: Dict[str, List[TicketStatusEvent]] = {}
+
+    for ticket_id, items in raw.items():
+        out[ticket_id] = [
+            TicketStatusEvent(
+                event_id=obj["event_id"],
+                ticket_id=obj["ticket_id"],
+                from_status=obj.get("from_status"),
+                to_status=obj["to_status"],
+                changed_by_staff_id=obj.get("changed_by_staff_id"),
+                reason=obj.get("reason"),
+                created_at=_parse_dt(obj.get("created_at")) or datetime.now(),
+            )
+            for obj in items
+        ]
+
     return out
 
 
