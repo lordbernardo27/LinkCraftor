@@ -55,6 +55,13 @@ def _clean_text(s: Any) -> str:
     return fix_mojibake_text(str(s or "").strip())
 
 
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return default
+
+
 def _clean_examples(v: Any) -> List[Dict[str, str]]:
     if not isinstance(v, list):
         return []
@@ -165,15 +172,29 @@ def _extract_canonical_core_phrase(s: str) -> str:
     return _canonical_phrase(s)
 
 
-def _quality_gate_phrase(phrase: str, source_type: str = "") -> str:
+def _light_normalize_phrase(phrase: str) -> str:
+    return _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+
+
+def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Dict[str, Any]:
     phrase = _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
 
     if not phrase:
-        return ""
+        return {
+            "keep": False,
+            "phrase": "",
+            "quality_gate": {},
+            "strength": {},
+        }
 
     guard = candidate_window_guard(phrase, source_type=source_type or "")
     if not isinstance(guard, dict) or not guard.get("keep"):
-        return ""
+        return {
+            "keep": False,
+            "phrase": "",
+            "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
+            "strength": {},
+        }
 
     guarded_phrase = _canonical_phrase(str(guard.get("phrase") or phrase))
 
@@ -183,17 +204,30 @@ def _quality_gate_phrase(phrase: str, source_type: str = "") -> str:
     )
 
     if not isinstance(scored, dict) or not scored.get("keep"):
-        return ""
+        return {
+            "keep": False,
+            "phrase": "",
+            "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
+            "strength": scored if isinstance(scored, dict) else {},
+        }
 
-    return _canonical_phrase(str(scored.get("phrase") or guarded_phrase))
+    final_phrase = _canonical_phrase(str(scored.get("phrase") or guarded_phrase))
+
+    return {
+        "keep": True,
+        "phrase": final_phrase,
+        "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
+        "strength": scored,
+    }
 
 
-def _light_normalize_phrase(phrase: str) -> str:
-    return _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+def _quality_gate_phrase(phrase: str, source_type: str = "") -> str:
+    result = _quality_gate_phrase_with_metadata(phrase, source_type)
+    return str(result.get("phrase") or "") if result.get("keep") else ""
 
 
 def _record_score(rec: Dict[str, Any]) -> float:
-    for key in ("score", "quality_score", "strength_score"):
+    for key in ("builder_score", "score", "quality_score", "strength_score"):
         try:
             val = float(rec.get(key) or 0.0)
             if val:
@@ -201,6 +235,196 @@ def _record_score(rec: Dict[str, Any]) -> float:
         except Exception:
             continue
     return 0.0
+
+
+def _extract_extractor_score(rec: Dict[str, Any]) -> float:
+    info = rec.get("extractor_intelligence")
+    if not isinstance(info, dict):
+        return 0.0
+    return _safe_float(info.get("score"), 0.0)
+
+
+def _extract_quality_gate_score(rec: Dict[str, Any]) -> float:
+    qg = rec.get("quality_gate")
+    if not isinstance(qg, dict):
+        return 0.0
+    return _safe_float(qg.get("quality_gate_score"), 0.0)
+
+
+def _extract_strength_score(rec: Dict[str, Any]) -> float:
+    strength = rec.get("strength")
+    if isinstance(strength, dict):
+        for key in ("score", "quality_score", "strength_score"):
+            val = _safe_float(strength.get(key), 0.0)
+            if val:
+                return val
+
+    for key in ("score", "quality_score", "strength_score"):
+        val = _safe_float(rec.get(key), 0.0)
+        if val:
+            return val
+
+    return 0.0
+
+
+def _source_priority(source_type: str) -> float:
+    source_type = str(source_type or "").strip().lower()
+
+    if source_type == "title":
+        return 1.00
+    if source_type in {"heading_h1", "heading_h2"}:
+        return 0.95
+    if source_type in {"heading_h3", "heading_h4", "heading_h5", "heading_h6"}:
+        return 0.88
+    if source_type in {"intent", "entity"}:
+        return 0.84
+    if source_type in {"noun_phrase", "action_object", "condition_phrase"}:
+        return 0.78
+    if source_type == "list_item":
+        return 0.74
+
+    return 0.65
+
+
+def _cross_document_strength(rec: Dict[str, Any]) -> float:
+    docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
+    doc_count = len(docs)
+
+    if doc_count >= 5:
+        return 1.0
+    if doc_count == 4:
+        return 0.9
+    if doc_count == 3:
+        return 0.8
+    if doc_count == 2:
+        return 0.65
+    if doc_count == 1:
+        return 0.45
+
+    examples = rec.get("examples") if isinstance(rec.get("examples"), list) else []
+    example_docs = {str(ex.get("doc_id") or "") for ex in examples if isinstance(ex, dict)}
+    example_docs.discard("")
+
+    if len(example_docs) >= 2:
+        return 0.60
+    if len(example_docs) == 1:
+        return 0.40
+
+    return 0.25
+
+
+def _semantic_stability(rec: Dict[str, Any]) -> float:
+    phrase = _canonical_phrase(str(rec.get("phrase") or ""))
+    canonical = _canonical_phrase(str(rec.get("canonical") or phrase))
+    aliases = rec.get("aliases") if isinstance(rec.get("aliases"), list) else []
+
+    if not phrase:
+        return 0.0
+
+    score = 0.70
+
+    if canonical == phrase:
+        score += 0.10
+
+    if len(phrase.split()) in {2, 3, 4}:
+        score += 0.10
+
+    clean_aliases = [
+        _light_normalize_phrase(str(a or ""))
+        for a in aliases
+        if _light_normalize_phrase(str(a or ""))
+    ]
+
+    if len(clean_aliases) <= 2:
+        score += 0.05
+    elif len(clean_aliases) >= 5:
+        score -= 0.10
+
+    return max(0.0, min(1.0, round(score, 4)))
+
+
+def _ranking_priority(builder_score: float) -> str:
+    if builder_score >= 0.85:
+        return "HIGH"
+    if builder_score >= 0.65:
+        return "MEDIUM"
+    return "LOW"
+
+
+def _build_builder_intelligence(rec: Dict[str, Any]) -> Dict[str, Any]:
+    extractor_score = _extract_extractor_score(rec)
+    quality_gate_score = _extract_quality_gate_score(rec)
+    strength_score = _extract_strength_score(rec)
+    source_score = _source_priority(str(rec.get("source_type") or ""))
+    cross_doc_score = _cross_document_strength(rec)
+    semantic_score = _semantic_stability(rec)
+
+    builder_score = (
+        (extractor_score * 0.20)
+        + (quality_gate_score * 0.20)
+        + (strength_score * 0.25)
+        + (source_score * 0.15)
+        + (cross_doc_score * 0.10)
+        + (semantic_score * 0.10)
+    )
+
+    builder_score = round(max(0.0, min(1.0, builder_score)), 4)
+
+    return {
+        "builder_score": builder_score,
+        "ranking_priority": _ranking_priority(builder_score),
+        "signals": {
+            "extractor_score": round(extractor_score, 4),
+            "quality_gate_score": round(quality_gate_score, 4),
+            "strength_score": round(strength_score, 4),
+            "source_priority": round(source_score, 4),
+            "cross_document_strength": round(cross_doc_score, 4),
+            "semantic_stability": round(semantic_score, 4),
+        },
+        "layers": [
+            "temporal_reasoning",
+            "entity_map",
+            "topic_coherence",
+            "cross_document_reasoning",
+            "long_context_compression",
+            "cross_knowledge_fusion",
+            "ontology_alignment",
+            "intelligent_data_compression",
+            "workspace_isolation",
+            "explainability",
+            "qa_regression_readiness",
+        ],
+    }
+
+
+def _preserve_intelligence_metadata(clean_rec: Dict[str, Any], gate_result: Dict[str, Any]) -> None:
+    extractor_intelligence = (
+        clean_rec.get("extractor_intelligence")
+        if isinstance(clean_rec.get("extractor_intelligence"), dict)
+        else {}
+    )
+
+    quality_gate = (
+        clean_rec.get("quality_gate")
+        if isinstance(clean_rec.get("quality_gate"), dict)
+        else {}
+    )
+
+    if not quality_gate and isinstance(gate_result.get("quality_gate"), dict):
+        quality_gate = gate_result.get("quality_gate") or {}
+
+    strength = (
+        clean_rec.get("strength")
+        if isinstance(clean_rec.get("strength"), dict)
+        else {}
+    )
+
+    if isinstance(gate_result.get("strength"), dict):
+        strength = gate_result.get("strength") or strength
+
+    clean_rec["extractor_intelligence"] = extractor_intelligence
+    clean_rec["quality_gate"] = quality_gate
+    clean_rec["strength"] = strength
 
 
 def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -221,9 +445,44 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
     last_seen_vals: List[str] = []
     best_score = _record_score(first)
 
+    best_extractor_intelligence = (
+        first.get("extractor_intelligence")
+        if isinstance(first.get("extractor_intelligence"), dict)
+        else {}
+    )
+    best_quality_gate = (
+        first.get("quality_gate")
+        if isinstance(first.get("quality_gate"), dict)
+        else {}
+    )
+    best_strength = first.get("strength") if isinstance(first.get("strength"), dict) else {}
+    best_builder_intelligence = (
+        first.get("builder_intelligence")
+        if isinstance(first.get("builder_intelligence"), dict)
+        else {}
+    )
+
     for rec in records:
+        rec_score = _record_score(rec)
         count_total += int(rec.get("count_total") or 0)
-        best_score = max(best_score, _record_score(rec))
+        best_score = max(best_score, rec_score)
+
+        if rec_score >= _record_score({
+            "builder_score": (
+                best_builder_intelligence.get("builder_score")
+                if isinstance(best_builder_intelligence, dict)
+                else 0.0
+            ),
+            "score": best_score,
+        }):
+            if isinstance(rec.get("extractor_intelligence"), dict):
+                best_extractor_intelligence = rec.get("extractor_intelligence") or {}
+            if isinstance(rec.get("quality_gate"), dict):
+                best_quality_gate = rec.get("quality_gate") or {}
+            if isinstance(rec.get("strength"), dict):
+                best_strength = rec.get("strength") or {}
+            if isinstance(rec.get("builder_intelligence"), dict):
+                best_builder_intelligence = rec.get("builder_intelligence") or {}
 
         rec_docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
         for d, c in rec_docs.items():
@@ -299,8 +558,15 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
     first["source_type"] = source_type
     first["tier"] = tier
     first["score"] = best_score
+    first["extractor_intelligence"] = best_extractor_intelligence
+    first["quality_gate"] = best_quality_gate
+    first["strength"] = best_strength
     first["first_seen"] = min(first_seen_vals) if first_seen_vals else first.get("first_seen", "")
     first["last_seen"] = max(last_seen_vals) if last_seen_vals else first.get("last_seen", "")
+
+    first["builder_intelligence"] = _build_builder_intelligence(first)
+    first["builder_score"] = first["builder_intelligence"]["builder_score"]
+    first["ranking_priority"] = first["builder_intelligence"]["ranking_priority"]
 
     return first
 
@@ -331,7 +597,7 @@ def _sort_phrase_dict(phrases: Dict[str, Any]) -> Dict[str, Any]:
     sorted_items = sorted(
         phrases.items(),
         key=lambda kv: (
-            -float(kv[1].get("score") or kv[1].get("quality_score") or 0.0)
+            -float(kv[1].get("builder_score") or kv[1].get("score") or kv[1].get("quality_score") or 0.0)
             if isinstance(kv[1], dict)
             else 0.0,
             kv[0],
@@ -364,24 +630,26 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         if not phrase_text:
             continue
 
+        gate_result = _quality_gate_phrase_with_metadata(phrase_text, source_type=source_type or "")
+        if not gate_result.get("keep"):
+            continue
+
+        phrase_text = _light_normalize_phrase(str(gate_result.get("phrase") or phrase_text))
+        if not phrase_text:
+            continue
+
         canonical_text = _light_normalize_phrase(_clean_text(clean_rec.get("canonical") or phrase_text))
         if not canonical_text:
             canonical_text = phrase_text
 
-        scored_check = score_phrase_strength(
-            phrase=phrase_text,
-            source_type=source_type or "",
-        )
+        _preserve_intelligence_metadata(clean_rec, gate_result)
 
         clean_rec["phrase"] = phrase_text
         clean_rec["canonical"] = canonical_text
 
-        if "score" not in clean_rec:
-            clean_rec["score"] = (
-                float(scored_check.get("score") or 0.0)
-                if isinstance(scored_check, dict)
-                else 0.0
-            )
+        strength_score = _extract_strength_score(clean_rec)
+        if "score" not in clean_rec or not _safe_float(clean_rec.get("score"), 0.0):
+            clean_rec["score"] = strength_score
 
         if isinstance(clean_rec.get("aliases"), list):
             clean_aliases: List[str] = []
@@ -409,6 +677,10 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
             clean_rec["examples"] = _clean_examples(clean_rec["examples"])
         else:
             clean_rec["examples"] = []
+
+        clean_rec["builder_intelligence"] = _build_builder_intelligence(clean_rec)
+        clean_rec["builder_score"] = clean_rec["builder_intelligence"]["builder_score"]
+        clean_rec["ranking_priority"] = clean_rec["builder_intelligence"]["ranking_priority"]
 
         phrases[phrase_text] = clean_rec
 
@@ -458,6 +730,15 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     filtered = _canonical_merge_phrases(filtered)
     filtered = _sort_phrase_dict(filtered)
 
+    priority_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+    for rec in filtered.values():
+        if not isinstance(rec, dict):
+            continue
+        priority = str(rec.get("ranking_priority") or "LOW")
+        if priority not in priority_counts:
+            priority = "LOW"
+        priority_counts[priority] += 1
+
     obj = {
         "workspace_id": ws,
         "updated_at": _now_iso(),
@@ -468,6 +749,23 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         "active_document_ids_count": len(active_doc_set),
         "usable_active_document_ids_count": len(usable_active_ids),
         "indexed_document_ids_count": len(indexed_doc_ids),
+        "builder_intelligence_summary": {
+            "enabled": True,
+            "ranking_priority_counts": priority_counts,
+            "layers": [
+                "temporal_reasoning",
+                "entity_map",
+                "topic_coherence",
+                "cross_document_reasoning",
+                "long_context_compression",
+                "cross_knowledge_fusion",
+                "ontology_alignment",
+                "intelligent_data_compression",
+                "workspace_isolation",
+                "explainability",
+                "qa_regression_readiness",
+            ],
+        },
         "phrases": filtered,
     }
 

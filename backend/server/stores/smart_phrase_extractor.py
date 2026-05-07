@@ -201,6 +201,51 @@ UNIVERSAL_MODIFIERS: Set[str] = {
     "usage", "search", "brand", "branded", "trial", "demo",
 }.union(get_all_universal_modifiers())
 
+
+EXTRACTOR_INTELLIGENCE_WEIGHTS: Dict[str, float] = {
+    "entity_density": 0.25,
+    "anchor_strength": 0.25,
+    "semantic_cohesion": 0.20,
+    "wrapper_noise_control": 0.15,
+    "topic_alignment": 0.15,
+}
+
+SOURCE_TYPE_THRESHOLDS: Dict[str, float] = {
+    "title": 0.45,
+    "heading_h1": 0.45,
+    "heading_h2": 0.48,
+    "heading_h3": 0.50,
+    "heading_h4": 0.52,
+    "heading_h5": 0.52,
+    "heading_h6": 0.52,
+    "list_item": 0.55,
+    "intent": 0.55,
+    "action_object": 0.58,
+    "condition_phrase": 0.58,
+    "noun_phrase": 0.60,
+}
+
+
+VERB_WRAPPER_STARTS: Set[str] = {
+    "avoid",
+    "prevent",
+    "reduce",
+    "improve",
+    "increase",
+    "manage",
+    "check",
+    "track",
+    "monitor",
+    "review",
+    "forecast",
+    "optimize",
+    "build",
+    "create",
+    "fix",
+    "protect",
+    "treat",
+}
+
 FRAGMENT_PATTERNS = (
     r"\b(\w+)\s+\1\b",
     r"\brather than\b",
@@ -318,6 +363,10 @@ def extract_headings_and_lists(html: str = "") -> List[Dict[str, Any]]:
     return out
 
 
+def _clamp_score(value: float) -> float:
+    return max(0.0, min(1.0, round(float(value), 4)))
+
+
 def _contains_bad_fragment(p: str) -> bool:
     return any(re.search(pat, p) for pat in FRAGMENT_PATTERNS)
 
@@ -427,6 +476,178 @@ def _is_weak_action_tail(tokens: List[str]) -> bool:
     return False
 
 
+def _score_entity_density(tokens: List[str]) -> float:
+    if not tokens:
+        return 0.0
+
+    content = content_tokens(tokens)
+    if not content:
+        return 0.0
+
+    entity_hits = 0
+    for token in content:
+        if token in UNIVERSAL_HEAD_SUFFIXES or token in UNIVERSAL_MODIFIERS:
+            entity_hits += 1
+
+    if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
+        entity_hits += 1
+
+    return _clamp_score(entity_hits / max(1, len(content)))
+
+
+def _score_anchor_strength(tokens: List[str], source_type: str) -> float:
+    if not tokens:
+        return 0.0
+
+    score = 0.35
+
+    if 2 <= len(tokens) <= 4:
+        score += 0.20
+    elif 5 <= len(tokens) <= 6:
+        score += 0.10
+
+    if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
+        score += 0.25
+
+    if any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]):
+        score += 0.15
+
+    if source_type in {"title", "heading_h1", "heading_h2", "heading_h3"}:
+        score += 0.10
+
+    if source_type in {"intent", "action_object", "condition_phrase"}:
+        score += 0.08
+
+    if _is_thin_modifier_phrase(tokens) or _is_generic_weak_head_phrase(tokens):
+        score -= 0.35
+
+    if _looks_like_sentence_fragment(tokens):
+        score -= 0.40
+
+    return _clamp_score(score)
+
+
+def _score_semantic_cohesion(tokens: List[str]) -> float:
+    if not tokens:
+        return 0.0
+
+    score = 0.55
+
+    if len(tokens) <= 4:
+        score += 0.15
+
+    if _has_universal_head(tokens):
+        score += 0.15
+
+    if any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]):
+        score += 0.10
+
+    if _has_mid_stopword_chain(tokens):
+        score -= 0.35
+
+    if _is_bad_noun_stack(tokens):
+        score -= 0.35
+
+    if _contains_clause_connector(tokens):
+        score -= 0.25
+
+    return _clamp_score(score)
+
+
+def _score_wrapper_noise_control(phrase: str, tokens: List[str]) -> float:
+    score = 1.0
+
+    if _contains_bad_fragment(phrase):
+        score -= 0.60
+
+    if tokens and (tokens[0] in BAD_STARTS or tokens[-1] in BAD_ENDINGS):
+        score -= 0.45
+
+    if _starts_with_weak_connector(phrase) or _ends_with_weak_phrase(phrase):
+        score -= 0.45
+
+    if any(t in PRONOUNS for t in tokens):
+        score -= 0.35
+
+    if any(t in HELPER_VERBS for t in tokens):
+        score -= 0.35
+
+    if tokens and tokens[-1] in VAGUE_ADVERB_ENDINGS:
+        score -= 0.30
+
+    return _clamp_score(score)
+
+
+def _score_topic_alignment(tokens: List[str], snippet: str) -> float:
+    if not tokens:
+        return 0.0
+
+    snippet_tokens = set(tokenize(snippet))
+    phrase_tokens = set(tokens)
+    content = set(content_tokens(tokens))
+
+    score = 0.45
+
+    if phrase_tokens and phrase_tokens.issubset(snippet_tokens):
+        score += 0.20
+
+    if any(t in UNIVERSAL_HEAD_SUFFIXES for t in content):
+        score += 0.15
+
+    if any(t in UNIVERSAL_MODIFIERS for t in content):
+        score += 0.10
+
+    if len(content) >= 2:
+        score += 0.10
+
+    return _clamp_score(score)
+
+
+def _weighted_extractor_score(signals: Dict[str, float]) -> float:
+    total = 0.0
+    for key, weight in EXTRACTOR_INTELLIGENCE_WEIGHTS.items():
+        total += float(signals.get(key, 0.0)) * weight
+    return _clamp_score(total)
+
+
+def _extractor_threshold(source_type: str) -> float:
+    return SOURCE_TYPE_THRESHOLDS.get(source_type, 0.58)
+
+
+def _extractor_intelligence_result(
+    phrase: str,
+    tokens: List[str],
+    source_type: str,
+    snippet: str,
+) -> Dict[str, Any]:
+    signals = {
+        "entity_density": _score_entity_density(tokens),
+        "anchor_strength": _score_anchor_strength(tokens, source_type),
+        "semantic_cohesion": _score_semantic_cohesion(tokens),
+        "wrapper_noise_control": _score_wrapper_noise_control(phrase, tokens),
+        "topic_alignment": _score_topic_alignment(tokens, snippet),
+    }
+
+    score = _weighted_extractor_score(signals)
+    threshold = _extractor_threshold(source_type)
+
+    return {
+        "score": score,
+        "threshold": threshold,
+        "decision": "ACCEPT" if score >= threshold else "REJECT",
+        "signals": signals,
+        "layers": [
+            "entity_map",
+            "intention_recognition",
+            "content_aware_context",
+            "semantic_similarity",
+            "topic_coherence",
+            "long_context_compression",
+            "transfer_learning",
+        ],
+    }
+
+
 def _basic_reject(phrase: str) -> bool:
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
@@ -496,6 +717,16 @@ def _add_candidate(
         if _looks_like_sentence_fragment(tokens):
             return
 
+    extractor_intelligence = _extractor_intelligence_result(
+        phrase=p,
+        tokens=tokens,
+        source_type=source_type,
+        snippet=snippet,
+    )
+
+    if extractor_intelligence["decision"] != "ACCEPT":
+        return
+
     key = f"{source_type}:{p}:{section_id}"
     if key in seen:
         return
@@ -506,6 +737,7 @@ def _add_candidate(
         "source_type": source_type,
         "section_id": section_id,
         "snippet": snippet,
+        "extractor_intelligence": extractor_intelligence,
     })
 
 
@@ -646,6 +878,12 @@ def _extract_clean_compound_candidates(sent: str, section_id: str) -> List[Dict[
             if chunk[0] in BAD_STARTS:
                 continue
             if chunk[0] in ACTION_TOKENS:
+                 continue
+            if chunk[0] in VERB_WRAPPER_STARTS:
+                 continue
+            if chunk[0] in ACTION_TOKENS:
+                continue
+            if any(t in ACTION_TOKENS for t in chunk[1:]):
                 continue
             if chunk[-1] in VAGUE_ADVERB_ENDINGS:
                 continue
@@ -665,6 +903,23 @@ def _extract_clean_compound_candidates(sent: str, section_id: str) -> List[Dict[
                 continue
             if _is_bad_noun_stack(chunk):
                 continue
+
+            # Boundary Intelligence:
+            # Reject shifted windows that begin in the middle of a stronger phrase.
+            if i > 0:
+                prev_token = tokens[i - 1]
+                if prev_token not in STOPWORDS and prev_token not in HELPER_VERBS:
+                    previous_extended = tokens[i - 1:i + n]
+                    if len(previous_extended) <= 4 and _has_universal_head(previous_extended):
+                        continue
+
+            # Reject chunks that end before a stronger noun phrase continues.
+            if i + n < len(tokens):
+                next_token = tokens[i + n]
+                if next_token not in STOPWORDS and next_token not in HELPER_VERBS:
+                    next_extended = tokens[i:i + n + 1]
+                    if len(next_extended) <= 4 and _has_universal_head(next_extended):
+                        continue
 
             content = content_tokens(chunk)
             if len(content) < 2:

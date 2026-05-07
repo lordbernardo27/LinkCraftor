@@ -1735,16 +1735,106 @@ def score_phrase_strength(
         score = max(score, 0.80)
         reasons.append("ordered_pair_score_floor")
 
-    threshold = 0.72
+        # =========================================================
+    # Adaptive Cross-Niche Survival Thresholds
+    # =========================================================
+
+    threshold = 0.66
+
+    token_len = len(tokens)
+
+    has_canonical_anchor = _is_exact_canonical_anchor(tokens)
+    has_valid_pair = _has_valid_ordered_pair(tokens)
+    query_style = _is_query_style_long_anchor(tokens)
+
+    structural_signal, structural_reasons = _has_structural_signal(
+        tokens,
+        source_type,
+    )
+
+    vertical_hits = _vertical_keyword_hits(tokens)
+
+    # ---------------------------------------------------------
+    # Strong canonical anchors survive easier
+    # ---------------------------------------------------------
+
+    if has_canonical_anchor:
+        threshold = 0.52
+
+    elif has_valid_pair:
+        threshold = 0.58
+
+    # ---------------------------------------------------------
+    # Query-style semantic anchors
+    # Example:
+    # "how to calculate ovulation"
+    # ---------------------------------------------------------
+
+    if query_style:
+        threshold = min(threshold, 0.60)
+
+    # ---------------------------------------------------------
+    # Structural phrases
+    # ---------------------------------------------------------
+
+    if structural_signal:
+        threshold -= 0.05
+
+    # ---------------------------------------------------------
+    # Strong niche cohesion
+    # ---------------------------------------------------------
+
+    cohesion = phrase_domain_cohesion(set(tokens))
+
+    if bool(cohesion.get("is_cohesive")):
+        threshold -= 0.04
+
+    # ---------------------------------------------------------
+    # Vertical semantic density
+    # ---------------------------------------------------------
+
+    if vertical_hits >= 2 and token_len <= 5:
+        threshold -= 0.04
+
+    # ---------------------------------------------------------
+    # Action phrases are harder ONLY if weak
+    # ---------------------------------------------------------
 
     if _is_action_phrase(tokens):
-        threshold = 0.76
+        head = tokens[-1]
 
-    if len(tokens) in {2, 3, 4}:
-        threshold = max(threshold, 0.78)
+        if (
+            head not in STRONG_ACTION_OBJECT_HEADS
+            and head not in STRONG_CONCEPT_HEADS
+        ):
+            threshold += 0.08
 
-    if len(tokens) >= 5:
-        threshold = 0.74
+    # ---------------------------------------------------------
+    # Long phrases
+    # ---------------------------------------------------------
+
+    if token_len >= 7:
+        threshold += 0.06
+
+    elif token_len >= 5:
+        threshold += 0.02
+
+    # ---------------------------------------------------------
+    # Weak structural phrases
+    # ---------------------------------------------------------
+
+    if (
+        not structural_signal
+        and token_len in {2, 3, 4}
+        and not has_valid_pair
+    ):
+        threshold += 0.10
+
+    # ---------------------------------------------------------
+    # Clamp
+    # ---------------------------------------------------------
+
+    threshold = max(0.50, min(0.82, threshold))
 
     keep = score >= threshold
 

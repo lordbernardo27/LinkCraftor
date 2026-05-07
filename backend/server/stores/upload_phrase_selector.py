@@ -64,6 +64,19 @@ UNIVERSAL_ANCHOR_HEADS = {
     "symptoms", "temperature", "tracking", "window",
 }
 
+SELECTOR_INTELLIGENCE_LAYERS = [
+    "memory_feedback",
+    "semantic_similarity",
+    "topic_coherence",
+    "cross_document_reasoning",
+    "knowledge_retrieval",
+    "multi_agent_reasoning",
+    "hypothesis_generation",
+    "multi_objective_optimization",
+    "explainability",
+    "qa_regression_readiness",
+]
+
 
 def _canonical_phrase(s: str) -> str:
     return canonical_phrase(s)
@@ -395,6 +408,162 @@ def _local_dedupe_phrase_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return list(best_by_canonical.values())
 
 
+def _semantic_root(tokens: List[str]) -> str:
+    if not tokens:
+        return ""
+
+    important = _content_tokens(tokens)
+    if not important:
+        important = tokens
+
+    return " ".join(important[:2])
+
+
+def _semantic_overlap(a: str, b: str) -> float:
+    ta = set(_tokens(a))
+    tb = set(_tokens(b))
+
+    if not ta or not tb:
+        return 0.0
+
+    inter = len(ta & tb)
+    union = len(ta | tb)
+
+    return inter / max(1, union)
+
+
+def _is_semantic_competitor(a: str, b: str) -> bool:
+    a = _canonical_phrase(a)
+    b = _canonical_phrase(b)
+
+    if not a or not b:
+        return False
+
+    if a == b:
+        return True
+
+    if a in b or b in a:
+        shorter = min(len(_tokens(a)), len(_tokens(b)))
+        if shorter >= 2:
+            return True
+
+    if _semantic_overlap(a, b) >= 0.60:
+        return True
+
+    ra = _semantic_root(_tokens(a))
+    rb = _semantic_root(_tokens(b))
+
+    if ra and rb and ra == rb:
+        return True
+
+    return False
+
+
+def _coverage_key(phrase: str) -> str:
+    tokens = _content_tokens(_tokens(phrase))
+    if not tokens:
+        return ""
+
+    if len(tokens) == 1:
+        return tokens[0]
+
+    return tokens[-1]
+
+
+def _selector_intelligence_result(
+    row: Dict[str, Any],
+    *,
+    selected_before: List[Dict[str, Any]],
+    semantic_competitor_blocked: bool = False,
+) -> Dict[str, Any]:
+    phrase = str(row.get("phrase") or "")
+    score = float(row.get("score") or 0.0)
+    quality_score = float(row.get("quality_score") or 0.0)
+    freq = int(row.get("frequency") or 1)
+
+    semantic_diversity = 1.0
+    closest_overlap = 0.0
+
+    for existing in selected_before:
+        overlap = _semantic_overlap(phrase, str(existing.get("phrase") or ""))
+        closest_overlap = max(closest_overlap, overlap)
+        if _is_semantic_competitor(phrase, str(existing.get("phrase") or "")):
+            semantic_diversity = min(semantic_diversity, 0.25)
+
+    coverage = 0.85 if _coverage_key(phrase) else 0.50
+    runtime_usefulness = min(1.0, max(0.0, score / 120.0))
+    frequency_signal = min(1.0, freq / 5.0)
+
+    selector_score = (
+        (runtime_usefulness * 0.35)
+        + (float(quality_score or 0.0) * 0.25)
+        + (semantic_diversity * 0.20)
+        + (coverage * 0.10)
+        + (frequency_signal * 0.10)
+    )
+
+    selector_score = round(max(0.0, min(1.0, selector_score)), 4)
+
+    if semantic_competitor_blocked:
+        decision = "REJECT"
+        reason = "semantic_competitor_suppressed"
+    else:
+        decision = "ACCEPT"
+        reason = "selector_accept"
+
+    return {
+        "selector_score": selector_score,
+        "decision": decision,
+        "reason": reason,
+        "signals": {
+            "runtime_usefulness": round(runtime_usefulness, 4),
+            "quality_score": round(float(quality_score or 0.0), 4),
+            "semantic_diversity": round(semantic_diversity, 4),
+            "closest_semantic_overlap": round(closest_overlap, 4),
+            "coverage": round(coverage, 4),
+            "frequency_signal": round(frequency_signal, 4),
+        },
+        "layers": SELECTOR_INTELLIGENCE_LAYERS,
+    }
+
+
+def _apply_selector_intelligence(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    selected: List[Dict[str, Any]] = []
+
+    ranked = sorted(
+        rows,
+        key=lambda x: (
+            -float(x.get("score") or 0),
+            -float(x.get("quality_score") or 0),
+            len(str(x.get("phrase") or "")),
+            str(x.get("phrase") or ""),
+        ),
+    )
+
+    for row in ranked:
+        phrase = str(row.get("phrase") or "")
+        blocked = any(
+            _is_semantic_competitor(
+                phrase,
+                str(existing.get("phrase") or ""),
+            )
+            for existing in selected
+        )
+
+        row["selector_intelligence"] = _selector_intelligence_result(
+            row,
+            selected_before=selected,
+            semantic_competitor_blocked=blocked,
+        )
+
+        if blocked:
+            continue
+
+        selected.append(row)
+
+    return selected
+
+
 def _dedupe_and_rank(
     candidates: List[Dict[str, Any]],
     vertical: str = "universal",
@@ -457,12 +626,24 @@ def _dedupe_and_rank(
             "snippet": context,
             "original_phrase": original_phrase,
             "frequency": freq,
+            "extractor_intelligence": (
+                c.get("extractor_intelligence")
+                if isinstance(c.get("extractor_intelligence"), dict)
+                else {}
+            ),
         }
+
+        guard = candidate_window_guard(phrase, source_type=source_type or "")
+        if isinstance(guard, dict):
+            row["quality_gate"] = guard.get("quality_gate") if isinstance(guard.get("quality_gate"), dict) else {}
+        else:
+            row["quality_gate"] = {}
 
         if _final_quality_gate(row):
             scored_rows.append(row)
 
     deduped = _local_dedupe_phrase_rows(scored_rows)
+    intelligence_selected = _apply_selector_intelligence(deduped)
 
     selected = [
         {
@@ -476,14 +657,18 @@ def _dedupe_and_rank(
             "snippet": row.get("snippet", ""),
             "original_phrase": row.get("original_phrase", ""),
             "frequency": row.get("frequency", 1),
+            "extractor_intelligence": row.get("extractor_intelligence", {}),
+            "quality_gate": row.get("quality_gate", {}),
+            "selector_intelligence": row.get("selector_intelligence", {}),
         }
-        for row in deduped
+        for row in intelligence_selected
         if _final_quality_gate(row)
     ]
 
     ranked = sorted(
         selected,
         key=lambda x: (
+            -float((x.get("selector_intelligence") or {}).get("selector_score") or 0),
             -float(x.get("score") or 0),
             len(str(x.get("phrase") or "")),
             str(x.get("phrase") or ""),
@@ -527,5 +712,9 @@ def select_upload_phrases(
         "paragraph_count": len(paragraphs),
         "candidate_count": len(candidates),
         "selected_count": len(selected),
+        "selector_intelligence_summary": {
+            "enabled": True,
+            "layers": SELECTOR_INTELLIGENCE_LAYERS,
+        },
         "phrases": selected,
     }

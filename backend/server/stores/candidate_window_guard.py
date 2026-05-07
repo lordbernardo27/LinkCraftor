@@ -23,7 +23,7 @@ CLAUSE_VERBS: Set[str] = {
     "depend", "helps", "help", "improves", "improve", "reduces", "reduce",
     "increases", "increase", "supports", "support", "contains", "contain",
     "requires", "require", "reveals", "reveal", "respond", "responds",
-    "handled", "handle", "affect", "affects",
+    "handled", "handle", "affect", "affects", "struggle", "struggles",
 }
 
 LOW_VALUE_GENERIC_SURVIVORS: Set[str] = {
@@ -44,6 +44,18 @@ CONNECTORS: Set[str] = {
 ACTION_LEAK_STARTS: Set[str] = {
     "neglect", "avoid", "reduce", "improve", "manage", "check", "monitor",
     "track", "review", "choose", "define", "send", "skip", "treat",
+}
+
+WEAK_SUBJECTS: Set[str] = {
+    "business", "businesses", "people", "person", "students", "student",
+    "patients", "patient", "users", "user", "customers", "customer",
+    "owners", "owner", "parents", "parent", "workers", "worker",
+    "teams", "team", "companies", "company",
+}
+
+WEAK_SUBJECT_VERBS: Set[str] = {
+    "struggle", "struggles", "face", "faces", "need", "needs", "want",
+    "wants", "use", "uses", "make", "makes", "get", "gets",
 }
 
 WEAK_CARRYOVER_WORDS: Set[str] = {
@@ -87,33 +99,6 @@ VALID_EDUCATION_PHRASES: Set[str] = {
     "timed practice",
 }
 
-WEAK_EDU_PREFIXES: Set[str] = {
-    "one",
-    "same",
-    "each",
-    "another",
-    "average",
-    "light",
-    "lighter",
-    "extreme",
-    "some",
-    "many",
-}
-
-GENERIC_EDU_HEADS: Set[str] = {
-    "topic",
-    "topics",
-    "review",
-    "reviews",
-    "schedule",
-    "system",
-    "method",
-    "methods",
-    "performance",
-    "skills",
-    "tools",
-}
-
 BAD_EDUCATION_FRAGMENTS: Set[str] = {
     "students time motivation system",
     "study biology today",
@@ -125,7 +110,6 @@ BAD_EDUCATION_FRAGMENTS: Set[str] = {
 }
 
 EDU_VALID_PATTERN_PHRASES: Set[str] = {
-    # 1. Exam preparation
     "exam preparation",
     "exam format",
     "mock exams",
@@ -134,32 +118,24 @@ EDU_VALID_PATTERN_PHRASES: Set[str] = {
     "timed practice",
     "revision schedule",
     "exam performance",
-
-    # 2. Online learning
     "online course",
     "virtual classroom",
     "learning platform",
     "video lesson",
     "course module",
     "digital learning",
-
-    # 3. Student productivity
     "study plan",
     "study schedule",
     "time blocking",
     "study environment",
     "progress tracking",
     "academic goals",
-
-    # 4. Tutoring
     "tutoring session",
     "private tutor",
     "math tutor",
     "reading tutor",
     "student support",
     "learning gaps",
-
-    # 5. Study skills
     "active learning methods",
     "spaced repetition",
     "retrieval practice",
@@ -187,6 +163,11 @@ EDU_ACTION_FRAGMENT_STARTS: Set[str] = {
     "covering", "revising", "reading", "writing", "practicing",
 }
 
+EDU_GENERIC_OBJECT_HEADS: Set[str] = {
+    "topic", "topics", "subject", "subjects", "chapter", "chapters",
+    "material", "materials", "content",
+}
+
 NOUN_CHAIN_WORDS: Set[str] = {
     "blood", "pressure", "control", "cholesterol", "management",
     "foot", "inspections", "checks", "monitoring", "medication",
@@ -200,7 +181,6 @@ NOUN_CHAIN_WORDS: Set[str] = {
     "rent", "supplier", "invoices", "invoice", "loan", "loans",
 }
 
-
 VERTICAL_KEYWORD_MAP: Dict[str, Set[str]] = {
     "finance": {"cash", "flow", "revenue", "profit", "invoice", "invoices", "payroll", "tax", "taxes", "loan", "loans", "credit", "banking", "investment", "insurance", "accounting"},
     "real_estate": {"property", "mortgage", "lease", "rent", "tenant", "landlord", "listing", "home", "buyer", "seller", "appraisal", "closing"},
@@ -209,52 +189,14 @@ VERTICAL_KEYWORD_MAP: Dict[str, Set[str]] = {
     "saas": {"software", "subscription", "platform", "dashboard", "workflow", "crm", "analytics", "integration", "automation", "users"},
     "marketing": {"seo", "content", "campaign", "conversion", "keyword", "keywords", "brand", "email", "traffic", "search", "intent"},
     "small_business": {"business", "cash", "flow", "payroll", "operations", "customers", "suppliers", "expenses", "forecast", "invoicing"},
-    "hr_recruiting": {"hiring", "recruiting", "onboarding", "payroll", "benefits", "employee", "employees", "performance", "staffing"},
     "medical_healthcare": {"health", "blood", "pressure", "diagnosis", "treatment", "symptoms", "clinic", "patient", "screening", "condition"},
     "pharmacy": {"medication", "medicine", "dose", "dosing", "side", "effects", "prescription", "otc", "adherence", "pharmacist"},
-    "mental_health": {"anxiety", "therapy", "counseling", "stress", "depression", "mental", "health", "wellbeing", "support"},
-    "fitness": {"exercise", "training", "strength", "mobility", "workout", "endurance", "muscle", "recovery", "fitness"},
-    "nutrition": {"diet", "nutrition", "meal", "meals", "protein", "calories", "supplements", "weight", "healthy", "eating"},
-    "beauty_skincare": {"skin", "skincare", "hair", "cosmetics", "dermatology", "grooming", "acne", "moisturizer"},
-    "home_improvement": {"plumbing", "roofing", "hvac", "painting", "remodeling", "repair", "tools", "contractor"},
-    "interior_design": {"furniture", "decor", "layout", "renovation", "lighting", "style", "room", "design"},
-    "gardening": {"plants", "garden", "landscaping", "lawn", "soil", "irrigation", "pest", "compost"},
-    "parenting_family": {"pregnancy", "baby", "child", "children", "parenting", "family", "development", "school"},
-    "pets": {"dog", "dogs", "cat", "cats", "pet", "pets", "training", "grooming", "veterinary", "food"},
-    "food_recipes": {"recipe", "recipes", "cooking", "baking", "kitchen", "meal", "restaurant", "ingredients"},
-    "travel": {"flight", "hotel", "visa", "itinerary", "tourism", "destination", "travel", "guide", "booking"},
-    "automotive": {"car", "cars", "auto", "repair", "vehicle", "ev", "insurance", "detailing", "maintenance"},
     "education": {"school", "student", "students", "course", "exam", "tutoring", "lesson", "study", "learning"},
-    "careers": {"resume", "interview", "salary", "career", "freelancing", "job", "promotion", "skills"},
-    "professional_training": {"certification", "license", "training", "continuing", "education", "professional", "exam"},
-    "consumer_tech": {"phone", "laptop", "gadget", "wearable", "accessory", "device", "tablet", "smartphone"},
-    "it_cybersecurity": {"network", "cloud", "security", "cybersecurity", "infrastructure", "compliance", "server", "endpoint"},
     "programming_development": {"code", "coding", "api", "database", "framework", "devops", "frontend", "backend", "deployment"},
     "ai_machine_learning": {"ai", "machine", "learning", "model", "models", "prompt", "automation", "dataset", "training"},
-    "gaming": {"game", "gaming", "console", "pc", "mobile", "esports", "guide", "level", "players"},
-    "sports": {"sports", "team", "teams", "player", "players", "training", "match", "league", "equipment"},
-    "entertainment": {"movie", "movies", "tv", "celebrity", "streaming", "series", "show", "culture"},
-    "music": {"music", "artist", "artists", "instrument", "production", "lesson", "gear", "song"},
-    "manufacturing": {"manufacturing", "production", "machinery", "quality", "supply", "chain", "factory", "materials"},
-    "construction": {"construction", "contractor", "materials", "bidding", "project", "site", "building"},
-    "logistics": {"shipping", "freight", "warehouse", "warehousing", "fleet", "delivery", "logistics", "carrier"},
-    "agriculture": {"farming", "livestock", "crops", "irrigation", "soil", "agritech", "harvest", "farm"},
-    "energy": {"solar", "energy", "utilities", "sustainability", "oil", "gas", "renewable", "grid"},
-    "telecom": {"internet", "mobile", "network", "telecom", "broadband", "provider", "device", "signal"},
-    "government": {"permit", "policy", "public", "service", "services", "program", "government", "license"},
-    "nonprofit": {"donation", "fundraising", "volunteer", "outreach", "nonprofit", "charity", "community"},
-    "religion_faith": {"faith", "ministry", "church", "teaching", "religion", "community", "worship"},
-    "local_services": {"dentist", "plumber", "cleaner", "lawyer", "contractor", "local", "service", "nearby"},
     "blogging": {"blog", "blogging", "affiliate", "content", "authority", "niche", "publisher", "posts"},
     "youtube_video_creators": {"youtube", "video", "thumbnail", "script", "monetization", "creator", "channel"},
-    "influencers_personal_brands": {"influencer", "brand", "audience", "sponsorship", "community", "followers"},
-    "courses_info_products": {"course", "courses", "membership", "coaching", "digital", "product", "products", "lesson"},
-    "web3_crypto": {"crypto", "blockchain", "wallet", "token", "tokens", "defi", "nft", "web3"},
-    "sustainability": {"green", "carbon", "eco", "sustainable", "sustainability", "climate", "recycling"},
-    "remote_work": {"remote", "work", "distributed", "team", "teams", "home", "digital", "nomad"},
-    "multi_niche_publishers": {"publisher", "publishers", "content", "network", "topics", "authority", "articles"},
 }
-
 
 VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
     ("cash", "flow"),
@@ -296,28 +238,6 @@ BAD_BOUNDARY_ENDS: Set[str] = {
     "issue", "issues", "problem", "problems", "result", "results",
 }
 
-EDU_ACTION_FRAGMENT_STARTS: Set[str] = {
-    "explaining",
-    "teaching",
-    "learning",
-    "reviewing",
-    "studying",
-    "covering",
-    "revising",
-}
-
-EDU_GENERIC_OBJECT_HEADS: Set[str] = {
-    "topic",
-    "topics",
-    "subject",
-    "subjects",
-    "chapter",
-    "chapters",
-    "material",
-    "materials",
-    "content",
-}
-
 ANCHOR_CORE_PHRASES: Set[str] = {
     "cash flow",
     "cash flow management",
@@ -340,9 +260,107 @@ ANCHOR_CORE_PHRASES: Set[str] = {
     "machine learning",
 }
 
+QUALITY_GATE_WEIGHTS: Dict[str, float] = {
+    "logical_structure": 0.20,
+    "context_fit": 0.20,
+    "pragmatic_anchor_value": 0.25,
+    "topic_coherence": 0.15,
+    "trust_risk_safety": 0.10,
+    "rule_hybrid_check": 0.10,
+}
+
 
 def tokenize(text: str) -> List[str]:
     return [t.lower() for t in WORD_RE.findall(text or "")]
+
+
+def make_quality_gate_result(
+    phrase: str,
+    score: float,
+    decision: str,
+    signals: Dict[str, float],
+    reasons: List[str] | None = None,
+) -> Dict[str, Any]:
+    return {
+        "phrase": phrase,
+        "quality_gate_score": round(float(score), 4),
+        "decision": decision,
+        "signals": signals or {},
+        "reasons": reasons or [],
+    }
+
+
+def _weighted_quality_score(signals: Dict[str, float]) -> float:
+    total = 0.0
+    for key, weight in QUALITY_GATE_WEIGHTS.items():
+        total += float(signals.get(key, 0.0)) * weight
+    return round(total, 4)
+
+
+def _quality_decision(score: float) -> str:
+    if score >= 0.80:
+        return "ACCEPT"
+    if score >= 0.65:
+        return "REVIEW"
+    return "REJECT"
+
+
+def _base_quality_signals() -> Dict[str, float]:
+    return {
+        "logical_structure": 1.0,
+        "context_fit": 1.0,
+        "pragmatic_anchor_value": 1.0,
+        "topic_coherence": 1.0,
+        "trust_risk_safety": 1.0,
+        "rule_hybrid_check": 1.0,
+    }
+
+
+def _attach_quality_gate(
+    result: Dict[str, Any],
+    *,
+    signals: Dict[str, float] | None = None,
+    reasons: List[str] | None = None,
+) -> Dict[str, Any]:
+    phrase = result.get("phrase", "")
+    keep = bool(result.get("keep"))
+
+    final_signals = _base_quality_signals()
+    if signals:
+        final_signals.update(signals)
+
+    if not keep:
+        final_signals["rule_hybrid_check"] = 0.0
+        reasons = reasons or [str(result.get("reason", "rejected_by_guard"))]
+
+    score = _weighted_quality_score(final_signals)
+    decision = "REJECT" if not keep else _quality_decision(score)
+
+    result["quality_gate"] = make_quality_gate_result(
+        phrase=phrase,
+        score=score,
+        decision=decision,
+        signals=final_signals,
+        reasons=reasons or [str(result.get("reason", ""))],
+    )
+
+    return result
+
+
+def _reject(phrase: str, reason: str, signals: Dict[str, float] | None = None) -> Dict[str, Any]:
+    return _attach_quality_gate(
+        {"keep": False, "reason": reason, "phrase": phrase},
+        signals=signals,
+        reasons=[reason],
+    )
+
+
+def _accept(phrase: str, reason: str, signals: Dict[str, float] | None = None) -> Dict[str, Any]:
+    return _attach_quality_gate(
+        {"keep": True, "reason": reason, "phrase": phrase},
+        signals=signals,
+        reasons=[reason],
+    )
 
 
 def _vertical_keyword_hits(tokens: List[str]) -> int:
@@ -370,8 +388,9 @@ def _contains_valid_core_phrase(tokens: List[str]) -> str:
 
     return ""
 
+
 def _is_valid_education_pattern_phrase(tokens: List[str]) -> bool:
-    return " ".join(tokens) in EDU_VALID_PATTERN_PHRASES
+    return _phrase_from_tokens(tokens) in EDU_VALID_PATTERN_PHRASES
 
 
 def _is_weak_education_pattern(tokens: List[str]) -> bool:
@@ -392,37 +411,35 @@ def _is_weak_education_pattern(tokens: List[str]) -> bool:
 
     return False
 
-def _is_weak_education_pattern(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    first = tokens[0]
-    last = tokens[-1]
-
-    return first in WEAK_EDU_PREFIXES and last in GENERIC_EDU_HEADS
-
 
 def _has_reversed_ordered_pair(tokens: List[str]) -> bool:
     if len(tokens) < 2:
         return False
 
-    pairs = list(zip(tokens, tokens[1:]))
-    return any(pair in REVERSED_ORDERED_PAIRS for pair in pairs)
+    return any(pair in REVERSED_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
 
 
 def _has_valid_ordered_pair(tokens: List[str]) -> bool:
     if len(tokens) < 2:
         return False
 
-    pairs = list(zip(tokens, tokens[1:]))
-    return any(pair in VALID_ORDERED_PAIRS for pair in pairs)
+    return any(pair in VALID_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
+
 
 def _is_valid_education_phrase(tokens: List[str]) -> bool:
-    return " ".join(tokens) in VALID_EDUCATION_PHRASES
+    return _phrase_from_tokens(tokens) in VALID_EDUCATION_PHRASES
 
 
 def _is_bad_education_fragment(tokens: List[str]) -> bool:
-    return " ".join(tokens) in BAD_EDUCATION_FRAGMENTS
+    return _phrase_from_tokens(tokens) in BAD_EDUCATION_FRAGMENTS
+
+
+def _is_weak_subject_verb_fragment(tokens: List[str]) -> bool:
+    if len(tokens) != 2:
+        return False
+
+    left, right = tokens
+    return left in WEAK_SUBJECTS and right in WEAK_SUBJECT_VERBS
 
 
 def _is_action_leak_start(tokens: List[str]) -> bool:
@@ -450,23 +467,27 @@ def _is_short_multi_head_collision(tokens: List[str]) -> bool:
 
     head_like = 0
     for t in tokens:
-        if (
-            t in NOUN_CHAIN_WORDS
-            or t in GENERIC_HEADS
-            or t in WEAK_CARRYOVER_WORDS
-        ):
+        if t in NOUN_CHAIN_WORDS or t in GENERIC_HEADS or t in WEAK_CARRYOVER_WORDS:
             head_like += 1
 
     return head_like >= 2
+
 
 def _is_education_action_fragment(tokens: List[str]) -> bool:
     if len(tokens) < 2:
         return False
 
-    if " ".join(tokens) in VALID_EDUCATION_PHRASES:
+    if _phrase_from_tokens(tokens) in VALID_EDUCATION_PHRASES:
         return False
 
     return tokens[0] in EDU_ACTION_FRAGMENT_STARTS and tokens[-1] in EDU_GENERIC_OBJECT_HEADS
+
+
+def _is_query_like(tokens: List[str]) -> bool:
+    if len(tokens) < 5:
+        return False
+
+    return tokens[0] in QUERY_STARTS and any(t in CONNECTORS for t in tokens[1:-1])
 
 
 def _is_long_carryover_stack(tokens: List[str]) -> bool:
@@ -488,12 +509,6 @@ def _is_long_carryover_stack(tokens: List[str]) -> bool:
     return (carryover_hits + noun_hits) >= 3
 
 
-def _is_query_like(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
-        return False
-    return tokens[0] in QUERY_STARTS and any(t in CONNECTORS for t in tokens[1:-1])
-
-
 def _has_clause_leak(tokens: List[str]) -> bool:
     if len(tokens) < 4:
         return False
@@ -511,16 +526,10 @@ def _starts_or_ends_badly(tokens: List[str]) -> bool:
     if not tokens:
         return True
 
-    if tokens[0] in STOPWORDS:
+    if tokens[0] in STOPWORDS or tokens[-1] in STOPWORDS:
         return True
 
-    if tokens[-1] in STOPWORDS:
-        return True
-
-    if tokens[0] in BAD_BOUNDARY_STARTS:
-        return True
-
-    if tokens[-1] in BAD_BOUNDARY_ENDS:
+    if tokens[0] in BAD_BOUNDARY_STARTS or tokens[-1] in BAD_BOUNDARY_ENDS:
         return True
 
     if len(tokens) >= 3 and tokens[0] in GENERIC_ADJECTIVES and tokens[-1] in GENERIC_HEADS:
@@ -530,8 +539,7 @@ def _starts_or_ends_badly(tokens: List[str]) -> bool:
 
 
 def _is_low_value_generic_survivor(tokens: List[str]) -> bool:
-    phrase = _phrase_from_tokens(tokens)
-    return phrase in LOW_VALUE_GENERIC_SURVIVORS
+    return _phrase_from_tokens(tokens) in LOW_VALUE_GENERIC_SURVIVORS
 
 
 def _is_dense_noun_chain(tokens: List[str]) -> bool:
@@ -631,38 +639,59 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
     phrase = " ".join(tokenize(candidate))
 
     if not phrase:
-        return {"keep": False, "reason": "empty_candidate", "phrase": ""}
+        return _reject("", "empty_candidate")
 
     tokens = phrase.split()
 
     if _is_valid_education_pattern_phrase(tokens):
-        return {"keep": True, "reason": "valid_education_pattern_phrase", "phrase": phrase}
+        return _accept(phrase, "valid_education_pattern_phrase")
 
     if _is_weak_education_pattern(tokens):
-        return {"keep": False, "reason": "weak_education_pattern", "phrase": phrase}
+        return _reject(
+            phrase,
+            "weak_education_pattern",
+            {
+                "logical_structure": 0.45,
+                "pragmatic_anchor_value": 0.25,
+                "topic_coherence": 0.45,
+            },
+        )
 
     if _is_education_action_fragment(tokens):
-        return {
-            "keep": False,
-            "reason": "education_action_fragment",
-            "phrase": phrase,
-        }
-
-    if _is_weak_education_pattern(tokens):
-        return {
-            "keep": False,
-            "reason": "weak_education_pattern",
-            "phrase": phrase,
-        }
+        return _reject(
+            phrase,
+            "education_action_fragment",
+            {
+                "logical_structure": 0.35,
+                "pragmatic_anchor_value": 0.20,
+                "topic_coherence": 0.40,
+            },
+        )
 
     if _is_valid_education_phrase(tokens):
-        return {"keep": True, "reason": "valid_education_phrase", "phrase": phrase}
+        return _accept(phrase, "valid_education_phrase")
 
     if _is_bad_education_fragment(tokens):
-        return {"keep": False, "reason": "bad_education_fragment", "phrase": phrase}
+        return _reject(
+            phrase,
+            "bad_education_fragment",
+            {
+                "logical_structure": 0.20,
+                "context_fit": 0.30,
+                "pragmatic_anchor_value": 0.10,
+                "topic_coherence": 0.20,
+            },
+        )
 
     if len(tokens) < 2:
-        return {"keep": False, "reason": "too_short", "phrase": phrase}
+        return _reject(
+            phrase,
+            "too_short",
+            {
+                "logical_structure": 0.30,
+                "pragmatic_anchor_value": 0.15,
+            },
+        )
 
     compressed_phrase = _compress_long_wrapper(tokens)
     compressed_tokens = compressed_phrase.split()
@@ -672,39 +701,144 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         tokens = compressed_tokens
 
     if len(tokens) > 10:
-        return {"keep": False, "reason": "too_long", "phrase": phrase}
+        return _reject(
+            phrase,
+            "too_long",
+            {
+                "logical_structure": 0.40,
+                "context_fit": 0.45,
+                "pragmatic_anchor_value": 0.30,
+            },
+        )
 
     if _starts_or_ends_badly(tokens):
-        return {"keep": False, "reason": "bad_boundary", "phrase": phrase}
+        return _reject(
+            phrase,
+            "bad_boundary",
+            {
+                "logical_structure": 0.25,
+                "pragmatic_anchor_value": 0.20,
+            },
+        )
 
     if _has_reversed_ordered_pair(tokens):
-        return {"keep": False, "reason": "reversed_ordered_pair", "phrase": phrase}
+        return _reject(
+            phrase,
+            "reversed_ordered_pair",
+            {
+                "logical_structure": 0.10,
+                "pragmatic_anchor_value": 0.20,
+                "topic_coherence": 0.45,
+            },
+        )
+
+    if _is_weak_subject_verb_fragment(tokens):
+        return _reject(
+            phrase,
+            "weak_subject_verb_fragment",
+            {
+                "logical_structure": 0.35,
+                "context_fit": 0.45,
+                "pragmatic_anchor_value": 0.10,
+                "topic_coherence": 0.35,
+            },
+        )
 
     if _is_action_leak_start(tokens):
-        return {"keep": False, "reason": "action_leak_start", "phrase": phrase}
+        return _reject(
+            phrase,
+            "action_leak_start",
+            {
+                "logical_structure": 0.35,
+                "pragmatic_anchor_value": 0.20,
+            },
+        )
 
     if _is_short_multi_head_collision(tokens):
-        return {"keep": False, "reason": "short_multi_head_collision", "phrase": phrase}
+        return _reject(
+            phrase,
+            "short_multi_head_collision",
+            {
+                "logical_structure": 0.30,
+                "pragmatic_anchor_value": 0.25,
+                "topic_coherence": 0.40,
+            },
+        )
 
     if _is_long_carryover_stack(tokens):
-        return {"keep": False, "reason": "long_carryover_stack", "phrase": phrase}
+        return _reject(
+            phrase,
+            "long_carryover_stack",
+            {
+                "logical_structure": 0.25,
+                "context_fit": 0.35,
+                "pragmatic_anchor_value": 0.15,
+            },
+        )
 
     if _has_clause_leak(tokens):
-        return {"keep": False, "reason": "clause_leak", "phrase": phrase}
+        return _reject(
+            phrase,
+            "clause_leak",
+            {
+                "logical_structure": 0.25,
+                "context_fit": 0.35,
+                "pragmatic_anchor_value": 0.20,
+            },
+        )
 
     if _is_stitched_vertical_list(tokens):
-        return {"keep": False, "reason": "stitched_vertical_list", "phrase": phrase}
+        return _reject(
+            phrase,
+            "stitched_vertical_list",
+            {
+                "logical_structure": 0.20,
+                "context_fit": 0.25,
+                "pragmatic_anchor_value": 0.15,
+                "topic_coherence": 0.30,
+            },
+        )
 
     if _is_dense_noun_chain(tokens):
-        return {"keep": False, "reason": "dense_noun_chain", "phrase": phrase}
+        return _reject(
+            phrase,
+            "dense_noun_chain",
+            {
+                "logical_structure": 0.25,
+                "context_fit": 0.35,
+                "pragmatic_anchor_value": 0.25,
+            },
+        )
 
     if _has_repeated_or_duplicate_noise(tokens):
-        return {"keep": False, "reason": "duplicate_noise", "phrase": phrase}
+        return _reject(
+            phrase,
+            "duplicate_noise",
+            {
+                "logical_structure": 0.25,
+                "pragmatic_anchor_value": 0.20,
+            },
+        )
 
     if _is_generic_short_false_positive(tokens):
-        return {"keep": False, "reason": "generic_short_false_positive", "phrase": phrase}
+        return _reject(
+            phrase,
+            "generic_short_false_positive",
+            {
+                "logical_structure": 0.40,
+                "pragmatic_anchor_value": 0.15,
+                "topic_coherence": 0.35,
+            },
+        )
 
     if _is_low_value_generic_survivor(tokens):
-        return {"keep": False, "reason": "low_value_generic_survivor", "phrase": phrase}
+        return _reject(
+            phrase,
+            "low_value_generic_survivor",
+            {
+                "pragmatic_anchor_value": 0.15,
+                "topic_coherence": 0.35,
+            },
+        )
 
-    return {"keep": True, "reason": "guard_pass", "phrase": phrase}
+    return _accept(phrase, "guard_pass")
