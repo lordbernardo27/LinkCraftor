@@ -1,4 +1,4 @@
-# backend/server/stores/upload_phrase_pool_builder.py
+﻿# backend/server/stores/upload_phrase_pool_builder.py
 from __future__ import annotations
 
 import json
@@ -87,37 +87,21 @@ def _clean_examples(v: Any) -> List[Dict[str, str]]:
 def _canonical_phrase(s: str) -> str:
     s = _clean_text(s).lower()
     s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"^[\"'“”‘’\(\[\{]+|[\"'“”‘’\)\]\}:;,\.\!\?]+$", "", s).strip()
+    s = re.sub(r"^[\"'â€œâ€â€˜â€™\(\[\{]+|[\"'â€œâ€â€˜â€™\)\]\}:;,\.\!\?]+$", "", s).strip()
     return s
 
 
-def _extract_canonical_core_phrase(s: str) -> str:
-    s = _canonical_phrase(s)
+def _light_normalize_phrase(phrase: str) -> str:
+    """
+    Universal cross-niche normalization.
 
-    if not s:
+    Preserve exact article anchors as much as possible.
+    Do not aggressively collapse semantic phrases here.
+    RB2 runtime exact-match highlighting depends on real in-document anchor text.
+    """
+    phrase = _canonical_phrase(phrase)
+    if not phrase:
         return ""
-
-    intent_markers = [
-        "how to ",
-        "how many ",
-        "when do ",
-        "what is ",
-        "what are ",
-        "why does ",
-        "why do ",
-        "where is ",
-        "where do ",
-        "signs of ",
-        "symptoms of ",
-        "causes of ",
-        "treatment for ",
-        "best time ",
-        "best way ",
-    ]
-
-    starts = [s.find(m) for m in intent_markers if s.find(m) != -1]
-    if starts:
-        s = s[min(starts):].strip()
 
     lead_patterns = [
         r"^people often ask\s+",
@@ -153,39 +137,16 @@ def _extract_canonical_core_phrase(s: str) -> str:
     ]
 
     for pat in lead_patterns:
-        s = re.sub(pat, "", s).strip()
+        phrase = re.sub(pat, "", phrase).strip()
 
-    trailing_cut_patterns = [
-        r"^(how to [a-z0-9\s\-]{1,80}?)(?:\s+after\b.*|\s+with\b.*|\s+for\b.*|\s+during\b.*|\s+because\b.*)$",
-        r"^(when do [a-z0-9\s\-]{1,80}?)(?:\s+after\b.*|\s+with\b.*|\s+during\b.*)$",
-        r"^(what is [a-z0-9\s\-]{1,80}?)(?:\s+for\b.*|\s+in\b.*)$",
-        r"^(signs of [a-z0-9\s\-]{1,80}?)(?:\s+in\b.*|\s+during\b.*)$",
-        r"^(symptoms of [a-z0-9\s\-]{1,80}?)(?:\s+in\b.*|\s+during\b.*)$",
-    ]
-
-    for pat in trailing_cut_patterns:
-        m = re.match(pat, s)
-        if m:
-            s = m.group(1).strip()
-            break
-
-    return _canonical_phrase(s)
-
-
-def _light_normalize_phrase(phrase: str) -> str:
-    return _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+    return _canonical_phrase(phrase)
 
 
 def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Dict[str, Any]:
-    phrase = _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+    phrase = _light_normalize_phrase(phrase)
 
     if not phrase:
-        return {
-            "keep": False,
-            "phrase": "",
-            "quality_gate": {},
-            "strength": {},
-        }
+        return {"keep": False, "phrase": "", "quality_gate": {}, "strength": {}}
 
     guard = candidate_window_guard(phrase, source_type=source_type or "")
     if not isinstance(guard, dict) or not guard.get("keep"):
@@ -196,7 +157,7 @@ def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Di
             "strength": {},
         }
 
-    guarded_phrase = _canonical_phrase(str(guard.get("phrase") or phrase))
+    guarded_phrase = _light_normalize_phrase(str(guard.get("phrase") or phrase))
 
     scored = score_phrase_strength(
         phrase=guarded_phrase,
@@ -211,7 +172,7 @@ def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Di
             "strength": scored if isinstance(scored, dict) else {},
         }
 
-    final_phrase = _canonical_phrase(str(scored.get("phrase") or guarded_phrase))
+    final_phrase = _light_normalize_phrase(str(scored.get("phrase") or guarded_phrase))
 
     return {
         "keep": True,
@@ -228,12 +189,9 @@ def _quality_gate_phrase(phrase: str, source_type: str = "") -> str:
 
 def _record_score(rec: Dict[str, Any]) -> float:
     for key in ("builder_score", "score", "quality_score", "strength_score"):
-        try:
-            val = float(rec.get(key) or 0.0)
-            if val:
-                return val
-        except Exception:
-            continue
+        val = _safe_float(rec.get(key), 0.0)
+        if val:
+            return val
     return 0.0
 
 
@@ -413,11 +371,7 @@ def _preserve_intelligence_metadata(clean_rec: Dict[str, Any], gate_result: Dict
     if not quality_gate and isinstance(gate_result.get("quality_gate"), dict):
         quality_gate = gate_result.get("quality_gate") or {}
 
-    strength = (
-        clean_rec.get("strength")
-        if isinstance(clean_rec.get("strength"), dict)
-        else {}
-    )
+    strength = clean_rec.get("strength") if isinstance(clean_rec.get("strength"), dict) else {}
 
     if isinstance(gate_result.get("strength"), dict):
         strength = gate_result.get("strength") or strength
@@ -467,14 +421,7 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
         count_total += int(rec.get("count_total") or 0)
         best_score = max(best_score, rec_score)
 
-        if rec_score >= _record_score({
-            "builder_score": (
-                best_builder_intelligence.get("builder_score")
-                if isinstance(best_builder_intelligence, dict)
-                else 0.0
-            ),
-            "score": best_score,
-        }):
+        if rec_score >= best_score:
             if isinstance(rec.get("extractor_intelligence"), dict):
                 best_extractor_intelligence = rec.get("extractor_intelligence") or {}
             if isinstance(rec.get("quality_gate"), dict):
@@ -534,7 +481,15 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
                 aliases.append(a)
                 seen_aliases.add(a)
 
-        if rec_source_type in {"title", "heading_h1", "heading_h2", "heading_h3", "list_item", "entity", "intent"}:
+        if rec_source_type in {
+            "title",
+            "heading_h1",
+            "heading_h2",
+            "heading_h3",
+            "list_item",
+            "entity",
+            "intent",
+        }:
             source_type = rec_source_type
 
         rec_tier = str(rec.get("tier") or "")
@@ -572,23 +527,44 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
 
 
 def _canonical_merge_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
-    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    """
+    Universal exact-anchor-preserving merge.
+
+    IMPORTANT:
+    Do NOT semantically collapse distinct topical noun compounds.
+
+    GOOD:
+    - menstrual cycle
+    - fertile window
+    - cervical mucus
+    - basal body temperature
+
+    should ALL survive.
+
+    ONLY merge exact identical normalized phrases.
+    """
+
+    merged: Dict[str, Any] = {}
 
     for old_key, rec in phrases.items():
         if not isinstance(rec, dict):
             continue
 
-        target_key = _light_normalize_phrase(str(old_key))
+        target_key = _canonical_phrase(str(old_key or ""))
 
         if not target_key:
             continue
 
-        grouped.setdefault(target_key, []).append(rec)
+        # EXACT duplicate only
+        existing = merged.get(target_key)
 
-    merged: Dict[str, Any] = {}
-
-    for target_key, records in grouped.items():
-        merged[target_key] = _merge_phrase_records(target_key, records)
+        if existing and isinstance(existing, dict):
+            merged[target_key] = _merge_phrase_records(
+                target_key,
+                [existing, rec],
+            )
+        else:
+            merged[target_key] = rec
 
     return merged
 
@@ -682,7 +658,16 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         clean_rec["builder_score"] = clean_rec["builder_intelligence"]["builder_score"]
         clean_rec["ranking_priority"] = clean_rec["builder_intelligence"]["ranking_priority"]
 
-        phrases[phrase_text] = clean_rec
+        existing = phrases.get(phrase_text)
+
+        if existing and isinstance(existing, dict):
+            existing_score = _safe_float(existing.get("builder_score"), 0.0)
+            new_score = _safe_float(clean_rec.get("builder_score"), 0.0)
+
+            if new_score > existing_score:
+                phrases[phrase_text] = clean_rec
+        else:
+            phrases[phrase_text] = clean_rec
 
     active = load_active_phrase_set(ws)
     active_doc_ids = active.get("active_upload_ids") if isinstance(active.get("active_upload_ids"), list) else []
@@ -703,7 +688,10 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         indexed_doc_ids.update(str(k) for k in docs.keys())
 
     usable_active_ids = active_doc_set.intersection(indexed_doc_ids)
-    active_phrase_set_used = bool(usable_active_ids)
+    # TEMPORARY DIAGNOSTIC BYPASS:
+    # Keep active set metadata, but do not filter upload phrases
+    # by active document membership during this test.
+    active_phrase_set_used = False
 
     filtered: Dict[str, Any] = {}
 
@@ -751,6 +739,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         "indexed_document_ids_count": len(indexed_doc_ids),
         "builder_intelligence_summary": {
             "enabled": True,
+            "mode": "exact_anchor_preserving_universal_builder",
             "ranking_priority_counts": priority_counts,
             "layers": [
                 "temporal_reasoning",

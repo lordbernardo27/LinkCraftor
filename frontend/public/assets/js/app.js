@@ -1313,14 +1313,45 @@ const publishedFromMap = (PUBLISHED_TOPICS instanceof Map) ? Array.from(PUBLISHE
       });
   }
 
-  const payload = {
-    workspaceId: wsId,
-    docId,
-    phase: (window.PHASE || "publish"),
-    html,
-    text,
-    targets
-  };
+  const runtimeRoot =
+  viewerEl ||
+  document.getElementById("doc-content") ||
+  document.querySelector("#doc-content .doc-root");
+
+console.log("[RB2 DEBUG viewerEl]", viewerEl);
+console.log("[RB2 DEBUG doc-content]", document.getElementById("doc-content"));
+console.log("[RB2 DEBUG runtimeRoot]", runtimeRoot);
+
+if (runtimeRoot) {
+  console.log("[RB2 DEBUG innerText len]", (runtimeRoot.innerText || "").length);
+  console.log("[RB2 DEBUG textContent len]", (runtimeRoot.textContent || "").length);
+}
+
+const runtimeHtml =
+  runtimeRoot?.innerHTML ||
+  html ||
+  "";
+
+const runtimeText =
+  runtimeRoot?.innerText ||
+  runtimeRoot?.textContent ||
+  text ||
+  "";
+
+const cleanedRuntimeText = String(runtimeText)
+  .replace(/\s+/g, " ")
+  .trim();
+
+console.log("[RB2 RUNTIME TEXT LENGTH]", cleanedRuntimeText.length);
+
+const payload = {
+  workspaceId: wsId,
+  docId,
+  phase: (window.PHASE || "publish"),
+  html: runtimeHtml,
+  text: cleanedRuntimeText,
+  targets
+};
 
 console.log("[RB2 PIPELINE] calling apiEngineRun now", {
   highlightEnabled,

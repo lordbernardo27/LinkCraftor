@@ -66,29 +66,10 @@ INTENT_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"^best way [a-z0-9\s\-]+$"),
 )
 
-ENTITY_SEEDS: List[str] = [
-    "lmp",
-    "ovulation",
-    "basal body temperature",
-    "bbt",
-    "ultrasound",
-    "gestational age",
-    "conception date",
-    "due date",
-    "fertile window",
-    "cervical mucus",
-    "morning sickness",
-    "first trimester",
-    "postpartum",
-    "breastfeeding",
-    "newborn",
-]
-
 
 def _ws_safe(ws: str) -> str:
     ws = (ws or "default").strip().lower()
-    ws = re.sub(r"[^a-z0-9_\-]", "_", ws)[:80] or "default"
-    return ws
+    return re.sub(r"[^a-z0-9_\-]", "_", ws)[:80] or "default"
 
 
 def _data_dir() -> Path:
@@ -156,44 +137,16 @@ def _extract_list_items(html: str) -> List[str]:
     return [_strip_tags(x) for x in LI_RE.findall(html or "") if _strip_tags(x)]
 
 
-def _extract_canonical_core_phrase(s: str) -> str:
-    s = _canonical_phrase(s)
-    if not s:
-        return ""
-
-    markers = [
-        "how to ", "when do ", "what is ", "what are ",
-        "signs of ", "symptoms of ", "causes of ", "treatment for ",
-        "best time ", "best way ",
-    ]
-    starts = [s.find(m) for m in markers if s.find(m) != -1]
-    if starts:
-        s = s[min(starts):].strip()
-
-    lead_patterns = [
-        r"^people often ask\s+",
-        r"^many people ask\s+",
-        r"^many women ask\s+",
-        r"^women often ask\s+",
-        r"^doctors are often asked\s+",
-        r"^you may wonder\s+",
-        r"^you might wonder\s+",
-        r"^you may ask\s+",
-        r"^you might ask\s+",
-        r"^you may be asking\s+",
-        r"^often ask\s+",
-    ]
-    for pat in lead_patterns:
-        s = re.sub(pat, "", s).strip()
-
-    return _canonical_phrase(s)
-
-
 def _is_valid_content_sentence(text: str) -> bool:
     t = _canonical_phrase(text)
     if not t or _looks_like_ui_junk(t):
         return False
     return not any(p.search(t) for p in META_SENTENCE_PATTERNS)
+
+
+def _looks_like_intent_phrase(phrase: str) -> bool:
+    p = _canonical_phrase(phrase)
+    return any(rx.match(p) for rx in INTENT_PATTERNS)
 
 
 def _fails_semantic_filter(phrase: str) -> bool:
@@ -206,15 +159,6 @@ def _fails_semantic_filter(phrase: str) -> bool:
 
     tokens = _tokenize(p)
     if not tokens:
-        return True
-
-    if len(tokens) <= 3 and p in {
-        "clinic or app",
-        "can search deeper",
-        "do you turn",
-        "actual day",
-        "each one",
-    }:
         return True
 
     bad_starts = {
@@ -234,17 +178,6 @@ def _fails_semantic_filter(phrase: str) -> bool:
     return False
 
 
-def _looks_like_intent_phrase(phrase: str) -> bool:
-    p = _canonical_phrase(phrase)
-    return any(rx.match(p) for rx in INTENT_PATTERNS)
-
-
-def _looks_like_entity_phrase(phrase: str) -> bool:
-    p = _canonical_phrase(phrase)
-    if p in ENTITY_SEEDS:
-        return True
-    return any(seed in p for seed in ENTITY_SEEDS)
-
 def _accept_phrase(phrase: str) -> bool:
     p = _canonical_phrase(phrase)
     if not p:
@@ -258,13 +191,11 @@ def _accept_phrase(phrase: str) -> bool:
 
     tokens = _tokenize(p)
 
-    # must be between 2–5 tokens
-    if len(tokens) < 2 or len(tokens) > 5:
+    if len(tokens) < 2 or len(tokens) > 8:
         return False
 
     content = _content_tokens(tokens)
 
-    # HARD RULE: must have at least 2 meaningful words
     if len(content) < 2:
         return False
 
@@ -278,78 +209,15 @@ def _accept_phrase(phrase: str) -> bool:
         if len(tokens) > 1 and tokens[1] in narrative_verbs:
             return False
 
-    # BLOCK weak generic verbs
     weak_words = {"feel", "like", "make", "take", "get", "go", "come"}
     if any(t in weak_words for t in tokens):
         return False
 
-    # BLOCK incomplete endings
     bad_endings = {"like", "such", "each", "one", "matter"}
     if tokens[-1] in bad_endings:
         return False
 
-    # ALLOW strong intent phrases
-    if _looks_like_intent_phrase(p):
-        return True
-
-    # ALLOW entity phrases
-    if _looks_like_entity_phrase(p):
-        return True
-
     return True
-
-def _generate_sentence_candidates(sentence: str) -> List[str]:
-    s = _canonical_phrase(sentence)
-    if not s or not _is_valid_content_sentence(s):
-        return []
-
-    clause_parts = [
-        _canonical_phrase(x)
-        for x in CLAUSE_SPLIT_RE.split(s)
-        if _canonical_phrase(x)
-    ]
-
-    out: List[str] = []
-    seen: Set[str] = set()
-
-    for part in clause_parts:
-        if not _is_valid_content_sentence(part):
-            continue
-
-        tokens = _tokenize(part)
-        if len(tokens) < NGRAM_MIN_N:
-            continue
-
-        max_n = min(NGRAM_MAX_N, len(tokens))
-        found_for_part = False
-
-        # only take the longest valid phrase for this part
-        for n in range(max_n, NGRAM_MIN_N - 1, -1):
-            for i in range(0, len(tokens) - n + 1):
-                cand = " ".join(tokens[i:i + n]).strip()
-
-                if _fails_semantic_filter(cand):
-                    continue
-
-                cand = _extract_canonical_core_phrase(cand) or _canonical_phrase(cand)
-
-                if _fails_semantic_filter(cand):
-                    continue
-
-                if not _accept_phrase(cand):
-                    continue
-
-                if cand not in seen:
-                    out.append(cand)
-                    seen.add(cand)
-
-                found_for_part = True
-                break
-
-            if found_for_part:
-                break
-
-    return out
 
 
 def _derive_alias_variants(phrase: str) -> List[str]:
@@ -404,7 +272,7 @@ def _paths_for_ws(workspace_id: str) -> Dict[str, Path]:
 def _tier_for_source(source_type: str) -> str:
     if source_type in {"title", "heading_h1", "heading_h2", "heading_h3", "list_item"}:
         return "A"
-    if source_type == "sentence":
+    if source_type in {"intent", "entity", "noun_phrase", "action_object", "condition_phrase"}:
         return "B"
     return "C"
 
@@ -416,10 +284,15 @@ def _quality_score_for(source_type: str, repeats: int = 1) -> float:
         "heading_h2": 0.95,
         "heading_h3": 0.90,
         "list_item": 0.85,
+        "intent": 0.80,
+        "entity": 0.78,
+        "noun_phrase": 0.76,
+        "action_object": 0.74,
+        "condition_phrase": 0.72,
         "sentence": 0.70,
         "alias": 0.60,
     }
-    base = base_map.get(source_type, 0.50)
+    base = base_map.get(source_type, 0.65)
     bonus = min(max(repeats - 1, 0) * 0.05, 0.20)
     return round(min(base + bonus, 1.0), 3)
 
@@ -431,8 +304,16 @@ def _upsert_phrase_record(
     doc_id: str,
     section_id: str,
     snippet: str,
+    item: Optional[Dict[str, Any]] = None,
 ) -> None:
-    phrase = _extract_canonical_core_phrase(phrase) or _canonical_phrase(phrase)
+    # IMPORTANT:
+    # Preserve selector-approved exact anchors.
+    # Do NOT aggressively collapse semantic noun compounds during storage.
+    phrase = _canonical_phrase(phrase)
+
+    if not phrase:
+        return
+
     if not _accept_phrase(phrase):
         return
 
@@ -443,7 +324,7 @@ def _upsert_phrase_record(
     if not isinstance(rec, dict):
         rec = {
             "phrase": phrase,
-            "canonical": phrase,
+            "canonical": _canonical_phrase(phrase),
             "source_type": source_type,
             "tier": tier,
             "count_total": 0,
@@ -471,6 +352,24 @@ def _upsert_phrase_record(
 
     rec["quality_score"] = _quality_score_for(source_type, int(rec["count_total"]))
 
+    if isinstance(item, dict):
+        if isinstance(item.get("extractor_intelligence"), dict):
+            rec["extractor_intelligence"] = item.get("extractor_intelligence") or {}
+        if isinstance(item.get("quality_gate"), dict):
+            rec["quality_gate"] = item.get("quality_gate") or {}
+        if isinstance(item.get("selector_intelligence"), dict):
+            rec["selector_intelligence"] = item.get("selector_intelligence") or {}
+        if item.get("score") is not None:
+            rec["score"] = item.get("score")
+        if item.get("quality_score") is not None:
+            rec["strength_score"] = item.get("quality_score")
+            rec["quality_score"] = max(
+                float(rec.get("quality_score") or 0.0),
+                float(item.get("quality_score") or 0.0),
+            )
+        if item.get("quality_reason"):
+            rec["quality_reason"] = item.get("quality_reason")
+
     examples = rec.get("examples") if isinstance(rec.get("examples"), list) else []
     rec["examples"] = examples
     if len(examples) < MAX_EXAMPLES_PER_PHRASE:
@@ -479,6 +378,7 @@ def _upsert_phrase_record(
             "section_id": section_id,
             "snippet": snippet[:160] + ("…" if len(snippet) > 160 else ""),
         })
+
 
 def _remove_doc_phrases(ph: Dict[str, Any], doc_id: str) -> None:
     if not doc_id:
@@ -525,6 +425,7 @@ def _remove_doc_phrases(ph: Dict[str, Any], doc_id: str) -> None:
 
     for phrase in to_delete:
         ph.pop(phrase, None)
+
 
 def build_upload_intelligence(
     workspace_id: str,
@@ -592,6 +493,9 @@ def build_upload_intelligence(
     )
 
     for item in selected.get("phrases", []):
+        if not isinstance(item, dict):
+            continue
+
         phrase = str(item.get("phrase") or "").strip()
         source_type = str(item.get("source_type") or "selector")
         section_id = str(item.get("section_id") or "")
@@ -600,10 +504,24 @@ def build_upload_intelligence(
         if not phrase:
             continue
 
-        _upsert_phrase_record(ph, phrase, source_type, doc_id, section_id, snippet)
-
+        _upsert_phrase_record(
+            ph,
+            phrase,
+            source_type,
+            doc_id,
+            section_id,
+            snippet,
+            item=item,
+        )
 
     phrase_index["updated_at"] = _now_iso()
+    phrase_index["selector_pipeline"] = {
+        "enabled": True,
+        "mode": "preserve_selector_exact_anchors",
+        "selected_count": int(selected.get("selected_count") or 0),
+        "candidate_count": int(selected.get("candidate_count") or 0),
+        "vertical": selected.get("vertical") or "universal",
+    }
     _write_json_atomic(paths["phrases"], phrase_index)
 
     entity_map = _read_json(paths["entities"], {"workspace_id": ws, "updated_at": _now_iso(), "entities": {}})
@@ -628,5 +546,7 @@ def build_upload_intelligence(
             "headings_h2h3": len(headings),
             "list_items": len(list_items),
             "phrases_total": len(phrase_index["phrases"]),
+            "selector_candidate_count": int(selected.get("candidate_count") or 0),
+            "selector_selected_count": int(selected.get("selected_count") or 0),
         },
     }

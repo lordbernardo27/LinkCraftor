@@ -58,12 +58,12 @@ CLAUSE_VERBS: Set[str] = {
     "increase", "increases", "reduce", "reduces", "guide", "guides",
     "summarize", "summarizes", "map", "maps", "contain", "contains",
     "mention", "mentions", "fit", "fits", "gain", "gains",
-    "interpret", "interprets", "support", "supports",
-    "combine", "combines", "understand", "understands", "view", "views",
-    "select", "selects", "request", "requests", "invite", "invites",
-    "connect", "connects", "complete", "completes", "compare", "compares",
-    "help", "helps", "include", "includes", "provide", "provides",
-    "require", "requires", "reveal", "reveals",
+    "interpret", "interprets", "support", "supports", "combine", "combines",
+    "understand", "understands", "view", "views", "select", "selects",
+    "request", "requests", "invite", "invites", "connect", "connects",
+    "complete", "completes", "compare", "compares", "help", "helps",
+    "include", "includes", "provide", "provides", "require", "requires",
+    "reveal", "reveals",
 }
 
 ACTION_TOKENS: Set[str] = {
@@ -80,8 +80,8 @@ BAD_STARTS: Set[str] = {
     "your", "you", "many", "people", "because", "whether", "rather",
     "without", "with", "into", "from", "for", "to", "at", "on", "by",
     "if", "while", "often", "still", "just", "as", "based", "brief",
-    "trained", "everyone", "someone", "anyone", "most", "time", "period",
-    "cycles", "back", "inside", "outside", "category", "such",
+    "trained", "everyone", "someone", "anyone", "most", "time", "back",
+    "inside", "outside", "category", "such",
 }
 
 BAD_ENDINGS: Set[str] = {
@@ -156,7 +156,7 @@ THIN_MODIFIERS: Set[str] = {
 }
 
 GENERIC_WEAK_HEADS: Set[str] = {
-    "date", "day", "days", "phase", "length", "time", "thing", "things",
+    "date", "day", "days", "time", "thing", "things",
     "way", "ways", "step", "steps", "part", "parts", "case", "cases",
     "reason", "reasons", "example", "examples", "number", "point",
     "points", "area", "level", "type", "types", "form", "forms",
@@ -222,28 +222,13 @@ SOURCE_TYPE_THRESHOLDS: Dict[str, float] = {
     "intent": 0.55,
     "action_object": 0.58,
     "condition_phrase": 0.58,
-    "noun_phrase": 0.60,
+    "noun_phrase": 0.52,
 }
 
-
 VERB_WRAPPER_STARTS: Set[str] = {
-    "avoid",
-    "prevent",
-    "reduce",
-    "improve",
-    "increase",
-    "manage",
-    "check",
-    "track",
-    "monitor",
-    "review",
-    "forecast",
-    "optimize",
-    "build",
-    "create",
-    "fix",
-    "protect",
-    "treat",
+    "avoid", "prevent", "reduce", "improve", "increase", "manage",
+    "check", "monitor", "review", "forecast", "optimize", "build",
+    "create", "fix", "protect", "treat",
 }
 
 FRAGMENT_PATTERNS = (
@@ -371,8 +356,62 @@ def _contains_bad_fragment(p: str) -> bool:
     return any(re.search(pat, p) for pat in FRAGMENT_PATTERNS)
 
 
+def _is_clean_content_compound(tokens: List[str]) -> bool:
+    if not tokens:
+        return False
+
+    if len(tokens) < 2 or len(tokens) > 5:
+        return False
+
+    if tokens[0] in BAD_STARTS or tokens[-1] in BAD_ENDINGS:
+        return False
+
+    if tokens[0] in STOPWORDS or tokens[-1] in STOPWORDS:
+        return False
+
+    if any(t in PRONOUNS for t in tokens):
+        return False
+
+    if any(t in HELPER_VERBS for t in tokens):
+        return False
+
+    if any(t in CLAUSE_VERBS for t in tokens):
+        return False
+
+    if tokens[-1] in VAGUE_ADVERB_ENDINGS:
+        return False
+
+    content = content_tokens(tokens)
+
+    if len(content) < 2:
+        return False
+
+    long_terms = [t for t in content if len(t) >= 5]
+    solid_terms = [t for t in content if len(t) >= 4]
+
+    if len(long_terms) >= 2:
+        return True
+
+    if len(content) >= 3 and len(solid_terms) >= 2:
+        return True
+
+    if len(content) == 2 and all(len(t) >= 4 for t in content):
+        return True
+
+    return False
+
+
 def _has_universal_head(tokens: List[str]) -> bool:
-    return bool(tokens and tokens[-1] in UNIVERSAL_HEAD_SUFFIXES)
+    if not tokens:
+        return False
+
+    if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
+        return True
+
+    if _is_clean_content_compound(tokens):
+        return True
+
+    return False
 
 
 def _starts_with_weak_connector(p: str) -> bool:
@@ -394,8 +433,13 @@ def _is_thin_modifier_phrase(tokens: List[str]) -> bool:
 def _is_generic_weak_head_phrase(tokens: List[str]) -> bool:
     if not tokens:
         return True
+
+    if _is_clean_content_compound(tokens):
+        return False
+
     if tokens[-1] not in GENERIC_WEAK_HEADS:
         return False
+
     if len(tokens) <= 2:
         return True
 
@@ -412,6 +456,10 @@ def _is_generic_weak_head_phrase(tokens: List[str]) -> bool:
 def _looks_like_sentence_fragment(tokens: List[str]) -> bool:
     if not tokens:
         return True
+
+    if _is_clean_content_compound(tokens):
+        return False
+
     if any(t in HELPER_VERBS for t in tokens):
         return True
     if any(t in PRONOUNS for t in tokens):
@@ -432,11 +480,18 @@ def _contains_clause_connector(tokens: List[str]) -> bool:
 def _has_mid_stopword_chain(tokens: List[str]) -> bool:
     if len(tokens) < 3:
         return False
+
+    if _is_clean_content_compound(tokens):
+        return False
+
     return any(t in STOPWORDS for t in tokens[1:-1])
 
 
 def _is_bad_noun_stack(tokens: List[str]) -> bool:
     if len(tokens) < 3:
+        return False
+
+    if _is_clean_content_compound(tokens):
         return False
 
     if any(t in STOPWORDS for t in tokens):
@@ -470,7 +525,7 @@ def _is_weak_action_tail(tokens: List[str]) -> bool:
     if tokens[-1] in GENERIC_WEAK_HEADS:
         return True
 
-    if len(tokens) == 3 and tokens[-1] not in UNIVERSAL_HEAD_SUFFIXES:
+    if len(tokens) == 3 and tokens[-1] not in UNIVERSAL_HEAD_SUFFIXES and not _is_clean_content_compound(tokens):
         return True
 
     return False
@@ -488,6 +543,8 @@ def _score_entity_density(tokens: List[str]) -> float:
     for token in content:
         if token in UNIVERSAL_HEAD_SUFFIXES or token in UNIVERSAL_MODIFIERS:
             entity_hits += 1
+        elif len(token) >= 5:
+            entity_hits += 0.65
 
     if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
         entity_hits += 1
@@ -508,6 +565,9 @@ def _score_anchor_strength(tokens: List[str], source_type: str) -> float:
 
     if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
         score += 0.25
+
+    if _is_clean_content_compound(tokens):
+        score += 0.20
 
     if any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]):
         score += 0.15
@@ -537,6 +597,9 @@ def _score_semantic_cohesion(tokens: List[str]) -> float:
         score += 0.15
 
     if _has_universal_head(tokens):
+        score += 0.15
+
+    if _is_clean_content_compound(tokens):
         score += 0.15
 
     if any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]):
@@ -592,6 +655,9 @@ def _score_topic_alignment(tokens: List[str], snippet: str) -> float:
         score += 0.20
 
     if any(t in UNIVERSAL_HEAD_SUFFIXES for t in content):
+        score += 0.15
+
+    if _is_clean_content_compound(tokens):
         score += 0.15
 
     if any(t in UNIVERSAL_MODIFIERS for t in content):
@@ -866,7 +932,7 @@ def _extract_clean_compound_candidates(sent: str, section_id: str) -> List[Dict[
     seen: Set[str] = set()
     tokens = tokenize(sent)
 
-    for n in (2, 3, 4):
+    for n in (4, 3, 2):
         if len(tokens) < n:
             continue
 
@@ -877,11 +943,9 @@ def _extract_clean_compound_candidates(sent: str, section_id: str) -> List[Dict[
                 continue
             if chunk[0] in BAD_STARTS:
                 continue
-            if chunk[0] in ACTION_TOKENS:
-                 continue
             if chunk[0] in VERB_WRAPPER_STARTS:
-                 continue
-            if chunk[0] in ACTION_TOKENS:
+                continue
+            if chunk[0] in ACTION_TOKENS and len(chunk) <= 2:
                 continue
             if any(t in ACTION_TOKENS for t in chunk[1:]):
                 continue
@@ -904,21 +968,18 @@ def _extract_clean_compound_candidates(sent: str, section_id: str) -> List[Dict[
             if _is_bad_noun_stack(chunk):
                 continue
 
-            # Boundary Intelligence:
-            # Reject shifted windows that begin in the middle of a stronger phrase.
             if i > 0:
                 prev_token = tokens[i - 1]
                 if prev_token not in STOPWORDS and prev_token not in HELPER_VERBS:
                     previous_extended = tokens[i - 1:i + n]
-                    if len(previous_extended) <= 4 and _has_universal_head(previous_extended):
+                    if len(previous_extended) <= 5 and _has_universal_head(previous_extended):
                         continue
 
-            # Reject chunks that end before a stronger noun phrase continues.
             if i + n < len(tokens):
                 next_token = tokens[i + n]
                 if next_token not in STOPWORDS and next_token not in HELPER_VERBS:
                     next_extended = tokens[i:i + n + 1]
-                    if len(next_extended) <= 4 and _has_universal_head(next_extended):
+                    if len(next_extended) <= 5 and _has_universal_head(next_extended):
                         continue
 
             content = content_tokens(chunk)

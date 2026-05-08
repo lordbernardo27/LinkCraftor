@@ -21,7 +21,7 @@ from backend.server.stores.smart_phrase_extractor import (
 CONNECTORS = {
     "about", "after", "before", "because", "by", "during", "for", "from",
     "in", "into", "of", "on", "than", "that", "to", "with", "without",
-    "while", "whether", "rather",
+    "while", "whether", "rather", "between", "through", "across", "around",
 }
 
 WEAK_PRONOUN_STARTS = {
@@ -41,27 +41,25 @@ ACTION_VERBS = {
     "find", "give", "gives", "go", "goes", "help", "helps",
     "know", "knows", "make", "makes", "mean", "means", "need",
     "needs", "show", "shows", "take", "takes", "turn", "turns",
-    "use", "uses", "want", "wants",
+    "use", "uses", "want", "wants", "avoid", "understand",
 }
 
-WEAK_ACTION_WORDS = {"feel", "like", "make", "take", "get", "go", "come"}
+WEAK_ACTION_WORDS = {
+    "feel", "like", "make", "take", "get", "go", "come", "try", "trying",
+}
 
 QUESTION_WORDS = {"how", "what", "when", "where", "which", "who", "why"}
 
 GENERIC_HEADS = {
     "area", "case", "goal", "idea", "method", "option", "part",
     "plan", "question", "reason", "routine", "step", "thing",
-    "time", "way",
+    "time", "way", "number", "point", "example", "fact", "approach",
 }
 
-UNIVERSAL_ANCHOR_HEADS = {
-    "account", "analytics", "assessment", "blood", "budget", "calculator",
-    "campaign", "care", "cash", "course", "cycle", "date", "diet",
-    "exam", "exercise", "fertility", "flow", "guide", "health",
-    "income", "investment", "keyword", "learning", "lesson", "management",
-    "marketing", "mucus", "ovulation", "period", "pregnancy",
-    "profit", "revenue", "risk", "score", "seo", "strategy",
-    "symptoms", "temperature", "tracking", "window",
+WEAK_GENERIC_TERMS = {
+    "simple", "useful", "common", "popular", "helpful", "likely",
+    "right", "today", "better", "same", "many", "most", "several",
+    "brief", "important", "different", "main", "own", "real",
 }
 
 SELECTOR_INTELLIGENCE_LAYERS = [
@@ -92,33 +90,67 @@ def _content_tokens(tokens: List[str]) -> List[str]:
         if t not in CONNECTORS
         and t not in AUXILIARY_VERBS
         and t not in WEAK_PRONOUN_STARTS
+        and t not in QUESTION_WORDS
     ]
+
+
+def _looks_like_strong_noun_phrase(tokens: List[str]) -> bool:
+    if not tokens:
+        return False
+
+    content = _content_tokens(tokens)
+
+    if len(content) < 2:
+        return False
+
+    if tokens[0] in WEAK_PRONOUN_STARTS:
+        return False
+
+    if tokens[0] in AUXILIARY_VERBS:
+        return False
+
+    if tokens[0] in CONNECTORS or tokens[-1] in CONNECTORS:
+        return False
+
+    if tokens[-1] in AUXILIARY_VERBS or tokens[-1] in ACTION_VERBS:
+        return False
+
+    if tokens[-1] in GENERIC_HEADS and len(content) < 3:
+        return False
+
+    if any(t in WEAK_GENERIC_TERMS for t in tokens) and len(content) < 3:
+        return False
+
+    long_content_words = [t for t in content if len(t) >= 5]
+    solid_content_words = [t for t in content if len(t) >= 4]
+
+    if len(long_content_words) >= 2:
+        return True
+
+    if len(content) >= 3 and len(solid_content_words) >= 2:
+        return True
+
+    if len(content) == 2 and all(len(t) >= 4 for t in content):
+        return True
+
+    return False
 
 
 def _has_anchor_head(tokens: List[str]) -> bool:
     if not tokens:
         return False
 
+    if _looks_like_strong_noun_phrase(tokens):
+        return True
+
     head = tokens[-1]
 
     if head in GENERIC_HEADS:
         return False
 
-    if head in UNIVERSAL_ANCHOR_HEADS:
-        return True
-
-    if len(tokens) >= 2:
-        phrase = " ".join(tokens[-2:])
-        if phrase in {
-            "fertile window",
-            "birth control",
-            "ovulation cycle",
-            "menstrual cycle",
-            "basal body",
-            "body temperature",
-            "cervical mucus",
-            "family planning",
-        }:
+    if len(head) >= 6 and head not in ACTION_VERBS and head not in AUXILIARY_VERBS:
+        content = _content_tokens(tokens)
+        if len(content) >= 2:
             return True
 
     return False
@@ -131,7 +163,7 @@ def _is_intent_phrase(tokens: List[str]) -> bool:
     if tokens[0] in QUESTION_WORDS:
         return True
 
-    if tokens[0] in {"signs", "symptoms", "causes", "treatment"}:
+    if tokens[0] in {"signs", "symptoms", "causes", "treatment", "benefits", "risks"}:
         return True
 
     if tokens[0] == "best":
@@ -154,7 +186,7 @@ def _has_connector_leak(tokens: List[str]) -> bool:
         left = tokens[i - 1]
         right = tokens[i + 1]
 
-        if tok in {"of", "for", "in", "with", "during", "after", "before"}:
+        if tok in {"of", "for", "in", "with", "during", "after", "before", "between"}:
             if left not in ACTION_VERBS and right not in AUXILIARY_VERBS:
                 continue
 
@@ -185,6 +217,9 @@ def _is_clause_fragment(tokens: List[str]) -> bool:
     if not tokens:
         return True
 
+    if _looks_like_strong_noun_phrase(tokens):
+        return False
+
     if tokens[0] in WEAK_PRONOUN_STARTS:
         return True
 
@@ -207,7 +242,17 @@ def _is_weak_generic_phrase(tokens: List[str], source_type: str = "") -> bool:
     if not tokens:
         return True
 
-    if source_type in {"title", "heading_h1", "heading_h2", "heading_h3", "entity", "intent"}:
+    if source_type in {
+        "title",
+        "heading_h1",
+        "heading_h2",
+        "heading_h3",
+        "entity",
+        "intent",
+    }:
+        return False
+
+    if _looks_like_strong_noun_phrase(tokens):
         return False
 
     if len(tokens) == 2 and tokens[-1] in GENERIC_HEADS:
@@ -251,8 +296,12 @@ def _is_structural_fragment(phrase: str, source_type: str = "") -> bool:
             return True
 
     if not _is_intent_phrase(tokens) and not _has_anchor_head(tokens):
+        if _looks_like_strong_noun_phrase(tokens):
+            return False
+
         if len(tokens) >= 3 and len(content) >= 3:
             return False
+
         return True
 
     if source_type == "sentence" and not _is_intent_phrase(tokens):
@@ -343,7 +392,7 @@ def _source_type_bonus(source_type: str) -> float:
     if source_type == "condition_phrase":
         return 6.0
     if source_type == "noun_phrase":
-        return 4.0
+        return 6.0
     return 0.0
 
 
@@ -420,8 +469,8 @@ def _semantic_root(tokens: List[str]) -> str:
 
 
 def _semantic_overlap(a: str, b: str) -> float:
-    ta = set(_tokens(a))
-    tb = set(_tokens(b))
+    ta = set(_content_tokens(_tokens(a)))
+    tb = set(_content_tokens(_tokens(b)))
 
     if not ta or not tb:
         return 0.0
@@ -433,6 +482,13 @@ def _semantic_overlap(a: str, b: str) -> float:
 
 
 def _is_semantic_competitor(a: str, b: str) -> bool:
+    """
+    Universal cross-niche semantic dedupe.
+
+    Suppress only near-identical variants.
+    Preserve distinct topical noun compounds.
+    """
+
     a = _canonical_phrase(a)
     b = _canonical_phrase(b)
 
@@ -442,19 +498,33 @@ def _is_semantic_competitor(a: str, b: str) -> bool:
     if a == b:
         return True
 
-    if a in b or b in a:
-        shorter = min(len(_tokens(a)), len(_tokens(b)))
-        if shorter >= 2:
-            return True
+    ta = _tokens(a)
+    tb = _tokens(b)
 
-    if _semantic_overlap(a, b) >= 0.60:
+    sa = set(_content_tokens(ta))
+    sb = set(_content_tokens(tb))
+
+    if not sa or not sb:
+        return False
+
+    overlap = len(sa & sb)
+    union = len(sa | sb)
+    jaccard = overlap / max(1, union)
+
+    if jaccard >= 0.82:
         return True
 
-    ra = _semantic_root(_tokens(a))
-    rb = _semantic_root(_tokens(b))
+    shorter = min(len(sa), len(sb))
+
+    if shorter >= 3 and (a in b or b in a):
+        return True
+
+    ra = _semantic_root(ta)
+    rb = _semantic_root(tb)
 
     if ra and rb and ra == rb:
-        return True
+        if overlap >= max(len(sa), len(sb)) - 1:
+            return True
 
     return False
 
@@ -488,7 +558,7 @@ def _selector_intelligence_result(
         overlap = _semantic_overlap(phrase, str(existing.get("phrase") or ""))
         closest_overlap = max(closest_overlap, overlap)
         if _is_semantic_competitor(phrase, str(existing.get("phrase") or "")):
-            semantic_diversity = min(semantic_diversity, 0.25)
+            semantic_diversity = min(semantic_diversity, 0.65)
 
     coverage = 0.85 if _coverage_key(phrase) else 0.50
     runtime_usefulness = min(1.0, max(0.0, score / 120.0))
@@ -506,7 +576,7 @@ def _selector_intelligence_result(
 
     if semantic_competitor_blocked:
         decision = "REJECT"
-        reason = "semantic_competitor_suppressed"
+        reason = "near_duplicate_variant_suppressed"
     else:
         decision = "ACCEPT"
         reason = "selector_accept"
@@ -542,6 +612,7 @@ def _apply_selector_intelligence(rows: List[Dict[str, Any]]) -> List[Dict[str, A
 
     for row in ranked:
         phrase = str(row.get("phrase") or "")
+
         blocked = any(
             _is_semantic_competitor(
                 phrase,
@@ -715,6 +786,7 @@ def select_upload_phrases(
         "selector_intelligence_summary": {
             "enabled": True,
             "layers": SELECTOR_INTELLIGENCE_LAYERS,
+            "mode": "universal_cross_niche_semantic_dedupe_relaxed",
         },
         "phrases": selected,
     }
