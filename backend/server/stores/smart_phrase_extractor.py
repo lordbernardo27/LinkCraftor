@@ -714,6 +714,253 @@ def _extractor_intelligence_result(
     }
 
 
+# ---------------------------------------------------------------------
+# Final universal extractor intelligence layers
+# ---------------------------------------------------------------------
+
+VALID_NUMERIC_HEADS = {
+    "age", "ages", "amount", "average", "budget", "cycle", "cycles",
+    "day", "days", "deadline", "duration", "forecast", "growth", "hour",
+    "hours", "index", "interval", "length", "limit", "month", "months",
+    "period", "periods", "price", "rate", "ratio", "revenue", "risk",
+    "score", "scores", "size", "term", "trial", "value", "week", "weeks",
+    "window", "year", "years",
+}
+
+DISCOURSE_TRANSITION_TERMS = {
+    "actually", "also", "anyway", "basically", "behind", "briefly",
+    "clearly", "especially", "even", "finally", "first", "firstly",
+    "generally", "however", "including", "instead", "just", "lastly",
+    "mainly", "meanwhile", "mostly", "normally", "often", "overall",
+    "particularly", "rather", "really", "second", "secondly", "simply",
+    "sometimes", "still", "therefore", "though", "today", "usually",
+}
+
+UNSTABLE_INTERNAL_CONNECTORS = {
+    "and", "but", "or", "so", "because", "although", "though", "while",
+    "whereas", "unless", "since",
+}
+
+VALID_PAIR_PATTERNS = {
+    ("risks", "benefits"),
+    ("risk", "benefit"),
+    ("signs", "symptoms"),
+    ("supply", "demand"),
+    ("pros", "cons"),
+    ("privacy", "security"),
+    ("cost", "benefit"),
+    ("costs", "benefits"),
+    ("strengths", "weaknesses"),
+    ("cause", "effect"),
+    ("causes", "effects"),
+    ("input", "output"),
+    ("inputs", "outputs"),
+    ("assets", "liabilities"),
+    ("revenue", "expenses"),
+    ("income", "expenses"),
+    ("growth", "profitability"),
+}
+
+
+def _has_numeric_semantic_pollution(tokens: List[str]) -> bool:
+    """
+    Universal numeric-window guard.
+
+    Rejects broken numeric windows while preserving normal numeric anchors:
+    - keep: 30 day trial, 12 month revenue forecast, 28 day cycle
+    - reject: 24 hours and sperm, 17 with the most fertile
+    """
+    if not tokens or not any(t.isdigit() for t in tokens):
+        return False
+
+    # Pure numeric tail was already handled elsewhere, but keep this safe.
+    if tokens[-1].isdigit():
+        return True
+
+    numeric_positions = [i for i, t in enumerate(tokens) if t.isdigit()]
+
+    for idx in numeric_positions:
+        prev_tok = tokens[idx - 1] if idx > 0 else ""
+        next_tok = tokens[idx + 1] if idx + 1 < len(tokens) else ""
+        next2_tok = tokens[idx + 2] if idx + 2 < len(tokens) else ""
+
+        # Valid numeric unit/metric phrase: 30 day trial, 12 month forecast.
+        if next_tok in VALID_NUMERIC_HEADS:
+            continue
+
+        # Valid phrase where the numeric unit is before the number is rare in
+        # anchors, but allow meaningful metric heads around the number.
+        if prev_tok in VALID_NUMERIC_HEADS or next2_tok in VALID_NUMERIC_HEADS:
+            continue
+
+        # Numeric value followed by connector/discourse is usually a sentence shard.
+        if next_tok in STOPWORDS or next_tok in UNSTABLE_INTERNAL_CONNECTORS:
+            return True
+
+        # Bare number inside a phrase without a known numeric head is unstable.
+        return True
+
+    return False
+
+
+def _has_discourse_transition_leak(tokens: List[str]) -> bool:
+    """
+    Rejects sentence-bridge/discourse fragments that are not stable anchors.
+    """
+    if not tokens:
+        return False
+
+    # Good anchors can contain ordinary modifiers, but should not start/end with
+    # discourse transition terms.
+    if tokens[0] in DISCOURSE_TRANSITION_TERMS:
+        return True
+
+    if tokens[-1] in DISCOURSE_TRANSITION_TERMS:
+        return True
+
+    # Internal discourse terms are usually bad unless the phrase is a known
+    # clean content compound.
+    internal = tokens[1:-1]
+    if any(t in DISCOURSE_TRANSITION_TERMS for t in internal):
+        return True
+
+    # Common narrative fragments.
+    phrase = " ".join(tokens)
+    if phrase in {
+        "behind the scenes",
+        "same number",
+        "single fact",
+        "main reason",
+        "main point",
+        "next step",
+        "first step",
+    }:
+        return True
+
+    return False
+
+
+def _has_unstable_internal_connector(tokens: List[str]) -> bool:
+    """
+    Reject unstable connector windows but preserve valid paired concepts.
+    """
+    if len(tokens) < 3:
+        return False
+
+    for i, tok in enumerate(tokens[1:-1], start=1):
+        if tok not in UNSTABLE_INTERNAL_CONNECTORS:
+            continue
+
+        left = tokens[i - 1]
+        right = tokens[i + 1]
+
+        if (left, right) in VALID_PAIR_PATTERNS:
+            continue
+
+        # Allow stable noun-pair anchors like "research and development" only
+        # when both sides are content-heavy.
+        if tok == "and" and len(left) >= 5 and len(right) >= 5:
+            continue
+
+        return True
+
+    return False
+
+INCOMPLETE_TAIL_TERMS = {
+    "around", "widely", "itself", "typically", "usually", "often",
+    "likely", "roughly", "generally", "seriously", "accurately",
+    "realizing", "finding", "trying", "based",
+}
+
+WEAK_COMPLETION_STARTS = {
+    "using", "planning", "working", "range", "vary", "hit", "mark",
+    "know", "search", "refine", "focus",
+}
+
+BAD_BOUNDARY_BIGRAMS = {
+    ("body", "better"),
+    ("better", "learning"),
+    ("conceive", "trying"),
+    ("ovulation", "answer"),
+    ("cycle", "math"),
+    ("powerful", "starting"),
+}
+
+
+def _has_numeric_phrase_shape_error(tokens: List[str]) -> bool:
+    if not tokens or not any(t.isdigit() for t in tokens):
+        return False
+
+    stable_units = {
+        "day", "days", "week", "weeks", "month", "months", "year", "years",
+        "hour", "hours", "minute", "minutes", "percent", "percentage",
+        "rate", "ratio", "score", "index", "cycle", "window", "trial",
+        "period", "forecast", "budget", "revenue", "growth", "risk",
+    }
+
+    stable_heads = {
+        "cycle", "window", "trial", "forecast", "rate", "ratio", "score",
+        "index", "period", "budget", "revenue", "growth", "risk",
+        "length", "duration", "deadline", "timeline", "plan",
+    }
+
+    for i, tok in enumerate(tokens):
+        if not tok.isdigit():
+            continue
+
+        next_tok = tokens[i + 1] if i + 1 < len(tokens) else ""
+        next2_tok = tokens[i + 2] if i + 2 < len(tokens) else ""
+
+        if next_tok in stable_units and (next2_tok in stable_heads or len(tokens) <= 3):
+            continue
+
+        if next_tok in stable_units and len(tokens) == 2:
+            continue
+
+        return True
+
+    return False
+
+
+def _has_boundary_stitch_error(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    for pair in zip(tokens, tokens[1:]):
+        if pair in BAD_BOUNDARY_BIGRAMS:
+            return True
+
+    if tokens[-1] in {"trying", "finding", "realizing", "using", "tracking"}:
+        return True
+
+    return False
+
+
+def _has_incomplete_phrase_completion(tokens: List[str]) -> bool:
+    if not tokens:
+        return False
+
+    if tokens[-1] in INCOMPLETE_TAIL_TERMS:
+        return True
+
+    if tokens[0] in WEAK_COMPLETION_STARTS and len(tokens) <= 3:
+        return True
+
+    phrase = " ".join(tokens)
+    if phrase in {
+        "using this principle",
+        "planning around",
+        "range more widely",
+        "working length",
+        "last three",
+        "personal average",
+        "same subtraction rule",
+        "ovulation the answer",
+    }:
+        return True
+
+    return False
+
 def _basic_reject(phrase: str) -> bool:
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
@@ -725,6 +972,20 @@ def _basic_reject(phrase: str) -> bool:
         return True
     if len(content) < 2:
         return True
+
+    if _has_numeric_semantic_pollution(tokens):
+        return True
+    if _has_discourse_transition_leak(tokens):
+        return True
+    if _has_unstable_internal_connector(tokens):
+        return True
+    if _has_numeric_phrase_shape_error(tokens):
+        return True
+    if _has_boundary_stitch_error(tokens):
+        return True
+    if _has_incomplete_phrase_completion(tokens):
+        return True
+
     if tokens[0] in BAD_STARTS:
         return True
     if tokens[-1] in BAD_ENDINGS:

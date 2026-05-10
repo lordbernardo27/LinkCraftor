@@ -457,17 +457,6 @@ def _local_dedupe_phrase_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]
     return list(best_by_canonical.values())
 
 
-def _semantic_root(tokens: List[str]) -> str:
-    if not tokens:
-        return ""
-
-    important = _content_tokens(tokens)
-    if not important:
-        important = tokens
-
-    return " ".join(important[:2])
-
-
 def _semantic_overlap(a: str, b: str) -> float:
     ta = set(_content_tokens(_tokens(a)))
     tb = set(_content_tokens(_tokens(b)))
@@ -481,14 +470,13 @@ def _semantic_overlap(a: str, b: str) -> float:
     return inter / max(1, union)
 
 
-def _is_semantic_competitor(a: str, b: str) -> bool:
+def _is_near_duplicate_variant(a: str, b: str) -> bool:
     """
-    Universal cross-niche semantic dedupe.
+    Editor-safe near-duplicate detection.
 
-    Suppress only near-identical variants.
-    Preserve distinct topical noun compounds.
+    This should NOT remove broad topical neighbors.
+    It only identifies phrases that are almost the same anchor.
     """
-
     a = _canonical_phrase(a)
     b = _canonical_phrase(b)
 
@@ -498,32 +486,36 @@ def _is_semantic_competitor(a: str, b: str) -> bool:
     if a == b:
         return True
 
-    ta = _tokens(a)
-    tb = _tokens(b)
+    ta = _content_tokens(_tokens(a))
+    tb = _content_tokens(_tokens(b))
 
-    sa = set(_content_tokens(ta))
-    sb = set(_content_tokens(tb))
+    sa = set(ta)
+    sb = set(tb)
 
     if not sa or not sb:
         return False
 
+    # Only exact/near-exact token-set variants compete.
     overlap = len(sa & sb)
     union = len(sa | sb)
     jaccard = overlap / max(1, union)
 
-    if jaccard >= 0.82:
+    if jaccard >= 0.92:
         return True
 
-    shorter = min(len(sa), len(sb))
+    # Allow "fertile window" and "fertile window calculator" to coexist.
+    # Suppress only when the longer phrase adds weak wrapper words.
+    weak_wrappers = {
+        "real", "time", "simple", "basic", "best", "easy", "useful",
+        "common", "important", "main", "different", "own", "today",
+    }
 
-    if shorter >= 3 and (a in b or b in a):
-        return True
+    shorter_tokens = ta if len(ta) <= len(tb) else tb
+    longer_tokens = tb if len(ta) <= len(tb) else ta
 
-    ra = _semantic_root(ta)
-    rb = _semantic_root(tb)
-
-    if ra and rb and ra == rb:
-        if overlap >= max(len(sa), len(sb)) - 1:
+    if len(shorter_tokens) >= 2 and all(t in longer_tokens for t in shorter_tokens):
+        extras = [t for t in longer_tokens if t not in shorter_tokens]
+        if extras and all(t in weak_wrappers for t in extras):
             return True
 
     return False
@@ -544,7 +536,7 @@ def _selector_intelligence_result(
     row: Dict[str, Any],
     *,
     selected_before: List[Dict[str, Any]],
-    semantic_competitor_blocked: bool = False,
+    near_duplicate_seen: bool = False,
 ) -> Dict[str, Any]:
     phrase = str(row.get("phrase") or "")
     score = float(row.get("score") or 0.0)
@@ -555,10 +547,14 @@ def _selector_intelligence_result(
     closest_overlap = 0.0
 
     for existing in selected_before:
-        overlap = _semantic_overlap(phrase, str(existing.get("phrase") or ""))
+        existing_phrase = str(existing.get("phrase") or "")
+        overlap = _semantic_overlap(phrase, existing_phrase)
         closest_overlap = max(closest_overlap, overlap)
-        if _is_semantic_competitor(phrase, str(existing.get("phrase") or "")):
-            semantic_diversity = min(semantic_diversity, 0.65)
+
+        if _is_near_duplicate_variant(phrase, existing_phrase):
+            semantic_diversity = min(semantic_diversity, 0.72)
+        elif overlap >= 0.70:
+            semantic_diversity = min(semantic_diversity, 0.85)
 
     coverage = 0.85 if _coverage_key(phrase) else 0.50
     runtime_usefulness = min(1.0, max(0.0, score / 120.0))
@@ -574,22 +570,16 @@ def _selector_intelligence_result(
 
     selector_score = round(max(0.0, min(1.0, selector_score)), 4)
 
-    if semantic_competitor_blocked:
-        decision = "REJECT"
-        reason = "near_duplicate_variant_suppressed"
-    else:
-        decision = "ACCEPT"
-        reason = "selector_accept"
-
     return {
         "selector_score": selector_score,
-        "decision": decision,
-        "reason": reason,
+        "decision": "ACCEPT",
+        "reason": "selector_accept_editor_rich_mode",
         "signals": {
             "runtime_usefulness": round(runtime_usefulness, 4),
             "quality_score": round(float(quality_score or 0.0), 4),
             "semantic_diversity": round(semantic_diversity, 4),
             "closest_semantic_overlap": round(closest_overlap, 4),
+            "near_duplicate_seen": bool(near_duplicate_seen),
             "coverage": round(coverage, 4),
             "frequency_signal": round(frequency_signal, 4),
         },
@@ -613,23 +603,21 @@ def _apply_selector_intelligence(rows: List[Dict[str, Any]]) -> List[Dict[str, A
     for row in ranked:
         phrase = str(row.get("phrase") or "")
 
-        blocked = any(
-            _is_semantic_competitor(
-                phrase,
-                str(existing.get("phrase") or ""),
-            )
+        near_duplicate_seen = any(
+            _is_near_duplicate_variant(phrase, str(existing.get("phrase") or ""))
             for existing in selected
         )
 
         row["selector_intelligence"] = _selector_intelligence_result(
             row,
             selected_before=selected,
-            semantic_competitor_blocked=blocked,
+            near_duplicate_seen=near_duplicate_seen,
         )
 
-        if blocked:
-            continue
-
+        # Important:
+        # Do NOT continue/skip here. Editor highlight mode must preserve
+        # rich semantic phrase coverage. Near-duplicates are down-scored,
+        # not deleted.
         selected.append(row)
 
     return selected
@@ -786,7 +774,7 @@ def select_upload_phrases(
         "selector_intelligence_summary": {
             "enabled": True,
             "layers": SELECTOR_INTELLIGENCE_LAYERS,
-            "mode": "universal_cross_niche_semantic_dedupe_relaxed",
+            "mode": "editor_rich_highlight_mode_no_semantic_deletion",
         },
         "phrases": selected,
     }

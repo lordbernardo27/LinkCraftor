@@ -688,10 +688,8 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         indexed_doc_ids.update(str(k) for k in docs.keys())
 
     usable_active_ids = active_doc_set.intersection(indexed_doc_ids)
-    # TEMPORARY DIAGNOSTIC BYPASS:
-    # Keep active set metadata, but do not filter upload phrases
-    # by active document membership during this test.
-    active_phrase_set_used = False
+
+    active_phrase_set_used = bool(usable_active_ids)
 
     filtered: Dict[str, Any] = {}
 

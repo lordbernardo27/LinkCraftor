@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Set, Any, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
 
 WORD_RE = re.compile(r"[a-z0-9]{2,}", re.I)
@@ -26,19 +26,10 @@ CLAUSE_VERBS: Set[str] = {
     "handled", "handle", "affect", "affects", "struggle", "struggles",
 }
 
-LOW_VALUE_GENERIC_SURVIVORS: Set[str] = {
-    "management strategies",
-    "rapid plan",
-    "dieting plan",
-    "strongest tools",
-    "helpful medication",
-    "repeatable systems",
-}
-
 CONNECTORS: Set[str] = {
     "for", "to", "with", "without", "before", "after", "during", "at", "in",
     "on", "between", "among", "against", "through", "into", "across", "near",
-    "within", "around", "under", "over",
+    "within", "around", "under", "over", "beyond",
 }
 
 ACTION_LEAK_STARTS: Set[str] = {
@@ -72,7 +63,8 @@ QUERY_STARTS: Set[str] = {
 GENERIC_ADJECTIVES: Set[str] = {
     "good", "better", "best", "strong", "weak", "useful", "helpful",
     "important", "clear", "simple", "basic", "common", "general",
-    "successful", "strongest", "regular", "normal",
+    "successful", "strongest", "regular", "normal", "same", "valuable",
+    "healthy", "traditional", "different", "various", "certain",
 }
 
 GENERIC_HEADS: Set[str] = {
@@ -80,92 +72,21 @@ GENERIC_HEADS: Set[str] = {
     "parts", "part", "problem", "problems", "issue", "issues",
     "result", "results", "system", "systems", "topic", "topics",
     "factor", "factors", "method", "methods", "option", "options",
+    "course", "courses", "care", "routine", "routines",
 }
 
-VALID_EDUCATION_PHRASES: Set[str] = {
-    "effective study plan",
-    "exam preparation",
-    "study plan",
-    "active learning methods",
-    "spaced repetition",
-    "past questions",
-    "mock exams",
-    "past questions and mock exams",
-    "academic assessment",
-    "exam format",
-    "practice questions",
-    "retrieval practice",
-    "study environment",
-    "timed practice",
+UNIVERSAL_WEAK_PREFIXES: Set[str] = {
+    "same", "another", "various", "different", "valuable",
+    "general", "specific", "certain", "particular",
+    "healthy", "simple", "basic", "normal", "regular",
+    "traditional", "random", "minor", "major",
 }
 
-BAD_EDUCATION_FRAGMENTS: Set[str] = {
-    "students time motivation system",
-    "study biology today",
-    "preparation exam",
-    "learning new material to revision",
-    "students time",
-    "motivation system",
-    "subjects topic",
-}
-
-EDU_VALID_PATTERN_PHRASES: Set[str] = {
-    "exam preparation",
-    "exam format",
-    "mock exams",
-    "past questions",
-    "practice questions",
-    "timed practice",
-    "revision schedule",
-    "exam performance",
-    "online course",
-    "virtual classroom",
-    "learning platform",
-    "video lesson",
-    "course module",
-    "digital learning",
-    "study plan",
-    "study schedule",
-    "time blocking",
-    "study environment",
-    "progress tracking",
-    "academic goals",
-    "tutoring session",
-    "private tutor",
-    "math tutor",
-    "reading tutor",
-    "student support",
-    "learning gaps",
-    "active learning methods",
-    "spaced repetition",
-    "retrieval practice",
-    "summary notes",
-    "flashcards",
-    "memory recall",
-    "learning strategy",
-}
-
-EDU_WEAK_PREFIXES: Set[str] = {
-    "one", "same", "each", "another", "average", "light", "lighter",
-    "extreme", "some", "many", "several", "different", "various",
-    "general", "basic", "simple", "clear", "strong", "weak",
-}
-
-EDU_GENERIC_HEADS: Set[str] = {
-    "topic", "topics", "subject", "subjects", "chapter", "chapters",
-    "review", "reviews", "schedule", "system", "systems", "method",
-    "methods", "performance", "skills", "tools", "material",
-    "materials", "content", "lesson", "lessons",
-}
-
-EDU_ACTION_FRAGMENT_STARTS: Set[str] = {
-    "explaining", "teaching", "learning", "reviewing", "studying",
-    "covering", "revising", "reading", "writing", "practicing",
-}
-
-EDU_GENERIC_OBJECT_HEADS: Set[str] = {
-    "topic", "topics", "subject", "subjects", "chapter", "chapters",
-    "material", "materials", "content",
+UNIVERSAL_WEAK_HEADS: Set[str] = {
+    "system", "systems", "course", "courses", "care",
+    "routine", "routines", "thing", "things", "area",
+    "areas", "part", "parts", "method", "methods",
+    "option", "options", "way", "ways",
 }
 
 NOUN_CHAIN_WORDS: Set[str] = {
@@ -179,23 +100,8 @@ NOUN_CHAIN_WORDS: Set[str] = {
     "data", "software", "equipment", "customers", "suppliers",
     "marketing", "inventory", "cash", "flow", "revenue", "payroll",
     "rent", "supplier", "invoices", "invoice", "loan", "loans",
-}
-
-VERTICAL_KEYWORD_MAP: Dict[str, Set[str]] = {
-    "finance": {"cash", "flow", "revenue", "profit", "invoice", "invoices", "payroll", "tax", "taxes", "loan", "loans", "credit", "banking", "investment", "insurance", "accounting"},
-    "real_estate": {"property", "mortgage", "lease", "rent", "tenant", "landlord", "listing", "home", "buyer", "seller", "appraisal", "closing"},
-    "legal": {"law", "legal", "contract", "compliance", "court", "attorney", "lawyer", "claim", "liability", "agreement", "clause"},
-    "ecommerce": {"product", "products", "cart", "checkout", "shopify", "woocommerce", "marketplace", "category", "pages", "inventory", "orders"},
-    "saas": {"software", "subscription", "platform", "dashboard", "workflow", "crm", "analytics", "integration", "automation", "users"},
-    "marketing": {"seo", "content", "campaign", "conversion", "keyword", "keywords", "brand", "email", "traffic", "search", "intent"},
-    "small_business": {"business", "cash", "flow", "payroll", "operations", "customers", "suppliers", "expenses", "forecast", "invoicing"},
-    "medical_healthcare": {"health", "blood", "pressure", "diagnosis", "treatment", "symptoms", "clinic", "patient", "screening", "condition"},
-    "pharmacy": {"medication", "medicine", "dose", "dosing", "side", "effects", "prescription", "otc", "adherence", "pharmacist"},
-    "education": {"school", "student", "students", "course", "exam", "tutoring", "lesson", "study", "learning"},
-    "programming_development": {"code", "coding", "api", "database", "framework", "devops", "frontend", "backend", "deployment"},
-    "ai_machine_learning": {"ai", "machine", "learning", "model", "models", "prompt", "automation", "dataset", "training"},
-    "blogging": {"blog", "blogging", "affiliate", "content", "authority", "niche", "publisher", "posts"},
-    "youtube_video_creators": {"youtube", "video", "thumbnail", "script", "monetization", "creator", "channel"},
+    "study", "plan", "learning", "platform", "progress", "tracking",
+    "lesson", "rates", "completion", "strategy", "environment",
 }
 
 VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
@@ -221,6 +127,11 @@ VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
     ("category", "pages"),
     ("product", "pages"),
     ("side", "effects"),
+    ("study", "plan"),
+    ("learning", "platform"),
+    ("progress", "tracking"),
+    ("recorded", "lesson"),
+    ("completion", "rates"),
 }
 
 REVERSED_ORDERED_PAIRS: Set[Tuple[str, str]] = {
@@ -230,7 +141,7 @@ REVERSED_ORDERED_PAIRS: Set[Tuple[str, str]] = {
 BAD_BOUNDARY_STARTS: Set[str] = {
     "quickly", "slowly", "often", "usually", "sometimes", "thing", "things",
     "face", "facing", "many", "several", "various", "different", "some",
-    "any", "each", "every", "other", "another", "certain",
+    "any", "each", "every", "other", "another", "certain", "same", "re",
 }
 
 BAD_BOUNDARY_ENDS: Set[str] = {
@@ -247,7 +158,6 @@ ANCHOR_CORE_PHRASES: Set[str] = {
     "internal linking strategy",
     "external linking",
     "search intent",
-    "ecommerce category pages",
     "category pages",
     "product pages",
     "rental agreement",
@@ -258,6 +168,9 @@ ANCHOR_CORE_PHRASES: Set[str] = {
     "content marketing",
     "email marketing",
     "machine learning",
+    "study plan",
+    "learning platform",
+    "progress tracking",
 }
 
 QUALITY_GATE_WEIGHTS: Dict[str, float] = {
@@ -363,81 +276,29 @@ def _accept(phrase: str, reason: str, signals: Dict[str, float] | None = None) -
     )
 
 
-def _vertical_keyword_hits(tokens: List[str]) -> int:
-    token_set = set(tokens)
-    hits = 0
-    for terms in VERTICAL_KEYWORD_MAP.values():
-        if token_set & terms:
-            hits += 1
-    return hits
-
-
 def _phrase_from_tokens(tokens: List[str]) -> str:
     return " ".join(tokens)
 
 
 def _contains_valid_core_phrase(tokens: List[str]) -> str:
-    if not tokens:
-        return ""
-
     joined = _phrase_from_tokens(tokens)
-
     for core in sorted(ANCHOR_CORE_PHRASES, key=lambda x: len(x.split()), reverse=True):
         if core in joined:
             return core
-
     return ""
 
 
-def _is_valid_education_pattern_phrase(tokens: List[str]) -> bool:
-    return _phrase_from_tokens(tokens) in EDU_VALID_PATTERN_PHRASES
-
-
-def _is_weak_education_pattern(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    if _is_valid_education_pattern_phrase(tokens):
-        return False
-
-    first = tokens[0]
-    last = tokens[-1]
-
-    if first in EDU_WEAK_PREFIXES and last in EDU_GENERIC_HEADS:
-        return True
-
-    if first in EDU_ACTION_FRAGMENT_STARTS and last in EDU_GENERIC_HEADS:
-        return True
-
-    return False
-
-
 def _has_reversed_ordered_pair(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
     return any(pair in REVERSED_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
 
 
 def _has_valid_ordered_pair(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
     return any(pair in VALID_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
-
-
-def _is_valid_education_phrase(tokens: List[str]) -> bool:
-    return _phrase_from_tokens(tokens) in VALID_EDUCATION_PHRASES
-
-
-def _is_bad_education_fragment(tokens: List[str]) -> bool:
-    return _phrase_from_tokens(tokens) in BAD_EDUCATION_FRAGMENTS
 
 
 def _is_weak_subject_verb_fragment(tokens: List[str]) -> bool:
     if len(tokens) != 2:
         return False
-
     left, right = tokens
     return left in WEAK_SUBJECTS and right in WEAK_SUBJECT_VERBS
 
@@ -445,13 +306,10 @@ def _is_weak_subject_verb_fragment(tokens: List[str]) -> bool:
 def _is_action_leak_start(tokens: List[str]) -> bool:
     if len(tokens) < 2:
         return False
-
     if tokens[0] not in ACTION_LEAK_STARTS:
         return False
-
     if any(t in CONNECTORS for t in tokens):
         return False
-
     return True
 
 
@@ -470,23 +328,12 @@ def _is_short_multi_head_collision(tokens: List[str]) -> bool:
         if t in NOUN_CHAIN_WORDS or t in GENERIC_HEADS or t in WEAK_CARRYOVER_WORDS:
             head_like += 1
 
-    return head_like >= 2
-
-
-def _is_education_action_fragment(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    if _phrase_from_tokens(tokens) in VALID_EDUCATION_PHRASES:
-        return False
-
-    return tokens[0] in EDU_ACTION_FRAGMENT_STARTS and tokens[-1] in EDU_GENERIC_OBJECT_HEADS
+    return head_like >= 3
 
 
 def _is_query_like(tokens: List[str]) -> bool:
     if len(tokens) < 5:
         return False
-
     return tokens[0] in QUERY_STARTS and any(t in CONNECTORS for t in tokens[1:-1])
 
 
@@ -506,7 +353,7 @@ def _is_long_carryover_stack(tokens: List[str]) -> bool:
     carryover_hits = sum(1 for t in tokens if t in WEAK_CARRYOVER_WORDS)
     noun_hits = sum(1 for t in tokens if t in NOUN_CHAIN_WORDS)
 
-    return (carryover_hits + noun_hits) >= 3
+    return (carryover_hits + noun_hits) >= 4
 
 
 def _has_clause_leak(tokens: List[str]) -> bool:
@@ -538,12 +385,8 @@ def _starts_or_ends_badly(tokens: List[str]) -> bool:
     return False
 
 
-def _is_low_value_generic_survivor(tokens: List[str]) -> bool:
-    return _phrase_from_tokens(tokens) in LOW_VALUE_GENERIC_SURVIVORS
-
-
 def _is_dense_noun_chain(tokens: List[str]) -> bool:
-    if len(tokens) < 4:
+    if len(tokens) < 5:
         return False
 
     if _is_query_like(tokens):
@@ -554,15 +397,8 @@ def _is_dense_noun_chain(tokens: List[str]) -> bool:
 
     connector_count = sum(1 for t in tokens if t in CONNECTORS)
     chain_hits = sum(1 for t in tokens if t in NOUN_CHAIN_WORDS)
-    vertical_hits = _vertical_keyword_hits(tokens)
 
-    if len(tokens) >= 4 and chain_hits / max(1, len(tokens)) >= 0.75 and connector_count == 0:
-        return True
-
-    if len(tokens) >= 5 and chain_hits / max(1, len(tokens)) >= 0.60 and connector_count <= 1:
-        return True
-
-    if len(tokens) >= 5 and vertical_hits >= 3 and connector_count == 0:
+    if len(tokens) >= 5 and chain_hits / max(1, len(tokens)) >= 0.75 and connector_count == 0:
         return True
 
     return False
@@ -580,17 +416,34 @@ def _is_generic_short_false_positive(tokens: List[str]) -> bool:
     if left in GENERIC_ADJECTIVES and right in GENERIC_HEADS:
         return True
 
-    weak_pairs = {
-        ("movement", "medication"),
-        ("helpful", "medication"),
-        ("successful", "management"),
-        ("strongest", "tools"),
-        ("thing", "revenue"),
-        ("face", "cash"),
-        ("quickly", "cash"),
-    }
+    return False
 
-    return (left, right) in weak_pairs
+
+def _is_universal_weak_semantic_phrase(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    first = tokens[0]
+    last = tokens[-1]
+
+    if first in UNIVERSAL_WEAK_PREFIXES:
+        return True
+
+    if last in UNIVERSAL_WEAK_HEADS and first in GENERIC_ADJECTIVES:
+        return True
+
+    if last in UNIVERSAL_WEAK_HEADS and len(tokens) <= 3:
+        non_generic = [
+            t for t in tokens
+            if t not in UNIVERSAL_WEAK_PREFIXES
+            and t not in UNIVERSAL_WEAK_HEADS
+            and t not in GENERIC_ADJECTIVES
+            and t not in CONNECTORS
+        ]
+        if len(non_generic) < 2:
+            return True
+
+    return False
 
 
 def _has_repeated_or_duplicate_noise(tokens: List[str]) -> bool:
@@ -602,7 +455,7 @@ def _has_repeated_or_duplicate_noise(tokens: List[str]) -> bool:
 
 
 def _is_stitched_vertical_list(tokens: List[str]) -> bool:
-    if len(tokens) < 4:
+    if len(tokens) < 5:
         return False
 
     if _is_query_like(tokens):
@@ -615,13 +468,8 @@ def _is_stitched_vertical_list(tokens: List[str]) -> bool:
     if connector_count > 0:
         return False
 
-    token_set = set(tokens)
-    total_vertical_term_hits = 0
-
-    for terms in VERTICAL_KEYWORD_MAP.values():
-        total_vertical_term_hits += len(token_set & terms)
-
-    return total_vertical_term_hits >= 4
+    chain_hits = sum(1 for t in tokens if t in NOUN_CHAIN_WORDS)
+    return chain_hits >= 4
 
 
 def _compress_long_wrapper(tokens: List[str]) -> str:
@@ -642,46 +490,6 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         return _reject("", "empty_candidate")
 
     tokens = phrase.split()
-
-    if _is_valid_education_pattern_phrase(tokens):
-        return _accept(phrase, "valid_education_pattern_phrase")
-
-    if _is_weak_education_pattern(tokens):
-        return _reject(
-            phrase,
-            "weak_education_pattern",
-            {
-                "logical_structure": 0.45,
-                "pragmatic_anchor_value": 0.25,
-                "topic_coherence": 0.45,
-            },
-        )
-
-    if _is_education_action_fragment(tokens):
-        return _reject(
-            phrase,
-            "education_action_fragment",
-            {
-                "logical_structure": 0.35,
-                "pragmatic_anchor_value": 0.20,
-                "topic_coherence": 0.40,
-            },
-        )
-
-    if _is_valid_education_phrase(tokens):
-        return _accept(phrase, "valid_education_phrase")
-
-    if _is_bad_education_fragment(tokens):
-        return _reject(
-            phrase,
-            "bad_education_fragment",
-            {
-                "logical_structure": 0.20,
-                "context_fit": 0.30,
-                "pragmatic_anchor_value": 0.10,
-                "topic_coherence": 0.20,
-            },
-        )
 
     if len(tokens) < 2:
         return _reject(
@@ -831,13 +639,15 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
             },
         )
 
-    if _is_low_value_generic_survivor(tokens):
+    if _is_universal_weak_semantic_phrase(tokens):
         return _reject(
             phrase,
-            "low_value_generic_survivor",
+            "universal_weak_semantic_phrase",
             {
-                "pragmatic_anchor_value": 0.15,
-                "topic_coherence": 0.35,
+                "logical_structure": 0.35,
+                "context_fit": 0.35,
+                "pragmatic_anchor_value": 0.10,
+                "topic_coherence": 0.30,
             },
         )
 
