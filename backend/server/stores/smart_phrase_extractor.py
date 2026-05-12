@@ -961,6 +961,164 @@ def _has_incomplete_phrase_completion(tokens: List[str]) -> bool:
 
     return False
 
+
+UNSTABLE_NUMERIC_CONTEXT_TERMS = {
+    "ovulation", "profit", "revenue", "traffic", "ranking", "conversion",
+    "growth", "risk", "score", "price", "cost", "budget", "users",
+    "customers", "patients", "students", "sales", "leads",
+}
+
+LOW_VALUE_STANDALONE_PHRASES = {
+    "want proof",
+    "likely passed",
+    "next period",
+    "calendar math",
+    "putting prediction",
+    "same subtraction rule",
+}
+
+UNSTABLE_PREFIX_TERMS = {
+    "re", "cost", "putting", "likely", "want", "notice", "searches",
+    "confirmation", "signaling",
+}
+
+
+def _has_unstable_numeric_context(tokens: List[str]) -> bool:
+    """
+    Universal V3 numeric-context guard.
+
+    Rejects: 28 days ovulation, 12 months revenue, 5 users growth
+    Preserves: 28 day cycle, 12 month revenue forecast, 5 year growth rate
+    """
+    if not tokens or not any(t.isdigit() for t in tokens):
+        return False
+
+    stable_metric_heads = {
+        "cycle", "window", "trial", "forecast", "rate", "ratio", "score",
+        "index", "period", "budget", "plan", "timeline", "duration",
+        "length", "cost", "price", "revenue", "growth", "risk",
+    }
+
+    for i, tok in enumerate(tokens):
+        if not tok.isdigit():
+            continue
+
+        next_tok = tokens[i + 1] if i + 1 < len(tokens) else ""
+        next2_tok = tokens[i + 2] if i + 2 < len(tokens) else ""
+
+        if next_tok in {"day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours"}:
+            if next2_tok in stable_metric_heads:
+                continue
+
+            if len(tokens) <= 2:
+                continue
+
+            return True
+
+        if next_tok and next_tok not in stable_metric_heads:
+            return True
+
+    return False
+
+
+def _has_low_value_standalone_shape(tokens: List[str]) -> bool:
+    """
+    Rejects low-value sentence pieces that are not stable anchors.
+    Universal, not niche-specific.
+    """
+    if not tokens:
+        return False
+
+    phrase = " ".join(tokens)
+
+    if phrase in LOW_VALUE_STANDALONE_PHRASES:
+        return True
+
+    if tokens[0] in UNSTABLE_PREFIX_TERMS and len(tokens) <= 4:
+        return True
+
+    if tokens[0] in UNSTABLE_PREFIX_TERMS and not _is_clean_content_compound(tokens):
+        return True
+
+    return False
+
+
+def _has_unfinished_narrative_window(tokens: List[str]) -> bool:
+    """
+    Rejects narrative fragments that look like sentence motion, not anchors.
+    """
+    if len(tokens) < 2:
+        return False
+
+    unstable_tails = {
+        "passed", "proof", "prediction", "together", "whether", "nothing",
+        "right", "widely", "seriously", "usually", "typically",
+    }
+
+    if tokens[-1] in unstable_tails:
+        return True
+
+    if len(tokens) >= 3 and tokens[0] in {"re", "cost", "putting", "confirmation"}:
+        return True
+
+    return False
+
+
+WEAK_TRAILING_ADJECTIVES = {
+    "trickier", "possible", "expected", "predictable",
+    "broader", "steady", "targeted", "clearer",
+    "wetter", "easiest", "special",
+}
+
+WEAK_CONTEXT_ENDINGS = {
+    "people", "averages", "range", "speak",
+    "evaluation", "release", "routine",
+    "situations", "principle",
+}
+
+LOW_INFORMATION_PHRASES = {
+    "well for people",
+    "less on averages",
+    "cycles range",
+    "period speak",
+    "special situations",
+    "expected release",
+    "possible evaluation",
+}
+
+
+def _has_semantic_completion_failure(tokens: List[str]) -> bool:
+    """
+    Final universal semantic completion validator.
+
+    Rejects semantically incomplete phrases while preserving
+    stable anchor concepts across niches.
+    """
+    if not tokens:
+        return False
+
+    phrase = " ".join(tokens)
+
+    if phrase in LOW_INFORMATION_PHRASES:
+        return True
+
+    if tokens[-1] in WEAK_TRAILING_ADJECTIVES:
+        return True
+
+    if tokens[-1] in WEAK_CONTEXT_ENDINGS:
+        return True
+
+    # Reject weak two-word adjective tails.
+    if len(tokens) == 2:
+        if tokens[1] in {
+            "trickier", "possible", "steady",
+            "targeted", "broader", "predictable",
+        }:
+            return True
+
+    return False
+
+
 def _basic_reject(phrase: str) -> bool:
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
@@ -985,7 +1143,14 @@ def _basic_reject(phrase: str) -> bool:
         return True
     if _has_incomplete_phrase_completion(tokens):
         return True
-
+    if _has_unstable_numeric_context(tokens):
+        return True
+    if _has_low_value_standalone_shape(tokens):
+        return True
+    if _has_unfinished_narrative_window(tokens):
+        return True
+    if _has_semantic_completion_failure(tokens):
+        return True
     if tokens[0] in BAD_STARTS:
         return True
     if tokens[-1] in BAD_ENDINGS:
@@ -1023,7 +1188,6 @@ def _basic_reject(phrase: str) -> bool:
 
     return False
 
-
 def _add_candidate(
     out: List[Dict[str, Any]],
     seen: Set[str],
@@ -1031,6 +1195,7 @@ def _add_candidate(
     source_type: str,
     section_id: str,
     snippet: str,
+    doc_id: str = "",
 ) -> None:
     p = canonical_phrase(phrase)
     if _basic_reject(p):
@@ -1063,6 +1228,7 @@ def _add_candidate(
         "phrase": p,
         "source_type": source_type,
         "section_id": section_id,
+        "doc_id": doc_id,
         "snippet": snippet,
         "extractor_intelligence": extractor_intelligence,
     })
@@ -1264,7 +1430,7 @@ def extract_smart_phrases(
     seen: Set[str] = set()
 
     if title:
-        _add_candidate(out, seen, title, "title", "title_0", title)
+        _add_candidate(out, seen, title, "title", "title_0", title, doc_id)
 
     for h in extract_headings_and_lists(html):
         _add_candidate(
@@ -1274,6 +1440,7 @@ def extract_smart_phrases(
             h.get("source_type") or "heading",
             h.get("section_id") or "heading_0",
             h.get("snippet") or "",
+            doc_id,
         )
 
     paragraphs = extract_paragraphs(html=html, text=text)
@@ -1283,16 +1450,16 @@ def extract_smart_phrases(
             section_id = f"p{pi}_s{si}"
 
             for item in _extract_intent_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"])
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
 
             for item in _extract_action_object_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"])
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
 
             for item in _extract_condition_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"])
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
 
             for item in _extract_clean_compound_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"])
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
 
             if len(out) >= max_candidates:
                 return out[:max_candidates]

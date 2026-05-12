@@ -87,18 +87,15 @@ def _clean_examples(v: Any) -> List[Dict[str, str]]:
 def _canonical_phrase(s: str) -> str:
     s = _clean_text(s).lower()
     s = re.sub(r"\s+", " ", s)
-    s = re.sub(r"^[\"'â€œâ€â€˜â€™\(\[\{]+|[\"'â€œâ€â€˜â€™\)\]\}:;,\.\!\?]+$", "", s).strip()
+    s = re.sub(
+        r"^[\"'“”‘’\(\[\{]+|[\"'“”‘’\)\]\}:;,\.\!\?]+$",
+        "",
+        s,
+    ).strip()
     return s
 
 
 def _light_normalize_phrase(phrase: str) -> str:
-    """
-    Universal cross-niche normalization.
-
-    Preserve exact article anchors as much as possible.
-    Do not aggressively collapse semantic phrases here.
-    RB2 runtime exact-match highlighting depends on real in-document anchor text.
-    """
     phrase = _canonical_phrase(phrase)
     if not phrase:
         return ""
@@ -180,11 +177,6 @@ def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Di
         "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
         "strength": scored,
     }
-
-
-def _quality_gate_phrase(phrase: str, source_type: str = "") -> str:
-    result = _quality_gate_phrase_with_metadata(phrase, source_type)
-    return str(result.get("phrase") or "") if result.get("keep") else ""
 
 
 def _record_score(rec: Dict[str, Any]) -> float:
@@ -527,23 +519,6 @@ def _merge_phrase_records(target_key: str, records: List[Dict[str, Any]]) -> Dic
 
 
 def _canonical_merge_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Universal exact-anchor-preserving merge.
-
-    IMPORTANT:
-    Do NOT semantically collapse distinct topical noun compounds.
-
-    GOOD:
-    - menstrual cycle
-    - fertile window
-    - cervical mucus
-    - basal body temperature
-
-    should ALL survive.
-
-    ONLY merge exact identical normalized phrases.
-    """
-
     merged: Dict[str, Any] = {}
 
     for old_key, rec in phrases.items():
@@ -555,14 +530,10 @@ def _canonical_merge_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
         if not target_key:
             continue
 
-        # EXACT duplicate only
         existing = merged.get(target_key)
 
         if existing and isinstance(existing, dict):
-            merged[target_key] = _merge_phrase_records(
-                target_key,
-                [existing, rec],
-            )
+            merged[target_key] = _merge_phrase_records(target_key, [existing, rec])
         else:
             merged[target_key] = rec
 
@@ -580,6 +551,53 @@ def _sort_phrase_dict(phrases: Dict[str, Any]) -> Dict[str, Any]:
         ),
     )
     return {k: v for k, v in sorted_items}
+
+
+def _extract_indexed_doc_ids(phrases: Dict[str, Any]) -> Set[str]:
+    indexed_doc_ids: Set[str] = set()
+
+    for rec in phrases.values():
+        if not isinstance(rec, dict):
+            continue
+
+        docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
+        indexed_doc_ids.update(str(k) for k in docs.keys() if str(k).strip())
+
+    return indexed_doc_ids
+
+
+def _filter_by_active_membership(
+    phrases: Dict[str, Any],
+    usable_active_ids: Set[str],
+) -> Dict[str, Any]:
+    filtered: Dict[str, Any] = {}
+
+    for phrase, rec in phrases.items():
+        if not isinstance(rec, dict):
+            continue
+
+        docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
+
+        if any(str(doc_id) in usable_active_ids for doc_id in docs.keys()):
+            gated_phrase = _light_normalize_phrase(phrase)
+            if gated_phrase:
+                filtered[gated_phrase] = rec
+
+    return filtered
+
+
+def _copy_all_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
+    filtered: Dict[str, Any] = {}
+
+    for phrase, rec in phrases.items():
+        if not isinstance(rec, dict):
+            continue
+
+        gated_phrase = _light_normalize_phrase(phrase)
+        if gated_phrase:
+            filtered[gated_phrase] = rec
+
+    return filtered
 
 
 def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
@@ -678,40 +696,22 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     active_doc_ids = [str(x).strip() for x in active_doc_ids if str(x).strip()]
     active_doc_set = set(active_doc_ids)
 
-    indexed_doc_ids = set()
-
-    for rec in phrases.values():
-        if not isinstance(rec, dict):
-            continue
-
-        docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
-        indexed_doc_ids.update(str(k) for k in docs.keys())
-
+    indexed_doc_ids = _extract_indexed_doc_ids(phrases)
     usable_active_ids = active_doc_set.intersection(indexed_doc_ids)
 
-    active_phrase_set_used = bool(usable_active_ids)
+    active_phrase_set_used = False
+    active_filter_reason = "no_active_document_ids"
 
-    filtered: Dict[str, Any] = {}
-
-    if active_phrase_set_used:
-        for phrase, rec in phrases.items():
-            if not isinstance(rec, dict):
-                continue
-
-            docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
-
-            if any(str(doc_id) in usable_active_ids for doc_id in docs.keys()):
-                gated_phrase = _light_normalize_phrase(phrase)
-                if gated_phrase:
-                    filtered[gated_phrase] = rec
+    if active_doc_set and usable_active_ids:
+        filtered = _filter_by_active_membership(phrases, usable_active_ids)
+        active_phrase_set_used = True
+        active_filter_reason = "active_membership_filter_applied"
+    elif active_doc_set and not usable_active_ids:
+        filtered = _copy_all_phrases(phrases)
+        active_filter_reason = "stale_active_membership_fallback_all_indexed_upload_phrases"
     else:
-        for phrase, rec in phrases.items():
-            if not isinstance(rec, dict):
-                continue
-
-            gated_phrase = _light_normalize_phrase(phrase)
-            if gated_phrase:
-                filtered[gated_phrase] = rec
+        filtered = _copy_all_phrases(phrases)
+        active_filter_reason = "no_active_membership_fallback_all_indexed_upload_phrases"
 
     filtered = _canonical_merge_phrases(filtered)
     filtered = _sort_phrase_dict(filtered)
@@ -732,12 +732,13 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         "quality_filtered_source_count": len(phrases),
         "phrase_count": len(filtered),
         "active_phrase_set_used": active_phrase_set_used,
+        "active_filter_reason": active_filter_reason,
         "active_document_ids_count": len(active_doc_set),
         "usable_active_document_ids_count": len(usable_active_ids),
         "indexed_document_ids_count": len(indexed_doc_ids),
         "builder_intelligence_summary": {
             "enabled": True,
-            "mode": "exact_anchor_preserving_universal_builder",
+            "mode": "exact_anchor_preserving_membership_safe_universal_builder",
             "ranking_priority_counts": priority_counts,
             "layers": [
                 "temporal_reasoning",
@@ -749,6 +750,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
                 "ontology_alignment",
                 "intelligent_data_compression",
                 "workspace_isolation",
+                "stale_active_membership_recovery",
                 "explainability",
                 "qa_regression_readiness",
             ],

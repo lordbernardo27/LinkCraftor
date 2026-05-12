@@ -2119,80 +2119,162 @@ if(currentExport==="rar")      { window.location.href = exportRarUrl(); return; 
 function delay(ms){ return new Promise(res=>setTimeout(res, ms)); }
 
 
+async function lcFileSha256(file) {
+  const buffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map(b => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function lcUploadHashKey(ws) {
+  return `lc_uploaded_file_hashes_${ws || "default"}`;
+}
+
+function lcLoadUploadedHashes(ws) {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(lcUploadHashKey(ws)) || "[]"));
+  } catch {
+    return new Set();
+  }
+}
+
+function lcSaveUploadedHashes(ws, set) {
+  try {
+    localStorage.setItem(lcUploadHashKey(ws), JSON.stringify(Array.from(set)));
+  } catch {}
+}
+
 /* Upload handler */
-fileInput?.addEventListener("change", async()=>{
+fileInput?.addEventListener("change", async () => {
   const fl = fileInput.files;
   if (!fl || !fl.length) return;
 
   safeSetText(errorBox, "", "error");
 
-  // Determine or enforce the locked session format
   let sessExt = getSessionFormat();
   const firstExt = extOf(fl[0]?.name || "");
 
   if (!sessExt) {
-    // First successful selection: lock the session to the first file's extension
     setSessionFormat(firstExt || ".txt");
     sessExt = getSessionFormat();
 
-    // Keep accept in sync and hide other menu options
     currentAccept = sessExt;
+
     try {
       if (fileInput) fileInput.setAttribute("accept", sessExt);
     } catch {}
+
     try {
-      // only if you added this helper earlier
       if (typeof refreshUploadMenuForSessionFormat === "function") {
         refreshUploadMenuForSessionFormat();
       }
     } catch {}
   }
 
-  // Process only files that match the locked extension
   let accepted = 0;
-  let skipped  = 0;
+  let skipped = 0;
+  let duplicates = 0;
 
   try {
     for (const file of fl) {
       const ext = extOf(file?.name || "");
-      if (ext !== sessExt) { skipped++; continue; }
+
+      if (ext !== sessExt) {
+        skipped++;
+        continue;
+      }
 
       const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+      const uploadedHashes = lcLoadUploadedHashes(ws);
+      const fileHash = await lcFileSha256(file);
+
+      if (uploadedHashes.has(fileHash)) {
+        duplicates++;
+        showToast(errorBox, "This document already exists in this session.", 2400);
+        continue;
+      }
+
       const data = await uploadFile(file, ws);
+
+      if (data?.duplicate_detected || data?.ok === false) {
+        if (data?.duplicate_detected) {
+          duplicates++;
+          uploadedHashes.add(fileHash);
+          lcSaveUploadedHashes(ws, uploadedHashes);
+
+          showToast(
+            errorBox,
+            data?.message || "This document already exists in this session.",
+            2400
+          );
+          continue;
+        }
+
+        throw new Error(data?.message || data?.reason || "Upload failed.");
+      }
+
+      data.file_hash = fileHash;
+
+      uploadedHashes.add(fileHash);
+      lcSaveUploadedHashes(ws, uploadedHashes);
+
       getOrAssignCode(data);
       docs.push(data);
       accepted++;
     }
 
     if (accepted === 0) {
-      showToast(errorBox, `No files uploaded � session is locked to ${sessExt}.`, 2200);
-      fileInput.value = "";
+      const parts = [];
+
+      if (duplicates) {
+        parts.push("File already exists");
+      }
+
+      if (skipped) {
+        parts.push(`${skipped} skipped because session is locked to ${sessExt}`);
+      }
+
+      showToast(
+        errorBox,
+        parts.length
+          ? parts.join(". ") + "."
+          : `No files uploaded — session is locked to ${sessExt}.`,
+        2600
+      );
+
       return;
     }
 
-  refreshDropdown();
-rebuildTitleIndexFromDocs();
-rebuildPublishedTopics();
-renderDoc(docs.length - 1);
+    refreshDropdown();
+    rebuildTitleIndexFromDocs();
+    rebuildPublishedTopics();
 
-// ? NEW: render using the backend preview contract (is_html)
-try { window.renderPreview?.(docs[docs.length - 1]); } catch {}
+    renderDoc(docs.length - 1);
 
-saveState();
+    try {
+      window.renderPreview?.(docs[docs.length - 1]);
+    } catch {}
 
+    saveState();
 
-    const msg = skipped
-      ? `Uploaded ${accepted} file(s). Skipped ${skipped} (not ${sessExt}).`
-      : `Uploaded ${accepted} file(s).`;
-    showToast(errorBox, msg, 2000);
+    const msgParts = [`Uploaded ${accepted} file(s)`];
 
+    if (duplicates) {
+      msgParts.push("File already exists");
+    }
+
+    if (skipped) {
+      msgParts.push(`${skipped} skipped because not ${sessExt}`);
+    }
+
+    showToast(errorBox, msgParts.join(". ") + ".", 2200);
   } catch (e) {
     safeSetText(errorBox, "Upload failed: " + (e?.message || e), "error");
+  } finally {
+    if (fileInput) fileInput.value = "";
   }
-
-  fileInput.value = "";
 });
-
 
 sitemapFile.addEventListener("change", async () => {
   const f = sitemapFile.files && sitemapFile.files[0];
@@ -2310,20 +2392,43 @@ const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIC
 });
 
 
-
 const btnClearSession = $("btnClearSession");
-btnClearSession?.addEventListener("click", () => {
+btnClearSession?.addEventListener("click", async () => {
   clearState();
+
+  try {
+    const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+    localStorage.removeItem(lcUploadHashKey(ws));
+    window.LC_UPLOAD_FILE_SIGNATURES = new Set();
+  } catch {}
+
+  try {
+    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+    const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+
+    await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+      method: "POST",
+    });
+  } catch (e) {
+    console.warn("[ClearSessionBackend] failed:", e);
+  }
+
   docs.splice(0, docs.length);
   currentIndex = -1;
-  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing�";
+
+  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing…";
   if (editor) editor.innerHTML = "";
+
   safeSetText(topMeta, "No document loaded", "topMeta");
-  safeSetText(docMeta, "Code: �", "docMeta");
+  safeSetText(docMeta, "Code: —", "docMeta");
   safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
+
   allDocs && (allDocs.innerHTML = "<option value=''>All docs</option>");
+
   APPLIED_LINKS = [];
+
   showToast(errorBox, "Session cleared.", 1200);
+
   updateDocNavButtons();
   underlineLinkedPhrases();
   highlightBucketKeywords();
@@ -4397,6 +4502,31 @@ function renderFromText(txt) {
   viewerEl.innerHTML = `<div class="doc-root"><pre style="white-space:pre-wrap;line-height:1.6">${safe}</pre></div>`;
 }
 
+
+async function syncActiveDocumentMembership(docId) {
+  try {
+    if (!docId) return;
+
+    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+    const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+
+    console.log("[ActiveDocSync]", docId);
+
+    await fetch(`${API_BASE}/api/files/active_target_set/save`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        workspace_id: ws,
+        active_document_ids: [docId],
+        active_upload_ids: [docId],
+      }),
+    });
+
+  } catch (e) {
+    console.warn("[ActiveDocSync] failed:", e);
+  }
+}
+
 /* ==========================================================================
    RENDERING + SESSION
    ========================================================================== */
@@ -4404,6 +4534,9 @@ function renderDoc(i){
   if (i<0 || i>=docs.length) return;
   currentIndex = i;
   const d = docs[i];
+  const activeDocId = d?.doc_id || d?.docId || "";
+  window.LC_ACTIVE_DOC_ID = activeDocId;
+  syncActiveDocumentMembership(activeDocId);
   const code = getOrAssignCode(d);
 
   const ext = (d.ext || "").toLowerCase();

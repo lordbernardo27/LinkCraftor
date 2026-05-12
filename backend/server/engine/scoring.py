@@ -557,6 +557,7 @@ def score_candidates_for_phrase(
     feedback_map: Optional[Dict[str, Dict[str, Any]]] = None,
     profile: Optional[Dict[str, Any] | str] = None,
     debug: bool = False,
+    imported_di_signal: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """
     profile can be:
@@ -654,9 +655,29 @@ def score_candidates_for_phrase(
                 rejects = int(rec.get("rejects", 0) or 0)
                 delta = compute_feedback_delta(accepts, rejects)
 
-        final_score = best_score + delta
-        final_score = max(0.0, min(1.0, float(final_score)))
+                imported_boost = 0.0
+        imported_best_match = None
 
+        imported_signal = imported_di_signal if isinstance(imported_di_signal, dict) else {}
+        if imported_signal.get("has_match"):
+            imported_best_match = imported_signal.get("best_match") if isinstance(imported_signal.get("best_match"), dict) else {}
+            imported_urls = imported_best_match.get("urls") if isinstance(imported_best_match.get("urls"), list) else []
+            candidate_url = str(cand.get("url") or "").strip().rstrip("/")
+
+            normalized_imported_urls = [
+                str(u or "").strip().rstrip("/")
+                for u in imported_urls
+                if str(u or "").strip()
+            ]
+
+            if candidate_url and any(
+                candidate_url == u or candidate_url.endswith(u) or u.endswith(candidate_url)
+                for u in normalized_imported_urls
+            ):
+                imported_boost = 0.06
+
+        final_score = best_score + delta + imported_boost
+        final_score = max(0.0, min(1.0, float(final_score)))
         result_item = {
             "id": cand.get("id"),
             "title": cand.get("title"),
@@ -670,6 +691,9 @@ def score_candidates_for_phrase(
                 "accepts": accepts,
                 "rejects": rejects,
                 "delta": float(delta),
+            },
+            "di_score_adjustments": {
+                "imported_url_match_boost": float(imported_boost),
             },
             "profile_id": resolved_profile.get("id"),
         }

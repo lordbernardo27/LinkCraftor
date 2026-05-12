@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -7,6 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from backend.server.stores.candidate_window_guard import candidate_window_guard
+from backend.server.stores.phrase_strength_scorer import score_phrase_strength
+from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
 from backend.server.stores.upload_normalizer import normalize_upload
 from backend.server.stores.upload_phrase_selector import select_upload_phrases
 
@@ -17,25 +21,24 @@ P_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
 LI_RE = re.compile(r"<li[^>]*>(.*?)</li>", re.IGNORECASE | re.DOTALL)
 TAG_RE = re.compile(r"<[^>]+>")
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
-CLAUSE_SPLIT_RE = re.compile(r"[,;:\-\u2013\u2014]\s+|\s+\bor\b\s+|\s+\band\b\s+")
 
-NGRAM_MIN_N = 2
-NGRAM_MAX_N = 5
-MAX_NGRAMS_PER_SENTENCE = 120
 MAX_EXAMPLES_PER_PHRASE = 5
 
 STOPWORDS: Set[str] = {
-    "the", "and", "for", "with", "that", "this", "from", "into", "your", "you", "are", "was", "were",
-    "will", "can", "could", "should", "would", "have", "has", "had", "about", "over", "under", "than",
-    "then", "when", "what", "where", "which", "who", "whom", "why", "how", "a", "an", "to", "of", "in",
-    "on", "at", "by", "or", "as", "is", "it", "be", "not", "no", "if", "but", "so", "because", "after",
-    "before", "during", "while", "through", "up", "down", "out", "off", "too", "very", "also"
+    "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
+    "are", "was", "were", "will", "can", "could", "should", "would", "have",
+    "has", "had", "about", "over", "under", "than", "then", "when", "what",
+    "where", "which", "who", "whom", "why", "how", "a", "an", "to", "of",
+    "in", "on", "at", "by", "or", "as", "is", "it", "be", "not", "no", "if",
+    "but", "so", "because", "after", "before", "during", "while", "through",
+    "up", "down", "out", "off", "too", "very", "also",
 }
 
 UI_JUNK_TERMS: Set[str] = {
-    "faq", "skip", "menu", "share", "home", "read more", "previous", "next", "written by", "contact us",
-    "about us", "privacy policy", "terms", "cookie", "login", "register", "subscribe", "follow us",
-    "facebook", "instagram", "twitter", "youtube", "whatsapp", "telegram"
+    "faq", "skip", "menu", "share", "home", "read more", "previous", "next",
+    "written by", "contact us", "about us", "privacy policy", "terms",
+    "cookie", "login", "register", "subscribe", "follow us", "facebook",
+    "instagram", "twitter", "youtube", "whatsapp", "telegram",
 }
 
 META_SENTENCE_PATTERNS: Tuple[re.Pattern[str], ...] = (
@@ -92,6 +95,94 @@ def _canonical_phrase(s: str) -> str:
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
+def _normalize_document_text(text: str) -> str:
+    text = (text or "").lower()
+
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    text = re.sub(r"<[^>]+>", " ", text)
+
+    text = re.sub(r"[^\w\s]", " ", text)
+
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
+
+
+def _document_fingerprint(
+    *,
+    original_name: str,
+    text: str,
+) -> Dict[str, Any]:
+    normalized = _normalize_document_text(text or "")
+
+    words = normalized.split()
+
+    first = " ".join(words[:120])
+    middle_start = max(len(words) // 2 - 60, 0)
+    middle = " ".join(words[middle_start:middle_start + 120])
+    last = " ".join(words[-120:])
+
+    title = _normalize_document_text(original_name or "")
+
+    full_hash = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+    signature_source = f"{title}\n{first}\n{middle}\n{last}\n{len(words)}"
+
+    signature_hash = hashlib.sha256(
+        signature_source.encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "full_hash": full_hash,
+        "signature_hash": signature_hash,
+        "word_count": len(words),
+        "normalized_title": title,
+    }
+
+
+def _is_duplicate_document(
+    *,
+    docs_store: Dict[str, Any],
+    original_name: str,
+    text: str,
+) -> Optional[Dict[str, Any]]:
+    incoming = _document_fingerprint(
+        original_name=original_name,
+        text=text,
+    )
+
+    incoming_full = incoming.get("full_hash")
+    incoming_sig = incoming.get("signature_hash")
+
+    for existing_doc_id, existing_doc in docs_store.items():
+        if not isinstance(existing_doc, dict):
+            continue
+
+        existing_fp = existing_doc.get("fingerprint")
+        if not isinstance(existing_fp, dict):
+            continue
+
+        existing_full = existing_fp.get("full_hash")
+        existing_sig = existing_fp.get("signature_hash")
+
+        if incoming_full and existing_full and incoming_full == existing_full:
+            return {
+                "duplicate": True,
+                "reason": "exact_text_hash_match",
+                "existing_doc_id": existing_doc_id,
+            }
+
+        if incoming_sig and existing_sig and incoming_sig == existing_sig:
+            return {
+                "duplicate": True,
+                "reason": "content_signature_match",
+                "existing_doc_id": existing_doc_id,
+            }
+
+    return None
+
+
 
 def _tokenize(text: str) -> List[str]:
     return [t.lower() for t in WORD_RE.findall(text or "")]
@@ -119,13 +210,6 @@ def _split_paragraphs(html: str, text: str) -> List[str]:
     return [x.strip() for x in re.split(r"\n\s*\n+", txt) if x.strip()]
 
 
-def _split_sentences(text: str) -> List[str]:
-    text = (text or "").strip()
-    if not text:
-        return []
-    return [p.strip() for p in SENTENCE_SPLIT_RE.split(text) if p and p.strip()]
-
-
 def _extract_headings(html: str) -> Tuple[Optional[str], List[Dict[str, Any]]]:
     found = [(int(lvl), _strip_tags(inner)) for lvl, inner in H_RE.findall(html or "")]
     h1 = next((txt for lvl, txt in found if lvl == 1 and txt), None)
@@ -135,13 +219,6 @@ def _extract_headings(html: str) -> Tuple[Optional[str], List[Dict[str, Any]]]:
 
 def _extract_list_items(html: str) -> List[str]:
     return [_strip_tags(x) for x in LI_RE.findall(html or "") if _strip_tags(x)]
-
-
-def _is_valid_content_sentence(text: str) -> bool:
-    t = _canonical_phrase(text)
-    if not t or _looks_like_ui_junk(t):
-        return False
-    return not any(p.search(t) for p in META_SENTENCE_PATTERNS)
 
 
 def _looks_like_intent_phrase(phrase: str) -> bool:
@@ -163,7 +240,7 @@ def _fails_semantic_filter(phrase: str) -> bool:
 
     bad_starts = {
         "you", "your", "we", "this", "that", "these", "those",
-        "explains", "guide", "helpful", "special", "actual"
+        "explains", "guide", "helpful", "special", "actual",
     }
     if tokens[0] in bad_starts:
         return True
@@ -191,11 +268,10 @@ def _accept_phrase(phrase: str) -> bool:
 
     tokens = _tokenize(p)
 
-    if len(tokens) < 2 or len(tokens) > 8:
+    if len(tokens) < 2 or len(tokens) > 10:
         return False
 
     content = _content_tokens(tokens)
-
     if len(content) < 2:
         return False
 
@@ -205,7 +281,6 @@ def _accept_phrase(phrase: str) -> bool:
     if len(tokens) >= 4:
         if tokens[0] in bad_starts:
             return False
-
         if len(tokens) > 1 and tokens[1] in narrative_verbs:
             return False
 
@@ -306,9 +381,6 @@ def _upsert_phrase_record(
     snippet: str,
     item: Optional[Dict[str, Any]] = None,
 ) -> None:
-    # IMPORTANT:
-    # Preserve selector-approved exact anchors.
-    # Do NOT aggressively collapse semantic noun compounds during storage.
     phrase = _canonical_phrase(phrase)
 
     if not phrase:
@@ -353,20 +425,28 @@ def _upsert_phrase_record(
     rec["quality_score"] = _quality_score_for(source_type, int(rec["count_total"]))
 
     if isinstance(item, dict):
-        if isinstance(item.get("extractor_intelligence"), dict):
-            rec["extractor_intelligence"] = item.get("extractor_intelligence") or {}
-        if isinstance(item.get("quality_gate"), dict):
-            rec["quality_gate"] = item.get("quality_gate") or {}
-        if isinstance(item.get("selector_intelligence"), dict):
-            rec["selector_intelligence"] = item.get("selector_intelligence") or {}
+        for key in (
+            "extractor_intelligence",
+            "quality_gate",
+            "selector_intelligence",
+            "strength",
+        ):
+            if isinstance(item.get(key), dict):
+                rec[key] = item.get(key) or {}
+
         if item.get("score") is not None:
             rec["score"] = item.get("score")
+
         if item.get("quality_score") is not None:
             rec["strength_score"] = item.get("quality_score")
-            rec["quality_score"] = max(
-                float(rec.get("quality_score") or 0.0),
-                float(item.get("quality_score") or 0.0),
-            )
+            try:
+                rec["quality_score"] = max(
+                    float(rec.get("quality_score") or 0.0),
+                    float(item.get("quality_score") or 0.0),
+                )
+            except Exception:
+                pass
+
         if item.get("quality_reason"):
             rec["quality_reason"] = item.get("quality_reason")
 
@@ -427,6 +507,127 @@ def _remove_doc_phrases(ph: Dict[str, Any], doc_id: str) -> None:
         ph.pop(phrase, None)
 
 
+def _selector_metadata_map(selected: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    phrases = selected.get("phrases") if isinstance(selected.get("phrases"), list) else []
+
+    for item in phrases:
+        if not isinstance(item, dict):
+            continue
+
+        phrase = _canonical_phrase(str(item.get("phrase") or ""))
+        if not phrase:
+            continue
+
+        out[phrase] = item
+
+    return out
+
+
+def _build_quality_phrase_items(
+    *,
+    text: str,
+    html: str,
+    original_name: str,
+    doc_id: str,
+    selected: Dict[str, Any],
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    candidates = extract_smart_phrases(
+        text=text or "",
+        html=html or "",
+        title=original_name or "",
+        doc_id=doc_id or "",
+        max_candidates=500,
+    )
+
+    selector_map = _selector_metadata_map(selected)
+
+    quality_items: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+
+    counts = {
+        "extractor_candidate_count": len(candidates),
+        "guard_kept_count": 0,
+        "scorer_kept_count": 0,
+        "selector_selected_count": int(selected.get("selected_count") or 0),
+    }
+
+    for c in candidates:
+        if not isinstance(c, dict):
+            continue
+
+        phrase = _canonical_phrase(str(c.get("phrase") or ""))
+        source_type = str(c.get("source_type") or "unknown")
+        section_id = str(c.get("section_id") or "")
+        snippet = str(c.get("snippet") or "")
+
+        if not phrase:
+            continue
+
+        guard = candidate_window_guard(phrase, source_type=source_type)
+        if isinstance(guard, dict) and not bool(guard.get("keep")):
+            continue
+
+        counts["guard_kept_count"] += 1
+
+        guarded_phrase = _canonical_phrase(str(guard.get("phrase") or phrase)) if isinstance(guard, dict) else phrase
+        if not guarded_phrase:
+            continue
+
+        scored = score_phrase_strength(
+            phrase=guarded_phrase,
+            source_type=source_type,
+        )
+
+        if not isinstance(scored, dict) or not bool(scored.get("keep")):
+            continue
+
+        counts["scorer_kept_count"] += 1
+
+        final_phrase = _canonical_phrase(str(scored.get("phrase") or guarded_phrase))
+        if not final_phrase or final_phrase in seen:
+            continue
+
+        if not _accept_phrase(final_phrase):
+            continue
+
+        seen.add(final_phrase)
+
+        selector_item = selector_map.get(final_phrase, {})
+
+        item: Dict[str, Any] = {
+            "phrase": final_phrase,
+            "canonical": final_phrase,
+            "source_type": source_type,
+            "section_id": section_id,
+            "snippet": snippet,
+            "score": scored.get("score"),
+            "quality_score": scored.get("score"),
+            "quality_reason": scored.get("reason"),
+            "extractor_intelligence": (
+                c.get("extractor_intelligence")
+                if isinstance(c.get("extractor_intelligence"), dict)
+                else {}
+            ),
+            "quality_gate": (
+                guard.get("quality_gate")
+                if isinstance(guard, dict) and isinstance(guard.get("quality_gate"), dict)
+                else {}
+            ),
+            "strength": scored,
+        }
+
+        if isinstance(selector_item, dict):
+            if isinstance(selector_item.get("selector_intelligence"), dict):
+                item["selector_intelligence"] = selector_item.get("selector_intelligence") or {}
+            if selector_item.get("quality_reason"):
+                item["selector_quality_reason"] = selector_item.get("quality_reason")
+
+        quality_items.append(item)
+
+    return quality_items, counts
+
+
 def build_upload_intelligence(
     workspace_id: str,
     doc_id: str,
@@ -459,6 +660,23 @@ def build_upload_intelligence(
     docs_store = struct.get("docs") if isinstance(struct.get("docs"), dict) else {}
     struct["docs"] = docs_store
 
+    duplicate_check = _is_duplicate_document(
+    docs_store=docs_store,
+    original_name=original_name,
+    text=text or "",
+)
+
+    if isinstance(duplicate_check, dict) and duplicate_check.get("duplicate"):
+     return {
+        "ok": False,
+        "duplicate_detected": True,
+        "duplicate_reason": duplicate_check.get("reason"),
+        "existing_doc_id": duplicate_check.get("existing_doc_id"),
+        "workspace_id": ws,
+        "doc_id": doc_id,
+        "message": "This document already exists in this session.",
+    }
+
     phrase_index = _read_json(paths["phrases"], {"workspace_id": ws, "updated_at": _now_iso(), "phrases": {}})
     if not isinstance(phrase_index, dict):
         phrase_index = {"workspace_id": ws, "updated_at": _now_iso(), "phrases": {}}
@@ -476,10 +694,34 @@ def build_upload_intelligence(
         "stored_path": stored_path,
         "original_name": original_name,
         "updated_at": _now_iso(),
-        "h1": {"text": h1 or "", "aliases": _derive_alias_variants(h1 or "") if h1 else []},
+
+        "fingerprint": _document_fingerprint(
+            original_name=original_name,
+            text=text or "",
+        ),
+
+        "h1": {
+            "text": h1 or "",
+            "aliases": _derive_alias_variants(h1 or "") if h1 else [],
+        },
+
         "headings": headings,
-        "list_items": [{"text": x, "aliases": _derive_alias_variants(x)} for x in list_items[:200]],
-        "paragraphs": [{"pid": f"p{i}", "text": para} for i, para in enumerate(paragraphs)],
+
+        "list_items": [
+            {
+                "text": x,
+                "aliases": _derive_alias_variants(x),
+            }
+            for x in list_items[:200]
+        ],
+
+        "paragraphs": [
+            {
+                "pid": f"p{i}",
+                "text": para,
+            }
+            for i, para in enumerate(paragraphs)
+        ],
     }
     struct["updated_at"] = _now_iso()
     _write_json_atomic(paths["struct"], struct)
@@ -492,12 +734,17 @@ def build_upload_intelligence(
         text=text or "",
     )
 
-    for item in selected.get("phrases", []):
-        if not isinstance(item, dict):
-            continue
+    quality_items, quality_counts = _build_quality_phrase_items(
+        text=text or "",
+        html=html or "",
+        original_name=original_name,
+        doc_id=doc_id,
+        selected=selected,
+    )
 
+    for item in quality_items:
         phrase = str(item.get("phrase") or "").strip()
-        source_type = str(item.get("source_type") or "selector")
+        source_type = str(item.get("source_type") or "quality_pipeline")
         section_id = str(item.get("section_id") or "")
         snippet = str(item.get("snippet") or "")
 
@@ -517,11 +764,20 @@ def build_upload_intelligence(
     phrase_index["updated_at"] = _now_iso()
     phrase_index["selector_pipeline"] = {
         "enabled": True,
-        "mode": "preserve_selector_exact_anchors",
-        "selected_count": int(selected.get("selected_count") or 0),
+        "mode": "quality_pipeline_preserves_all_scorer_approved_phrases",
         "candidate_count": int(selected.get("candidate_count") or 0),
+        "selected_count": int(selected.get("selected_count") or 0),
         "vertical": selected.get("vertical") or "universal",
     }
+    phrase_index["quality_pipeline"] = {
+        "enabled": True,
+        "mode": "extractor_guard_scorer_index_writer",
+        "extractor_candidate_count": quality_counts["extractor_candidate_count"],
+        "guard_kept_count": quality_counts["guard_kept_count"],
+        "scorer_kept_count": quality_counts["scorer_kept_count"],
+        "indexed_quality_items_count": len(quality_items),
+    }
+
     _write_json_atomic(paths["phrases"], phrase_index)
 
     entity_map = _read_json(paths["entities"], {"workspace_id": ws, "updated_at": _now_iso(), "entities": {}})
@@ -548,5 +804,9 @@ def build_upload_intelligence(
             "phrases_total": len(phrase_index["phrases"]),
             "selector_candidate_count": int(selected.get("candidate_count") or 0),
             "selector_selected_count": int(selected.get("selected_count") or 0),
+            "quality_extractor_candidate_count": quality_counts["extractor_candidate_count"],
+            "quality_guard_kept_count": quality_counts["guard_kept_count"],
+            "quality_scorer_kept_count": quality_counts["scorer_kept_count"],
+            "quality_indexed_count": len(quality_items),
         },
     }

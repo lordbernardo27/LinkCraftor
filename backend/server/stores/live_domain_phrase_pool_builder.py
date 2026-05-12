@@ -41,7 +41,12 @@ def _site_phrase_index_path(ws: str) -> Path:
 
 
 def _live_domain_phrase_pool_path(ws: str) -> Path:
-    return _data_dir() / "phrase_pools" / "live_domain" / f"live_domain_phrase_pool_{_ws_safe(ws)}.json"
+    return (
+        _data_dir()
+        / "phrase_pools"
+        / "live_domain"
+        / f"live_domain_phrase_pool_{_ws_safe(ws)}.json"
+    )
 
 
 def _safe_read_json(path: Path) -> Any:
@@ -54,6 +59,11 @@ def _safe_read_json(path: Path) -> Any:
 def _clean_text(s: Any) -> str:
     s = fix_mojibake_text(str(s or ""))
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _normalize_url(u: Any) -> str:
+    x = _clean_text(u).lower()
+    return x.rstrip("/")
 
 
 def _canonical_phrase(s: Any) -> str:
@@ -79,6 +89,15 @@ def _clean_aliases(v: Any) -> List[str]:
     return out
 
 
+def _safe_int_score(value: Any, default: int = 1) -> int:
+    try:
+        if value is None:
+            return default
+        return int(value)
+    except Exception:
+        return default
+
+
 def _quality_gate_phrase(phrase: str, rec: Dict[str, Any]) -> bool:
     p = _canonical_phrase(phrase)
     if not p:
@@ -93,8 +112,17 @@ def _quality_gate_phrase(phrase: str, rec: Dict[str, Any]) -> bool:
         return False
 
     weak = {
-        "the", "and", "for", "with", "from", "after",
-        "before", "that", "this", "those", "these"
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "after",
+        "before",
+        "that",
+        "this",
+        "those",
+        "these",
     }
 
     if toks[0] in weak:
@@ -103,7 +131,8 @@ def _quality_gate_phrase(phrase: str, rec: Dict[str, Any]) -> bool:
     if toks[-1] in weak:
         return False
 
-    score = int(rec.get("score", 0))
+    score = _safe_int_score(rec.get("score"), default=1)
+
     if score <= 0:
         return False
 
@@ -118,7 +147,7 @@ def _rec_to_selector_entry(phrase: str, rec: Dict[str, Any]) -> Dict[str, Any]:
         "bucket": _clean_text(rec.get("bucket") or ""),
         "confidence": float(rec.get("confidence") or 0.0),
         "aliases": _clean_aliases(rec.get("aliases")),
-        "source_url": _clean_text(rec.get("source_url") or ""),
+        "source_url": _normalize_url(rec.get("source_url") or ""),
         "section_id": _clean_text(rec.get("section_id") or ""),
         "snippet": _clean_text(rec.get("snippet") or rec.get("phrase") or phrase or ""),
     }
@@ -143,7 +172,7 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
     active_obj = load_active_phrase_set(ws)
 
     active_live_domain_urls = [
-        _clean_text(x)
+        _normalize_url(x)
         for x in (active_obj.get("active_live_domain_urls") or [])
         if _clean_text(x)
     ]
@@ -161,7 +190,7 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
 
         source_phrase_count += 1
 
-        source_url = _clean_text(rec.get("source_url") or "")
+        source_url = _normalize_url(rec.get("source_url") or "")
         if not source_url:
             continue
 
@@ -171,12 +200,11 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
         eligible_phrase_count += 1
 
         entry = _rec_to_selector_entry(str(phrase), rec)
+        entry["source_url"] = source_url
+
         entries_by_url.setdefault(source_url, []).append(entry)
 
-        key = (
-            _canonical_phrase(entry.get("norm") or phrase),
-            source_url
-        )
+        key = (_canonical_phrase(entry.get("norm") or phrase), source_url)
         record_by_phrase_and_url[key] = rec
 
     phrases: Dict[str, Dict[str, Any]] = {}
@@ -195,22 +223,35 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
                 continue
 
             original = record_by_phrase_and_url.get((norm, source_url), {})
-
             merged = dict(original) if isinstance(original, dict) else {}
 
             merged["phrase"] = _clean_text(item.get("phrase") or norm)
             merged["norm"] = norm
             merged["source_url"] = source_url
-            merged["type"] = _clean_text(item.get("type") or merged.get("type") or "unknown")
-            merged["bucket"] = _clean_text(item.get("bucket") or merged.get("bucket") or "unknown")
+            merged["source"] = "live_domain"
+            merged["source_type"] = "live_page"
+
+            merged["type"] = _clean_text(
+                item.get("type") or merged.get("type") or "unknown"
+            )
+            merged["bucket"] = _clean_text(
+                item.get("bucket") or merged.get("bucket") or "unknown"
+            )
             merged["confidence"] = (
                 item.get("confidence")
                 if item.get("confidence") is not None
                 else merged.get("confidence", 0.0)
             )
-            merged["score"] = int(item.get("score", merged.get("score", 0)))
-            merged["aliases"] = _clean_aliases(item.get("aliases") or merged.get("aliases") or [])
-            merged["section_id"] = _clean_text(item.get("section_id") or merged.get("section_id") or "")
+            merged["score"] = _safe_int_score(
+                item.get("score", merged.get("score")),
+                default=1,
+            )
+            merged["aliases"] = _clean_aliases(
+                item.get("aliases") or merged.get("aliases") or []
+            )
+            merged["section_id"] = _clean_text(
+                item.get("section_id") or merged.get("section_id") or ""
+            )
             merged["snippet"] = _clean_text(
                 item.get("snippet")
                 or merged.get("snippet")
@@ -218,9 +259,7 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
                 or norm
             )
             merged["vertical"] = _clean_text(
-                item.get("vertical")
-                or merged.get("vertical")
-                or ""
+                item.get("vertical") or merged.get("vertical") or ""
             )
 
             if not _quality_gate_phrase(norm, merged):
@@ -236,7 +275,7 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
 
     sorted_items = sorted(
         phrases.items(),
-        key=lambda kv: (-int(kv[1].get("score", 0)), kv[0])
+        key=lambda kv: (-int(kv[1].get("score", 0)), kv[0]),
     )
 
     final_phrases = {k: v for k, v in sorted_items}
@@ -255,7 +294,7 @@ def build_live_domain_phrase_pool(workspace_id: str) -> Dict[str, Any]:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(
         json.dumps(out_obj, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     return out_obj

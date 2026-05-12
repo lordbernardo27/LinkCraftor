@@ -656,29 +656,44 @@ def _merge_active_target_set(
                 seen.add(s)
         return out
 
-    obj["active_document_ids"] = _merge_unique(
-        obj.get("active_document_ids") or [],
-        add_document_ids,
-    )
+    # Runtime document membership must REPLACE, not merge.
+    # This prevents phrases from multiple uploaded documents being active together.
+    if add_document_ids is not None:
+        obj["active_document_ids"] = [
+            str(x).strip()
+            for x in add_document_ids
+            if str(x).strip()
+        ]
+    else:
+        obj["active_document_ids"] = list(obj.get("active_document_ids") or [])
+
+    # Supporting-intelligence libraries may remain merged.
     obj["active_draft_ids"] = _merge_unique(
         obj.get("active_draft_ids") or [],
         add_draft_ids,
     )
+
     obj["active_imported_urls"] = _merge_unique(
         obj.get("active_imported_urls") or [],
         add_imported_urls,
     )
+
     obj["active_live_domain_urls"] = _merge_unique(
         obj.get("active_live_domain_urls") or [],
         add_live_domain_urls,
     )
-    obj["active_upload_ids"] = _merge_unique(
-        obj.get("active_upload_ids") or [],
-        add_upload_ids,
-    )
+
+    # Upload runtime membership must also REPLACE, not merge.
+    if add_upload_ids is not None:
+        obj["active_upload_ids"] = [
+            str(x).strip()
+            for x in add_upload_ids
+            if str(x).strip()
+        ]
+    else:
+        obj["active_upload_ids"] = list(obj.get("active_upload_ids") or [])
 
     return _write_active_target_set(workspace_id, obj)
-
 
 # -------------------------
 # API
@@ -768,6 +783,54 @@ async def upload_file(
         "truncated": bool(preview.get("truncated")),
     }
 
+@router.post("/clear_session")
+def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
+    ws_norm = _ws(workspace_id)
+
+    removed_files: List[str] = []
+
+    paths_to_remove = [
+        BASE_DIR / "data" / f"upload_struct_{ws_norm}.json",
+        BASE_DIR / "data" / f"upload_phrase_index_{ws_norm}.json",
+        BASE_DIR / "data" / "phrase_pools" / "upload" / f"upload_phrase_pool_{ws_norm}.json",
+        BASE_DIR / "data" / "phrase_pools" / "active" / f"active_phrase_pool_{ws_norm}.json",
+    ]
+
+    for fp in paths_to_remove:
+        try:
+            if fp.exists():
+                fp.unlink()
+                removed_files.append(str(fp))
+        except Exception as e:
+            print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
+
+    try:
+        active_obj = _load_active_target_set(ws_norm)
+        active_obj["active_document_ids"] = []
+        active_obj["active_upload_ids"] = []
+        _write_active_target_set(ws_norm, active_obj)
+    except Exception as e:
+        print("[CLEAR_FILE_SESSION_ACTIVE_SET_ERROR]", repr(e))
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "cleared": {
+            "upload_struct": True,
+            "upload_phrase_index": True,
+            "upload_phrase_pool": True,
+            "active_phrase_pool": True,
+            "active_document_ids": True,
+            "active_upload_ids": True,
+        },
+        "removed_files": removed_files,
+        "preserved": [
+            "draft_intelligence",
+            "imported_urls",
+            "live_domain_intelligence",
+        ],
+    }
+
 
 @router.get("/list")
 def list_files(workspace_id: str = Query("ws_betterhealthcheck_com")):
@@ -839,6 +902,38 @@ def get_active_target_set(
             "error": str(e),
         }
 
+
+@router.post("/active_target_set/save")
+async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
+    workspace_id = str(payload.get("workspace_id") or "ws_betterhealthcheck_com")
+
+    obj = {
+        "active_document_ids": list(payload.get("active_document_ids") or []),
+        "active_draft_ids": list(payload.get("active_draft_ids") or []),
+        "active_imported_urls": list(payload.get("active_imported_urls") or []),
+        "active_live_domain_urls": list(payload.get("active_live_domain_urls") or []),
+        "active_upload_ids": list(payload.get("active_upload_ids") or []),
+    }
+
+    saved = _write_active_target_set(workspace_id, obj)
+
+    try:
+        from backend.server.stores.active_phrase_set_store import save_active_phrase_set
+
+        save_active_phrase_set(workspace_id, {
+            "active_document_ids": obj.get("active_document_ids") or [],
+            "active_upload_ids": obj.get("active_upload_ids") or [],
+            "active_draft_ids": obj.get("active_draft_ids") or [],
+            "active_imported_urls": obj.get("active_imported_urls") or [],
+            "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+        })
+    except Exception as e:
+        print("[ACTIVE_PHRASE_SET_SAVE_ERROR]", repr(e))
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "active_target_set": saved,
+    }
 
 @router.post("/reindex_h1s")
 def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
