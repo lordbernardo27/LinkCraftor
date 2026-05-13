@@ -386,8 +386,10 @@ def _upsert_phrase_record(
     if not phrase:
         return
 
-    if not _accept_phrase(phrase):
-        return
+    # Phrase has already passed Extractor → Guard → Scorer.
+# At index-write stage, only reject empty/corrupt phrases.
+    if len(_tokenize(phrase)) < 2:
+      return
 
     now = _now_iso()
     tier = _tier_for_source(source_type)
@@ -588,9 +590,6 @@ def _build_quality_phrase_items(
         if not final_phrase or final_phrase in seen:
             continue
 
-        if not _accept_phrase(final_phrase):
-            continue
-
         seen.add(final_phrase)
 
         selector_item = selector_map.get(final_phrase, {})
@@ -666,7 +665,11 @@ def build_upload_intelligence(
     text=text or "",
 )
 
-    if isinstance(duplicate_check, dict) and duplicate_check.get("duplicate"):
+    if (
+    isinstance(duplicate_check, dict)
+    and duplicate_check.get("duplicate")
+    and str(duplicate_check.get("existing_doc_id") or "") != str(doc_id)
+):
      return {
         "ok": False,
         "duplicate_detected": True,

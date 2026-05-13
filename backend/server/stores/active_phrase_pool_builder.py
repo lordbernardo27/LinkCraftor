@@ -178,6 +178,32 @@ def _is_runtime_dirty_phrase(phrase: str) -> Tuple[bool, str]:
         return True, "runtime_bad_start"
     if toks[-1] in RUNTIME_BAD_ENDS:
         return True, "runtime_bad_end"
+ 
+
+    runtime_noise_patterns = [
+        # vague action + vague object fragments
+        r"^(add|adding|allow|allowing|calculate|calculating|read|reading)\s+(that|this|those|these|many|more|safe|further)$",
+
+        # weak adjective/narration fragments
+        r"^(easiest|easy|simple|best|better|called|known|considered)\s+\w+$",
+
+        # pronoun/contraction debris
+        r"^(themselves|yourself|ourselves|himself|herself|itself)\s+\w+$",
+        # weak add/calculate instruction with vague quantity + time unit
+        r"^(add|adding|calculate|calculating)\s+(that|this|those|these)\s+(many|much)\s+(days|weeks|months|years)$",
+        # discourse connector fragments
+        r"^(well|although|however|therefore|meanwhile)\s+\w+$",
+
+        # weak speaker/reporting fragments
+        r"^\w+\s+(said|says|noted|mentioned|explained)$",
+
+        # weak verb chain fragments
+        r"^\w+\s+(invest|allow|allows|allowing)\s+\w+$",
+    ]
+
+    for pattern in runtime_noise_patterns:
+        if re.search(pattern, p):
+            return True, "runtime_noise_pattern"
 
     for pattern in RUNTIME_BAD_PATTERNS:
         if re.search(pattern, p):

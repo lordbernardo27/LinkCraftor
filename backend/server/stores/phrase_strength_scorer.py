@@ -43,7 +43,8 @@ VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
     ("data", "security"), ("keyword", "research"), ("content", "optimization"),
     ("conversion", "rate"), ("payment", "schedule"), ("late", "payment"),
     ("late", "fee"), ("study", "plan"), ("learning", "platform"),
-    ("progress", "tracking"), ("recorded", "lesson"), ("completion", "rates"),
+    ("progress", "tracking"), ("recorded", "lesson"), ("completion", "rates"), ("body", "mass"),
+    ("mass", "index"),
 
     # Universal health/fertility compound patterns
     ("fertile", "window"), ("cycle", "length"), ("follicular", "phase"),
@@ -51,7 +52,7 @@ VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
     ("basal", "body"), ("body", "temperature"), ("birth", "control"),
     ("fertility", "tracking"), ("ovulation", "predictor"),
     ("ovulation", "calculator"), ("expected", "ovulation"),
-    ("irregular", "periods"),
+    ("irregular", "periods"), ("due", "date"),
 }
 
 REVERSED_ORDERED_PAIRS: Set[Tuple[str, str]] = {(b, a) for a, b in VALID_ORDERED_PAIRS}
@@ -190,7 +191,7 @@ ACTION_STARTS: Set[str] = {
     "measure", "estimate", "build", "create", "fix", "improve",
     "optimize", "reduce", "increase", "manage", "review", "audit",
     "forecast", "plan", "analyze", "monitor", "test", "rank",
-    "score", "publish", "import", "export", "sync", "validate",
+    "score", "calculate", "publish", "import", "export", "sync", "validate",
     "prevent", "protect", "design", "write", "stopping",
 }
 
@@ -199,7 +200,7 @@ STRONG_ACTION_OBJECT_HEADS: Set[str] = {
     "outcomes", "collection", "cash", "traffic", "costs", "cost",
     "features", "plans", "accounts", "budget", "performance",
     "security", "quality", "workflow", "workflows", "content",
-    "links", "ranking", "revenue", "sales", "expenses", "debt",
+    "links", "bmi","ranking", "revenue", "sales", "expenses", "debt",
     "interest", "payments", "flexibility", "plan", "control",
 }
 
@@ -411,6 +412,120 @@ def _is_universal_weak_semantic_phrase(tokens: List[str]) -> bool:
             and t not in STOPWORDS
         ]
         return len(non_generic) < 2
+
+    return False
+
+def _fails_semantic_anchor_validation(tokens: List[str]) -> bool:
+    """
+    Universal semantic-anchor validation.
+
+    Rejects phrases that look grammatically valid but are too vague,
+    generic, or weakly anchored to function as useful SEO/link anchors.
+    """
+    if len(tokens) < 2:
+        return False
+
+    if _is_exact_canonical_anchor(tokens):
+        return False
+
+    if _has_valid_ordered_pair(tokens):
+        return False
+
+    if len(tokens) == 3 and (tokens[1], tokens[2]) in VALID_ORDERED_PAIRS and tokens[0] not in STOPWORDS:
+        return False
+
+    head = tokens[-1]
+
+    vague_heads = set(WEAK_HEADS) | set(UNIVERSAL_WEAK_HEADS) | {
+        "care", "routine", "routines", "plan", "plans", "day", "days",
+        "date", "time", "process", "strategy", "method", "methods",
+        "way", "ways", "thing", "things", "area", "areas", "part",
+        "parts", "issue", "issues", "problem", "problems", "timeline",
+    }
+
+
+    if _is_natural_compound_phrase(tokens) and head not in vague_heads:
+        return False
+
+    weak_modifiers = set(WEAK_ADJECTIVE_STARTS) | set(UNIVERSAL_WEAK_PREFIXES) | {
+        "personal", "healthy", "safe", "final", "known", "extra",
+        "real", "different", "same", "average", "roughly",
+    }
+
+    if head not in vague_heads:
+        return False
+
+    content_tokens = [t for t in tokens if t not in STOPWORDS]
+    if len(content_tokens) < 2:
+        return True
+
+    strong_mod_hits = sum(1 for t in tokens[:-1] if t in STRONG_MODIFIER_WORDS)
+    strong_head_hits = sum(1 for t in tokens if t in STRONG_CONCEPT_HEADS)
+    vertical_hits = _vertical_keyword_hits(tokens)
+
+    cohesion = phrase_domain_cohesion(tokens)
+    is_cohesive = bool(cohesion.get("is_cohesive")) if isinstance(cohesion, dict) else False
+    cohesion_ratio = float(cohesion.get("cohesion_ratio") or 0.0) if isinstance(cohesion, dict) else 0.0
+
+    weak_modifier_hits = sum(1 for t in tokens[:-1] if t in weak_modifiers)
+
+    if tokens[0] in {"personal", "basic", "general", "healthy", "safe"} and head in vague_heads:
+        return True
+
+    if weak_modifier_hits and strong_mod_hits == 0 and vertical_hits == 0:
+        return True
+
+    # Do not reject every compact phrase just because it lacks known vertical terms.
+    # Many valid anchors are short, contentful, and niche-neutral.
+    if strong_mod_hits == 0 and vertical_hits == 0 and not is_cohesive:
+        if len(content_tokens) >= 3 and len(tokens) <= 5:
+            return False
+        return True
+    
+
+    if strong_head_hits == 0 and vertical_hits == 0 and cohesion_ratio < 0.50:
+        return True
+
+    return False
+
+def _fails_malformed_wrapper_validation(tokens: List[str]) -> bool:
+    """
+    Universal malformed-wrapper validation.
+
+    Blocks phrases that are sentence leftovers, conversational wrappers,
+    or orphan fragments rather than real anchor phrases.
+    """
+    if len(tokens) < 2:
+        return False
+
+    if _is_exact_canonical_anchor(tokens):
+        return False
+
+    malformed_starts = {
+        "aren", "isn", "wasn", "weren", "don", "doesn", "didn",
+        "cant", "couldn", "shouldn", "wouldn", "won", "number",
+    }
+
+    if tokens[0] in malformed_starts:
+        return True
+
+    if len(tokens) >= 3 and tokens[0] in {"later", "afterward", "afterwards"} and tokens[1] in {"with", "for", "to"}:
+        return True
+
+    if _has_valid_ordered_pair(tokens):
+        return False
+
+    if len(tokens) == 3 and (tokens[1], tokens[2]) in VALID_ORDERED_PAIRS and tokens[0] not in STOPWORDS:
+        return False
+
+    if len(tokens) >= 4 and tokens[0] in {"refining", "checking", "using", "doing"} and tokens[1] in {"later", "afterward", "afterwards"}:
+        return True
+
+    if len(tokens) >= 4 and tokens[0] in {"best", "good", "easy", "simple"} and tokens[1] in {"way", "ways", "friend", "option", "method"}:
+        return True
+
+    if len(tokens) >= 4 and tokens[0] in {"one", "thing", "things"} and tokens[1] in {"to", "for", "with"}:
+        return True
 
     return False
 
@@ -809,7 +924,7 @@ def _short_window_structure_penalty(tokens: List[str], source_type: str) -> tupl
     has_signal, reasons = _has_structural_signal(tokens, source_type)
 
     if not has_signal:
-        return -0.45, reasons + ["short_window_missing_structure"]
+        return -0.22, reasons + ["short_window_missing_structure"]
 
     if _is_list_style_stack(tokens):
         return -0.30, reasons + ["short_window_stitched_sequence"]
@@ -893,7 +1008,6 @@ def _modifier_quality_score(tokens: List[str]) -> tuple[float, List[str]]:
 
     return score, reasons
 
-
 def _head_quality_score(tokens: List[str]) -> tuple[float, List[str]]:
     if not tokens:
         return -1.0, ["missing_head"]
@@ -913,18 +1027,46 @@ def _head_quality_score(tokens: List[str]) -> tuple[float, List[str]]:
     if head in STRONG_CONCEPT_HEADS:
         score += 0.35
         reasons.append("strong_head")
+
     elif head in GENERIC_BUT_ALLOWED_HEADS:
         score += 0.08
         reasons.append("generic_allowed_head")
+
     elif head in WEAK_HEADS:
         score -= 0.45
         reasons.append("weak_head")
+
     elif head in NEUTRAL_NOUN_LIKE_HEADS:
         score += 0.05
         reasons.append("neutral_noun_head")
+
     else:
-        score -= 0.10
-        reasons.append("unknown_head")
+        modifier_hits = sum(
+            1
+            for t in tokens[:-1]
+            if (
+                t in STRONG_MODIFIER_WORDS
+                or t in STRONG_CONCEPT_HEADS
+                or t in STRONG_ACTION_OBJECT_HEADS
+            )
+        )
+
+        content_hits = len([
+            t for t in tokens
+            if t not in STOPWORDS
+        ])
+
+        if (
+            modifier_hits >= 1
+            or content_hits >= 2
+            or _has_valid_ordered_pair(tokens)
+            or _is_natural_compound_phrase(tokens)
+        ):
+            score += 0.02
+            reasons.append("structural_unknown_head")
+        else:
+            score -= 0.10
+            reasons.append("unknown_head")
 
     return score, reasons
 
@@ -988,8 +1130,12 @@ def _action_object_score(tokens: List[str]) -> tuple[float, List[str]]:
         score += 0.08
         reasons.append("neutral_action_object")
     else:
-        score -= 0.10
-        reasons.append("unclear_action_object")
+        if len(tokens) in {2, 3, 4} and len(_content_tokens(tokens)) >= 2:
+            score += 0.18
+            reasons.append("generic_action_object")
+        else:
+            score -= 0.10
+            reasons.append("unclear_action_object")
 
     if _has_vague_action_modifier(tokens):
         score -= 0.45
@@ -1058,8 +1204,12 @@ def _fragment_penalty(tokens: List[str], p: str) -> tuple[float, List[str]]:
         reasons.append("bad_fragment_pattern")
 
     if _has_mid_stopword(tokens):
-        score -= 0.45
-        reasons.append("mid_stopword_fragment")
+        if len(tokens) <= 5 and len(_content_tokens(tokens)) >= 2:
+            score -= 0.18
+            reasons.append("mid_stopword_fragment_softened")
+        else:
+            score -= 0.45
+            reasons.append("mid_stopword_fragment")
 
     if _has_clause_verb_leakage(tokens):
         if not (_contains_canonical_anchor(tokens) and len(tokens) <= 5):
@@ -1149,6 +1299,12 @@ def score_phrase_strength(
     if _is_sentence_fragment_phrase(tokens):
         return {"keep": False, "score": 0.0, "phrase": p, "reason": "sentence_fragment_phrase"}
 
+    if _fails_semantic_anchor_validation(tokens):
+        return {"keep": False, "score": 0.0, "phrase": p, "reason": "semantic_anchor_validation_failed"}
+
+    if _fails_malformed_wrapper_validation(tokens):
+        return {"keep": False, "score": 0.0, "phrase": p, "reason": "malformed_wrapper_validation_failed"}
+
     if _has_reversed_ordered_pair(tokens):
         return {"keep": False, "score": 0.0, "phrase": p, "reason": "reversed_ordered_pair"}
 
@@ -1198,6 +1354,56 @@ def score_phrase_strength(
     for layer_score, layer_reasons in scoring_layers:
         score += layer_score
         reasons.extend(layer_reasons)
+
+    content_tokens = _content_tokens(tokens)
+    unique_ratio = len(set(tokens)) / max(1, len(tokens))
+
+    compact_contentful_phrase = (
+        2 <= len(tokens) <= 5
+        and len(content_tokens) >= 2
+        and unique_ratio >= 0.75
+        and not _is_sentence_fragment_phrase(tokens)
+        and not _is_universal_weak_semantic_phrase(tokens)
+    )
+
+    high_value_compact_phrase = (
+        compact_contentful_phrase
+        and (
+            _has_valid_ordered_pair(tokens)
+            or _is_natural_compound_phrase(tokens)
+            or any(len(t) >= 6 for t in content_tokens)
+        )
+    )
+
+    if high_value_compact_phrase:
+        score += 0.34
+        reasons.append("high_value_compact_phrase")
+
+        recovery_hits = 0
+
+        if "short_window_missing_structure" in reasons:
+            score += 0.18
+            recovery_hits += 1
+            reasons.append("softened_short_window_missing_structure")
+
+        if "low_domain_cohesion" in reasons:
+            score += 0.16
+            recovery_hits += 1
+            reasons.append("softened_low_domain_cohesion")
+
+        if "structural_unknown_head" in reasons:
+            score += 0.14
+            recovery_hits += 1
+            reasons.append("softened_structural_unknown_head")
+
+        if "list_style_stack" in reasons:
+            score += 0.08
+            recovery_hits += 1
+            reasons.append("softened_list_style_stack")
+
+        if recovery_hits >= 2:
+            score = max(score, 0.72)
+            reasons.append("multi_signal_recovery_floor")
 
     score = max(0.0, min(1.0, round(score, 3)))
 
@@ -1274,7 +1480,42 @@ def score_phrase_strength(
         threshold += 0.08
 
     threshold = max(0.50, min(0.86, threshold))
-    keep = score >= threshold
+
+    recovery_reason_hits = sum(
+        1 for r in reasons
+        if r in {
+            "high_value_compact_phrase",
+            "multi_signal_recovery_floor",
+            "ordered_pair_score_floor",
+            "natural_compound_score_floor",
+            "canonical_score_floor",
+            "valid_ordered_pair",
+            "natural_compound_precision",
+            "contentful",
+        }
+    )
+
+    soft_penalty_hits = sum(
+        1 for r in reasons
+        if r in {
+            "low_domain_cohesion",
+            "short_window_missing_structure",
+            "structural_unknown_head",
+            "list_style_stack",
+            "mid_stopword_fragment_softened",
+        }
+    )
+
+    recovery_override = (
+        score >= 0.68
+        and recovery_reason_hits >= 3
+        and soft_penalty_hits >= 2
+        and "sentence_fragment_phrase" not in reasons
+        and "semantic_anchor_validation_failed" not in reasons
+        and "malformed_wrapper_validation_failed" not in reasons
+    )
+
+    keep = score >= threshold or recovery_override
 
     return {
         "keep": keep,

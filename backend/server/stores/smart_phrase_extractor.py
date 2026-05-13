@@ -1,6 +1,22 @@
 from __future__ import annotations
 
 import re
+ORPHAN_CONTRACTION_TOKENS = {
+    "ve", "ll", "re", "d", "m", "s", "t", "x27"
+}
+
+
+def _has_orphan_contraction_debris(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    tokens = re.findall(r"[a-z0-9]+", text)
+
+    if not tokens:
+        return True
+
+    return any(tok in ORPHAN_CONTRACTION_TOKENS for tok in tokens)
 from typing import Any, Dict, List, Set
 
 
@@ -98,6 +114,21 @@ VAGUE_ADVERB_ENDINGS: Set[str] = {
     "yesterday", "eventually", "recently", "currently",
 }
 
+VAGUE_FILLER_TOKENS = {
+    "thing", "things", "something", "everything", "anything",
+    "someone", "somebody", "everyone", "everybody"
+}
+
+SENTENCE_FLOW_STARTERS = {
+    "ever", "there", "around", "only", "any"
+}
+
+SENTENCE_FRAGMENT_PATTERNS = [
+    re.compile(r"\b(from|with|for|about|into|over|under|through)\s+(thing|things|something|everything|anything)\b"),
+    re.compile(r"\b(for|over|during|within)\s+the\s+(next|last|same|first)\b"),
+    re.compile(r"\b(there|something|everything|anything)\s+\w+\s+(something|thing|things|anything)\b"),
+]
+
 INTENT_STARTS = (
     "how to",
     "how many",
@@ -118,6 +149,7 @@ INTENT_STARTS = (
 CONDITION_CONNECTORS: Set[str] = {
     "after", "before", "during", "without", "with", "near", "for",
 }
+
 
 WEAK_CONNECTOR_STARTS = (
     "based on",
@@ -400,6 +432,32 @@ def _is_clean_content_compound(tokens: List[str]) -> bool:
 
     return False
 
+def _has_universal_residue_pattern(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    patterns = [
+        # narration/search-intent residue
+        r"\b(searched|searching|looked|looking)\s+for\s+how\s+to\b",
+
+        # broken transition residue
+        r"\b\w+\s+(see|read|watch|check)\s+\w+",
+
+        # trailing weak verb residue
+        r"\b\w+\s+\w+\s+\w+\s+(making|giving|getting|becoming|feeling|seeming)$",
+
+        # vague time residue
+        r"^(same|next|last|first|second|third)\s+(year|month|week|day|time)$",
+
+        # weak adjective + vague noun
+        r"\b(healthy|shared|accurate|simple|real|same|quick)\s+(care|timeline|thing|things|way|language|numbers?)\b",
+
+        # number + weak abstract noun
+        r"^number\s+\w+",
+    ]
+
+    return any(re.search(pattern, text) for pattern in patterns)
 
 def _has_universal_head(tokens: List[str]) -> bool:
     if not tokens:
@@ -527,6 +585,30 @@ def _is_weak_action_tail(tokens: List[str]) -> bool:
 
     if len(tokens) == 3 and tokens[-1] not in UNIVERSAL_HEAD_SUFFIXES and not _is_clean_content_compound(tokens):
         return True
+
+    return False
+
+def _looks_like_sentence_fragment(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    tokens = re.findall(r"[a-z0-9]+", text)
+    if not tokens:
+        return True
+
+    # Reject vague filler tokens unless phrase has a strong domain head.
+    if any(tok in VAGUE_FILLER_TOKENS for tok in tokens):
+        return True
+
+    # Reject sentence-flow starts when phrase is longer than 2 words.
+    if len(tokens) >= 3 and tokens[0] in SENTENCE_FLOW_STARTERS:
+        return True
+
+    # Reject generic "for the next", "from things", etc.
+    for pat in SENTENCE_FRAGMENT_PATTERNS:
+        if pat.search(text):
+            return True
 
     return False
 
@@ -801,6 +883,31 @@ def _has_numeric_semantic_pollution(tokens: List[str]) -> bool:
         return True
 
     return False
+
+def _has_broken_residue_pattern(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    patterns = [
+        # broken contractions / auxiliaries: aren, isn, doesn, don, etc.
+        r"\b[a-z]+n\s+\w+",
+
+        # emotion/conversation residue: monitor confused, feeling worried
+        r"\b\w+\s+(confused|frustrated|wondering|worried)\b",
+        r"\b(confused|frustrated|wondering|worried)\s+\w+\b",
+
+        # video/article reminder residue
+        r"\b(reminder|video|article|guide|post|section)\b",
+
+        # disclaimer residue
+        r"\b(purposes?\s+only|educational\s+purposes?|informational\s+purposes?)\b",
+
+        # impossible subject-verb residue
+        r"\b(world|numbers|body|timeline|shared)\s+\w+ing\b",
+    ]
+
+    return any(re.search(pattern, text) for pattern in patterns)
 
 
 def _has_discourse_transition_leak(tokens: List[str]) -> bool:
@@ -1188,6 +1295,66 @@ def _basic_reject(phrase: str) -> bool:
 
     return False
 
+def _has_incomplete_phrase_shape(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    patterns = [
+        # ends with vague/incomplete adjective or adverb
+        r"\b(with|for|by|to|from|into|around|after|before)\s+(real|healthy|accurate|same|simple|quick|much|next|last)$",
+
+        # explanatory "stands for..." fragments
+        r"\bstands\s+for\s+\w+",
+
+        # trailing gerund after already complete concept
+        r"\b(calculate|estimate|measure|translate)\s+\w+(\s+\w+){0,3}\s+(figuring|using|making|giving|getting|adjusting)$",
+
+        # sentence-like subject + weak verb
+        r"^(world|body|numbers|pressure|accuracy)\s+\w+$",
+
+        # vague metric/event phrases
+        r"^(every|each)\s+\w+\s+\w+$",
+
+        # timeline + weak adjective
+        r"\btimeline\s+for\s+\w+$",
+
+        # adverbial ending residue
+        r"\b\w+\s+\w+\s+immediately$",
+    ]
+
+    return any(re.search(pattern, text) for pattern in patterns)
+
+def _has_final_incomplete_residue_pattern(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    patterns = [
+        # incomplete calculate/diagnose verb-object
+        r"^(calculate|diagnose|measure|estimate|translate)\s+(adult|body)$",
+
+        # incomplete medical/body-object fragments
+        r"^diagnose\s+body(\s+fat)?$",
+
+        # associated-with fragments
+        r"\bassociated\s+with\s+(lower|higher|increased|reduced|decreased)$",
+
+        # conversational timing residue
+        r"\bright\s+now\s+the\s+\w+$",
+
+        # sentence residue with vague framing
+        r"\bsome\s+perspective\s+there\s+\w+$",
+
+        # subject + verb/adverb residue
+        r"^\w+\s+(gives|adjusting|arrive|arrives|shoot|shoots)\b",
+
+        # not/deadline comparison residue
+        r"\bnot\s+(deadline|diagnosis|treatment|medical\s+advice)$",
+    ]
+
+    return any(re.search(pattern, text) for pattern in patterns)
+
 def _add_candidate(
     out: List[Dict[str, Any]],
     seen: Set[str],
@@ -1198,15 +1365,28 @@ def _add_candidate(
     doc_id: str = "",
 ) -> None:
     p = canonical_phrase(phrase)
+
     if _basic_reject(p):
+        return
+
+    if _has_orphan_contraction_debris(p):
+        return
+
+    if _looks_like_sentence_fragment(p):
+        return
+    if _has_broken_residue_pattern(p):
+        return
+    if _has_universal_residue_pattern(p):
+        return
+    if _has_incomplete_phrase_shape(p):
+        return
+    if _has_final_incomplete_residue_pattern(p):
         return
 
     tokens = tokenize(p)
 
     if source_type in {"noun_phrase", "condition_phrase"}:
         if not _has_universal_head(tokens):
-            return
-        if _looks_like_sentence_fragment(tokens):
             return
 
     extractor_intelligence = _extractor_intelligence_result(
@@ -1224,6 +1404,7 @@ def _add_candidate(
         return
 
     seen.add(key)
+
     out.append({
         "phrase": p,
         "source_type": source_type,

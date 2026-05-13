@@ -62,6 +62,32 @@ WEAK_GENERIC_TERMS = {
     "brief", "important", "different", "main", "own", "real",
 }
 
+UNIVERSAL_STRONG_ANCHOR_HEADS = {
+    # Health / medical
+    "pressure", "hypertension", "medication", "medicine", "dosage", "dose",
+    "treatment", "symptom", "symptoms", "risk", "risks", "condition",
+    "therapy", "diagnosis", "retention", "swelling", "pain", "sleep",
+    "apnea", "cholesterol", "glucose", "insulin", "infection",
+
+    # Calculators / measurement / body metrics
+    "calculator", "index", "bmi", "weight", "height", "measurement",
+    "range", "score", "classification", "trend", "category", "chart",
+
+    # Pregnancy / fertility
+    "ovulation", "fertility", "pregnancy", "period", "cycle", "window",
+    "mucus", "temperature", "conception", "trimester",
+
+    # Business / finance / legal / education / technology
+    "strategy", "planning", "budget", "revenue", "cost", "tax", "contract",
+    "policy", "compliance", "workflow", "software", "platform", "system",
+    "engine", "model", "data", "security", "learning", "training",
+
+    # General high-value anchor nouns
+    "guide", "checklist", "process", "method", "benefit", "cause", "causes",
+    "effect", "effects", "problem", "solution", "management", "prevention",
+    "analysis", "comparison", "example", "examples", "tool", "tools",
+}
+
 SELECTOR_INTELLIGENCE_LAYERS = [
     "memory_feedback",
     "semantic_similarity",
@@ -144,12 +170,15 @@ def _has_anchor_head(tokens: List[str]) -> bool:
         return True
 
     head = tokens[-1]
+    content = _content_tokens(tokens)
+
+    if head in UNIVERSAL_STRONG_ANCHOR_HEADS and len(content) >= 1:
+        return True
 
     if head in GENERIC_HEADS:
         return False
 
-    if len(head) >= 6 and head not in ACTION_VERBS and head not in AUXILIARY_VERBS:
-        content = _content_tokens(tokens)
+    if len(head) >= 5 and head not in ACTION_VERBS and head not in AUXILIARY_VERBS:
         if len(content) >= 2:
             return True
 

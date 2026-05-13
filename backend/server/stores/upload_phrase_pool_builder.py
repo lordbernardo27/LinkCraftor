@@ -32,6 +32,14 @@ def _upload_phrase_index_path(ws: str) -> Path:
 def _upload_phrase_pool_path(ws: str) -> Path:
     return _data_dir() / "phrase_pools" / "upload" / f"upload_phrase_pool_{_ws_safe(ws)}.json"
 
+def _upload_phrase_pool_doc_path(ws: str, doc_id: str) -> Path:
+    safe_doc = re.sub(r"[^a-zA-Z0-9_\-]", "_", str(doc_id or "").strip())
+    return (
+        _data_dir()
+        / "phrase_pools"
+        / "upload"
+        / f"upload_phrase_pool_{_ws_safe(ws)}_{safe_doc}.json"
+    )
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -599,6 +607,40 @@ def _copy_all_phrases(phrases: Dict[str, Any]) -> Dict[str, Any]:
 
     return filtered
 
+def _matches_builder_noise_pattern(phrase: str) -> bool:
+    text = _light_normalize_phrase(str(phrase or ""))
+    if not text:
+        return True
+
+    patterns = [
+        # conversational/video/article residue
+        r"\b(thanks\s+for\s+watching|thanks\s+for\s+reading|quick\s+reminder)\b",
+        # weak verb + vague duration fragment
+        r"^(go|goes|went|going|come|comes|came|coming)\s+\w+\s+(days|weeks|months|years)$",
+        # search-intent leakage from narration
+        r"\b(search|searched|searching|looked|looking)\s+for\s+(how|what|when|why|where)\b",
+
+        # broken emotional/narrative action fragments
+        r"\b(derail|ruin|wreck|confuse|frustrate)\s+(many|some|your|the)?\s*\w+\b",
+
+        # vague friend/best-friend metaphor fragments
+        r"\b(best\s+friend|friend)\s+for\s+\w+\b",
+
+        # broken action phrase with weak verb after subject
+        r"^\w+\s+\w+\s+(shoot|shoots|go|goes|went|come|comes|came)$",
+
+        # broken 'number + concept' residue
+        r"^number\s+\w+(\s+\w+)?$",
+
+        # vague method/evaluation fragments
+        r"^(accurate|safe|easy|simple|better|best)\s+each\s+\w+$",
+
+        # violent/deadline metaphor residue, not a useful anchor
+        r"\b(drop\s+dead|dead\s+day)\b",
+    ]
+
+    return any(re.search(pattern, text) for pattern in patterns)
+
 
 def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     ws = _ws_safe(ws)
@@ -624,13 +666,34 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         if not phrase_text:
             continue
 
-        gate_result = _quality_gate_phrase_with_metadata(phrase_text, source_type=source_type or "")
-        if not gate_result.get("keep"):
+        gate_result = _quality_gate_phrase_with_metadata(
+            phrase_text,
+            source_type=source_type or "",
+        )
+
+        gate_reason = str(gate_result.get("reason") or "")
+
+        hard_pool_reject = gate_reason in {
+            "malformed_wrapper",
+            "malformed_wrapper_validation_failed",
+            "orphan_tail",
+            "orphan_tail_start",
+            "boundary_spillover",
+            "prefix_suffix_spillover",
+            "sentence_fragment",
+            "sentence_fragment_phrase",
+            "semantic_anchor_validation_failed",
+        }
+
+        if not gate_result.get("keep") and hard_pool_reject:
             continue
 
         phrase_text = _light_normalize_phrase(str(gate_result.get("phrase") or phrase_text))
         if not phrase_text:
-            continue
+           continue
+
+        if _matches_builder_noise_pattern(phrase_text):
+           continue
 
         canonical_text = _light_normalize_phrase(_clean_text(clean_rec.get("canonical") or phrase_text))
         if not canonical_text:
@@ -702,16 +765,17 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     active_phrase_set_used = False
     active_filter_reason = "no_active_document_ids"
 
+    # Main workspace upload pool must include all indexed upload phrases.
+    # Per-document isolation is handled later by document-specific pool files.
+    filtered = _copy_all_phrases(phrases)
+    active_phrase_set_used = False
+
     if active_doc_set and usable_active_ids:
-        filtered = _filter_by_active_membership(phrases, usable_active_ids)
-        active_phrase_set_used = True
-        active_filter_reason = "active_membership_filter_applied"
+        active_filter_reason = "workspace_pool_all_indexed_phrases_active_docs_ignored"
     elif active_doc_set and not usable_active_ids:
-        filtered = _copy_all_phrases(phrases)
-        active_filter_reason = "stale_active_membership_fallback_all_indexed_upload_phrases"
+        active_filter_reason = "workspace_pool_all_indexed_phrases_stale_active_membership_ignored"
     else:
-        filtered = _copy_all_phrases(phrases)
-        active_filter_reason = "no_active_membership_fallback_all_indexed_upload_phrases"
+        active_filter_reason = "workspace_pool_all_indexed_phrases_no_active_membership"
 
     filtered = _canonical_merge_phrases(filtered)
     filtered = _sort_phrase_dict(filtered)
@@ -759,4 +823,36 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
     }
 
     _write_json(pool_path, obj)
+
+    for indexed_doc_id in sorted(indexed_doc_ids):
+        doc_filtered = _filter_by_active_membership(phrases, {indexed_doc_id})
+        doc_filtered = _canonical_merge_phrases(doc_filtered)
+        doc_filtered = _sort_phrase_dict(doc_filtered)
+
+        doc_priority_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+        for rec in doc_filtered.values():
+            if not isinstance(rec, dict):
+                continue
+            priority = str(rec.get("ranking_priority") or "LOW")
+            if priority not in doc_priority_counts:
+                priority = "LOW"
+            doc_priority_counts[priority] += 1
+
+        doc_obj = dict(obj)
+        doc_obj["phrase_count"] = len(doc_filtered)
+        doc_obj["active_phrase_set_used"] = False
+        doc_obj["active_filter_reason"] = "document_specific_pool_by_doc_id"
+        doc_obj["active_document_ids_count"] = 1
+        doc_obj["usable_active_document_ids_count"] = 1
+        doc_obj["document_specific_pool"] = True
+        doc_obj["document_id"] = indexed_doc_id
+        doc_obj["builder_intelligence_summary"] = dict(obj.get("builder_intelligence_summary") or {})
+        doc_obj["builder_intelligence_summary"]["ranking_priority_counts"] = doc_priority_counts
+        doc_obj["phrases"] = doc_filtered
+
+        _write_json(
+            _upload_phrase_pool_doc_path(ws, indexed_doc_id),
+            doc_obj,
+        )
+
     return obj

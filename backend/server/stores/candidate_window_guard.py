@@ -445,6 +445,40 @@ def _is_universal_weak_semantic_phrase(tokens: List[str]) -> bool:
 
     return False
 
+def _matches_universal_guard_noise_pattern(phrase: str) -> bool:
+    text = str(phrase or "").strip().lower()
+    if not text:
+        return True
+
+    patterns = [
+        # incomplete phrase endings
+        # incomplete phrase endings only when the ending is vague/generic
+       r"\b(with|for|by|to|from|into|around|after|before)\s+(this|that|these|those|it|them|other|another|same|next|last|early|example)$",
+
+        # broken "for early", "with other", etc.
+        r"\b(for|with|by|from)\s+(early|other|another|same|example)$",
+
+        # narration residue
+        r"\b(right now|some perspective|quick reminder|in this video|this article|this guide)\b",
+
+        # weak explanatory fragments
+        r"\b(stands for|looks like|lines up with|associated with)\b",
+
+        # weak generic phrases
+        r"^(quickest ways|single number|pick up tips|much salt)$",
+
+        # broken subject + action residue
+        r"^\w+\s+(shoot|shoots|goes|gives|adjusting|arrive|arrives|vary)\b",
+
+        # awkward article/body fragments
+        r"\b\w+\s+(after eating salty|before the next|vary lot month)$",
+
+        # weak numeric/time fragments
+        r"^(five days|next nine months|same year|next year|average length|single number)$",
+    ]
+
+    return any(re.search(pattern, text) for pattern in patterns)
+
 
 def _has_repeated_or_duplicate_noise(tokens: List[str]) -> bool:
     if len(tokens) < 3:
@@ -638,6 +672,18 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
                 "topic_coherence": 0.35,
             },
         )
+
+    if _matches_universal_guard_noise_pattern(phrase):
+       return _reject(
+        phrase,
+        "universal_guard_noise_pattern",
+        {
+            "logical_structure": 0.25,
+            "context_fit": 0.30,
+            "pragmatic_anchor_value": 0.15,
+            "topic_coherence": 0.25,
+        },
+    )
 
     if _is_universal_weak_semantic_phrase(tokens):
         return _reject(
