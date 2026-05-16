@@ -1,7 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Set, Tuple
+
+from backend.server.stores.dis_pipeline_learning import learn_from_pipeline_rejection
 
 
 WORD_RE = re.compile(r"[a-z0-9]{2,}", re.I)
@@ -260,7 +262,24 @@ def _attach_quality_gate(
     return result
 
 
-def _reject(phrase: str, reason: str, signals: Dict[str, float] | None = None) -> Dict[str, Any]:
+def _reject(
+    phrase: str,
+    reason: str,
+    signals: Dict[str, float] | None = None,
+    *,
+    workspace_id: str = "default",
+    document_id: str = "",
+    vertical: str = "general",
+) -> Dict[str, Any]:
+    learn_from_pipeline_rejection(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        vertical=vertical,
+        pipeline_stage="candidate_window_guard",
+        candidate={"phrase": phrase},
+        rejection_reason=reason,
+    )
+
     return _attach_quality_gate(
         {"keep": False, "reason": reason, "phrase": phrase},
         signals=signals,
@@ -517,16 +536,37 @@ def _compress_long_wrapper(tokens: List[str]) -> str:
     return _phrase_from_tokens(tokens)
 
 
-def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str, Any]:
+def candidate_window_guard(
+    candidate: str,
+    *,
+    source_type: str = "",
+    workspace_id: str = "default",
+    document_id: str = "",
+    vertical: str = "general",
+) -> Dict[str, Any]:
     phrase = " ".join(tokenize(candidate))
 
+    def reject_guard(
+        phrase_value: str,
+        reason: str,
+        signals: Dict[str, float] | None = None,
+    ) -> Dict[str, Any]:
+        return _reject(
+            phrase_value,
+            reason,
+            signals,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
+
     if not phrase:
-        return _reject("", "empty_candidate")
+        return reject_guard("", "empty_candidate")
 
     tokens = phrase.split()
 
     if len(tokens) < 2:
-        return _reject(
+        return reject_guard(
             phrase,
             "too_short",
             {
@@ -543,7 +583,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         tokens = compressed_tokens
 
     if len(tokens) > 10:
-        return _reject(
+        return reject_guard(
             phrase,
             "too_long",
             {
@@ -554,7 +594,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _starts_or_ends_badly(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "bad_boundary",
             {
@@ -564,7 +604,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _has_reversed_ordered_pair(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "reversed_ordered_pair",
             {
@@ -575,7 +615,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_weak_subject_verb_fragment(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "weak_subject_verb_fragment",
             {
@@ -587,7 +627,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_action_leak_start(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "action_leak_start",
             {
@@ -597,7 +637,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_short_multi_head_collision(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "short_multi_head_collision",
             {
@@ -608,7 +648,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_long_carryover_stack(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "long_carryover_stack",
             {
@@ -619,7 +659,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _has_clause_leak(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "clause_leak",
             {
@@ -630,7 +670,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_stitched_vertical_list(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "stitched_vertical_list",
             {
@@ -642,7 +682,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_dense_noun_chain(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "dense_noun_chain",
             {
@@ -653,7 +693,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _has_repeated_or_duplicate_noise(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "duplicate_noise",
             {
@@ -663,7 +703,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _is_generic_short_false_positive(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "generic_short_false_positive",
             {
@@ -674,7 +714,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     if _matches_universal_guard_noise_pattern(phrase):
-       return _reject(
+       return reject_guard(
         phrase,
         "universal_guard_noise_pattern",
         {
@@ -686,7 +726,7 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
     )
 
     if _is_universal_weak_semantic_phrase(tokens):
-        return _reject(
+        return reject_guard(
             phrase,
             "universal_weak_semantic_phrase",
             {
@@ -698,3 +738,10 @@ def candidate_window_guard(candidate: str, *, source_type: str = "") -> Dict[str
         )
 
     return _accept(phrase, "guard_pass")
+
+
+
+
+
+
+

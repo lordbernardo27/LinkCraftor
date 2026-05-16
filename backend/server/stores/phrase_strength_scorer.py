@@ -1,7 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Set, Tuple
+
+from backend.server.stores.dis_pipeline_learning import learn_from_pipeline_rejection
 
 
 try:
@@ -303,7 +305,7 @@ def canonical_phrase(text: str) -> str:
     s = s.replace("\u2013", "-").replace("\u2014", "-")
     s = s.replace("\u2026", "...")
     s = s.replace("\u00a0", " ")
-    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[•\-]\s+)", "", s)
+    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[â€¢\-]\s+)", "", s)
     s = re.sub(r"^[\"'\(\[\{]+|[\"'\)\]\}:;,\.\!\?]+$", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
@@ -1277,6 +1279,31 @@ def _universal_precision_score(tokens: List[str]) -> tuple[float, List[str]]:
     return score, reasons
 
 
+def _reject_score_phrase(
+    phrase: str,
+    reason: str,
+    *,
+    score: float = 0.0,
+    workspace_id: str = "default",
+    document_id: str = "",
+    vertical: str = "general",
+) -> Dict[str, Any]:
+    learn_from_pipeline_rejection(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        vertical=vertical,
+        pipeline_stage="phrase_strength_scorer",
+        candidate={"phrase": phrase},
+        rejection_reason=reason,
+    )
+
+    return {
+        "keep": False,
+        "score": score,
+        "phrase": phrase,
+        "reason": reason,
+    }
+
 def score_phrase_strength(
     phrase: str,
     *,
@@ -1284,29 +1311,82 @@ def score_phrase_strength(
     allow_trim: bool = True,
     **kwargs: Any,
 ) -> Dict[str, Any]:
+    workspace_id = str(kwargs.get("workspace_id", "default") or "default")
+    document_id = str(kwargs.get("document_id", "") or "")
+    vertical = str(kwargs.get("vertical", "general") or "general")
+
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
 
     if not p or len(tokens) < 2:
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "too_short"}
+        return _reject_score_phrase(
+            p,
+            "too_short",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if len(tokens) > 10:
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "too_long"}
+        return _reject_score_phrase(
+            p,
+            "too_long",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if _is_universal_weak_semantic_phrase(tokens):
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "universal_weak_semantic_phrase"}
+        return _reject_score_phrase(
+            p,
+            "universal_weak_semantic_phrase",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if _is_sentence_fragment_phrase(tokens):
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "sentence_fragment_phrase"}
+        return _reject_score_phrase(
+            p,
+            "sentence_fragment_phrase",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if _fails_semantic_anchor_validation(tokens):
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "semantic_anchor_validation_failed"}
+        return _reject_score_phrase(
+            p,
+            "semantic_anchor_validation_failed",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if _fails_malformed_wrapper_validation(tokens):
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "malformed_wrapper_validation_failed"}
+        return _reject_score_phrase(
+            p,
+            "malformed_wrapper_validation_failed",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if _has_reversed_ordered_pair(tokens):
-        return {"keep": False, "score": 0.0, "phrase": p, "reason": "reversed_ordered_pair"}
+        return _reject_score_phrase(
+            p,
+            "reversed_ordered_pair",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if allow_trim and _should_trim_bad_long_phrase(tokens):
         trimmed = trim_bad_long_phrase(tokens)
@@ -1327,13 +1407,34 @@ def score_phrase_strength(
 
     for bad, reason in hard_rejects:
         if bad:
-            return {"keep": False, "score": 0.0, "phrase": p, "reason": reason}
+            return _reject_score_phrase(
+                p,
+                reason,
+                score=0.0,
+                workspace_id=workspace_id,
+                document_id=document_id,
+                vertical=vertical,
+            )
 
     if tokens[0] in WEAK_STARTS and not _is_exact_canonical_anchor(tokens) and not _is_natural_compound_phrase(tokens):
-        return {"keep": False, "score": 0.10, "phrase": p, "reason": "weak_start"}
+        return _reject_score_phrase(
+            p,
+            "weak_start",
+            score=0.10,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     if tokens[-1] in WEAK_ENDINGS and not _is_exact_canonical_anchor(tokens) and not _is_natural_compound_phrase(tokens):
-        return {"keep": False, "score": 0.10, "phrase": p, "reason": "weak_ending"}
+        return _reject_score_phrase(
+            p,
+            "weak_ending",
+            score=0.10,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
 
     score = 0.40
     reasons: List[str] = []
@@ -1523,3 +1624,16 @@ def score_phrase_strength(
         "phrase": p,
         "reason": "+".join(reasons) if reasons else "neutral",
     }
+
+
+
+
+
+
+
+
+
+
+
+
+

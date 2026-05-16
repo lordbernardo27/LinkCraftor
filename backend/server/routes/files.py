@@ -723,10 +723,30 @@ async def upload_file(
         preview_text=str(preview.get("text") or ""),
     )
 
+
+    try:
+            from backend.server.stores.upload_phrase_pool_builder import (
+                build_upload_phrase_pool,
+            )
+
+            from backend.server.stores.active_phrase_pool_builder import (
+                build_active_phrase_pool,
+            )
+
+            build_upload_phrase_pool(ws_norm)
+            build_active_phrase_pool(ws_norm)
+
+    except Exception as rebuild_error:
+            print(
+                "[UPLOAD PIPELINE REBUILD ERROR]",
+                str(rebuild_error),
+            )
+
     try:
         from backend.server.stores.upload_intel_store_v2 import build_upload_intelligence
 
         stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+
         intel_result = build_upload_intelligence(
             workspace_id=ws_norm,
             doc_id=str(meta.get("doc_id") or ""),
@@ -735,7 +755,19 @@ async def upload_file(
             html=str(preview.get("html") or ""),
             text=str(preview.get("text") or ""),
         )
+
         print("[UPLOAD_INTEL_OK]", json.dumps(intel_result, ensure_ascii=False))
+
+        try:
+            from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
+            from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
+
+            build_upload_phrase_pool(ws_norm)
+            build_active_phrase_pool(ws_norm)
+
+        except Exception as rebuild_error:
+            print("[UPLOAD PIPELINE REBUILD ERROR]", str(rebuild_error))
+
     except Exception as e:
         print("[UPLOAD_INTEL_ERROR]", repr(e))
         traceback.print_exc()

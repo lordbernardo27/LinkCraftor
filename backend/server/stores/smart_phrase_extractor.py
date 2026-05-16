@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 ORPHAN_CONTRACTION_TOKENS = {
@@ -18,6 +18,8 @@ def _has_orphan_contraction_debris(phrase: str) -> bool:
 
     return any(tok in ORPHAN_CONTRACTION_TOKENS for tok in tokens)
 from typing import Any, Dict, List, Set
+
+from backend.server.stores.dis_pipeline_learning import learn_from_pipeline_rejection
 
 
 try:
@@ -316,9 +318,9 @@ FRAGMENT_PATTERNS = (
 
 def canonical_phrase(text: str) -> str:
     s = (text or "").strip().lower()
-    s = s.replace("’", "'").replace("“", '"').replace("”", '"')
-    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[•\-–]\s+)", "", s)
-    s = re.sub(r"^[\"'“”‘’\(\[\{]+|[\"'“”‘’\)\]\}:;,\.\!\?]+$", "", s)
+    s = s.replace("â€™", "'").replace("â€œ", '"').replace("â€", '"')
+    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[â€¢\-â€“]\s+)", "", s)
+    s = re.sub(r"^[\"'â€œâ€â€˜â€™\(\[\{]+|[\"'â€œâ€â€˜â€™\)\]\}:;,\.\!\?]+$", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -1363,30 +1365,128 @@ def _add_candidate(
     section_id: str,
     snippet: str,
     doc_id: str = "",
+    workspace_id: str = "default",
+    vertical: str = "general",
 ) -> None:
     p = canonical_phrase(phrase)
 
     if _basic_reject(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_basic_reject",
+        )
         return
 
     if _has_orphan_contraction_debris(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_orphan_contraction_debris",
+        )
         return
 
     if _looks_like_sentence_fragment(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_sentence_fragment",
+        )
         return
     if _has_broken_residue_pattern(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_broken_residue_pattern",
+        )
         return
     if _has_universal_residue_pattern(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_universal_residue_pattern",
+        )
         return
     if _has_incomplete_phrase_shape(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_incomplete_phrase_shape",
+        )
         return
     if _has_final_incomplete_residue_pattern(p):
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_final_incomplete_residue_pattern",
+        )
         return
 
     tokens = tokenize(p)
 
     if source_type in {"noun_phrase", "condition_phrase"}:
         if not _has_universal_head(tokens):
+            learn_from_pipeline_rejection(
+                workspace_id=workspace_id,
+                document_id=doc_id,
+                vertical=vertical,
+                pipeline_stage="smart_extractor",
+                candidate={
+                    "phrase": p,
+                    "source_type": source_type,
+                    "section_id": section_id,
+                },
+                rejection_reason="smart_extractor_missing_universal_head",
+            )
             return
 
     extractor_intelligence = _extractor_intelligence_result(
@@ -1397,6 +1497,18 @@ def _add_candidate(
     )
 
     if extractor_intelligence["decision"] != "ACCEPT":
+        learn_from_pipeline_rejection(
+            workspace_id=workspace_id,
+            document_id=doc_id,
+            vertical=vertical,
+            pipeline_stage="smart_extractor",
+            candidate={
+                "phrase": p,
+                "source_type": source_type,
+                "section_id": section_id,
+            },
+            rejection_reason="smart_extractor_intelligence_reject",
+        )
         return
 
     key = f"{source_type}:{p}:{section_id}"
@@ -1606,12 +1718,14 @@ def extract_smart_phrases(
     title: str = "",
     doc_id: str = "",
     max_candidates: int = 500,
+    workspace_id: str = "default",
+    vertical: str = "general",
 ) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen: Set[str] = set()
 
     if title:
-        _add_candidate(out, seen, title, "title", "title_0", title, doc_id)
+        _add_candidate(out, seen, title, "title", "title_0", title, doc_id, workspace_id, vertical)
 
     for h in extract_headings_and_lists(html):
         _add_candidate(
@@ -1622,6 +1736,8 @@ def extract_smart_phrases(
             h.get("section_id") or "heading_0",
             h.get("snippet") or "",
             doc_id,
+            workspace_id,
+            vertical,
         )
 
     paragraphs = extract_paragraphs(html=html, text=text)
@@ -1631,18 +1747,30 @@ def extract_smart_phrases(
             section_id = f"p{pi}_s{si}"
 
             for item in _extract_intent_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
 
             for item in _extract_action_object_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
 
             for item in _extract_condition_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
 
             for item in _extract_clean_compound_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id)
+                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
 
             if len(out) >= max_candidates:
                 return out[:max_candidates]
 
     return out[:max_candidates]
+
+
+
+
+
+
+
+
+
+
+
+
