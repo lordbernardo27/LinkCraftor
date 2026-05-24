@@ -36,6 +36,23 @@ export function initILModal(ctx) {
   const escRe      = (s)=> String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const norm       = (s)=> String(s||"").toLowerCase().trim().replace(/\s+/g, " ");
 
+  function getSafeSuggestionConfidence(s){
+    // Prefer normalized runtime score because resolver_confidence may be legacy-scaled.
+    if (s?.runtime_normalized_score != null) return Number(s.runtime_normalized_score) || 0;
+    if (s?.resolver_confidence != null) return Number(s.resolver_confidence) || 0;
+    if (s?.source_type === "document_registry") return Number(s.score) || 0;
+
+    // Legacy UI lexical score can be 80/120/140+, so normalize it.
+    if (s?.score != null) return Math.min(1, (Number(s.score) || 0) / 300);
+    return 0;
+  }
+
+  function isSafeLinkSuggestion(s){
+    const u = String(s?.url || "").trim();
+    const title = String(s?.title || "").trim();
+    return !!u && !!title && getSafeSuggestionConfidence(s) >= 0.42;
+  }
+
   // ========= Core IL modal nodes (ensure these exist) =========
   const ilModal       = $("ilModal");
   const ilTitle       = $("ilTitle");
@@ -333,6 +350,29 @@ for (const r of source.slice(0,12)){
 
 }
 
+
+  function syncILApplyButton(){
+    if (!ilApply) return;
+
+    const valid = validateILFieldsSilent();
+
+    if (valid){
+      ilApply.removeAttribute("disabled");
+      ilApply.disabled = false;
+      ilApply.classList.remove("lc-disabled");
+      ilApply.style.opacity = "1";
+      ilApply.style.cursor = "pointer";
+      ilApply.style.pointerEvents = "auto";
+    } else {
+      ilApply.setAttribute("disabled", "true");
+      ilApply.disabled = true;
+      ilApply.classList.add("lc-disabled");
+      ilApply.style.opacity = "0.45";
+      ilApply.style.cursor = "not-allowed";
+      ilApply.style.pointerEvents = "none";
+    }
+  }
+
   function validateILFieldsSilent(){
     if (IL_MODE === "external"){
       const v = (extReferences?.value||"").trim();
@@ -341,7 +381,7 @@ for (const r of source.slice(0,12)){
     const u = (ilUrl?.value||"").trim();
     const t = (ilTitle?.value||"").trim();
     const x = (ilText?.value||"").trim();
-    if (!t || !x) return false;
+    if (!t || !x || !u) return false;
 
     if (u){
       try {
@@ -518,6 +558,27 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
 
     if (IL_MODE === "internal") {
       const currPhrase = ctx.state.getCurrentPhrase();
+
+      // First trust URL/title already attached to the clicked mark by RB2 runtime.
+      const markTitle = String(markEl?.getAttribute("data-title") || "").trim();
+      const markUrl = String(markEl?.getAttribute("data-url") || "").trim();
+      const markKind = String(markEl?.getAttribute("data-kind") || "").trim();
+      const markTopicId = String(markEl?.getAttribute("data-topic-id") || "").trim();
+
+      // If the painter already attached a safe URL/title, prefill immediately.
+      if (markUrl && markTitle) {
+        if (ilTitle) ilTitle.value = markTitle;
+        if (ilUrl) ilUrl.value = markUrl;
+        if (ilText) ilText.value = currPhrase || "";
+        showDomainHint(markUrl);
+        setSourceLabel(markKind || "internal");
+        syncILApplyButton();
+
+        if (ilToast) ilToast.textContent = "";
+        if (ilModal) ilModal.style.display = "flex";
+        return;
+      }
+
       const engineRaw  = ctx.findEngineSuggestionsForPhrase(currPhrase) || [];
 
       // Best-fit from engine + imported topics
@@ -547,11 +608,28 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
       fillDatalist(ilTitleList, pool, "title");
       fillDatalist(ilUrlList,   pool.filter(s => s.url), "url");
 
-      // Pick best suggestion (already sorted by score, so take first)
-      const pick = pool[0] || null;
+      // Pick best suggestion only if it is actually usable.
+      // First use the clicked mark's own URL/title if RB2 already attached them.
+      let pick = null;
+
+      if (markUrl && markTitle) {
+        pick = {
+          title: markTitle,
+          url: markUrl,
+          kind: markKind || "internal",
+          topicId: markEl?.getAttribute("data-topic-id") || "",
+          runtime_normalized_score: 1,
+          score: 1,
+          tier: "high"
+        };
+      } else {
+        pick = pool.find(isSafeLinkSuggestion) || null;
+      }
 
       if (ilTitle) ilTitle.value = pick ? (pick.title || "") : "";
       if (ilUrl)   ilUrl.value   = pick ? (pick.url   || "") : "";
+
+      syncILApplyButton();
       if (ilText)  ilText.value  = currPhrase || "";
 
       // Top Targets displays the same pool (internal-first, semantic fallback)
@@ -562,8 +640,12 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
       setSourceLabel(
         pick
           ? (pick.kind || "Internal suggestions")
-          : ""
+          : "No target found ? add URL manually"
       );
+
+      if (!pick && ilToast) {
+        ilToast.textContent = "No target found ? add URL manually.";
+      }
 
       // Enable Apply if we have a valid prefilled combo; otherwise keep disabled
       if (pick && validateILFieldsSilent()) {
@@ -623,8 +705,9 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
       ilApply?.setAttribute("disabled", "true");
     }
 
-    // Clear toast; open modal
+    // Clear toast; sync button; open modal
     if (ilToast) ilToast.textContent = "";
+    syncILApplyButton();
     if (ilModal) ilModal.style.display = "flex";
   }
 
@@ -660,6 +743,13 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
       if (validateILFieldsSilent()) ilApply?.removeAttribute("disabled");
       else ilApply?.setAttribute("disabled","true");
     });
+  });
+
+
+  [ilTitle, ilUrl, ilText, extReferences].forEach(el => {
+    if (!el) return;
+    el.addEventListener("input", syncILApplyButton);
+    el.addEventListener("change", syncILApplyButton);
   });
 
   // Enter-to-apply (QoL)
@@ -731,7 +821,7 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
       if (ilToast){
         ilToast.textContent = IL_MODE === "external"
           ? "Choose a reference."
-          : "Provide Title and Link text. URL is optional (draft).";
+          : "Provide Title, URL, and Link text.";
         setTimeout(()=> ilToast.textContent = "", 1500);
       }
       return;
@@ -756,22 +846,18 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
         ctx.findEngineSuggestionsForPhrase(phrase) || []
       );
       const nTitle = norm(title);
-      let pick     = pool.find(x=> norm(x.title) === nTitle) || null;
+      let pick = pool.find(x => norm(x.title) === nTitle && isSafeLinkSuggestion(x)) || null;
 
       if (pick){
         topicId = pick.topicId || "";
         kind    = pick.kind || "";
         url     = url || pick.url || "";
       } else {
-        // same-doc heading fallback
-        const viewerEl = ctx.getViewerEl();
-        const slug     = ctx.slugifyHeading(title);
-        const h        = viewerEl?.querySelector(`h1,h2,h3[id="${slug}"]`);
-        if (h) {
-          topicId = `h:${h.id}`;
-          kind    = "same-doc";
-          url     = url || (`#${h.id}`);
-        }
+        // No safe resolver/imported match found.
+        // Leave URL blank. Same-doc links must be manually selected, not auto-generated.
+        topicId = "";
+        kind = "";
+        url = url || "";
       }
     }
 

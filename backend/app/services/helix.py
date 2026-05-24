@@ -1,4 +1,4 @@
-from .textops import tokens, content_ratio, norm, split_into_sections
+﻿from .textops import tokens, content_ratio, norm, split_into_sections
 from ..config import settings
 
 def run_helix(text: str, published_topics:list, draft_topics:list, phase:str, buckets:dict):
@@ -30,7 +30,7 @@ def run_helix(text: str, published_topics:list, draft_topics:list, phase:str, bu
         a_tok = c["anchor"].split()
         aQ = content_ratio(a_tok, STOP)
         score = 0.6*aQ
-        bucket = "strong" if score >= settings.FLOORS_STRONG else "optional" if score >= settings.FLOORS_OPTIONAL else "drop"
+        bucket = "strong" if score >= settings.FLOORS_STRONG else "secondary" if score >= settings.FLOORS_SECONDARY else "drop"
         if bucket == "drop":
             hid.append({"anchor": {"text": c["anchor"]}, "rawScore": score})
             continue
@@ -46,11 +46,14 @@ def run_helix(text: str, published_topics:list, draft_topics:list, phase:str, bu
         (rec if bucket=="strong" else opt).append(sug)
 
     return {
-        "recommended": rec,
-        "optional": opt,
+        "external": rec,
+        "external_secondary_removed": opt,
         "external": [],  # filled by external_v2
         "hidden": hid,
         "meta": {"phase": phase, "floors": {
-            "STRONG": settings.FLOORS_STRONG, "OPTIONAL": settings.FLOORS_OPTIONAL
+            "EXTERNAL_STRONG": settings.FLOORS_STRONG, "EXTERNAL_SECONDARY": settings.FLOORS_SECONDARY
         }}
     }
+
+
+

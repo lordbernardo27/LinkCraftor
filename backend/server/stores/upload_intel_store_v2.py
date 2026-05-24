@@ -317,6 +317,147 @@ def _derive_alias_variants(phrase: str) -> List[str]:
     return clean[:3]
 
 
+def _accept_entity_phrase(phrase: str) -> bool:
+    """
+    Quality gate for Entity Map population.
+    Safe: only controls entity-map metadata, not phrase extraction/indexing.
+    """
+    p = _canonical_phrase(phrase)
+    if not p:
+        return False
+
+    if not _accept_phrase(p):
+        return False
+
+    tokens = _tokenize(p)
+
+    if len(tokens) < 2 or len(tokens) > 8:
+        return False
+
+    weak_starts = {
+        "create", "increase", "decrease", "make", "take", "get",
+        "go", "come", "show", "shows", "seem", "seems", "appear",
+        "appears", "become", "becomes", "use", "using",
+    }
+
+    weak_ends = {
+        "hidden", "additional", "new", "some", "many", "more",
+        "less", "much", "very", "slowly", "quickly", "automatically",
+        "clearly", "simply",
+    }
+
+    weak_single_tokens = {
+        "thing", "things", "stuff", "something", "anything",
+        "everything", "someone", "somebody",
+    }
+
+    if tokens[0] in weak_starts:
+        return False
+
+    if tokens[-1] in weak_ends:
+        return False
+
+    if any(t in weak_single_tokens for t in tokens):
+        return False
+
+    # Reject verb-fragment pairs like "create hidden", "increase new"
+    if len(tokens) <= 3 and tokens[0] in weak_starts:
+        return False
+
+    # Prefer noun-like, topic-like phrase shapes.
+    strong_topic_heads = {
+        "flow", "capital", "revenue", "profit", "profits", "sales",
+        "expenses", "costs", "finance", "finances", "growth",
+        "stability", "acquisition", "customers", "business",
+        "businesses", "companies", "cash", "forecast", "forecasts",
+        "risk", "risks", "operations", "compliance", "regulations",
+        "copyright", "trademarks", "traffic", "ranking", "articles",
+        "systems", "technology", "scale", "scaling", "ecommerce",
+        "stores", "conversion", "inventory",
+    }
+
+    if any(t in strong_topic_heads for t in tokens):
+        return True
+
+    # Allow stable 2–5 word noun-like phrases that passed _accept_phrase.
+    if 2 <= len(tokens) <= 5:
+        return True
+
+    return False
+
+def _upsert_entity_from_phrase(
+    entities: Dict[str, Any],
+    *,
+    phrase: str,
+    rec: Dict[str, Any],
+    doc_id: str,
+) -> None:
+    """
+    Populate upload_entity_map from already-approved indexed phrases.
+    Safe: does not create new phrases or affect extraction/scoring.
+    """
+    p = _canonical_phrase(phrase)
+    if not _accept_entity_phrase(p):
+        return
+
+    aliases = rec.get("aliases") if isinstance(rec.get("aliases"), list) else []
+    source_type = str(rec.get("source_type") or "phrase")
+    tier = str(rec.get("tier") or "B")
+
+    ent = entities.setdefault(
+        p,
+        {
+            "label": p,
+            "type": "PHRASE_ENTITY",
+            "aliases": [],
+            "docs": {},
+            "source_types": [],
+            "tiers": [],
+            "evidence_count": 0,
+            "confidence": 0.0,
+        },
+    )
+
+    ent["docs"][doc_id] = int(ent.get("docs", {}).get(doc_id, 0)) + 1
+
+    if not isinstance(ent.get("source_types"), list):
+        ent["source_types"] = []
+
+    if not isinstance(ent.get("tiers"), list):
+        ent["tiers"] = []
+
+    if not isinstance(ent.get("aliases"), list):
+        ent["aliases"] = []
+
+    if not isinstance(ent.get("docs"), dict):
+        ent["docs"] = {}
+
+    if source_type not in ent["source_types"]:
+        ent["source_types"].append(source_type)
+
+    if tier not in ent["tiers"]:
+        ent["tiers"].append(tier)
+
+    seen_aliases = set(ent.get("aliases") or [])
+
+    for a in aliases:
+        aa = _canonical_phrase(a)
+        if aa and aa != p and aa not in seen_aliases and _accept_phrase(aa):
+            ent["aliases"].append(aa)
+            seen_aliases.add(aa)
+
+    ent["aliases"] = ent["aliases"][:8]
+    ent["evidence_count"] = int(ent.get("evidence_count") or 0) + 1
+
+    alias_bonus = min(len(ent["aliases"]) * 0.04, 0.20)
+    evidence_bonus = min(int(ent["evidence_count"]) * 0.01, 0.25)
+
+    ent["confidence"] = round(
+        min(0.95, 0.55 + alias_bonus + evidence_bonus),
+        3,
+    )
+
+
 def _read_json(fp: Path, default: Any) -> Any:
     try:
         if not fp.exists():
@@ -783,10 +924,64 @@ def build_upload_intelligence(
 
     _write_json_atomic(paths["phrases"], phrase_index)
 
-    entity_map = _read_json(paths["entities"], {"workspace_id": ws, "updated_at": _now_iso(), "entities": {}})
-    graph = _read_json(paths["graph"], {"workspace_id": ws, "updated_at": _now_iso(), "nodes": {}, "edges": []})
+    entity_map = _read_json(
+        paths["entities"],
+        {"workspace_id": ws, "updated_at": _now_iso(), "entities": {}},
+    )
+
+    if not isinstance(entity_map, dict):
+        entity_map = {
+            "workspace_id": ws,
+            "updated_at": _now_iso(),
+            "entities": {},
+        }
+
+    entities = (
+        entity_map.get("entities")
+        if isinstance(entity_map.get("entities"), dict)
+        else {}
+    )
+    entity_map["entities"] = entities
+
+    for phrase, rec in phrase_index.get("phrases", {}).items():
+        if not isinstance(rec, dict):
+            continue
+
+        docs = rec.get("docs") if isinstance(rec.get("docs"), dict) else {}
+
+        if doc_id not in docs:
+            continue
+
+        _upsert_entity_from_phrase(
+            entities,
+            phrase=phrase,
+            rec=rec,
+            doc_id=doc_id,
+        )
+
+    graph = _read_json(
+        paths["graph"],
+        {
+            "workspace_id": ws,
+            "updated_at": _now_iso(),
+            "nodes": {},
+            "edges": [],
+        },
+    )
+
+    if not isinstance(graph, dict):
+        graph = {
+            "workspace_id": ws,
+            "updated_at": _now_iso(),
+            "nodes": {},
+            "edges": [],
+        }
+
     entity_map["updated_at"] = _now_iso()
+    entity_map["entity_population_mode"] = "approved_indexed_phrases_only"
+
     graph["updated_at"] = _now_iso()
+
     _write_json_atomic(paths["entities"], entity_map)
     _write_json_atomic(paths["graph"], graph)
 
@@ -811,5 +1006,6 @@ def build_upload_intelligence(
             "quality_guard_kept_count": quality_counts["guard_kept_count"],
             "quality_scorer_kept_count": quality_counts["scorer_kept_count"],
             "quality_indexed_count": len(quality_items),
+            "entity_count": len(entity_map.get("entities", {})),
         },
     }

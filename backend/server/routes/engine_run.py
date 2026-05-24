@@ -5,11 +5,14 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Tuple
 import os
 import json
+import glob
 import re
 
 from backend.server.engine.rb2_adapter import build_rb2_phrase_contexts
 from backend.server.stores.highlight_selection_engine import select_highlight_candidates
 from backend.server.stores.highlight_density_engine import apply_highlight_density
+from backend.server.engine.scoring import classify_highlight_buckets
+from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
 
 PHASE_DEFAULT = "prepublish"
 ENGINE_RUN_BUILD = "2026-05-12-RB2-C5-DOC-SPECIFIC-POOL"
@@ -83,6 +86,62 @@ def _safe_read_json(path: str) -> Any:
         return None
 
 
+
+def _load_workspace_upload_pool_fallback(ws: str) -> Dict[str, Any]:
+    safe_ws = _ws_safe(ws)
+    folder = os.path.join(_data_dir(), "phrase_pools", "upload")
+    pattern = os.path.join(folder, f"upload_phrase_pool_{safe_ws}_*.json")
+
+    merged_phrases = []
+    seen = set()
+    files_loaded = 0
+
+    for file_path in sorted(glob.glob(pattern)):
+        data = _safe_read_json(file_path)
+        if not isinstance(data, dict):
+            continue
+
+        phrases = data.get("phrases", {})
+
+        if isinstance(phrases, dict):
+            phrases = list(phrases.values())
+
+        if not isinstance(phrases, list):
+            continue
+
+        files_loaded += 1
+
+        for item in phrases:
+            if isinstance(item, dict):
+                phrase_text = str(
+                    item.get("phrase")
+                    or item.get("text")
+                    or item.get("label")
+                    or item.get("title")
+                    or ""
+                ).strip()
+            else:
+                phrase_text = str(item or "").strip()
+
+            key = phrase_text.lower()
+            if not key or key in seen:
+                continue
+
+            seen.add(key)
+            merged_phrases.append(item)
+
+    if not merged_phrases:
+        return {}
+
+    return {
+        "workspace_id": ws,
+        "document_specific_fallback": True,
+        "fallback_files_loaded": files_loaded,
+        "phrase_count": len(merged_phrases),
+        "phrases": merged_phrases,
+    }
+
+
 def _normalize_spaces(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
@@ -137,7 +196,208 @@ def _source_from_candidate(candidate: Dict[str, Any]) -> str:
     return "upload_phrase_pool"
 
 
-def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong") -> Dict[str, Any]:
+
+def _best_runtime_url(target: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(target, dict):
+        return ""
+
+    return str(
+        target.get("published_url")
+        or target.get("url")
+        or target.get("planned_url")
+        or target.get("placeholder_url")
+        or ""
+    ).strip()
+
+
+def _normalized_runtime_target_score(target: Dict[str, Any]) -> float:
+    try:
+        raw = float(target.get("target_score") or 0)
+    except Exception:
+        raw = 0.0
+
+    source_type = str(target.get("source_type") or "")
+
+    # Draft scores are already 0-1.
+    if source_type == "draft":
+        return max(0.0, min(1.0, raw))
+
+    # Legacy live/imported scores may be 0-300+.
+    if raw > 1:
+        return max(0.0, min(1.0, raw / 300.0))
+
+    return max(0.0, min(1.0, raw))
+
+
+def _runtime_source_balance(target: Dict[str, Any]) -> float:
+    source_type = str(target.get("source_type") or "")
+
+    weights = {
+        "live_domain": 1.00,
+        "imported": 0.92,
+        "draft": 0.86,
+    }
+
+    return weights.get(source_type, 0.75)
+
+
+def _runtime_semantic_dominance_ok(target: Dict[str, Any]) -> bool:
+    try:
+        route = float(target.get("semantic_route_score") or 0)
+    except Exception:
+        route = 0.0
+
+    source_type = str(target.get("source_type") or "")
+
+    # Legacy live/imported route scores may be larger than 1.
+    if source_type in {"live_domain", "imported"} and route >= 12:
+        return True
+
+    # Draft route scores are normalized.
+    if source_type == "draft" and route >= 0.30:
+        return True
+
+    return False
+
+
+def _filter_and_balance_runtime_targets(
+    targets: List[Dict[str, Any]],
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    filtered: List[Dict[str, Any]] = []
+
+    for target in targets or []:
+        if not isinstance(target, dict):
+            continue
+
+        url = _best_runtime_url(target)
+        title = str(target.get("title") or "").strip()
+        title_key = title.lower()
+        url_key = url.lower()
+
+        if not url and not title:
+            continue
+
+        if url_key and url_key in seen_urls:
+            continue
+
+        if title_key and title_key in seen_titles:
+            continue
+
+        if not _runtime_semantic_dominance_ok(target):
+            continue
+
+        normalized_score = _normalized_runtime_target_score(target)
+        source_balance = _runtime_source_balance(target)
+
+        runtime_score = round(normalized_score * source_balance, 4)
+
+        enriched = dict(target)
+        enriched["runtime_url"] = url
+        enriched["runtime_normalized_score"] = normalized_score
+        enriched["runtime_source_balance"] = source_balance
+        enriched["runtime_balanced_score"] = runtime_score
+        enriched["runtime_semantic_dominance_ok"] = True
+
+        if url_key:
+            seen_urls.add(url_key)
+
+        if title_key:
+            seen_titles.add(title_key)
+
+        filtered.append(enriched)
+
+    filtered.sort(
+        key=lambda x: (
+            float(x.get("runtime_balanced_score") or 0),
+            float(x.get("semantic_route_score") or 0),
+            float(x.get("authority_score") or 0),
+        ),
+        reverse=True,
+    )
+
+    return filtered[: max(1, int(limit or 5))]
+
+
+def _norm_runtime_url(url: Any) -> str:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return ""
+    raw = raw.split("#", 1)[0]
+    raw = raw.rstrip("/")
+    return raw
+
+
+def _apply_article_duplicate_url_guard(
+    hits: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Article-level duplicate URL guard.
+    Keeps the strongest phrase for a URL and blanks weaker duplicates.
+    """
+    by_url: Dict[str, List[Dict[str, Any]]] = {}
+
+    for hit in hits or []:
+        url = _norm_runtime_url(hit.get("best_target_url"))
+        if not url:
+            continue
+        by_url.setdefault(url, []).append(hit)
+
+    suppressed = []
+
+    for url, group in by_url.items():
+        if len(group) <= 1:
+            continue
+
+        group.sort(
+            key=lambda h: (
+                float(h.get("best_target_runtime_score") or 0),
+                float(h.get("score") or 0),
+            ),
+            reverse=True,
+        )
+
+        keep = group[0]
+        keep_phrase = str(keep.get("phrase") or "")
+
+        for dup in group[1:]:
+            suppressed.append({
+                "url": url,
+                "kept_phrase": keep_phrase,
+                "suppressed_phrase": str(dup.get("phrase") or ""),
+                "reason": "duplicate_url_same_article",
+            })
+
+            dup["duplicate_url_suppressed"] = True
+            dup["duplicate_url_rejection_reason"] = "duplicate_url_same_article"
+            dup["duplicate_url_kept_phrase"] = keep_phrase
+
+            dup["resolved_targets"] = []
+            dup["best_target"] = None
+            dup["best_target_url"] = ""
+            dup["best_target_title"] = ""
+            dup["best_target_source_type"] = ""
+            dup["best_target_runtime_score"] = 0
+
+            ri = dup.get("runtime_intelligence")
+            if isinstance(ri, dict):
+                ri["resolver_target_count"] = 0
+                ri["best_target_url"] = ""
+                ri["best_target_source_type"] = ""
+                ri["duplicate_url_suppressed"] = True
+                ri["duplicate_url_rejection_reason"] = "duplicate_url_same_article"
+                ri["duplicate_url_kept_phrase"] = keep_phrase
+
+    return {
+        "suppressed_count": len(suppressed),
+        "suppressed": suppressed,
+    }
+
+
+
+def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", workspace_id: str = "") -> Dict[str, Any]:
     phrase = str(
         candidate.get("phrase")
         or candidate.get("phrase_text")
@@ -153,6 +413,27 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong") -
 
     normalized_score = max(0.0, min(1.0, normalized_score))
 
+    resolved_targets: List[Dict[str, Any]] = []
+    best_target: Optional[Dict[str, Any]] = None
+
+    if workspace_id and phrase:
+        try:
+            raw_resolved_targets = resolve_intelligent_targets(
+                workspace_id,
+                phrase,
+                limit=10,
+            )
+
+            resolved_targets = _filter_and_balance_runtime_targets(
+                raw_resolved_targets,
+                limit=5,
+            )
+
+            best_target = resolved_targets[0] if resolved_targets else None
+        except Exception:
+            resolved_targets = []
+            best_target = None
+
     return {
         "phrase": phrase,
         "phrase_text": phrase,
@@ -164,6 +445,16 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong") -
         "bucket": bucket,
         "source": _source_from_candidate(candidate),
         "source_type": str(candidate.get("source_type") or ""),
+        "resolved_targets": resolved_targets,
+        "best_target": best_target,
+        "best_target_url": _best_runtime_url(best_target),
+        "best_target_title": best_target.get("title") if isinstance(best_target, dict) else "",
+        "best_target_source_type": best_target.get("source_type") if isinstance(best_target, dict) else "",
+        "best_target_runtime_score": (
+            best_target.get("runtime_normalized_score")
+            if isinstance(best_target, dict)
+            else 0
+        ),
         "vertical": str(candidate.get("vertical") or ""),
         "snippet": _best_title_from_candidate(candidate),
         "runtime_intelligence": {
@@ -177,11 +468,27 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong") -
             "selection_reason": candidate.get("selection_reason"),
             "document_specific_pool": candidate.get("document_specific_pool"),
             "document_id": candidate.get("document_id"),
+            "resolver_target_count": len(resolved_targets),
+            "best_target_url": _best_runtime_url(best_target),
+            "best_target_source_type": best_target.get("source_type") if isinstance(best_target, dict) else "",
+            "runtime_target_filtering": {
+                "enabled": True,
+                "duplicate_suppression": True,
+                "source_balancing": True,
+                "score_normalization_bridge": True,
+                "semantic_dominance_protection": True,
+                "placeholder_published_url_fallback": True,
+            },
             "layers": [
                 "highlight_selection_engine_v1",
                 "highlight_density_engine_v1",
                 "document_specific_upload_pool",
                 "rb2_runtime_bridge",
+                "intelligence_target_resolver",
+                "runtime_target_filtering",
+                "cross_pool_source_balancing",
+                "runtime_score_normalization_bridge",
+                "semantic_dominance_protection",
             ],
         },
     }
@@ -212,6 +519,12 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     pool_path, pool_resolution = _resolve_pool_path(ws, doc_id)
     pool_obj = _safe_read_json(pool_path) if os.path.exists(pool_path) else None
+
+    if not isinstance(pool_obj, dict):
+        fallback_pool = _load_workspace_upload_pool_fallback(ws)
+        if isinstance(fallback_pool, dict) and fallback_pool.get("phrases"):
+            pool_obj = fallback_pool
+            pool_resolution = "document_specific_workspace_merge_fallback"
 
     if not isinstance(pool_obj, dict):
         return {
@@ -257,14 +570,54 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     final_highlights = density_result.get("final_highlights", []) or []
 
+    bucket_result = classify_highlight_buckets(final_highlights)
+
     internal_strong: List[Dict[str, Any]] = [
-        _build_rb2_hit(candidate, bucket="internal_strong")
-        for candidate in final_highlights
+        _build_rb2_hit(candidate, bucket="internal_strong", workspace_id=ws)
+        for candidate in bucket_result.get("internal_strong", [])
         if isinstance(candidate, dict)
         and str(candidate.get("phrase") or "").strip()
     ]
 
-    semantic_optional: List[Dict[str, Any]] = []
+    semantic_optional: List[Dict[str, Any]] = [
+        _build_rb2_hit(candidate, bucket="semantic_optional", workspace_id=ws)
+        for candidate in bucket_result.get("semantic_optional", [])
+        if isinstance(candidate, dict)
+        and str(candidate.get("phrase") or "").strip()
+    ]
+
+    all_runtime_hits = internal_strong + semantic_optional
+
+    duplicate_url_guard = _apply_article_duplicate_url_guard(all_runtime_hits)
+
+    resolved_target_count = 0
+    resolved_source_distribution: Dict[str, int] = {}
+    best_target_source_distribution: Dict[str, int] = {}
+    draft_target_count = 0
+
+    for hit in all_runtime_hits:
+        targets = hit.get("resolved_targets") or []
+        if isinstance(targets, list):
+            resolved_target_count += len(targets)
+
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+
+                source_type = str(target.get("source_type") or "unknown")
+                resolved_source_distribution[source_type] = (
+                    resolved_source_distribution.get(source_type, 0) + 1
+                )
+
+                if source_type == "draft":
+                    draft_target_count += 1
+
+        best_target = hit.get("best_target")
+        if isinstance(best_target, dict):
+            best_source = str(best_target.get("source_type") or "unknown")
+            best_target_source_distribution[best_source] = (
+                best_target_source_distribution.get(best_source, 0) + 1
+            )
 
     return {
         "ok": True,
@@ -295,6 +648,14 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "internal_found": len(internal_strong) + len(semantic_optional),
             "internal_strong_count": len(internal_strong),
             "semantic_optional_count": len(semantic_optional),
+
+            "resolver_enabled": True,
+            "duplicate_url_guard": duplicate_url_guard,
+            "resolved_target_count": resolved_target_count,
+            "resolved_source_distribution": resolved_source_distribution,
+            "best_target_source_distribution": best_target_source_distribution,
+            "draft_target_count": draft_target_count,
+
             "unique_phrases": len({x.get("phrase") for x in internal_strong if x.get("phrase")}),
             "runtime_intelligence_layers": [
                 "highlight_selection_engine_v1",

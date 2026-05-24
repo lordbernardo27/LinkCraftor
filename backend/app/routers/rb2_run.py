@@ -7,6 +7,10 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from backend.server.pools.target_pools.live_domain_target_intelligence import load_live_domain_targets
+from backend.server.pools.target_pools.live_domain_target_intelligence import score_live_domain_target
+from backend.server.pools.target_pools.imported_target_intelligence import score_imported_target
+from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -480,22 +484,35 @@ def _build_candidate_pool(workspace_id: str, limit: int = 50000) -> List[Dict[st
                 origin="other-doc",
             )
 
-    # 4) Live-domain pages (site_pages) -> PAGE targets (this is what you wanted)
-    live_pages = _load_site_pages(workspace_id)
-    if isinstance(live_pages, list) and live_pages:
-        for p in live_pages[:limit]:
+    # 4) Live-Domain Target Pool -> PAGE targets
+    # Uses Builder v2/v2.1 output instead of raw site_pages.
+    live_targets = load_live_domain_targets(workspace_id)
+
+    if isinstance(live_targets, list) and live_targets:
+        for p in live_targets[:limit]:
+            if not isinstance(p, dict):
+                continue
+
             url = str(p.get("url") or "").strip()
             if not url:
                 continue
-            h1 = str(p.get("h1") or p.get("title") or "").strip()
-            title = h1 or _title_from_url(url) or url
+
+            title = str(p.get("title") or p.get("h1") or "").strip()
+            title = title or _title_from_url(url) or url
 
             _add_page_candidate(
                 cid=f"live:{url}",
                 url=url,
                 title=title,
-                origin="live_page",
-                meta={"h1": h1},
+                origin="live_domain_target_pool",
+                meta={
+                    "h1": p.get("h1"),
+                    "page_type_hint": p.get("page_type_hint"),
+                    "priority_bucket": p.get("priority_bucket"),
+                    "seed_path_match": p.get("seed_path_match"),
+                    "source_type": p.get("source_type") or "live_domain",
+                    "title_source": p.get("title_source"),
+                },
             )
 
     # Build URL -> candidate reference for alias attachment
@@ -632,13 +649,82 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
             if not title and not url:
                 continue
 
+            clean_aliases = [str(a).strip() for a in aliases if str(a).strip()]
+
+            lc_meta = it.get("_lc_meta") if isinstance(it.get("_lc_meta"), dict) else {}
+            intelligence = {}
+
+            if it.get("origin") == "live_domain_target_pool":
+                # Use title + aliases as the scoring phrase context.
+                phrase_context = " ".join([title] + clean_aliases).strip()
+
+                intelligence = score_live_domain_target(
+                    phrase_context,
+                    {
+                        "url": url,
+                        "title": title,
+                        "h1": lc_meta.get("h1") or title,
+                        "page_type_hint": lc_meta.get("page_type_hint"),
+                        "priority_bucket": lc_meta.get("priority_bucket"),
+                        "seed_path_match": lc_meta.get("seed_path_match"),
+                    },
+                )
+
+                # Intelligence-first resolver support:
+                # Store resolver matches for future runtime use/debugging.
+                try:
+                    resolver_matches = resolve_intelligent_targets(
+                        workspace_id,
+                        phrase_context,
+                        limit=3,
+                    )
+                except Exception:
+                    resolver_matches = []
+
+                lc_meta["resolver_matches"] = resolver_matches
+                lc_meta["resolver_enabled"] = True
+
+            elif it.get("origin") == "imported_target_pool":
+                # Use title + aliases as the scoring phrase context.
+                phrase_context = " ".join([title] + clean_aliases).strip()
+
+                intelligence = score_imported_target(
+                    phrase_context,
+                    {
+                        "url": url,
+                        "title": title,
+                        "h1": lc_meta.get("h1") or title,
+                        "page_type_hint": lc_meta.get("page_type_hint"),
+                        "priority_bucket": lc_meta.get("priority_bucket"),
+                        "import_source": lc_meta.get("import_source"),
+                        "path": lc_meta.get("path"),
+                    },
+                )
+
+                # Multi-source intelligent resolver support.
+                # Resolver now includes live-domain + imported targets.
+                try:
+                    resolver_matches = resolve_intelligent_targets(
+                        workspace_id,
+                        phrase_context,
+                        limit=3,
+                    )
+                except Exception:
+                    resolver_matches = []
+
+                lc_meta["resolver_matches"] = resolver_matches
+                lc_meta["resolver_enabled"] = True
+
             targets.append(
                 {
                     "url": url,
                     "title": title,
-                    "aliases": [str(a).strip() for a in aliases if str(a).strip()],
+                    "aliases": clean_aliases,
                     "topic_id": topic_id,
                     "inboundLinks": 0,
+                    "origin": it.get("origin"),
+                    "_lc_meta": lc_meta,
+                    "_target_intelligence": intelligence,
                 }
             )
 
@@ -707,15 +793,37 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
             },
         )
 
-    # Normalize Node output → LinkCraftor UI bucket contract
+    # Normalize Node output to LinkCraftor UI bucket contract.
+    # Unified contract: Node RB2 now returns internal/strong and semantic/optional directly.
     inner = node_out.get("out") if isinstance(node_out, dict) and isinstance(node_out.get("out"), dict) else node_out
-    rec = inner.get("recommended") if isinstance(inner, dict) and isinstance(inner.get("recommended"), list) else []
-    opt = inner.get("optional") if isinstance(inner, dict) and isinstance(inner.get("optional"), list) else []
+
+    strong = []
+    optional = []
+
+    if isinstance(inner, dict):
+        strong = inner.get("internal/strong") if isinstance(inner.get("internal/strong"), list) else []
+        optional = inner.get("semantic/optional") if isinstance(inner.get("semantic/optional"), list) else []
+
+        # Backward compatibility only, for older cached/local RB2 outputs.
+        if not strong and isinstance(inner.get("recommended"), list):
+            strong = inner.get("recommended") or []
+
+        if not optional and isinstance(inner.get("optional"), list):
+            optional = inner.get("optional") or []
+
+    hidden = []
+    meta = {}
+
+    if isinstance(inner, dict):
+        hidden = inner.get("hidden") if isinstance(inner.get("hidden"), list) else []
+        meta = inner.get("meta") if isinstance(inner.get("meta"), dict) else {}
 
     return {
         "ok": True,
-        "internal/strong": rec,
-        "semantic/optional": opt,
+        "internal/strong": strong,
+        "semantic/optional": optional,
+        "hidden": hidden,
+        "meta": meta,
         "stderr": stderr,
         "_debug": debug,
     }

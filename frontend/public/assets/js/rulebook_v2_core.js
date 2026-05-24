@@ -7,7 +7,7 @@
  *  - Maps anchors to targets using lexical signals (titles/aliases + URL slugs).
  *  - Scores, filters with adaptive floor, and enforces caps:
  *      per-target (<=2), per-section (<=3), per-200 words rolling (<=4).
- *  - Returns JSON with {recommended, optional, hidden, meta, diagnostics}.
+ *  - Returns JSON with {"internal/strong", "semantic/optional", hidden, meta, diagnostics}.
  *
  * Nothing is inserted into the DOM at this step.
  */
@@ -300,13 +300,20 @@ export function mapAndScore({ sections, targets, cfg=RB2_DEFAULTS, include={}, b
     placed.push({ idx, c });
   }
 
-  // Bucketize into recommended/optional based on distribution
+  // Bucketize into unified LinkCraftor contract
   const placedSorted = placed.sort((a,b)=> b.c.score - a.c.score).map(p=>p.c);
   const strongCut = Math.max(0.70, Math.max(0.20, adaptiveFloor) + 0.20);
   const midCut = Math.max(0.50, Math.max(0.20, adaptiveFloor) + 0.08);
-  const recommended = placedSorted.filter(c=> c.score >= strongCut);
-  const optional    = placedSorted.filter(c=> c.score < strongCut && c.score >= midCut);
-  const hidden      = candidates.filter(c=> !placedSorted.includes(c));
+
+  const internalStrong = placedSorted
+    .filter(c=> c.score >= strongCut)
+    .map(c => ({ ...c, bucket: "internal/strong" }));
+
+  const semanticOptional = placedSorted
+    .filter(c=> c.score < strongCut && c.score >= midCut)
+    .map(c => ({ ...c, bucket: "semantic/optional" }));
+
+  const hidden = candidates.filter(c=> !placedSorted.includes(c));
 
   // Diagnostics
   const diagnostics = {
@@ -319,7 +326,7 @@ export function mapAndScore({ sections, targets, cfg=RB2_DEFAULTS, include={}, b
     thresholds: { strongCut, midCut },
   };
 
-  return { recommended, optional, hidden, meta: diagnostics };
+  return { "internal/strong": internalStrong, "semantic/optional": semanticOptional, hidden, meta: diagnostics };
 }
 
 // cumulative word offsets per section start

@@ -139,6 +139,60 @@ def _is_test_or_demo_title(title: str) -> bool:
     return False
 
 
+def _classify_page_type(title: str, title_source: str, rec: Dict[str, Any]) -> str:
+    text = f"{title} {title_source} {rec.get('filename') or ''}".lower()
+
+    if any(x in text for x in ["guide", "how to", "what is", "explained", "complete"]):
+        return "guide_article"
+
+    if any(x in text for x in ["calculator", "tool", "checker", "estimator"]):
+        return "tool_page"
+
+    if any(x in text for x in ["review", "comparison", "vs", "best"]):
+        return "commercial_article"
+
+    if any(x in text for x in ["policy", "terms", "privacy", "about", "contact"]):
+        return "utility_page"
+
+    return "editor_document"
+
+
+def _registry_priority_bucket(title: str, title_source: str, is_placeholder_url: bool) -> str:
+    # Document Registry Pool is purely for cross-document linking.
+    # All valid uploaded documents should be treated equally.
+    return "cross_document_target"
+
+
+def _semantic_intent_signals(title: str, page_type_hint: str) -> Dict[str, Any]:
+    t = _norm_title(title)
+    tokens = [x for x in t.split() if len(x) > 2]
+
+    return {
+        "normalized_title": t,
+        "token_count": len(tokens),
+        "page_type_hint": page_type_hint,
+        "has_question_intent": any(x in t for x in ["how", "what", "why", "when", "where"]),
+        "has_tool_intent": any(x in t for x in ["calculator", "checker", "tool", "estimator"]),
+        "has_guide_intent": any(x in t for x in ["guide", "complete", "explained"]),
+    }
+
+
+def _registry_priority_signals(
+    title: str,
+    title_source: str,
+    page_type_hint: str,
+    is_placeholder_url: bool,
+) -> Dict[str, Any]:
+    return {
+        "title_source": title_source,
+        "page_type_hint": page_type_hint,
+        "is_placeholder_url": is_placeholder_url,
+        "h1_or_heading_based": title_source in {"h1", "first_heading", "docx:Title"},
+        "filename_based": title_source == "filename",
+        "cross_document_eligible": bool(title),
+    }
+
+
 def _pick_title(rec: Dict[str, Any], file_text: str) -> Dict[str, str]:
     # 1) Prefer indexed H1 from upload pipeline
     indexed_h1 = _clean_text(rec.get("h1") or "")
@@ -216,14 +270,10 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
         if isinstance(raw_ids, list):
             active_document_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
 
-    if active_fp.exists():
-        active_id_set = set(active_document_ids)
-        rows = [
-            rec
-            for rec in rows
-            if isinstance(rec, dict)
-            and str(rec.get("doc_id") or rec.get("docId") or "").strip() in active_id_set
-        ]
+    # Document Registry is used for editor cross-document linking.
+    # It must include all uploaded workspace documents, not only active target set documents.
+    # Active-target membership is still reported in diagnostics, but it must not filter registry targets.
+    active_filter_skipped_for_document_registry = active_fp.exists()
 
     docs_dir = _ws_docs_dir(ws)
 
@@ -232,11 +282,35 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
     missing_title = 0
     duplicate_titles_collapsed = 0
     test_titles_removed = 0
+    invalid_records_rejected = 0
+    rejected_examples: List[Dict[str, Any]] = []
+    rejection_reasons: Dict[str, int] = {}
+    duplicate_suppression_audit: List[Dict[str, Any]] = []
+
+    def _track_rejection(reason: str, rec: Any = None, title: str = "") -> None:
+        nonlocal invalid_records_rejected
+        invalid_records_rejected += 1
+        rejection_reasons[reason] = rejection_reasons.get(reason, 0) + 1
+
+        if len(rejected_examples) < 10:
+            if isinstance(rec, dict):
+                rejected_examples.append({
+                    "reason": reason,
+                    "document_id": str(rec.get("doc_id") or rec.get("docId") or ""),
+                    "title": title or str(rec.get("title") or rec.get("filename") or ""),
+                })
+            else:
+                rejected_examples.append({
+                    "reason": reason,
+                    "record_type": type(rec).__name__,
+                    "title": title,
+                })
 
     deduped: Dict[str, Dict[str, Any]] = {}
 
     for rec in rows:
         if not isinstance(rec, dict):
+            _track_rejection("invalid_record_type", rec)
             continue
 
         documents_seen += 1
@@ -244,6 +318,7 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
         document_id = str(rec.get("doc_id") or rec.get("docId") or "").strip()
         if not document_id:
             missing_title += 1
+            _track_rejection("missing_document_id", rec)
             continue
 
         stored_name = str(rec.get("stored_name") or rec.get("storedName") or "").strip()
@@ -259,47 +334,158 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
 
         if not title:
             missing_title += 1
+            _track_rejection("missing_title", rec)
             continue
 
         if _is_test_or_demo_title(title):
             test_titles_removed += 1
+            _track_rejection("test_or_demo_title", rec, title)
             continue
 
         norm = _norm_title(title)
         if not norm:
             missing_title += 1
+            _track_rejection("empty_normalized_title", rec, title)
             continue
+
+        target_path = f"/documents/{document_id}"
+        published_url = _clean_text(
+            rec.get("published_url")
+            or rec.get("publishedUrl")
+            or rec.get("url")
+            or rec.get("canonical_url")
+            or rec.get("canonicalUrl")
+            or ""
+        )
+        final_url = published_url or target_path
+        is_placeholder_url = not bool(published_url)
+        page_type_hint = _classify_page_type(title, title_source, rec)
+        priority_bucket = _registry_priority_bucket(title, title_source, is_placeholder_url)
+        registry_priority_signals = _registry_priority_signals(
+            title,
+            title_source,
+            page_type_hint,
+            is_placeholder_url,
+        )
+        semantic_intent_signals = _semantic_intent_signals(title, page_type_hint)
 
         candidate = {
             "document_id": document_id,
+            "workspace_id": ws,
+            "url": final_url,
+            "path": target_path,
+            "published_url": published_url,
+            "placeholder_url": target_path,
+            "is_placeholder_url": is_placeholder_url,
+            "label": title,
+            "h1": title,
             "title": title,
             "title_source": title_source,
-            "link_target": f"/documents/{document_id}",
+            "link_target": final_url,
+            "source_type": "document_registry",
+            "source_origin": "uploaded_editor_documents",
+            "priority_bucket": priority_bucket,
+            "page_type_hint": page_type_hint,
+            "cross_document_linking": True,
+            "uses_h1_heading_targets": True,
+            "registry_priority_signals": registry_priority_signals,
+            "semantic_intent_signals": semantic_intent_signals,
+            "metadata": {
+                "builder_version": "document_registry_pool_v2",
+                "document_id": document_id,
+                "workspace_id": ws,
+                "document_title": title,
+                "title_source": title_source,
+                "upload_source": "document_registry",
+                "content_type": str(rec.get("content_type") or rec.get("contentType") or ""),
+                "document_status": str(rec.get("status") or rec.get("document_status") or "uploaded"),
+                "publish_readiness": str(rec.get("publish_readiness") or rec.get("publishReadiness") or "editor_document"),
+                "planned_content": False,
+                "future_content": False,
+                "uploaded_at": _uploaded_at_key(rec),
+                "created_at": str(rec.get("created_at") or rec.get("createdAt") or ""),
+                "updated_at": str(rec.get("updated_at") or rec.get("updatedAt") or ""),
+                "registry_timestamps_available": bool(
+                    rec.get("uploaded_at")
+                    or rec.get("created_at")
+                    or rec.get("createdAt")
+                    or rec.get("updated_at")
+                    or rec.get("updatedAt")
+                ),
+                "metadata_diagnostics": {
+                    "has_document_id": bool(document_id),
+                    "has_title": bool(title),
+                    "has_published_url": bool(published_url),
+                    "title_source": title_source,
+                    "is_placeholder_url": is_placeholder_url,
+                },
+                "published_url": published_url,
+                "placeholder_url": target_path,
+                "is_placeholder_url": is_placeholder_url,
+                "cross_document_linking": True,
+                "uses_h1_heading_targets": True,
+            },
+            "generated_by": "document_registry_pool",
             "_uploaded_at": _uploaded_at_key(rec),
         }
 
-        existing = deduped.get(norm)
+        # Document Registry must dedupe by document_id, not title.
+        # Different uploaded documents may share similar titles/headings, but each document_id is a valid cross-document target.
+        dedupe_key = document_id
+
+        existing = deduped.get(dedupe_key)
         if existing is None:
-            deduped[norm] = candidate
+            deduped[dedupe_key] = candidate
         else:
             duplicate_titles_collapsed += 1
-            # Keep newest uploaded document
+            duplicate_suppression_audit.append({
+                "dedupe_key": dedupe_key,
+                "normalized_title": norm,
+                "kept_document_id": candidate["document_id"] if candidate["_uploaded_at"] >= existing["_uploaded_at"] else existing["document_id"],
+                "suppressed_document_id": existing["document_id"] if candidate["_uploaded_at"] >= existing["_uploaded_at"] else candidate["document_id"],
+                "reason": "duplicate_document_id_keep_newest",
+            })
+            # Keep newest duplicate copy of the same document_id
             if candidate["_uploaded_at"] >= existing["_uploaded_at"]:
-                deduped[norm] = candidate
+                deduped[dedupe_key] = candidate
 
     items: List[Dict[str, str]] = []
     for _, item in deduped.items():
         items.append(
             {
                 "document_id": item["document_id"],
+                "workspace_id": item["workspace_id"],
+                "url": item["url"],
+                "path": item["path"],
+                "label": item["label"],
+                "h1": item["h1"],
                 "title": item["title"],
                 "title_source": item["title_source"],
                 "link_target": item["link_target"],
+                "source_type": item["source_type"],
+                "source_origin": item["source_origin"],
+                "priority_bucket": item["priority_bucket"],
+                "page_type_hint": item["page_type_hint"],
+                "cross_document_linking": item["cross_document_linking"],
+                "uses_h1_heading_targets": item["uses_h1_heading_targets"],
+                "registry_priority_signals": item["registry_priority_signals"],
+                "semantic_intent_signals": item["semantic_intent_signals"],
+                "metadata": item["metadata"],
+                "generated_by": item["generated_by"],
             }
         )
 
     items.sort(key=lambda x: x["title"].lower())
     documents_written = len(items)
+
+    page_type_counts: Dict[str, int] = {}
+    priority_bucket_counts: Dict[str, int] = {}
+
+    for item in items:
+        pt = str(item.get("page_type_hint") or "unknown")
+        pb = str(item.get("priority_bucket") or "unknown")
+        page_type_counts[pt] = page_type_counts.get(pt, 0) + 1
+        priority_bucket_counts[pb] = priority_bucket_counts.get(pb, 0) + 1
 
     out: Dict[str, Any] = {
         "workspace_id": ws,
@@ -311,9 +497,35 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
             "missing_title": missing_title,
             "duplicate_titles_collapsed": duplicate_titles_collapsed,
             "test_titles_removed": test_titles_removed,
+            "page_type_counts": page_type_counts,
+            "priority_bucket_counts": priority_bucket_counts,
+            "invalid_records_rejected": invalid_records_rejected,
+            "rejection_reasons": rejection_reasons,
+            "rejected_examples": rejected_examples,
+            "duplicate_suppression_audit_count": len(duplicate_suppression_audit),
+        },
+        "audit": {
+            "rejection_reasons": rejection_reasons,
+            "rejected_examples": rejected_examples,
+            "duplicate_suppression_audit": duplicate_suppression_audit[:25],
+            "counts_diagnostics": {
+                "documents_seen": documents_seen,
+                "documents_written": documents_written,
+                "invalid_records_rejected": invalid_records_rejected,
+                "duplicate_titles_collapsed": duplicate_titles_collapsed,
+            },
+            "rebuild_diagnostics": {
+                "workspace_id": ws,
+                "source_index": str(idx_fp),
+                "output_path": str(_pool_path(ws)),
+                "active_target_set_used": active_fp.exists(),
+        "active_filter_skipped_for_document_registry": active_filter_skipped_for_document_registry,
+                "active_document_ids_count": len(active_document_ids),
+            },
         },
         "source": f"docs/{ws}/index.json",
         "active_target_set_used": active_fp.exists(),
+        "active_filter_skipped_for_document_registry": active_filter_skipped_for_document_registry,
         "active_document_ids_count": len(active_document_ids),
         "items": items,
     }

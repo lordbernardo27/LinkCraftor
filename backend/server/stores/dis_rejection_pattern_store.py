@@ -4,8 +4,9 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-
 DATA_DIR = Path("backend/server/data/dis/rejection_patterns")
+_BATCH_BUFFERS: Dict[str, List[Dict[str, Any]]] = {}
+_BATCH_FLUSH_SIZE = 100
 
 REQUIRED_TOP_LEVEL_KEYS = {
     "event_type",
@@ -70,44 +71,60 @@ def _is_valid_rejection_pattern_event(event: Dict[str, Any]) -> bool:
         return False
 
     privacy = event.get("privacy_and_scope") or {}
-
     if privacy.get("stores_exact_phrase_as_rule") is not False:
         return False
-
     if privacy.get("stores_individual_words") is not False:
         return False
-
     if privacy.get("stores_alphabets") is not False:
         return False
-
     if privacy.get("stores_pattern_only") is not True:
         return False
 
     rules = event.get("rc2_pipeline_rules") or {}
-
     if rules.get("learns_from_pipeline_rejections") is not True:
         return False
-
     if rules.get("learns_from_pipeline_passed_candidates") is not False:
         return False
 
     return True
 
 
+_REJECTION_CACHE: Dict[str, List[Dict[str, Any]]] = {}
+
+
 def load_rejection_pattern_events(workspace_id: str) -> List[Dict[str, Any]]:
     _ensure_dir()
+
+    key = str(workspace_id or "default").strip() or "default"
+
+    if key in _REJECTION_CACHE:
+        rows = list(_REJECTION_CACHE[key])
+
+        buffered = _BATCH_BUFFERS.get(key, [])
+        if buffered:
+            rows.extend(buffered)
+
+        return rows
+
     fp = _workspace_file(workspace_id)
 
-    if not fp.exists():
-        return []
+    rows: List[Dict[str, Any]] = []
 
-    try:
-        raw = json.loads(fp.read_text(encoding="utf-8"))
-        if isinstance(raw, list):
-            return raw
-        return []
-    except Exception:
-        return []
+    if fp.exists():
+        try:
+            raw = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                rows = [x for x in raw if isinstance(x, dict)]
+        except Exception:
+            rows = []
+
+    _REJECTION_CACHE[key] = list(rows)
+
+    buffered = _BATCH_BUFFERS.get(key, [])
+    if buffered:
+        rows.extend(buffered)
+
+    return rows
 
 
 def save_rejection_pattern_events(
@@ -122,15 +139,62 @@ def save_rejection_pattern_events(
     ]
 
     fp = _workspace_file(workspace_id)
-    fp.write_text(
-        json.dumps(clean_events, indent=2),
-        encoding="utf-8",
-    )
+    tmp = fp.with_suffix(fp.suffix + ".tmp")
+    tmp.write_text(json.dumps(clean_events, indent=2), encoding="utf-8")
+    tmp.replace(fp)
+
+    _BATCH_BUFFERS[str(workspace_id or "default").strip() or "default"] = []
 
     return {
         "ok": True,
         "workspace_id": workspace_id,
         "count": len(clean_events),
+    }
+
+
+def flush_rejection_pattern_events(workspace_id: str) -> Dict[str, Any]:
+    key = str(workspace_id or "default").strip() or "default"
+    buffered = _BATCH_BUFFERS.get(key, [])
+
+    if not buffered:
+        return {
+            "ok": True,
+            "workspace_id": workspace_id,
+            "count": len(load_rejection_pattern_events(workspace_id)),
+            "flushed": 0,
+        }
+
+    _ensure_dir()
+    fp = _workspace_file(workspace_id)
+
+    existing: List[Dict[str, Any]] = []
+    if fp.exists():
+        try:
+            raw = json.loads(fp.read_text(encoding="utf-8"))
+            if isinstance(raw, list):
+                existing = [x for x in raw if isinstance(x, dict)]
+        except Exception:
+            existing = []
+
+    merged = existing + [
+        event for event in buffered
+        if isinstance(event, dict) and _is_valid_rejection_pattern_event(event)
+    ]
+
+    tmp = fp.with_suffix(fp.suffix + ".tmp")
+    tmp.write_text(json.dumps(merged, indent=2), encoding="utf-8")
+    tmp.replace(fp)
+
+
+    _REJECTION_CACHE[key] = list(merged)
+
+    _BATCH_BUFFERS[key] = []
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "count": len(merged),
+        "flushed": len(buffered),
     }
 
 
@@ -146,19 +210,18 @@ def append_rejection_pattern_event(
             "error": "invalid_rejection_pattern_event_shape",
         }
 
-    rows = load_rejection_pattern_events(workspace_id)
-    rows.append(event)
+    key = str(workspace_id or "default").strip() or "default"
+    buf = _BATCH_BUFFERS.setdefault(key, [])
+    buf.append(event)
 
-    fp = _workspace_file(workspace_id)
-    fp.write_text(
-        json.dumps(rows, indent=2),
-        encoding="utf-8",
-    )
+    if len(buf) >= _BATCH_FLUSH_SIZE:
+        return flush_rejection_pattern_events(workspace_id)
 
     return {
         "ok": True,
         "workspace_id": workspace_id,
-        "count": len(rows),
+        "count": len(load_rejection_pattern_events(workspace_id)),
+        "buffered": len(buf),
     }
 
 
@@ -166,6 +229,7 @@ def get_rejection_pattern_knowledge(
     workspace_id: str,
     vertical: Optional[str] = None,
 ) -> Dict[str, Any]:
+    flush_rejection_pattern_events(workspace_id)
     events = load_rejection_pattern_events(workspace_id)
 
     if vertical:

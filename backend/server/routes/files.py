@@ -1,4 +1,4 @@
-# backend/server/routes/files.py
+﻿# backend/server/routes/files.py
 from __future__ import annotations
 
 import io
@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 
 import mammoth
 
-# ✅ Strict DOCX style-based H1 extraction (no fallbacks)
+# âœ… Strict DOCX style-based H1 extraction (no fallbacks)
 try:
     from docx import Document as DocxDocument  # python-docx
 except Exception:
@@ -723,53 +723,62 @@ async def upload_file(
         preview_text=str(preview.get("text") or ""),
     )
 
+    processing_job_id = None
 
     try:
-            from backend.server.stores.upload_phrase_pool_builder import (
-                build_upload_phrase_pool,
-            )
-
-            from backend.server.stores.active_phrase_pool_builder import (
-                build_active_phrase_pool,
-            )
-
-            build_upload_phrase_pool(ws_norm)
-            build_active_phrase_pool(ws_norm)
-
-    except Exception as rebuild_error:
-            print(
-                "[UPLOAD PIPELINE REBUILD ERROR]",
-                str(rebuild_error),
-            )
-
-    try:
-        from backend.server.stores.upload_intel_store_v2 import build_upload_intelligence
+        from backend.server.orchestration.service import create_orchestration_job
 
         stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+        doc_id = str(meta.get("doc_id") or "").strip()
 
-        intel_result = build_upload_intelligence(
+        processing_job = create_orchestration_job(
             workspace_id=ws_norm,
-            doc_id=str(meta.get("doc_id") or ""),
-            stored_path=stored_path,
-            original_name=str(meta.get("filename") or ""),
-            html=str(preview.get("html") or ""),
-            text=str(preview.get("text") or ""),
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": ws_norm,
+                "doc_id": doc_id,
+                "stored_path": stored_path,
+                "original_name": str(meta.get("filename") or ""),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "upload_to_job_flow",
+                "filename": str(meta.get("filename") or ""),
+                "stored_name": str(meta.get("stored_name") or ""),
+                "document_count": 1,
+            },
+            priority=5,
         )
+        processing_job_id = processing_job.job_id
 
-        print("[UPLOAD_INTEL_OK]", json.dumps(intel_result, ensure_ascii=False))
-
+        # DEV/LOCAL IMMEDIATE EXECUTION FIX
+        # Prevent queued upload jobs from blocking RB2 highlights.
         try:
-            from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
-            from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
-
-            build_upload_phrase_pool(ws_norm)
-            build_active_phrase_pool(ws_norm)
-
-        except Exception as rebuild_error:
-            print("[UPLOAD PIPELINE REBUILD ERROR]", str(rebuild_error))
+            from backend.server.orchestration.worker import execute_job
+            execute_job(
+                processing_job_id,
+                "document_upload_job",
+                "local_upload_worker",
+                processing_job.payload if hasattr(processing_job, "payload") else {
+                    "workspace_id": ws_norm,
+                    "doc_id": doc_id,
+                    "stored_path": stored_path,
+                    "original_name": str(meta.get("filename") or ""),
+                    "html": str(preview.get("html") or ""),
+                    "text": str(preview.get("text") or ""),
+                    "source_route": "/upload",
+                    "document_count": 1,
+                },
+            )
+            print("[UPLOAD AUTO-WORKER] completed:", processing_job_id)
+        except Exception as e:
+            print("[UPLOAD AUTO-WORKER ERROR]", repr(e))
 
     except Exception as e:
-        print("[UPLOAD_INTEL_ERROR]", repr(e))
+        print("[UPLOAD_ORCHESTRATION_JOB_ERROR]", repr(e))
         traceback.print_exc()
 
     _work_append(
@@ -813,6 +822,8 @@ async def upload_file(
         "html": preview.get("html"),
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
+        "job_id": processing_job_id,
+        "processing_status": "queued" if processing_job_id else "not_queued",
     }
 
 @router.post("/clear_session")
@@ -835,6 +846,21 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
                 removed_files.append(str(fp))
         except Exception as e:
             print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
+
+    # Clear actual uploaded workspace files for this session.
+    # This prevents re-upload from being blocked as duplicate after Clear Session.
+    try:
+        ws_dir = _ws_dir(ws_norm)
+        if ws_dir.exists() and ws_dir.is_dir():
+            for fp in ws_dir.iterdir():
+                try:
+                    if fp.is_file():
+                        fp.unlink()
+                        removed_files.append(str(fp))
+                except Exception as e:
+                    print("[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]", str(fp), repr(e))
+    except Exception as e:
+        print("[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]", repr(e))
 
     try:
         active_obj = _load_active_target_set(ws_norm)
@@ -1199,6 +1225,8 @@ def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: 
         "html": preview.get("html"),
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
+        "job_id": processing_job_id,
+        "processing_status": "queued" if processing_job_id else "not_queued",
         "h1": hit.get("h1") or "",
         "h1_source": hit.get("h1_source") or "",
         "h1_error": hit.get("h1_error") or "",
@@ -1211,3 +1239,5 @@ async def legacy_upload(
     file: UploadFile = File(...),
 ):
     return await upload_file(workspace_id=workspace_id, file=file)
+
+

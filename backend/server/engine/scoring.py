@@ -248,6 +248,77 @@ def entity_score(
     return min(1.0, actual / max_possible)
 
 
+def _is_clean_graph_target_id(target_id: Any) -> bool:
+    """
+    Prevent noisy graph fragment nodes from influencing semantic scoring.
+    Safe scoring-time filter only. Does not delete graph data.
+    """
+    tid = str(target_id or "").strip().lower()
+
+    if not tid:
+        return False
+
+    if tid.startswith("ent:"):
+        return True
+
+    if not tid.startswith("phrase:"):
+        return False
+
+    phrase = tid.replace("phrase:", "", 1).strip()
+    tokens = re.findall(r"[a-z0-9]+", phrase)
+
+    if len(tokens) < 2 or len(tokens) > 6:
+        return False
+
+    weak_starts = {
+        "can", "will", "would", "could", "should", "may", "might",
+        "is", "are", "was", "were", "be", "being", "been",
+        "the", "this", "that", "these", "those",
+        "and", "or", "but", "so",
+    }
+
+    weak_ends = {
+        "can", "will", "would", "could", "should", "may", "might",
+        "is", "are", "was", "were", "be", "being", "been",
+        "to", "of", "in", "on", "for", "with", "by",
+        "due", "because", "while", "when",
+    }
+
+    if tokens[0] in weak_starts:
+        return False
+
+    if tokens[-1] in weak_ends:
+        return False
+
+    weak_verbs = {
+        "affects", "refine", "make", "take", "get", "go", "come",
+        "seem", "become", "appear", "show", "shows",
+    }
+
+    if len(tokens) <= 3 and any(t in weak_verbs for t in tokens):
+        return False
+
+    return True
+
+
+def _clean_graph_relations(relations: Any) -> List[Dict[str, Any]]:
+    if not isinstance(relations, list):
+        return []
+
+    clean: List[Dict[str, Any]] = []
+
+    for r in relations:
+        if not isinstance(r, dict):
+            continue
+
+        if not _is_clean_graph_target_id(r.get("targetId")):
+            continue
+
+        clean.append(r)
+
+    return clean
+
+
 def graph_score(
     phrase_ctx: Dict[str, Any],
     candidate: Dict[str, Any],
@@ -277,8 +348,9 @@ def graph_score(
             profile=profile,
         ) * 0.7
 
-    p_rel = phrase_ctx.get("graphRelations") or []
-    c_rel = candidate.get("graphRelations") or []
+        p_rel = _clean_graph_relations(phrase_ctx.get("graphRelations"))
+    c_rel = _clean_graph_relations(candidate.get("graphRelations"))
+
     rel_boost = 0.0
 
     if p_rel and c_rel:
@@ -365,8 +437,14 @@ def internal_source_score(candidate: Dict[str, Any], profile: Optional[Dict[str,
     profile = _resolve_profile(profile)
     internal_priority = profile.get("internal_priority") or INTERNAL_SOURCE_BASE
 
-    st = candidate.get("sourceType")
+    # Backward compatible source detection:
+    # old candidates may use sourceType; imported v2 uses source_type.
+    st = candidate.get("sourceType") or candidate.get("source_type")
     base = float(internal_priority.get(st, 0.6))
+
+    # Imported Target Pool v2 awareness.
+    if st == "imported":
+        base = max(base, 0.72)
 
     topic_types = candidate.get("topicTypes") or []
     section_roles = candidate.get("sectionRoles") or []
@@ -379,8 +457,54 @@ def internal_source_score(candidate: Dict[str, Any], profile: Optional[Dict[str,
     )
     canonical_boost = 0.1 if candidate.get("isCanonicalTopic") or role else 0.0
 
-    score = base + canonical_boost
-    return min(1.0, score)
+    metadata = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+
+    priority_bucket = str(candidate.get("priority_bucket") or metadata.get("priority_bucket") or "").lower()
+    page_type_hint = str(candidate.get("page_type_hint") or metadata.get("page_type_hint") or "").lower()
+    import_source = str(candidate.get("import_source") or metadata.get("import_source") or "").lower()
+    path = str(candidate.get("path") or metadata.get("path") or "")
+
+    priority_boosts = {
+        "core": 0.12,
+        "high": 0.09,
+        "standard": 0.04,
+        "supporting": 0.02,
+    }
+
+    page_type_boosts = {
+        "homepage": 0.10,
+        "category": 0.08,
+        "service": 0.08,
+        "product": 0.06,
+        "article": 0.04,
+        "page": 0.02,
+    }
+
+    import_source_boosts = {
+        "csv": 0.03,
+        "txt": 0.02,
+        "xml": 0.02,
+    }
+
+    priority_boost = priority_boosts.get(priority_bucket, 0.0)
+    page_type_boost = page_type_boosts.get(page_type_hint, 0.0)
+    import_source_boost = import_source_boosts.get(import_source, 0.0)
+
+    # Prefer cleaner/shallower internal paths slightly.
+    clean_path = path.strip("/")
+    path_depth = len([x for x in clean_path.split("/") if x]) if clean_path else 0
+    path_boost = 0.03 if path_depth <= 2 else 0.01 if path_depth <= 4 else 0.0
+
+    score = (
+        base
+        + canonical_boost
+        + priority_boost
+        + page_type_boost
+        + import_source_boost
+        + path_boost
+    )
+
+    return max(0.0, min(1.0, score))
 
 
 def external_source_score(candidate: Dict[str, Any], profile: Optional[Dict[str, Any]] = None) -> float:
@@ -439,6 +563,162 @@ def classify_internal_tier(score: float, profile: Optional[Dict[str, Any]] = Non
         return "low"
     return None
 
+def synonym_alias_boost(
+    phrase_a: Any,
+    phrase_b: Any,
+) -> float:
+    """
+    Controlled synonym/alias boost.
+    Safe: only handles known universal synonym families.
+    """
+    a = safe_norm(str(phrase_a or ""))
+    b = safe_norm(str(phrase_b or ""))
+
+    if not a or not b:
+        return 0.0
+
+    synonym_groups = [
+        {"high blood pressure", "hypertension", "elevated blood pressure"},
+        {"heart attack", "myocardial infarction"},
+        {"liver damage", "hepatotoxicity"},
+        {"blood sugar", "glucose", "blood glucose"},
+        {"scaling problems", "scalability issues", "system scalability", "system scalability issues", "difficult to scale"},
+        {"website ranking", "google ranking", "search ranking", "rank on google"},
+        {"cash flow problems", "negative cash flow", "cash flow issues"},
+    ]
+
+    for group in synonym_groups:
+        if a in group and b in group:
+            return 0.95
+
+    return 0.0
+
+def ontology_categories_for_phrase(
+    phrase: Any,
+) -> List[str]:
+    """
+    Assign broad ontology categories to a phrase.
+    Safe: category tagging only. Does not create phrases or links.
+    """
+    p = safe_norm(str(phrase or ""))
+    toks = set(tokenize(p))
+
+    categories: List[str] = []
+
+    ontology_rules = {
+        "medical_condition": {
+            "hypertension", "pressure", "diabetes", "disease", "condition",
+            "osteoporosis", "fractures", "pain", "deficiency",
+        },
+        "medication_topic": {
+            "amlodipine", "medication", "medications", "drug", "drugs",
+            "dose", "dosage", "therapy", "treatment",
+        },
+        "business_finance": {
+            "cash", "flow", "revenue", "profit", "profits", "sales",
+            "expenses", "costs", "capital", "financial", "finance",
+            "budget", "forecast", "forecasts",
+        },
+        "legal_compliance": {
+            "legal", "law", "laws", "regulation", "regulations",
+            "compliance", "copyright", "trademark", "trademarks",
+            "contract", "contracts", "liability",
+        },
+        "seo_search": {
+            "seo", "ranking", "rank", "google", "search", "traffic",
+            "articles", "content", "keywords", "website", "websites",
+        },
+        "technology_scaling": {
+            "system", "systems", "technology", "scaling", "scale",
+            "scalability", "infrastructure", "performance", "latency",
+            "architecture",
+        },
+        "ecommerce_operations": {
+            "ecommerce", "stores", "store", "inventory", "checkout",
+            "conversion", "cart", "customers", "orders", "products",
+        },
+    }
+
+    for category, terms in ontology_rules.items():
+        if toks & terms:
+            categories.append(category)
+
+    return categories
+
+
+def ontology_alignment_score(
+    phrase_a: Any,
+    phrase_b: Any,
+) -> float:
+    """
+    Score whether two phrases belong to the same ontology/topic category.
+    """
+    cats_a = set(ontology_categories_for_phrase(phrase_a))
+    cats_b = set(ontology_categories_for_phrase(phrase_b))
+
+    if not cats_a or not cats_b:
+        return 0.0
+
+    overlap = cats_a & cats_b
+
+    if not overlap:
+        return 0.0
+
+    return min(1.0, len(overlap) / max(len(cats_a | cats_b), 1))
+
+
+def semantic_similarity_score(
+    phrase_a: Any,
+    phrase_b: Any,
+) -> float:
+    """
+    Safe lexical-semantic similarity.
+    Does not use external AI and does not create new phrases.
+    """
+    a = safe_norm(str(phrase_a or ""))
+    b = safe_norm(str(phrase_b or ""))
+
+    if not a or not b:
+        return 0.0
+
+    if a == b:
+        return 1.0
+
+    alias_boost = synonym_alias_boost(a, b)
+    if alias_boost:
+        return alias_boost
+
+    a_tokens = set(tokenize(a))
+    b_tokens = set(tokenize(b))
+
+    if not a_tokens or not b_tokens:
+        return 0.0
+
+    overlap = len(a_tokens & b_tokens)
+    union = len(a_tokens | b_tokens)
+
+    jaccard = overlap / max(union, 1)
+
+    containment = 0.0
+    if a in b or b in a:
+        shorter = min(len(a_tokens), len(b_tokens))
+        longer = max(len(a_tokens), len(b_tokens))
+        containment = shorter / max(longer, 1)
+
+    root_overlap = 0.0
+    if overlap >= 2:
+        root_overlap = min(
+            1.0,
+            overlap / max(min(len(a_tokens), len(b_tokens)), 1),
+        )
+
+    score = max(
+        jaccard,
+        containment,
+        root_overlap * 0.85,
+    )
+
+    return max(0.0, min(1.0, round(score, 4)))
 
 def compute_semantic_score(
     phrase_ctx: Dict[str, Any],
@@ -448,13 +728,46 @@ def compute_semantic_score(
 ) -> float:
     lexical, entity, graph, context, source = s["lexical"], s["entity"], s["graph"], s["context"], s["source"]
 
-    if entity == 0.0 and graph == 0.0 and context == 0.0 and lexical < 0.20:
+    semantic_similarity = semantic_similarity_score(
+        phrase_ctx.get("phrase"),
+        candidate.get("phrase"),
+    )
+
+    ontology_alignment = ontology_alignment_score(
+        phrase_ctx.get("phrase"),
+        candidate.get("phrase"),
+    )
+
+    semantic_intelligence = (
+        semantic_similarity >= 0.70
+        and ontology_alignment >= 0.50
+    )
+
+    if (
+        entity == 0.0
+        and graph == 0.0
+        and context == 0.0
+        and lexical < 0.20
+        and not semantic_intelligence
+    ):
         return 0.0
 
     has_entity_graph = (entity + graph) >= 0.15
     has_lexical = lexical >= 0.30
-    if not has_entity_graph and not has_lexical:
+
+    if not has_entity_graph and not has_lexical and not semantic_intelligence:
         return 0.0
+
+
+    ontology_alignment = ontology_alignment_score(
+        phrase_ctx.get("phrase"),
+        candidate.get("phrase"),
+    )
+
+    semantic_bonus = (
+        semantic_similarity * 0.12 +
+        ontology_alignment * 0.08
+    )
 
     score = (
         WEIGHTS_SEMANTIC["lexical"] * lexical +
@@ -463,6 +776,8 @@ def compute_semantic_score(
         WEIGHTS_SEMANTIC["context"] * context +
         WEIGHTS_SEMANTIC["source"] * source
     )
+
+    score += semantic_bonus
 
     if entity >= 0.70 and lexical >= 0.80:
         score *= 0.4
@@ -531,16 +846,44 @@ def classify_external_tier(score: float, profile: Optional[Dict[str, Any]] = Non
 
 def candidate_is_strong_internal(candidate: Dict[str, Any], internal_score: float, semantic_score: float) -> bool:
     """
-    Prefer internal when:
-    - the internal candidate is already strong
-    - and it is close enough to semantic
-    - especially if it is canonical
-    """
-    is_canonical = bool(candidate.get("isCanonicalTopic"))
-    close_gap = internal_score >= (semantic_score - 0.06)
-    strong_internal = internal_score >= 0.75
+    Balanced internal-vs-semantic separation.
 
-    if is_canonical and strong_internal and close_gap:
+    Internal should win only when it is clearly/directly stronger.
+    Semantic should survive when it carries meaningful optional relevance.
+
+    Fixes:
+    1. Better internal-vs-semantic separation
+    2. Semantic preservation
+    3. Reduced canonical override aggression
+    4. Dedicated semantic retention threshold
+    """
+
+    is_canonical = bool(candidate.get("isCanonicalTopic"))
+
+    # Dedicated semantic preservation threshold.
+    semantic_preserve = semantic_score >= 0.40
+
+    # Internal must be truly strong before it can override semantic.
+    strong_internal = internal_score >= 0.82
+
+    # Internal must beat semantic by a real margin, not just be "close".
+    clear_internal_margin = (internal_score - semantic_score) >= 0.14
+
+    # Canonical pages get a small advantage, but no longer swallow semantic matches.
+    canonical_direct_match = (
+        is_canonical
+        and internal_score >= 0.86
+        and (internal_score - semantic_score) >= 0.10
+    )
+
+    # If semantic is strong enough and internal is not clearly better, preserve yellow.
+    if semantic_preserve and not clear_internal_margin and not canonical_direct_match:
+        return False
+
+    if strong_internal and clear_internal_margin:
+        return True
+
+    if canonical_direct_match:
         return True
 
     return False
@@ -634,8 +977,9 @@ def score_candidates_for_phrase(
             elif (not t_int) and t_sem:
                 best_kind, best_score, tier = "semantic", s_sem, t_sem
             elif t_int and t_sem:
-                # Prefer internal when it is already strong and close enough
-                # to the semantic score, especially for canonical internal pages.
+                # Balanced strong-vs-optional decision.
+                # Keep direct, clearly superior internal matches blue.
+                # Preserve meaningful semantic matches as yellow/optional.
                 if candidate_is_strong_internal(cand, s_int, s_sem):
                     best_kind, best_score, tier = "internal", s_int, t_int
                 else:
@@ -655,7 +999,7 @@ def score_candidates_for_phrase(
                 rejects = int(rec.get("rejects", 0) or 0)
                 delta = compute_feedback_delta(accepts, rejects)
 
-                imported_boost = 0.0
+        imported_boost = 0.0
         imported_best_match = None
 
         imported_signal = imported_di_signal if isinstance(imported_di_signal, dict) else {}
@@ -676,7 +1020,97 @@ def score_candidates_for_phrase(
             ):
                 imported_boost = 0.06
 
-        final_score = best_score + delta + imported_boost
+        # ---------------------------------------------------------
+        # Live-Domain Target Intelligence
+        # ---------------------------------------------------------
+        target_intelligence = (
+            cand.get("_target_intelligence")
+            if isinstance(cand.get("_target_intelligence"), dict)
+            else {}
+        )
+
+        semantic_route_score = float(target_intelligence.get("semantic_route_score", 0.0) or 0.0)
+        authority_score = float(target_intelligence.get("authority_score", 0.0) or 0.0)
+        topic_graph_score = float(target_intelligence.get("topic_graph_score", 0.0) or 0.0)
+        rb2_weight_score = float(target_intelligence.get("rb2_weight_score", 0.0) or 0.0)
+        target_score = float(target_intelligence.get("target_score", 0.0) or 0.0)
+
+        # Normalize intelligence contribution
+        intelligence_boost = min(
+            0.25,
+            (
+                (semantic_route_score * 0.0004)
+                + (authority_score * 0.0005)
+                + (topic_graph_score * 0.0003)
+                + (rb2_weight_score * 0.0006)
+                + (target_score * 0.0002)
+            )
+        )
+
+        # ---------------------------------------------------------
+        # Imported Target Pool v2 Diagnostics
+        # ---------------------------------------------------------
+        imported_meta = (
+            cand.get("metadata")
+            if isinstance(cand.get("metadata"), dict)
+            else {}
+        )
+
+        imported_diag = {
+            "source_type": cand.get("source_type") or cand.get("sourceType"),
+            "priority_bucket": (
+                cand.get("priority_bucket")
+                or imported_meta.get("priority_bucket")
+            ),
+            "page_type_hint": (
+                cand.get("page_type_hint")
+                or imported_meta.get("page_type_hint")
+            ),
+            "import_source": (
+                cand.get("import_source")
+                or imported_meta.get("import_source")
+            ),
+            "path": (
+                cand.get("path")
+                or imported_meta.get("path")
+            ),
+        }
+
+        live_domain_diag = {
+            "source_type": cand.get("source_type") or cand.get("sourceType"),
+            "source_origin": (
+                cand.get("source_origin")
+                or imported_meta.get("source_origin")
+            ),
+            "priority_bucket": (
+                cand.get("priority_bucket")
+                or imported_meta.get("priority_bucket")
+            ),
+            "seed_priority_bucket": (
+                cand.get("seed_priority_bucket")
+                or imported_meta.get("seed_priority_bucket")
+            ),
+            "seed_path_match": (
+                cand.get("seed_path_match")
+                or imported_meta.get("seed_path_match")
+            ),
+            "page_type_hint": (
+                cand.get("page_type_hint")
+                or imported_meta.get("page_type_hint")
+            ),
+            "path": (
+                cand.get("path")
+                or imported_meta.get("path")
+            ),
+        }
+
+        final_score = (
+            best_score
+            + delta
+            + imported_boost
+            + intelligence_boost
+        )
+
         final_score = max(0.0, min(1.0, float(final_score)))
         result_item = {
             "id": cand.get("id"),
@@ -694,6 +1128,16 @@ def score_candidates_for_phrase(
             },
             "di_score_adjustments": {
                 "imported_url_match_boost": float(imported_boost),
+                "live_domain_intelligence_boost": float(intelligence_boost),
+                "semantic_route_score": float(semantic_route_score),
+                "authority_score": float(authority_score),
+                "topic_graph_score": float(topic_graph_score),
+                "rb2_weight_score": float(rb2_weight_score),
+                "target_score": float(target_score),
+
+                # Target Pool diagnostics
+                "imported_target_diagnostics": imported_diag,
+                "live_domain_target_diagnostics": live_domain_diag,
             },
             "profile_id": resolved_profile.get("id"),
         }
@@ -706,3 +1150,92 @@ def score_candidates_for_phrase(
 
     results.sort(key=lambda x: float(x.get("score", 0.0)), reverse=True)
     return results
+
+# -------------------------------------------------------------
+# RB2 Runtime Highlight Bucket Classification
+# -------------------------------------------------------------
+
+def classify_highlight_buckets(final_highlights: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+    """
+    Classify final RB2 highlight candidates into LinkCraftor runtime buckets.
+
+    This function is used after:
+    Upload Phrase Pool -> Highlight Selection Engine -> Highlight Density Engine
+
+    It decides:
+    - internal_strong: direct/high-confidence highlight
+    - semantic_optional: useful semantic/optional highlight
+
+    engine_run.py should orchestrate only; this function owns bucket intelligence.
+    """
+
+    internal_strong: List[Dict[str, Any]] = []
+    semantic_optional: List[Dict[str, Any]] = []
+
+    for candidate in final_highlights or []:
+        if not isinstance(candidate, dict):
+            continue
+
+        phrase = str(candidate.get("phrase") or "").strip()
+        if not phrase:
+            continue
+
+        selection_score = int(candidate.get("selection_score") or 0)
+        anchor_quality = int(candidate.get("anchor_quality_score") or 0)
+        article_relevance = int(candidate.get("article_relevance_score") or 0)
+        link_opportunity = int(candidate.get("link_opportunity_score") or 0)
+        occurrence_count = int(candidate.get("occurrence_count") or 0)
+
+        source_type = str(candidate.get("source_type") or candidate.get("type") or "").lower()
+
+        # Strong/direct signals:
+        # High selection score, strong anchor quality, repeated article relevance,
+        # and strong link opportunity should become internal/strong.
+        is_direct_strong = (
+            selection_score >= 120
+            or (
+                anchor_quality >= 75
+                and article_relevance >= 20
+                and link_opportunity >= 25
+            )
+            or (
+                occurrence_count >= 3
+                and article_relevance >= 20
+                and anchor_quality >= 70
+            )
+        )
+
+        # Semantic/optional preservation:
+        # Useful lower-confidence or context/condition phrases should remain yellow,
+        # not be forced into blue.
+        is_semantic_optional = (
+            not is_direct_strong
+            and (
+                selection_score >= 80
+                or link_opportunity >= 20
+                or "condition" in source_type
+                or "semantic" in source_type
+            )
+        )
+
+        if is_direct_strong:
+            enriched = dict(candidate)
+            enriched["scoring_bucket_reason"] = "direct_high_confidence_runtime_match"
+            internal_strong.append(enriched)
+
+        elif is_semantic_optional:
+            enriched = dict(candidate)
+            enriched["scoring_bucket_reason"] = "semantic_optional_runtime_match"
+            semantic_optional.append(enriched)
+
+        else:
+            # Conservative fallback: still useful but not strong enough.
+            enriched = dict(candidate)
+            enriched["scoring_bucket_reason"] = "fallback_semantic_optional"
+            semantic_optional.append(enriched)
+
+    return {
+        "internal_strong": internal_strong,
+        "semantic_optional": semantic_optional,
+    }
+

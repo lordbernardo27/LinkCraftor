@@ -1,4 +1,4 @@
-# backend/server/main.py
+﻿# backend/server/main.py
 # -------------------------------
 # FastAPI backend exposing:
 #  - GET  /health + /api/health  (via health_router)
@@ -14,6 +14,8 @@
 # Uses python-mammoth to convert .docx -> HTML.
 
 from __future__ import annotations
+import asyncio
+from contextlib import asynccontextmanager
 
 import io
 import logging
@@ -40,6 +42,7 @@ from .routes.engine_decisions import router as engine_decisions_router
 from backend.app.routers.rb2_run import router as rb2_runner_router
 from backend.app.routers.document_registry import router as document_registry_router
 from backend.server.routes.workspace_health import router as workspace_health_router
+from backend.server.orchestration.routes import router as orchestration_router
 from backend.server.tms.routes import router as tms_router
 
 log = logging.getLogger("linkcraftor.server")
@@ -130,7 +133,7 @@ def favicon():
 
 
 # =========================
-# DOCX → HTML converter
+# DOCX â†’ HTML converter
 # =========================
 @app.post("/api/convert/docx")
 async def convert_docx(file: UploadFile = File(...)):
@@ -157,7 +160,7 @@ async def convert_docx(file: UploadFile = File(...)):
 
 
 # ================================
-# Export simple HTML → .docx
+# Export simple HTML â†’ .docx
 # ================================
 @app.post("/api/export/docx")
 async def export_docx(payload: dict = Body(...)):
@@ -271,6 +274,7 @@ if not _already_mounted("backend.app.routers.rb2_run", "/api/rb2"):
 
 if not _already_mounted("backend.server.routes.workspace_health", "/api/workspace"):
     app.include_router(workspace_health_router, tags=["workspace"])
+    app.include_router(orchestration_router)
 
 if not _already_mounted("backend.app.routers.document_registry", "/api/site/target_pools/document_registry"):
     app.include_router(

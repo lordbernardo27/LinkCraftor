@@ -366,29 +366,44 @@ function passesOptionalEvidenceGate(c, cfg, synonyms) {
   const phrase = String(c?.anchor?.text || "");
   const tTitle = String(c?.target?.title || "");
 
-  // Always allow include mappings (manual/memory)
+  const pNorm = norm(phrase).trim();
+  const tNorm = norm(tTitle).trim();
+
+  // Always allow explicit semantic sources
   if (via === "include") return true;
-
-  // ✅ Step 5: allow entityMap semantic evidence
   if (via === "entityMap") return true;
-
-  // Allow synonym-driven semantic links (fallback placeholder)
   if (via === "synonyms") return true;
 
-  // Block title fragments for semantic/optional meaning
+  // Prevent weak title fragments from becoming yellow
   if (isSubsetOfTitle(phrase, tTitle)) return false;
 
-  // If synonyms map provided, allow only if explicitly maps phrase -> target title
+  // Token overlap semantic preservation
+  const pTokens = new Set(tokenize(pNorm));
+  const tTokens = new Set(tokenize(tNorm));
+
+  let overlap = 0;
+  for (const tok of pTokens) {
+    if (tTokens.has(tok)) overlap++;
+  }
+
+  const overlapRatio = pTokens.size > 0 ? overlap / pTokens.size : 0;
+
+  // Strong semantic overlap survives
+  if (overlap >= 2 && overlapRatio >= 0.45) {
+    return true;
+  }
+
+  // Synonym map support
   if (synonyms && typeof synonyms === "object") {
-    const key = norm(phrase).trim();
+    const key = pNorm;
     const syn = synonyms[key];
 
     if (typeof syn === "string") {
-      return norm(syn).trim() === norm(tTitle).trim();
+      return norm(syn).trim() === tNorm;
     }
+
     if (Array.isArray(syn)) {
-      const t = norm(tTitle).trim();
-      return syn.map((x) => norm(x).trim()).includes(t);
+      return syn.map((x) => norm(x).trim()).includes(tNorm);
     }
   }
 
@@ -807,8 +822,8 @@ export function mapAndScore({
 
   // ✅ Step 4.2 + 4.3:
   // Strong-first (literal) + Optional must pass semantic evidence gate (synonyms/include/entityMap placeholder)
-  const recommended = [];
-  const optional = [];
+  const internalStrong = [];
+  const semanticOptional = [];
 
    let strongCount = 0;
   let optionalCount = 0;
@@ -827,7 +842,7 @@ export function mapAndScore({
 
     if (isStrong) {
       strongCount++;
-      recommended.push({ ...c, bucket: "strong" });
+      internalStrong.push({ ...c, bucket: "internal/strong" });
       continue;
     }
 
@@ -864,7 +879,7 @@ export function mapAndScore({
     }
 
     optionalCount++;
-    optional.push({ ...c, bucket: "optional" });
+    semanticOptional.push({ ...c, bucket: "semantic/optional" });
   }
 
 
@@ -877,7 +892,7 @@ export function mapAndScore({
     anchorsFound: sectionAnchors.reduce((a, b) => a + b.length, 0),
     mappedCandidates: candidates.length,
     keptAfterFloor: kept.length,
-    placed: (recommended.length + optional.length),
+    placed: (internalStrong.length + semanticOptional.length),
     dedupDropped,
     strongCount,
     optionalCount,
@@ -887,7 +902,7 @@ export function mapAndScore({
     thresholds: { strongCut, midCut }
   };
 
-  return { recommended, optional, hidden, meta: diagnostics };
+  return { "internal/strong": internalStrong, "semantic/optional": semanticOptional, hidden, meta: diagnostics };
 }
 
 // cumulative word offsets per section start

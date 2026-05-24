@@ -19,7 +19,7 @@ if (typeof window.reloadFromBackend !== "function") {
 
 
 // -------------------------------------------------------------------------------------------
-// app.js � LinkCraftor (Full, updated)  
+// app.js — LinkCraftor (Full, updated)  
 // -------------------------------------------------------------------------------------------
 
 import { KEYS, lsGet, lsSet, lsDel } from "./core/storage.js";
@@ -171,7 +171,7 @@ const payload = {
 }
 
 // =====================================================
-// Layer 1.3.1 � Global bridge for IL Modal ? Decision API
+// Layer 1.3.1 — Global bridge for IL Modal ? Decision API
 // IL modal calls window.LC_registerLinkFeedback(...)
 // =====================================================
 if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback !== "function") {
@@ -338,7 +338,10 @@ async function apiEngineRun(payload){
     body: JSON.stringify({
       html: payload?.html || "",
       text: payload?.text || "",
-      workspace_id: "ws_betterhealthcheck_com",
+      workspace_id: payload?.workspaceId || payload?.workspace_id || "ws_betterhealthcheck_com",
+      workspaceId: payload?.workspaceId || payload?.workspace_id || "ws_betterhealthcheck_com",
+      docId: payload?.docId || payload?.doc_id || window.LC_ACTIVE_DOC_ID || "",
+      doc_id: payload?.docId || payload?.doc_id || window.LC_ACTIVE_DOC_ID || "",
       limit: payload?.limit || 50,
       targets: Array.isArray(payload?.targets) ? payload.targets : [],
       include: (payload?.include && typeof payload.include === "object") ? payload.include : {},
@@ -474,11 +477,11 @@ const FLOORS = (PHASE === "publish")
 
 const CAPS = Object.freeze({ MAX_PER_SECTION: 4, MAX_PER_200W: 5, MAX_PER_TOPIC: 3 });
 
-// Spacing radius for mark placement (�words)
+// Spacing radius for mark placement (—words)
 const WINDOW_RADIUS_WORDS = 90;
 
 /* ==========================================================================
-   NEW: External V2 (local, rule-based) � mirrors internal placement logic
+   NEW: External V2 (local, rule-based) — mirrors internal placement logic
    ========================================================================== */
 const EXT_V2 = Object.freeze({
   ENABLED: true,
@@ -578,7 +581,7 @@ const toggleHighlight = $("toggleHighlight");
 const highlightCountBadge = $("highlightCountBadge");
 
 // ============================================================================
-// Draft + Sitemap Audit (Right Sidebar Card) � no new button
+// Draft + Sitemap Audit (Right Sidebar Card) — no new button
 // Combines:
 //  A) Draft ? Sitemap audit (backend truth)
 //  B) Topics NOT matched to a phrase (this doc/run) using LAST_ENGINE_OUTPUT
@@ -632,7 +635,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </h3>
 
   <div id="auditStats" style="font-size:12px;color:#6b7280;margin-top:6px;">
-    Loading�
+    Loading—
   </div>
 
   <div id="auditList" style="margin-top:10px;">
@@ -640,7 +643,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </div>
 
   <div id="auditHint" style="margin-top:10px;font-size:12px;color:#6b7280;">
-    Tip: Use the filter to switch between draft gaps and sitemap topics that didn�t match any phrase in this doc.
+    Tip: Use the filter to switch between draft gaps and sitemap topics that didn—t match any phrase in this doc.
   </div>
 `;
 
@@ -793,7 +796,7 @@ const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${enc
   `;
 }).join("")
  
-  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} more�</div>` : "");
+  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} more—</div>` : "");
   }
 
 
@@ -867,7 +870,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
     }).join("");
   } catch(e){
     console.warn("[renderDraftRows] failed:", e?.message || e);
-    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">�</div>`;
+    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">—</div>`;
   }
 }
 
@@ -885,7 +888,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
   if (!listEl) return;
 
   try {
-    if (stats) stats.textContent = "Loading�";
+    if (stats) stats.textContent = "Loading—";
 
     const data = await fetchAudit();
 
@@ -1099,7 +1102,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
   } catch(e){
     console.warn("[AuditCard] refresh failed:", e?.message || e);
     if (stats) stats.textContent = "Audit failed: " + (e?.message || e);
-    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">�</div>`;
+    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">—</div>`;
   }
 }
 
@@ -1254,11 +1257,26 @@ async function runRB2PipelineAndHighlight(opts = {}) {
   localPublishedCount: (PUBLISHED_TOPICS instanceof Map) ? PUBLISHED_TOPICS.size : -1
 });
 
+  const activeDoc = Array.isArray(docs) ? docs[currentIndex] : null;
+
   const docId =
     window.LC_ACTIVE_DOC_ID ||
-    docs?.[currentIndex]?.doc_id ||
-    docs?.[currentIndex]?.docId ||
+    activeDoc?.doc_id ||
+    activeDoc?.docId ||
+    activeDoc?.id ||
+    (typeof allDocs !== "undefined" && allDocs ? allDocs.value : "") ||
     null;
+
+  if (docId) {
+    window.LC_ACTIVE_DOC_ID = docId;
+  }
+
+  console.log("[RB2 DOCID CHECK]", {
+    docId,
+    activeIndex: currentIndex,
+    activeDocKeys: activeDoc ? Object.keys(activeDoc) : [],
+    dropdownValue: (typeof allDocs !== "undefined" && allDocs) ? allDocs.value : null
+  });
 
   const rootEl = (viewerEl?.querySelector?.(".doc-root")) || viewerEl;
 
@@ -1352,6 +1370,22 @@ const payload = {
   text: cleanedRuntimeText,
   targets
 };
+
+// RB2 FIX: hydrate imported URL targets before engine run.
+// Without this, RB2 can highlight phrases but cannot attach URLs,
+// so Apply Link / Bulk Apply skips every mark because href is empty.
+try { await loadImportedUrlsLocal?.(); } catch (e) { console.warn("[RB2 FIX] loadImportedUrlsLocal failed", e); }
+try { await loadImportsFromBackend?.(); } catch (e) { console.warn("[RB2 FIX] loadImportsFromBackend failed", e); }
+try { rebuildPublishedTopics?.(); } catch (e) { console.warn("[RB2 FIX] rebuildPublishedTopics failed", e); }
+try { rebuildTitleUrlDatalists?.(); } catch (e) { console.warn("[RB2 FIX] rebuildTitleUrlDatalists failed", e); }
+
+console.log(
+  "[RB2 FIX CHECK]",
+  "IMPORTED_URLS=",
+  IMPORTED_URLS instanceof Set ? IMPORTED_URLS.size : "missing",
+  "PUBLISHED_TOPICS=",
+  PUBLISHED_TOPICS instanceof Map ? PUBLISHED_TOPICS.size : "missing"
+);
 
 console.log("[RB2 PIPELINE] calling apiEngineRun now", {
   highlightEnabled,
@@ -1449,7 +1483,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
 
 
 // ==========================================================================
-// Session format helpers (upload/download lock to one format) � COLLISION-SAFE
+// Session format helpers (upload/download lock to one format) — COLLISION-SAFE
 // ==========================================================================
 (function(){
   const W = (typeof window !== "undefined") ? window : globalThis;
@@ -1503,7 +1537,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
       menu.querySelectorAll("button[data-ext]").forEach(btn=>{
         const extAttr = (btn.getAttribute("data-ext") || "").toLowerCase();
 
-        // Never show �original� or �.htm�
+        // Never show —original— or —.htm—
         if (kill.has(extAttr)) { btn.style.display = "none"; return; }
 
         // If a session format is locked, show only that matching option
@@ -1568,7 +1602,7 @@ async function loadAndRenderDocByIndex(idx){
 /* ==========================================================================
    HELPERS
    ========================================================================== */
-const rxWord = /[\p{L}\p{N}�'-]+/gu;
+const rxWord = /[\p{L}\p{N}—'-]+/gu;
 const norm   = (s)=> String(s||"").toLowerCase().trim().replace(/\s+/g, " ");
 const tokens = (s)=> (String(s||"").toLowerCase().match(rxWord) || []).filter(Boolean);
 const uniq   = (a)=> Array.from(new Set(a));
@@ -1589,7 +1623,7 @@ function extractHtmlPayload(rawHtml = "") {
     }
     doc.documentElement.innerHTML = rawHtml;
 
-    // Collect inline styles from <head> (ignore <link> for now�can�t fetch local files)
+    // Collect inline styles from <head> (ignore <link> for now—can—t fetch local files)
     const head = doc.querySelector("head");
     let styles = "";
     if (head) {
@@ -1613,7 +1647,7 @@ function markdownToHtml(md = "") {
     return `\uE000CODE${fences.length - 1}\uE000`;
   });
 
-  // 2) Escape HTML (so markdown can�t inject raw tags)
+  // 2) Escape HTML (so markdown can—t inject raw tags)
   const esc = s => String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -2078,7 +2112,7 @@ if (downloadMenu) downloadMenu.querySelectorAll("button").forEach(btn=>{
     hideMenu(downloadMenu, btnDownloadMenu);
 
     try{
-      // Prefer the locked session format; if not set yet, use the button�s request
+      // Prefer the locked session format; if not set yet, use the button—s request
       const sess = getSessionFormat(); // ".docx" | ".md" | ".txt" | ".html" | ""
       const requested = (btn.getAttribute("data-ext") || "").toLowerCase();
 
@@ -2394,28 +2428,81 @@ const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIC
 
 const btnClearSession = $("btnClearSession");
 btnClearSession?.addEventListener("click", async () => {
-  clearState();
+  const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+  const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
 
+     // Clear backend uploaded document session.
   try {
-    const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
-    localStorage.removeItem(lcUploadHashKey(ws));
-    window.LC_UPLOAD_FILE_SIGNATURES = new Set();
-  } catch {}
-
-  try {
-    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
-
     await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
       method: "POST",
     });
   } catch (e) {
-    console.warn("[ClearSessionBackend] failed:", e);
+    console.warn("[ClearSession] uploaded file session clear failed:", e);
   }
 
-  docs.splice(0, docs.length);
-  currentIndex = -1;
+  // Clear backend imported sitemap URLs.
+  try {
+    await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+      method: "POST",
+    });
+  } catch (e) {
+    console.warn("[ClearSession] imported URL clear failed:", e);
+  }
 
+  // Clear backend draft map imports.
+  try {
+    await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+      method: "POST",
+    });
+  } catch (e) {
+    console.warn("[ClearSession] draft clear failed:", e);
+  }
+
+  try {
+  await loadDraftsFromBackend(ws);
+} catch {}
+
+try {
+  await loadImportsFromBackend();
+} catch {}
+
+try {
+  await updateUnifiedImportCount(ws);
+} catch {}
+
+try {
+  setImportCount(0);
+} catch {}
+
+  // Clear frontend imported-memory systems.
+  try { IMPORTED_URLS = new Set(); } catch {}
+  try { window.IMPORTED_URLS = new Set(); } catch {}
+  try { IMPORTED_TOPICS.length = 0; } catch {}
+  try { window.LC_IMPORTS = []; } catch {}
+  try { window.LC_getImportedTopics = () => []; } catch {}
+  try { DRAFT_TOPICS = new Map(); } catch {}
+  try { PUBLISHED_TOPICS = new Map(); } catch {}
+  try { TITLE_INDEX = new Map(); } catch {}
+  try { TITLE_ALIAS_MAP = new Map(); } catch {}
+
+  // Clear loaded editor session.
+  try { clearState(); } catch {}
+  try { docs.splice(0, docs.length); } catch {}
+  try { currentIndex = -1; } catch {}
+  try { LAST_ENGINE_OUTPUT = { internal_strong: [], semantic_optional: [], hidden: [], meta: {} }; } catch {}
+  try { APPLIED_LINKS = []; } catch {}
+  try { LINKED_SET.clear(); } catch {}
+  try { LINKED_MAP.clear(); } catch {}
+  // Clear upload duplicate hash memory.
+try {
+  localStorage.removeItem(lcUploadHashKey(ws));
+} catch {}
+
+try {
+  window.LC_UPLOAD_FILE_SIGNATURES = new Set();
+} catch {}
+
+  // Clear UI.
   if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing…";
   if (editor) editor.innerHTML = "";
 
@@ -2423,19 +2510,21 @@ btnClearSession?.addEventListener("click", async () => {
   safeSetText(docMeta, "Code: —", "docMeta");
   safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
 
-  allDocs && (allDocs.innerHTML = "<option value=''>All docs</option>");
+  if (allDocs) allDocs.innerHTML = "<option value=''>All docs</option>";
 
-  APPLIED_LINKS = [];
+  try { setImportCount(0); } catch {}
+  try { updateImportBadge?.(); } catch {}
+  try { updateDocNavButtons(); } catch {}
+  try { underlineLinkedPhrases(); } catch {}
+  try { highlightBucketKeywords(); } catch {}
+  try { updateHighlightBadge(); } catch {}
+  try { rebuildEngineHighlightsPanel(); } catch {}
+  try { rebuildLinkedPhrasesList(); } catch {}
+  try { rebuildRejectionsPanel(); } catch {}
 
-  showToast(errorBox, "Session cleared.", 1200);
-
-  updateDocNavButtons();
-  underlineLinkedPhrases();
-  highlightBucketKeywords();
-  updateHighlightBadge();
-  rebuildEngineHighlightsPanel();
+  showToast(errorBox, "Session cleared.", 1600);
+  console.log("[ClearSession] completed");
 });
-
 /* Stopwords UI */
 function applyStopwords() {
   const custom = new Set(
@@ -2456,7 +2545,7 @@ btnNextDoc?.addEventListener("click", () => {
 });
 
 /* ==========================================================================
-   BULK APPLY � TURN MARKS INTO UNDERLINED LINKS
+   BULK APPLY — TURN MARKS INTO UNDERLINED LINKS
    ========================================================================== */
 
 /**
@@ -2485,6 +2574,8 @@ async function bulkApplyInContainer(root) {
   let applied = 0;
   let skippedNoHref = 0;
   let skippedNoText = 0;
+  let skippedMissingTitle = 0;
+  let skippedLowConfidence = 0;
 
   for (let i = 0; i < marks.length; i++) {
     const mark = marks[i];
@@ -2509,17 +2600,39 @@ async function bulkApplyInContainer(root) {
         mark.classList.contains("kwd-ext") ||
         ds.kind === "external"
         ? "external"
-        : "same-doc");
+        : "internal");
 
     const strength = ds.strength || ds.rank || "optional";
     const urlAttr = ds.url || ds.href || "";
 
     const topicId = ds.topicId || ds.targetId || "";
-    const title = ds.title || ds.targetTitle || phrase || "";
+    const title = ds.title || ds.targetTitle || "";
+    const confidence = Number(
+      ds.runtimeNormalizedScore ||
+      ds.resolverConfidence ||
+      ds.score ||
+      0
+    );
 
     console.log(
       `[BulkApply] MARK #${i}: phrase="${phrase}" kind="${kind}" strength="${strength}" urlAttr="${urlAttr}" title="${title}"`
     );
+
+    if (!title) {
+      skippedMissingTitle++;
+      console.log(
+        `[BulkApply] MARK #${i}: SKIP (missing title) ? phrase="${phrase}", urlAttr="${urlAttr}"`
+      );
+      continue;
+    }
+
+    if (confidence && confidence < 0.42) {
+      skippedLowConfidence++;
+      console.log(
+        `[BulkApply] MARK #${i}: SKIP (low confidence) ? phrase="${phrase}", confidence="${confidence}"`
+      );
+      continue;
+    }
 
     // Compute final href using your existing helper
     let href = "";
@@ -2542,16 +2655,23 @@ async function bulkApplyInContainer(root) {
     if (!href) {
       skippedNoHref++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no href) � phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
+        `[BulkApply] MARK #${i}: SKIP (no href) — phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
       );
       continue;
     }
 
-    const text = (mark.textContent || "").trim();
+    const cleanClone = mark.cloneNode(true);
+    cleanClone.querySelectorAll(".kw-ctl, .kw-accept, .kw-reject").forEach(el => el.remove());
+
+    const coreNode = cleanClone.querySelector(".kw-core");
+    const text = (coreNode?.textContent || cleanClone.textContent || "")
+      .replace(/[?????]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
     if (!text) {
       skippedNoText++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no text) � href="${href}", phrase="${phrase}"`
+        `[BulkApply] MARK #${i}: SKIP (no text) — href="${href}", phrase="${phrase}"`
       );
       continue;
     }
@@ -2574,19 +2694,23 @@ async function bulkApplyInContainer(root) {
     if (kind) a.dataset.kind = kind;
     if (strength) a.dataset.strength = strength;
     if (topicId) a.dataset.topicId = topicId;
-    if (title) a.title = title;
+    if (title) {
+      a.title = title;
+      a.dataset.title = title;
+    }
     if (urlAttr && !a.dataset.url) a.dataset.url = urlAttr;
+    if (confidence) a.dataset.runtimeNormalizedScore = String(confidence);
 
     mark.replaceWith(a);
     applied++;
 
     console.log(
-      `[BulkApply] MARK #${i}: APPLY � href="${href}", text="${text}"`
+      `[BulkApply] MARK #${i}: APPLY — href="${href}", text="${text}"`
     );
   }
 
   console.log(
-    "[BulkApply] SUMMARY (container) � applied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApply] SUMMARY (container) — applied=%d, skippedNoHref=%d, skippedNoText=%d",
     applied,
     skippedNoHref,
     skippedNoText
@@ -2712,7 +2836,7 @@ async function bulkApplyAllDocs() {
   }
 
   console.log(
-    "[BulkApplyAll] DONE � totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApplyAll] DONE — totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
     totalApplied,
     totalSkippedNoHref,
     totalSkippedNoText
@@ -2720,18 +2844,41 @@ async function bulkApplyAllDocs() {
 }
 
 /* ------------------------------------------------------------------
- * Button wiring � ONE CLICK = BULK APPLY ACROSS ALL DOCS
+ * Button wiring — ONE CLICK = BULK APPLY ACROSS ALL DOCS
  * ------------------------------------------------------------------ */
 
 async function handleBulkApplyAllClick() {
-  console.log("[BulkApplyAll] Button clicked � bulk apply across *ALL* docs");
-  await bulkApplyAllDocs();
+  console.log("[BulkApply] Button clicked");
 
-  // After the bulk, refresh UI for the currently visible doc
-  underlineLinkedPhrases?.();
-  highlightBucketKeywords?.();
-  updateHighlightBadge?.();
-  rebuildEngineHighlightsPanel?.();
+  const currentMarks = viewerEl
+    ? viewerEl.querySelectorAll("mark.kwd, mark.kwd-strong, mark.kwd-optional, mark.kwd-int, mark.kwd-sem").length
+    : 0;
+
+  if (viewerEl && currentMarks > 0) {
+    console.log("[BulkApply] Applying current document marks:", currentMarks);
+    const stats = await bulkApplyInContainer(viewerEl);
+
+    try { underlineLinkedPhrases?.(); } catch {}
+    try { highlightBucketKeywords?.(); } catch {}
+    try { updateHighlightBadge?.(); } catch {}
+    try { rebuildEngineHighlightsPanel?.(); } catch {}
+    try { rebuildLinkedPhrasesList?.(); } catch {}
+    try { LR_rebuild?.(); } catch {}
+    try { saveLinkedSet?.(); } catch {}
+
+    console.log("[BulkApply] Current document applied:", stats);
+    return stats;
+  }
+
+  console.log("[BulkApplyAll] No current marks found; falling back to all-doc bulk apply.");
+  const stats = await bulkApplyAllDocs();
+
+  try { underlineLinkedPhrases?.(); } catch {}
+  try { highlightBucketKeywords?.(); } catch {}
+  try { updateHighlightBadge?.(); } catch {}
+  try { rebuildEngineHighlightsPanel?.(); } catch {}
+
+  return stats;
 }
 
 // If you only have ONE bulk apply button (btnBulkApply), this will make
@@ -3141,7 +3288,7 @@ function underlineLinkedPhrases(){
   }
 }
 
-// Remove keyword marks around/inside headings (h1�h6) so titles are never highlighted
+// Remove keyword marks around/inside headings (h1—h6) so titles are never highlighted
 function stripMarksFromHeadings(root) {
   if (!root) return;
 
@@ -3250,6 +3397,36 @@ function applyMarksFromSuggestions(items = [], opts = {}) {
       mark.className = item.bucket === "strong" ? "kwd kwd-strong" : "kwd kwd-optional";
       mark.dataset.strength = item.bucket === "strong" ? "strong" : "optional";
       mark.dataset.phrase = encodeURIComponent(phraseNorm);
+
+      // Attach resolver target metadata directly to the painted mark.
+      // This allows the IL modal, bulk apply, export, and decision layer to read the URL/title.
+      const bestTarget =
+        Array.isArray(item.resolved_targets) && item.resolved_targets.length
+          ? item.resolved_targets[0]
+          : null;
+
+      if (bestTarget) {
+        mark.setAttribute(
+          "data-url",
+          bestTarget.runtime_url ||
+          bestTarget.url ||
+          bestTarget.published_url ||
+          bestTarget.placeholder_url ||
+          ""
+        );
+
+        mark.setAttribute("data-title", bestTarget.title || "");
+        mark.setAttribute("data-kind", bestTarget.source_type || "internal");
+
+        mark.setAttribute(
+          "data-topic-id",
+          bestTarget.document_id ||
+          bestTarget.topicId ||
+          bestTarget.id ||
+          ""
+        );
+      }
+
       mark.textContent = hit;
 
 const ctl = document.createElement("span");
@@ -3341,7 +3518,7 @@ function rebuildEngineHighlightsPanel() {
         <div class="kw-item" data-phrase="${escapeHtml(r.phrase)}" data-mode="${r.mode}" data-i="${i}">
           <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${r.dot};margin-right:6px;"></span>
           <button class="kw-jump" title="Find in doc" style="font-size:12px;">${escapeHtml(r.phrase)}</button>
-          <span class="qty" style="font-size:12px;color:#6b7280;">� ${r.tier} (Bucket)</span>
+          <span class="qty" style="font-size:12px;color:#6b7280;">— ${r.tier} (Bucket)</span>
         </div>
       `;
     }).join("");
@@ -3389,7 +3566,7 @@ function rebuildEngineHighlightsPanel() {
       <div class="kw-item" data-i="${i}">
         <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${dot};margin-right:6px;"></span>
         <button class="kw-jump" title="Jump to highlight" style="font-size:12px;">${escapeHtml(phrase)}</button>
-        <span class="qty" style="font-size:12px;color:#6b7280;">� ${tier}</span>
+        <span class="qty" style="font-size:12px;color:#6b7280;">— ${tier}</span>
       </div>
     `;
   }).join("");
@@ -3583,7 +3760,7 @@ async function fetchSitemapContent(urls) {
 
 async function downloadDocx() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3601,7 +3778,7 @@ async function downloadDocx() {
 
 function downloadHTML(ext = "html") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3622,7 +3799,7 @@ function downloadHTML(ext = "html") {
 
 function downloadText(ext = "txt") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3642,7 +3819,7 @@ function downloadText(ext = "txt") {
 
 async function downloadOriginal() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet � upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3806,7 +3983,7 @@ function fillExternalReferencesFromMark(markEl) {
   for (const r of list) {
     const opt = document.createElement("option");
     opt.value = r.url || "";
-    opt.textContent = r.title ? `${r.title} � ${r.domainRoot || r.domain || ""}` : (r.url || "");
+    opt.textContent = r.title ? `${r.title} — ${r.domainRoot || r.domain || ""}` : (r.url || "");
     opt.dataset.title = r.title || "";
     opt.dataset.provider = r.domainRoot || r.domain || "";
     extReferences.appendChild(opt);
@@ -3814,7 +3991,7 @@ function fillExternalReferencesFromMark(markEl) {
 }
 
 // ==========================================================================
-// HEADING CLEANUP � remove any marks from H1�H6 *and* heading-like <p> tags
+// HEADING CLEANUP — remove any marks from H1—H6 *and* heading-like <p> tags
 // ==========================================================================
 function cleanupMarksInHeadings(root) {
   if (!root) return;
@@ -3824,7 +4001,7 @@ function cleanupMarksInHeadings(root) {
     " mark.kwd-external, mark.kwd-int, mark.kwd-sem, mark.kwd-ext";
 
   // -------------------------------------------------
-  // A) Real heading tags: <h1>�<h6>
+  // A) Real heading tags: <h1>—<h6>
   // -------------------------------------------------
   const headings = root.querySelectorAll("h1, h2, h3, h4, h5, h6");
   headings.forEach(h => {
@@ -3838,7 +4015,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // B) Mark WRAPPING a heading:
-  //    <mark class="kwd-�"><h1>Heading</h1></mark>
+  //    <mark class="kwd-—"><h1>Heading</h1></mark>
   // -------------------------------------------------
   const allMarks = root.querySelectorAll(MARK_SELECTOR);
   allMarks.forEach(mark => {
@@ -3850,7 +4027,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // C) "Heading-like" paragraphs (your exact case):
-  //    <p><strong><span><mark �><span class="kw-core">Heading</span>�</mark></span></strong></p>
+  //    <p><strong><span><mark —><span class="kw-core">Heading</span>—</mark></span></strong></p>
   //    We treat short, mostly-bold <p> as headings and remove marks inside.
   // -------------------------------------------------
   const paras = root.querySelectorAll("p");
@@ -3907,7 +4084,7 @@ async function applyAllThisDoc(){
       await delay(30);
     }
   } finally {
-    showToast(errorBox, `Apply All (this doc) � added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
+    showToast(errorBox, `Apply All (this doc) — added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
     applyingAll = false;
     updateHighlightBadge();
     rebuildEngineHighlightsPanel();
@@ -3969,7 +4146,7 @@ async function applyAllAcrossDocs() {
     applyingAll = false;
     showToast(
       errorBox,
-      `Apply All (all docs) � total added ${totalAdded}.`,
+      `Apply All (all docs) — total added ${totalAdded}.`,
       2300
     );
     updateHighlightBadge();
@@ -3998,6 +4175,44 @@ function rememberAppliedLink(phrase, topicId, url, title, kind) {
   if (!rememberAppliedLink._seen.has(key)) {
     rememberAppliedLink._seen.add(key);
     APPLIED_LINKS.push({ phrase, topicId, url, title, kind });
+
+    // Decision memory: only save ACCEPTED after a link is actually applied.
+    try {
+      const workspaceId = getCurrentWorkspaceId("ws_demo");
+      const docId =
+        (window.LC_ACTIVE_DOC_ID || null) ||
+        (docs && currentIndex >= 0 && docs[currentIndex]
+          ? (docs[currentIndex].doc_id || docs[currentIndex].docId || null)
+          : null);
+
+      const phraseCtx = {
+        workspaceId,
+        docId,
+        phraseText: phrase,
+        sectionType: "BODY",
+        intent: "INFO",
+        entities: []
+      };
+
+      const candidate = {
+        id: topicId || "",
+        title: title || phrase,
+        url: url || "",
+        sourceType: kind || "applied",
+        isExternal: kind === "external",
+        entities: []
+      };
+
+      if (typeof emitDecision === "function") {
+        emitDecision("LINK_SUGGESTION_ACCEPTED", phraseCtx, candidate, {
+          uiControl: "apply-link",
+          kind,
+          source: "rememberAppliedLink"
+        }).catch(e => console.warn("[Decision] accepted emit failed", e));
+      }
+    } catch (e) {
+      console.warn("[Decision] accepted emit setup failed", e);
+    }
   }
 }
 
@@ -4008,51 +4223,26 @@ function rememberAppliedLink(phrase, topicId, url, title, kind) {
 function autoApplyMarksInCurrentDoc() {
   if (!viewerEl) return 0;
 
-  // Select ALL engine marks, including external
-  const marks = Array.from(
-    viewerEl.querySelectorAll("mark.kwd, mark.kwd-int, mark.kwd-ext, mark.kwd-sem")
-  );
-  if (!marks.length) return 0;
+  // Use the real anchor-insertion engine.
+  // This converts <mark> suggestions into actual <a href="..."> links.
+  if (typeof bulkApplyInContainer === "function") {
+    bulkApplyInContainer(viewerEl)
+      .then((stats) => {
+        try { rebuildLinkedPhrasesList?.(); } catch {}
+        try { LR_rebuild?.(); } catch {}
+        try { saveLinkedSet?.(); } catch {}
+        try { updateHighlightBadge?.(); } catch {}
+        try { rebuildEngineHighlightsPanel?.(); } catch {}
 
-  let applied = 0;
+        console.log("[ApplyLink] autoApplyMarksInCurrentDoc applied:", stats);
+      })
+      .catch((e) => console.warn("[ApplyLink] bulkApplyInContainer failed", e));
 
-  for (const m of marks) {
-    const coreNode = m.querySelector?.(".kw-core");
-    const phrase =
-      decodeURIComponent(m.getAttribute("data-phrase") || "").trim() ||
-      (coreNode?.textContent || m.textContent || "").trim();
-    if (!phrase) continue;
-
-    const topicId = m.getAttribute("data-topic-id") || "";
-    const kindAttr = (m.getAttribute("data-kind") || "").toLowerCase();
-    const kind =
-      kindAttr ||
-      (topicId?.startsWith("d:") ? "draft" :
-       topicId?.startsWith("p:") ? "published" :
-       "same-doc");
-
-    const title = (m.getAttribute("data-title") || coreNode?.textContent || phrase).trim();
-    const rawUrl = m.getAttribute("data-url") || "";
-    const finalUrl = computeFinalUrl(kind, topicId, title, rawUrl);
-
-    // Save this as an applied link
-    rememberAppliedLink(phrase, topicId, finalUrl, title, kind);
-    applied++;
+    return 1;
   }
 
-  // Remove engine marks and redraw underlines from LINKED_SET
-  unwrapMarks();
-  underlineLinkedPhrases();
-  highlightBucketKeywords();
-  updateHighlightBadge();
-  rebuildEngineHighlightsPanel();
-
-  try { rebuildLinkedPhrasesList?.(); } catch {}
-  try { LR_rebuild?.(); } catch {}
-
-  saveLinkedSet();
-
-  return applied;
+  console.warn("[ApplyLink] bulkApplyInContainer not available");
+  return 0;
 }
 
 
@@ -4101,27 +4291,95 @@ btnResetLinked?.addEventListener("click", () => {
 
 /* ==========================================================================
    Suggestion picker (for IL modal)
-   Uses LAST_ENGINE_OUTPUT only � stable and simple.
+   Uses LAST_ENGINE_OUTPUT only — stable and simple.
    ========================================================================== */
 function findEngineSuggestionsForPhrase(phrase) {
   const norm = (s) => String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
-  const normp = norm(phrase);
+  const normp = norm(
+    typeof phrase === "string"
+      ? phrase
+      : (
+          phrase?.phrase ||
+          phrase?.text ||
+          phrase?.innerText ||
+          ""
+        )
+  );
 
   const pool = [
-    ...(LAST_ENGINE_OUTPUT?.recommended || []),
-    ...(LAST_ENGINE_OUTPUT?.optional || [])
+    ...(LAST_ENGINE_OUTPUT?.internal_strong || []),
+    ...(LAST_ENGINE_OUTPUT?.semantic_optional || [])
   ];
 
   const hits = pool
-    .filter(x => norm(x.anchor?.text || "") === normp)
-    .map(x => ({
-      title:   x.target?.title || "",
-      url:     x.target?.url || "",
-      topicId: x.target?.topicId || x.target?.id || "",
-      kind:    x.target?.kind || x.kind || (x.target?.isExternal ? "external" : "internal"),
-      tier:    x.bucket === "strong" ? "high" : "mid",
-      score:   typeof x.finalScore === "number" ? x.finalScore : 0
-    }));
+    .filter(x => {
+      const anchorText = norm(x.anchor?.text || "");
+      return (
+        anchorText === normp ||
+        normp.includes(anchorText) ||
+        anchorText.includes(normp)
+      );
+    })
+    .flatMap(x => {
+
+      // NEW resolver/runtime targets
+      const resolved = Array.isArray(x.resolved_targets)
+        ? x.resolved_targets
+        : [];
+
+      if (resolved.length){
+        return resolved.map(t => ({
+          title: t.title || "",
+          url: (
+            t.runtime_url ||
+            t.url ||
+            t.published_url ||
+            t.placeholder_url ||
+            ""
+          ),
+          topicId: t.topicId || t.document_id || t.id || "",
+          kind: t.kind || t.source_type || x.kind || "internal",
+
+          // IMPORTANT: modal safety layer depends on these
+          resolver_confidence:
+            typeof t.runtime_balanced_score === "number"
+              ? t.runtime_balanced_score
+              : (
+                  typeof t.runtime_normalized_score === "number"
+                    ? t.runtime_normalized_score
+                    : 0
+                ),
+
+          runtime_normalized_score:
+            typeof t.runtime_normalized_score === "number"
+              ? t.runtime_normalized_score
+              : 0,
+
+          source_type: t.source_type || "",
+
+          tier: x.bucket === "strong" ? "high" : "mid",
+
+          score:
+            typeof t.runtime_balanced_score === "number"
+              ? t.runtime_balanced_score
+              : (
+                  typeof x.finalScore === "number"
+                    ? x.finalScore
+                    : 0
+                )
+        }));
+      }
+
+      // LEGACY fallback
+      return [{
+        title:   x.target?.title || "",
+        url:     x.target?.url || "",
+        topicId: x.target?.topicId || x.target?.id || "",
+        kind:    x.target?.kind || x.kind || (x.target?.isExternal ? "external" : "internal"),
+        tier:    x.bucket === "strong" ? "high" : "mid",
+        score:   typeof x.finalScore === "number" ? x.finalScore : 0
+      }];
+    });
 
   const uniqHits = [];
   const seen = new Set();
@@ -4162,7 +4420,7 @@ function buildPhraseContext(phraseText) {
     contextType: null
   };
 
-  // Optional hook � if you later define window.LC_getPhraseContext,
+  // Optional hook — if you later define window.LC_getPhraseContext,
   // it can enrich this context (entities, graphVector, contextType, etc.)
   if (typeof window.LC_getPhraseContext === "function") {
     try {
@@ -4360,8 +4618,8 @@ function collectCandidatesForPhrase(phraseCtx) {
 
   // 3) Engine output (recommended + optional) as additional candidates
   const pool = [
-    ...(window.LAST_ENGINE_OUTPUT?.recommended || []),
-    ...(window.LAST_ENGINE_OUTPUT?.optional || [])
+    ...(window.LAST_ENGINE_OUTPUT?.internal_strong || []),
+    ...(window.LAST_ENGINE_OUTPUT?.semantic_optional || [])
   ];
 
   pool.forEach((item, index) => {
@@ -4580,7 +4838,7 @@ function renderDoc(i){
       } else if (safeText && safeText.trim()) {
         renderFromText(safeText);
       } else {
-        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing�</p></div>`;
+        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing—</p></div>`;
       }
     }
   } catch (e) {
@@ -4604,8 +4862,8 @@ function renderDoc(i){
       if (docs.length === 0) {
         currentIndex = -1;
         // Clear viewer + meta when no docs left
-        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing�</p></div>`;
-        safeSetText(topMeta, "File: �", "topMeta");
+        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing—</p></div>`;
+        safeSetText(topMeta, "File: —", "topMeta");
         safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
       } else {
         currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -4630,8 +4888,8 @@ function renderDoc(i){
           docs.splice(j, 1);
           if (docs.length === 0) {
             currentIndex = -1;
-            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing�</p></div>`;
-            safeSetText(topMeta, "File: �", "topMeta");
+            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing—</p></div>`;
+            safeSetText(topMeta, "File: —", "topMeta");
             safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
           } else {
             currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -4688,7 +4946,7 @@ function refreshDropdown(){
 }
 
 // ==========================================================================
-// IMPORTED_URLS storage � BACKEND ONLY (localStorage disabled)
+// IMPORTED_URLS storage — BACKEND ONLY (localStorage disabled)
 // ==========================================================================
 
 async function saveImportedUrlsLocal(){
@@ -4719,7 +4977,7 @@ const res = await fetch(`${base}/api/urls/list?workspace_id=${encodeURIComponent
 
 
 // ================================
-// Draft Topics � BACKEND load on startup
+// Draft Topics — BACKEND load on startup
 // ================================
 async function loadDraftsFromBackend(workspaceId = "default") {
   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
@@ -5473,7 +5731,7 @@ async function bootExtras() {
 }
 
 // =====================================================
-// Layer 1.3 � Wire ? Accept / ? Reject buttons to /api/engine/decision
+// Layer 1.3 — Wire ? Accept / ? Reject buttons to /api/engine/decision
 // (Event delegation on viewerEl; no UI logic changes beyond emitting decisions)
 // =====================================================
 function wireDecisionButtons(){
@@ -5488,9 +5746,18 @@ function wireDecisionButtons(){
     const mark = btn.closest("mark.kwd");
     if (!mark) return;
 
-    // Identify event type
+    // Identify action type
     const isAccept = btn.classList.contains("kw-accept");
-    const eventType = isAccept ? "LINK_SUGGESTION_ACCEPTED" : "LINK_SUGGESTION_REJECTED";
+    // IMPORTANT:
+    // Accept button only opens/reviews the suggestion.
+    // It must NOT save LINK_SUGGESTION_ACCEPTED.
+    // Final acceptance is saved only when Apply Link / Bulk Apply actually inserts a link.
+    if (isAccept) {
+      console.log("[Decision] Accept clicked: review/open only; no accepted decision saved yet.");
+      return;
+    }
+
+    const eventType = "LINK_SUGGESTION_REJECTED";
 
     // Phrase
     let phrase = "";
@@ -5937,3 +6204,5 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+
+
