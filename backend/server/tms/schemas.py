@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
@@ -69,3 +69,45 @@ class TicketStatusUpdateResponse(BaseModel):
     changed_by_staff_id: Optional[str] = None
     reason: Optional[str] = None
     updated_at: datetime
+class TicketAssignmentRequest(BaseModel):
+    assigned_team: Optional[str] = None
+    assigned_staff_id: Optional[str] = None
+    assigned_by_staff_id: Optional[str] = None
+
+
+class TicketAssignmentResponse(BaseModel):
+    ok: bool = True
+    ticket_id: str
+    assignment_id: str
+    assigned_team: Optional[str] = None
+    assigned_staff_id: Optional[str] = None
+    assigned_by_staff_id: Optional[str] = None
+    updated_at: datetime
+class TicketPrioritySeverityUpdateRequest(BaseModel):
+    priority: Optional[str] = None
+    severity: Optional[str] = None
+    changed_by_staff_id: Optional[str] = None
+    reason: Optional[str] = None
+
+
+class TicketPrioritySeverityUpdateResponse(BaseModel):
+    ok: bool = True
+    ticket_id: str
+    priority: str
+    severity: str
+    changed_by_staff_id: Optional[str] = None
+    reason: Optional[str] = None
+    updated_at: datetime
+class TicketInternalNoteCreateRequest(BaseModel):
+    author_staff_id: str = Field(..., min_length=1, max_length=100)
+    body: str = Field(..., min_length=1)
+
+
+class TicketInternalNoteResponse(BaseModel):
+    ok: bool = True
+    note_id: str
+    ticket_id: str
+    author_staff_id: str
+    body: str
+    created_at: datetime
+

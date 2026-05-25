@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from dataclasses import asdict
@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-from .models import Ticket, TicketMessage, TicketStatusEvent
+from .models import Ticket, TicketMessage, TicketStatusEvent, TicketAssignment, TicketNote
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 TMS_DATA_DIR = BASE_DIR / "data" / "tms"
@@ -14,6 +14,8 @@ TMS_DATA_DIR = BASE_DIR / "data" / "tms"
 TICKETS_FP = TMS_DATA_DIR / "tickets.json"
 MESSAGES_FP = TMS_DATA_DIR / "messages.json"
 STATUS_EVENTS_FP = TMS_DATA_DIR / "status_events.json"
+ASSIGNMENTS_FP = TMS_DATA_DIR / "assignments.json"
+NOTES_FP = TMS_DATA_DIR / "notes.json"
 META_FP = TMS_DATA_DIR / "meta.json"
 
 
@@ -145,6 +147,76 @@ def load_status_events() -> Dict[str, List[TicketStatusEvent]]:
     return out
 
 
+
+def save_assignments(assignments: Dict[str, List[TicketAssignment]]) -> None:
+    payload = {
+        ticket_id: [asdict(assignment) for assignment in items]
+        for ticket_id, items in assignments.items()
+    }
+    _write_json(ASSIGNMENTS_FP, payload)
+
+
+def load_assignments() -> Dict[str, List[TicketAssignment]]:
+    raw = _read_json(ASSIGNMENTS_FP, {})
+    out: Dict[str, List[TicketAssignment]] = {}
+
+    for ticket_id, items in raw.items():
+        out[ticket_id] = [
+            TicketAssignment(
+                assignment_id=obj["assignment_id"],
+                ticket_id=obj["ticket_id"],
+                assigned_team=obj.get("assigned_team"),
+                assigned_staff_id=obj.get("assigned_staff_id"),
+                assigned_by_staff_id=obj.get("assigned_by_staff_id"),
+                created_at=_parse_dt(obj.get("created_at")) or datetime.now(),
+            )
+            for obj in items
+        ]
+
+    return out
+
+
+def save_notes(notes: Dict[str, List[TicketNote]]) -> None:
+    payload = {
+        ticket_id: [asdict(note) for note in items]
+        for ticket_id, items in notes.items()
+    }
+    _write_json(NOTES_FP, payload)
+
+
+def load_notes() -> Dict[str, List[TicketNote]]:
+    raw = _read_json(NOTES_FP, {})
+    out: Dict[str, List[TicketNote]] = {}
+
+    for ticket_id, items in raw.items():
+        cleaned: List[TicketNote] = []
+
+        for obj in items:
+            note_id = obj.get("note_id")
+            note_ticket_id = obj.get("ticket_id") or ticket_id
+            author_staff_id = obj.get("author_staff_id")
+            body = obj.get("body")
+
+            if not note_id:
+                note_id = f"note_recovered_{ticket_id}_{len(cleaned) + 1}"
+
+            if not author_staff_id or not body:
+                continue
+
+            cleaned.append(
+                TicketNote(
+                    note_id=note_id,
+                    ticket_id=note_ticket_id,
+                    author_staff_id=author_staff_id,
+                    body=body,
+                    created_at=_parse_dt(obj.get("created_at")) or datetime.now(),
+                )
+            )
+
+        out[ticket_id] = cleaned
+
+    return out
+
 def save_meta(ticket_counter: int) -> None:
     _write_json(META_FP, {"ticket_counter": ticket_counter})
 
@@ -152,3 +224,5 @@ def save_meta(ticket_counter: int) -> None:
 def load_meta() -> int:
     raw = _read_json(META_FP, {})
     return int(raw.get("ticket_counter", 0))
+
+

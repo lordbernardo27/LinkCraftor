@@ -131,22 +131,31 @@ async function emitDecision(eventType, phraseCtx, candidate, meta){
 const doc = String((phraseCtx && phraseCtx.docId) || window.LC_ACTIVE_DOC_ID || "doc_demo_001").trim();
 const user = String(window.LC_USER_ID || "bernard").trim();
 
+const decisionPayload = {
+  phraseText: String(phraseCtx?.phraseText || phraseCtx?.phrase || "").trim(),
+  targetId: String(candidate?.id || candidate?.topicId || "").trim(),
+  title: String(candidate?.title || "").trim(),
+  url: String(candidate?.url || "").trim()
+};
+
 const payload = {
-  // ? required by backend model (top-level)
+  // required by backend model
   workspaceId: ws,
   userId: user,
   docId: doc,
-
-  // existing fields
   eventType,
+
+  // required by feedback aggregator
+  payload: decisionPayload,
+
+  // diagnostic/debug context
   phraseCtx: phraseCtx || {},
   candidate: candidate || {},
   meta: {
-  ts: Date.now(),
-  ui: "editor",
-  ...(meta || {})
-}
-
+    ts: Date.now(),
+    ui: "editor",
+    ...(meta || {})
+  }
 };
 
 
@@ -2702,6 +2711,14 @@ async function bulkApplyInContainer(root) {
     if (confidence) a.dataset.runtimeNormalizedScore = String(confidence);
 
     mark.replaceWith(a);
+
+    // Save applied state + emit LINK_SUGGESTION_ACCEPTED
+    try {
+      rememberAppliedLink(phrase, topicId, href, title, kind);
+    } catch (e) {
+      console.warn("[BulkApply] rememberAppliedLink failed", e);
+    }
+
     applied++;
 
     console.log(
@@ -3421,7 +3438,13 @@ function applyMarksFromSuggestions(items = [], opts = {}) {
         mark.setAttribute(
           "data-topic-id",
           bestTarget.document_id ||
+          bestTarget.documentId ||
           bestTarget.topicId ||
+          bestTarget.topic_id ||
+          bestTarget.targetId ||
+          bestTarget.target_id ||
+          bestTarget.draftId ||
+          bestTarget.draft_id ||
           bestTarget.id ||
           ""
         );
@@ -4160,6 +4183,13 @@ async function applyAllAcrossDocs() {
 // Bulk apply helpers (current doc)
 // ---------------------------------------------------------------------------
 function rememberAppliedLink(phrase, topicId, url, title, kind) {
+  console.log("[DecisionDebug] rememberAppliedLink called", {
+    phrase,
+    topicId,
+    url,
+    title,
+    kind
+  });
   const pNorm = norm(phrase);
   const key = `${pNorm}|${topicId || ""}|${url || ""}`;
 
@@ -6204,5 +6234,464 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 });
+// ===============================
+// TMS Customer Support Tab Shell
+// ===============================
+function initSupportTabShell() {
+  const supportTab = document.getElementById("supportTab");
+  const supportShell = document.getElementById("supportShell");
+  const mainArea = document.querySelector(".main-area");
+  const allTabs = Array.from(document.querySelectorAll(".tabs .tab"));
+
+  if (!supportTab || !supportShell || !mainArea) {
+    console.warn("[TMS] Support tab shell not ready");
+    return;
+  }
+
+  function setActiveTab(activeTab) {
+    allTabs.forEach((tab) => {
+      const isActive = tab === activeTab;
+      tab.classList.toggle("active", isActive);
+      tab.setAttribute("aria-selected", isActive ? "true" : "false");
+      tab.setAttribute("tabindex", isActive ? "0" : "-1");
+    });
+  }
+
+  supportTab.addEventListener("click", () => {
+    setActiveTab(supportTab);
+
+    mainArea.hidden = true;
+    mainArea.style.display = "none";
+
+    supportShell.hidden = false;
+    supportShell.style.display = "block";
+    supportShell.style.visibility = "visible";
+
+    window.location.hash = "#/support";
+    supportShell.scrollIntoView({ behavior: "smooth", block: "start" });
+  });
+
+  const editorTab = allTabs.find((tab) => (tab.textContent || "").trim() === "Editor");
+  if (editorTab) {
+    editorTab.addEventListener("click", () => {
+      setActiveTab(editorTab);
+
+      supportShell.hidden = true;
+      supportShell.style.display = "none";
+
+      mainArea.hidden = false;
+      mainArea.style.display = "";
+
+      window.location.hash = "#/editor";
+    });
+  }
+
+  if (window.location.hash === "#/support") {
+    supportTab.click();
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", initSupportTabShell);
+} else {
+  initSupportTabShell();
+}
+// ===============================
+// TMS Customer Support Form Submit
+// ===============================
+function initSupportTicketForm() {
+  const form = document.getElementById("supportTicketForm");
+  const subjectEl = document.getElementById("supportTicketSubject");
+  const categoryEl = document.getElementById("supportTicketCategory");
+  const descriptionEl = document.getElementById("supportTicketDescription");
+  const statusEl = document.getElementById("supportFormStatus");
+
+  if (!form || !subjectEl || !categoryEl || !descriptionEl || !statusEl) {
+    console.warn("[TMS] Support ticket form not ready");
+    return;
+  }
+
+  const apiBase = window.LINKCRAFTOR_API_BASE || "";
+
+  function setSupportFormStatus(message, type = "") {
+    statusEl.textContent = message || "";
+    statusEl.classList.remove("ok", "error");
+    if (type) statusEl.classList.add(type);
+  }
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    const subject = subjectEl.value.trim();
+    const category = categoryEl.value.trim() || "general";
+    const description = descriptionEl.value.trim();
+
+    if (!subject || !description) {
+      setSupportFormStatus("Please enter a subject and description.", "error");
+      return;
+    }
+
+    const payload = {
+      subject,
+      description,
+      category,
+      source: "app",
+      channel: "web",
+      requester_user_id: "user_phase3_validation",
+      requester_email: "phase3@example.com",
+      requester_name: "Phase 3 Validation",
+      workspace_id: "ws_betterhealthcheck_com",
+      plan_tier: "starter"
+    };
+
+    setSupportFormStatus("Submitting ticket...", "");
+
+    try {
+      const res = await fetch(`${apiBase}/api/tms/tickets`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data?.detail || "Ticket submission failed");
+      }
+
+      setSupportFormStatus(`✅ Ticket submitted successfully: ${data.ticket_number}`, "ok");
+      alert(`Ticket submitted successfully: ${data.ticket_number}`);
+      form.reset();
+
+      document.dispatchEvent(new CustomEvent("tms:ticket-created", {
+        detail: data
+      }));
+    } catch (err) {
+      console.error("[TMS] Ticket submit failed", err);
+      setSupportFormStatus(err?.message || "Ticket submission failed.", "error");
+    }
+  });
+}
+
+function bootSupportTicketFormSafe() {
+  try {
+    initSupportTicketForm();
+  } catch (err) {
+    console.error("[TMS] Support form boot failed", err);
+  }
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", bootSupportTicketFormSafe);
+} else {
+  bootSupportTicketFormSafe();
+}
+
+document.addEventListener("click", (event) => {
+  const tab = event.target?.closest?.("#supportTab");
+  if (tab) {
+    setTimeout(bootSupportTicketFormSafe, 50);
+  }
+});
+// ===============================
+// TMS Customer Ticket History
+// ===============================
+async function loadSupportTicketHistory() {
+  const listEl = document.getElementById("supportTicketList");
+  if (!listEl) return;
+
+  const apiBase = window.LINKCRAFTOR_API_BASE || "";
+  const requesterUserId = "user_phase3_validation";
+
+  listEl.textContent = "Loading tickets...";
+
+  try {
+    const res = await fetch(`${apiBase}/api/tms/customers/${encodeURIComponent(requesterUserId)}/tickets`);
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data?.detail || "Could not load tickets");
+    }
+
+    if (!data.tickets || data.tickets.length === 0) {
+      listEl.innerHTML = `<div class="support-empty">No support tickets yet.</div>`;
+      return;
+    }
+
+    listEl.innerHTML = data.tickets.map((ticket) => `
+      <button class="support-ticket-item" type="button" data-ticket-id="${ticket.ticket_id}">
+        <div class="support-ticket-main">
+          <strong>${ticket.ticket_number || ticket.ticket_id}</strong>
+          <span>${ticket.subject || "Untitled ticket"}</span>
+        </div>
+        <div class="support-ticket-meta">
+          <span>${ticket.status || "new"}</span>
+          <span>${ticket.priority || "normal"}</span>
+        </div>
+      </button>
+    `).join("");
+  } catch (err) {
+    console.error("[TMS] Failed to load support tickets", err);
+    listEl.innerHTML = `<div class="support-error">Could not load support tickets.</div>`;
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const tab = event.target?.closest?.("#supportTab");
+  if (tab) {
+    setTimeout(loadSupportTicketHistory, 80);
+  }
+});
+
+document.addEventListener("tms:ticket-created", () => {
+  loadSupportTicketHistory();
+});
+// ===============================
+// TMS Customer Ticket History Boot Fix
+// ===============================
+function bootSupportTicketHistorySafe() {
+  try {
+    if (typeof loadSupportTicketHistory === "function") {
+      loadSupportTicketHistory();
+    }
+  } catch (err) {
+    console.error("[TMS] Ticket history boot failed", err);
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const tab = event.target?.closest?.("#supportTab");
+  if (tab) {
+    setTimeout(bootSupportTicketHistorySafe, 150);
+  }
+});
+
+window.addEventListener("hashchange", () => {
+  if (window.location.hash === "#/support") {
+    setTimeout(bootSupportTicketHistorySafe, 150);
+  }
+});
+
+document.addEventListener("DOMContentLoaded", () => {
+  if (window.location.hash === "#/support") {
+    setTimeout(bootSupportTicketHistorySafe, 200);
+  }
+});
+
+document.addEventListener("tms:ticket-created", () => {
+  setTimeout(bootSupportTicketHistorySafe, 150);
+});
+// ===============================
+// TMS Customer Ticket Thread Viewer
+// ===============================
+async function loadSupportTicketThread(ticketId) {
+  const threadEl = document.getElementById("supportThreadView");
+  if (!threadEl || !ticketId) return;
+
+  const apiBase = window.LINKCRAFTOR_API_BASE || "";
+  const requesterUserId = "user_phase3_validation";
+
+  threadEl.textContent = "Loading ticket thread...";
+
+  try {
+    const res = await fetch(
+      `${apiBase}/api/tms/customers/${encodeURIComponent(requesterUserId)}/tickets/${encodeURIComponent(ticketId)}`
+    );
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data?.detail || "Could not load ticket thread");
+    }
+
+    const ticket = data.ticket || {};
+    const messages = data.messages || [];
+
+    const messageHtml = messages.length
+      ? messages.map((message) => `
+          <div class="support-thread-message">
+            <div class="support-thread-message-meta">
+              <strong>${message.author_type || "message"}</strong>
+              <span>${message.created_at || ""}</span>
+            </div>
+            <div class="support-thread-message-body">
+              ${message.body || ""}
+            </div>
+          </div>
+        `).join("")
+      : `<div class="support-empty">No messages yet.</div>`;
+
+    threadEl.innerHTML = `
+      <div class="support-thread-header">
+        <div>
+          <strong>${ticket.ticket_number || ticket.ticket_id}</strong>
+          <h3>${ticket.subject || "Untitled ticket"}</h3>
+        </div>
+        <div class="support-thread-badges">
+          <span>${ticket.status || "new"}</span>
+          <span>${ticket.priority || "normal"}</span>
+          <span>${ticket.severity || "minor"}</span>
+        </div>
+      </div>
+
+      <div class="support-thread-description">
+        ${ticket.description || ""}
+      </div>
+
+      <div class="support-thread-messages">
+        ${messageHtml}
+      </div>
+
+      <form id="supportReplyForm" class="support-reply-form" data-ticket-id="${ticket.ticket_id}">
+        <label>
+          Reply
+          <textarea id="supportReplyBody" rows="4" placeholder="Write your reply..." required></textarea>
+        </label>
+        <button class="primary" type="submit">Send Reply</button>
+        <div id="supportReplyStatus" class="support-form-status" aria-live="polite"></div>
+      </form>
+    `;
+  } catch (err) {
+    console.error("[TMS] Failed to load ticket thread", err);
+    threadEl.innerHTML = `<div class="support-error">Could not load ticket thread.</div>`;
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const item = event.target?.closest?.(".support-ticket-item");
+  if (!item) return;
+
+  const ticketId = item.getAttribute("data-ticket-id");
+  if (!ticketId) return;
+
+  document.querySelectorAll(".support-ticket-item").forEach((el) => {
+    el.classList.toggle("active", el === item);
+  });
+
+  loadSupportTicketThread(ticketId);
+});
+// ===============================
+// TMS Ticket Thread Click Fix
+// ===============================
+function bootSupportTicketThreadClickFix() {
+  const listEl = document.getElementById("supportTicketList");
+  const threadEl = document.getElementById("supportThreadView");
+
+  if (!listEl || !threadEl) {
+    console.warn("[TMS] Thread click fix not ready");
+    return;
+  }
+
+  if (listEl.dataset.threadClickBound === "1") return;
+  listEl.dataset.threadClickBound = "1";
+
+  listEl.addEventListener("click", async (event) => {
+    const item = event.target.closest(".support-ticket-item");
+    if (!item) return;
+
+    const ticketId = item.dataset.ticketId;
+    if (!ticketId) {
+      threadEl.innerHTML = `<div class="support-error">Ticket ID missing.</div>`;
+      return;
+    }
+
+    document.querySelectorAll(".support-ticket-item").forEach((el) => {
+      el.classList.toggle("active", el === item);
+    });
+
+    if (typeof loadSupportTicketThread === "function") {
+      await loadSupportTicketThread(ticketId);
+    } else {
+      threadEl.innerHTML = `<div class="support-error">Thread loader not found.</div>`;
+    }
+  });
+
+  console.log("[TMS] Ticket thread click fix bound");
+}
+
+document.addEventListener("click", (event) => {
+  if (event.target?.closest?.("#supportTab")) {
+    setTimeout(bootSupportTicketThreadClickFix, 250);
+  }
+});
+
+document.addEventListener("tms:ticket-created", () => {
+  setTimeout(bootSupportTicketThreadClickFix, 250);
+});
+
+setTimeout(bootSupportTicketThreadClickFix, 500);
+// ===============================
+// TMS Customer Reply Composer
+// ===============================
+function initSupportReplyComposer() {
+  document.addEventListener("submit", async (event) => {
+    const form = event.target;
+    if (!form || form.id !== "supportReplyForm") return;
+
+    event.preventDefault();
+
+    const ticketId = form.getAttribute("data-ticket-id");
+    const bodyEl = document.getElementById("supportReplyBody");
+    const statusEl = document.getElementById("supportReplyStatus");
+
+    if (!ticketId || !bodyEl || !statusEl) return;
+
+    const body = bodyEl.value.trim();
+    if (!body) {
+      statusEl.textContent = "Please enter a reply.";
+      statusEl.classList.remove("ok");
+      statusEl.classList.add("error");
+      return;
+    }
+
+    const apiBase = window.LINKCRAFTOR_API_BASE || "";
+    const requesterUserId = "user_phase3_validation";
+
+    statusEl.textContent = "Sending reply...";
+    statusEl.classList.remove("ok", "error");
+
+    try {
+      const res = await fetch(
+        `${apiBase}/api/tms/customers/${encodeURIComponent(requesterUserId)}/tickets/${encodeURIComponent(ticketId)}/messages`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            body,
+            author_type: "customer",
+            author_id: requesterUserId,
+            is_customer_visible: true
+          })
+        }
+      );
+
+      const data = await res.json();
+
+      if (!res.ok || !data.ok) {
+        throw new Error(data?.detail || "Could not send reply");
+      }
+
+      statusEl.textContent = "Reply sent.";
+      statusEl.classList.add("ok");
+      bodyEl.value = "";
+
+      if (typeof loadSupportTicketThread === "function") {
+        await loadSupportTicketThread(ticketId);
+      }
+
+      if (typeof loadSupportTicketHistory === "function") {
+        await loadSupportTicketHistory();
+      }
+    } catch (err) {
+      console.error("[TMS] Reply failed", err);
+      statusEl.textContent = err?.message || "Could not send reply.";
+      statusEl.classList.add("error");
+    }
+  });
+}
+
+if (!window.__tmsReplyComposerBound) {
+  window.__tmsReplyComposerBound = true;
+  initSupportReplyComposer();
+}
 
 

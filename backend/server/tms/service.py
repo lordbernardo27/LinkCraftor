@@ -1,10 +1,10 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Dict, List
 from uuid import uuid4
 
-from .models import Ticket, TicketMessage, TicketStatusEvent
+from .models import Ticket, TicketMessage, TicketStatusEvent, TicketAssignment, TicketNote
 from .schemas import (
     TicketCreateRequest,
     TicketCreateResponse,
@@ -12,16 +12,26 @@ from .schemas import (
     TicketMessageResponse,
     TicketStatusUpdateRequest,
     TicketStatusUpdateResponse,
+    TicketAssignmentRequest,
+    TicketAssignmentResponse,
+    TicketPrioritySeverityUpdateRequest,
+    TicketPrioritySeverityUpdateResponse,
+    TicketInternalNoteCreateRequest,
+    TicketInternalNoteResponse,
 )
 from .ticket_store import (
     load_messages,
     load_meta,
     load_tickets,
+    load_status_events,
+    load_assignments,
+    load_notes,
     save_messages,
     save_meta,
     save_tickets,
-    load_status_events,
     save_status_events,
+    save_assignments,
+    save_notes,
 )
 
 
@@ -43,6 +53,26 @@ ALLOWED_TICKET_STATUSES = {
 }
 
 
+ALLOWED_TICKET_PRIORITIES = {
+    "low",
+    "normal",
+    "high",
+    "urgent",
+    "critical",
+}
+
+
+ALLOWED_TICKET_SEVERITIES = {
+    "cosmetic",
+    "minor",
+    "major",
+    "workspace_blocked",
+    "billing_risk",
+    "security_risk",
+    "system_wide",
+}
+
+
 class TicketService:
     """
     JSON-backed TMS service.
@@ -52,13 +82,17 @@ class TicketService:
         self._tickets: Dict[str, Ticket] = load_tickets()
         self._messages: Dict[str, List[TicketMessage]] = load_messages()
         self._status_events: Dict[str, List[TicketStatusEvent]] = load_status_events()
+        self._assignments: Dict[str, List[TicketAssignment]] = load_assignments()
+        self._notes: Dict[str, List[TicketNote]] = load_notes()
         self._ticket_counter: int = load_meta()
 
     def _persist(self) -> None:
-     save_tickets(self._tickets)
-     save_messages(self._messages)
-     save_status_events(self._status_events)
-     save_meta(self._ticket_counter)
+        save_tickets(self._tickets)
+        save_messages(self._messages)
+        save_status_events(self._status_events)
+        save_assignments(self._assignments)
+        save_notes(self._notes)
+        save_meta(self._ticket_counter)
 
     def _next_ticket_number(self) -> str:
         self._ticket_counter += 1
@@ -85,6 +119,9 @@ class TicketService:
 
         self._tickets[ticket_id] = ticket
         self._messages.setdefault(ticket_id, [])
+        self._status_events.setdefault(ticket_id, [])
+        self._assignments.setdefault(ticket_id, [])
+        self._notes.setdefault(ticket_id, [])
         self._persist()
 
         return TicketCreateResponse(
@@ -163,6 +200,7 @@ class TicketService:
             changed_by_staff_id=payload.changed_by_staff_id,
             reason=payload.reason,
         )
+
         self._status_events.setdefault(ticket_id, []).append(status_event)
 
         if new_status in {"resolved", "closed"}:
@@ -181,6 +219,101 @@ class TicketService:
             updated_at=ticket.updated_at,
         )
 
+    def assign_ticket(
+        self,
+        ticket_id: str,
+        payload: TicketAssignmentRequest,
+    ) -> TicketAssignmentResponse:
+        ticket = self._tickets.get(ticket_id)
+        if ticket is None:
+            raise KeyError(f"ticket_not_found: {ticket_id}")
+
+        assignment = TicketAssignment(
+            assignment_id=f"assign_{uuid4().hex}",
+            ticket_id=ticket_id,
+            assigned_team=payload.assigned_team,
+            assigned_staff_id=payload.assigned_staff_id,
+            assigned_by_staff_id=payload.assigned_by_staff_id,
+        )
+
+        self._assignments.setdefault(ticket_id, [])
+        self._notes.setdefault(ticket_id, []).append(assignment)
+
+        ticket.assigned_team = payload.assigned_team
+        ticket.assigned_staff_id = payload.assigned_staff_id
+        ticket.updated_at = utc_now()
+
+        self._persist()
+
+        return TicketAssignmentResponse(
+            ticket_id=ticket.ticket_id,
+            assignment_id=assignment.assignment_id,
+            assigned_team=ticket.assigned_team,
+            assigned_staff_id=ticket.assigned_staff_id,
+            assigned_by_staff_id=assignment.assigned_by_staff_id,
+            updated_at=ticket.updated_at,
+        )
+
+    def update_ticket_priority_severity(
+        self,
+        ticket_id: str,
+        payload: TicketPrioritySeverityUpdateRequest,
+    ) -> TicketPrioritySeverityUpdateResponse:
+        ticket = self._tickets.get(ticket_id)
+        if ticket is None:
+            raise KeyError(f"ticket_not_found: {ticket_id}")
+
+        if payload.priority is not None:
+            new_priority = payload.priority.strip().lower()
+            if new_priority not in ALLOWED_TICKET_PRIORITIES:
+                raise ValueError(f"invalid_ticket_priority: {new_priority}")
+            ticket.priority = new_priority
+
+        if payload.severity is not None:
+            new_severity = payload.severity.strip().lower()
+            if new_severity not in ALLOWED_TICKET_SEVERITIES:
+                raise ValueError(f"invalid_ticket_severity: {new_severity}")
+            ticket.severity = new_severity
+
+        ticket.updated_at = utc_now()
+        self._persist()
+
+        return TicketPrioritySeverityUpdateResponse(
+            ticket_id=ticket.ticket_id,
+            priority=ticket.priority,
+            severity=ticket.severity,
+            changed_by_staff_id=payload.changed_by_staff_id,
+            reason=payload.reason,
+            updated_at=ticket.updated_at,
+        )
+
+    def add_internal_note(
+        self,
+        ticket_id: str,
+        payload: TicketInternalNoteCreateRequest,
+    ) -> TicketInternalNoteResponse:
+        ticket = self._tickets.get(ticket_id)
+        if ticket is None:
+            raise KeyError(f"ticket_not_found: {ticket_id}")
+
+        note = TicketNote(
+            note_id=f"note_{uuid4().hex}",
+            ticket_id=ticket_id,
+            author_staff_id=payload.author_staff_id,
+            body=payload.body,
+        )
+
+        self._notes.setdefault(ticket_id, []).append(note)
+        ticket.updated_at = utc_now()
+        self._persist()
+
+        return TicketInternalNoteResponse(
+            note_id=note.note_id,
+            ticket_id=note.ticket_id,
+            author_staff_id=note.author_staff_id,
+            body=note.body,
+            created_at=note.created_at,
+        )
     def list_tickets(self) -> List[Ticket]:
         return sorted(
             self._tickets.values(),
@@ -193,6 +326,12 @@ class TicketService:
 
     def list_status_events(self, ticket_id: str) -> List[TicketStatusEvent]:
         return list(self._status_events.get(ticket_id, []))
+
+    def list_assignments(self, ticket_id: str) -> List[TicketAssignment]:
+        return list(self._assignments.get(ticket_id, []))
+
+    def list_internal_notes(self, ticket_id: str) -> List[TicketNote]:
+        return list(self._notes.get(ticket_id, []))
 
     def list_messages(self, ticket_id: str) -> List[TicketMessage]:
         return list(self._messages.get(ticket_id, []))
