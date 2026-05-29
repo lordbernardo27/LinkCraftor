@@ -127,7 +127,12 @@ const API_DECISION = "/api/engine/decision";
 
 async function emitDecision(eventType, phraseCtx, candidate, meta){
   try{
-    const ws = String((phraseCtx && phraseCtx.workspaceId) || getCurrentWorkspaceId("ws_demo")).trim();
+    const ws = String(
+      (phraseCtx && phraseCtx.workspaceId) ||
+      window.LC_WORKSPACE_ID ||
+      window.CURRENT_WORKSPACE_ID ||
+      getCurrentWorkspaceId("ws_betterhealthcheck_com")
+    ).trim();
 const doc = String((phraseCtx && phraseCtx.docId) || window.LC_ACTIVE_DOC_ID || "doc_demo_001").trim();
 const user = String(window.LC_USER_ID || "bernard").trim();
 
@@ -4208,7 +4213,10 @@ function rememberAppliedLink(phrase, topicId, url, title, kind) {
 
     // Decision memory: only save ACCEPTED after a link is actually applied.
     try {
-      const workspaceId = getCurrentWorkspaceId("ws_demo");
+      const workspaceId =
+        window.LC_WORKSPACE_ID ||
+        window.CURRENT_WORKSPACE_ID ||
+        getCurrentWorkspaceId("ws_betterhealthcheck_com");
       const docId =
         (window.LC_ACTIVE_DOC_ID || null) ||
         (docs && currentIndex >= 0 && docs[currentIndex]
@@ -5801,7 +5809,10 @@ function wireDecisionButtons(){
     // Build phraseCtx (reuse your existing helper)
     const baseCtx = (typeof buildPhraseContext === "function") ? buildPhraseContext(phrase) : { phraseText: phrase };
 
-    const workspaceId = getCurrentWorkspaceId("ws_demo");
+    const workspaceId =
+        window.LC_WORKSPACE_ID ||
+        window.CURRENT_WORKSPACE_ID ||
+        getCurrentWorkspaceId("ws_betterhealthcheck_com");
     const docId =
       (window.LC_ACTIVE_DOC_ID || null) ||
       (docs && currentIndex >= 0 && docs[currentIndex] ? (docs[currentIndex].doc_id || docs[currentIndex].docId || null) : null);
@@ -5816,11 +5827,43 @@ function wireDecisionButtons(){
       entities: Array.isArray(baseCtx.entities) ? baseCtx.entities : []
     };
 
-    // Candidate (from mark dataset)
+    // Candidate (from mark dataset, with fallback metadata lookup)
     const kind = String(mark.getAttribute("data-kind") || "").toLowerCase();
-    const url  = String(mark.getAttribute("data-url") || "").trim();
-    const title = String(mark.getAttribute("data-title") || "").trim();
-    const topicId = String(mark.getAttribute("data-topic-id") || "").trim();
+
+    let url  = String(mark.getAttribute("data-url") || "").trim();
+    let title = String(mark.getAttribute("data-title") || "").trim();
+    let topicId = String(mark.getAttribute("data-topic-id") || "").trim();
+
+    // If this specific clicked mark has no metadata, search sibling/current marks
+    // for the same phrase that may carry resolver metadata.
+    if (!url && !title && !topicId) {
+      try {
+        const samePhraseMarks = Array.from(viewerEl.querySelectorAll("mark.kwd"))
+          .filter(m => {
+            let mp = "";
+            try {
+              mp = decodeURIComponent(m.getAttribute("data-phrase") || "").trim();
+            } catch {
+              mp = String(m.getAttribute("data-phrase") || "").trim();
+            }
+            return norm(mp) === norm(phrase);
+          });
+
+        const metadataMark = samePhraseMarks.find(m =>
+          String(m.getAttribute("data-url") || "").trim() ||
+          String(m.getAttribute("data-title") || "").trim() ||
+          String(m.getAttribute("data-topic-id") || "").trim()
+        );
+
+        if (metadataMark) {
+          url = String(metadataMark.getAttribute("data-url") || "").trim();
+          title = String(metadataMark.getAttribute("data-title") || "").trim();
+          topicId = String(metadataMark.getAttribute("data-topic-id") || "").trim();
+        }
+      } catch (e) {
+        console.warn("[Decision] reject metadata fallback failed", e);
+      }
+    }
 
     const candidate = {
       id: topicId || "",
@@ -6693,5 +6736,7 @@ if (!window.__tmsReplyComposerBound) {
   window.__tmsReplyComposerBound = true;
   initSupportReplyComposer();
 }
+
+
 
 

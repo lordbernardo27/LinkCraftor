@@ -1144,3 +1144,1956 @@ def explain_semantic_memory_reduction_governance_v2(
         "layer": "1.7.5_semantic_memory_reduction_governance_v2",
     }
 
+
+UNIFIED_SEMANTIC_INTENT_SCHEMA_V1 = {
+    "schema_name": "unified_semantic_intent_schema",
+    "schema_version": "1.8.1.1_v1",
+    "scope": "universal_cross_niche_semantic_intent",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "allowed_intent_types": [
+        "informational",
+        "transactional",
+        "preventive",
+        "diagnostic",
+        "comparison",
+        "mixed",
+        "unknown",
+    ],
+    "required_fields": [
+        "intent_type",
+        "intent_confidence",
+        "intent_evidence",
+        "intent_source",
+        "intent_scope",
+    ],
+    "optional_fields": [
+        "secondary_intents",
+        "vertical_context",
+        "workspace_id",
+        "document_id",
+        "phrase",
+        "target_url",
+        "notes",
+    ],
+    "field_contract": {
+        "intent_type": "one of allowed_intent_types",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "list_of_evidence_strings",
+        "intent_source": "source_engine_or_layer_name",
+        "intent_scope": "where_this_intent_signal_applies",
+        "secondary_intents": "optional_list_of_additional_intent_types",
+        "vertical_context": "optional_vertical_or_domain_context_without_hardcoding",
+    },
+    "universal_design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_unified_semantic_intent_schema_v1() -> Dict[str, Any]:
+    return dict(UNIFIED_SEMANTIC_INTENT_SCHEMA_V1)
+
+
+SEMANTIC_INTENT_REGISTRY_V1 = {
+    "registry_name": "semantic_intent_registry",
+    "registry_version": "1.8.1.2_v1",
+    "scope": "universal_cross_niche_intent_registry",
+    "runtime_effect": "registry_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "registered_intents": {
+        "informational": {
+            "purpose": "User or content is seeking explanation, education, guidance, or understanding.",
+            "universal_examples": [
+                "how to automate internal linking",
+                "what is semantic SEO",
+                "guide to cash flow management",
+            ],
+        },
+        "transactional": {
+            "purpose": "User or content is oriented toward purchase, subscription, pricing, signup, or commercial action.",
+            "universal_examples": [
+                "buy accounting software",
+                "pricing for SEO tools",
+                "subscribe to project management platform",
+            ],
+        },
+        "preventive": {
+            "purpose": "User or content is focused on avoiding harm, reducing risk, preventing problems, or improving safety.",
+            "universal_examples": [
+                "how to avoid credit card debt",
+                "prevent phishing attacks",
+                "reduce legal compliance risk",
+            ],
+        },
+        "diagnostic": {
+            "purpose": "User or content is trying to identify a problem, cause, symptom, failure, or root issue.",
+            "universal_examples": [
+                "why website traffic dropped",
+                "symptoms of server overload",
+                "causes of failed payment processing",
+            ],
+        },
+        "comparison": {
+            "purpose": "User or content is evaluating differences, alternatives, tradeoffs, or best-fit options.",
+            "universal_examples": [
+                "WordPress vs Webflow",
+                "LLC vs corporation",
+                "best CRM for small business",
+            ],
+        },
+        "mixed": {
+            "purpose": "Multiple intent types are present and should be preserved without forcing a single label.",
+            "universal_examples": [
+                "best software to prevent invoice errors",
+                "compare pricing for security tools",
+            ],
+        },
+        "unknown": {
+            "purpose": "Intent signal is weak, unclear, or insufficiently evidenced.",
+            "universal_examples": [
+                "general topic mention without clear purpose",
+            ],
+        },
+    },
+    "registry_rules": {
+        "universal": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "allows_mixed_intent": True,
+        "default_when_unclear": "unknown",
+    },
+}
+
+def get_semantic_intent_registry_v1() -> Dict[str, Any]:
+    return dict(SEMANTIC_INTENT_REGISTRY_V1)
+
+
+SEMANTIC_INTENT_EVIDENCE_CONTRACT_V1 = {
+    "contract_name": "semantic_intent_evidence_contract",
+    "contract_version": "1.8.1.3_v1",
+    "scope": "universal_cross_niche_intent_evidence",
+    "runtime_effect": "evidence_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "required_evidence_fields": [
+        "intent_type",
+        "intent_confidence",
+        "intent_evidence",
+        "evidence_sources",
+        "evidence_reasoning",
+    ],
+    "optional_evidence_fields": [
+        "secondary_intents",
+        "semantic_route_signals",
+        "target_transition_signals",
+        "comparison_signals",
+        "diagnostic_signals",
+        "preventive_signals",
+        "transactional_signals",
+        "informational_signals",
+        "notes",
+    ],
+    "evidence_field_contract": {
+        "intent_type": "normalized_primary_intent",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "list_of_human_readable_evidence_strings",
+        "evidence_sources": "list_of_source_engines_or_runtime_layers",
+        "evidence_reasoning": "human_readable_explanation_of_why_intent_was_detected",
+    },
+    "design_rules": {
+        "human_explainable": True,
+        "runtime_safe": True,
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "supports_future_ai_learning": True,
+        "supports_owner_console_explainability": True,
+    },
+}
+
+def get_semantic_intent_evidence_contract_v1() -> Dict[str, Any]:
+    return dict(SEMANTIC_INTENT_EVIDENCE_CONTRACT_V1)
+
+
+def explain_intent_classification_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "intent_classification_orchestration",
+        "layer": "1.8.1_intent_classification_orchestration_v1",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_unified_semantic_intent_schema_v1(),
+        "registry": get_semantic_intent_registry_v1(),
+        "evidence_contract": get_semantic_intent_evidence_contract_v1(),
+        "existing_distributed_sources": {
+            "phrase_quality_gate": [
+                "_intent_lane",
+                "_score_after_lane",
+                "classify_phrase_strength",
+            ],
+            "upload_phrase_selector": [
+                "_is_intent_phrase",
+                "_score_with_strength",
+                "_semantic_overlap",
+            ],
+            "upload_intel_store_v2": [
+                "_looks_like_intent_phrase",
+                "_quality_score_for",
+            ],
+            "document_registry_pool": [
+                "_classify_page_type",
+                "_semantic_intent_signals",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+            ],
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "target_ranking": "not_modified",
+            "semantic_route_score": "not_modified",
+            "semantic_intent_score": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_selection": "not_modified",
+            "highlight_density": "not_modified",
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_distributed_intent_intelligence",
+            "reason": "Intent classification already exists across phrase gates, upload selectors, registry pools, and target intelligence. This wrapper centralizes explanation and contracts without changing runtime behavior.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_intent_classification_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "intent_classification_explainability",
+        "layer": "1.8.1_intent_classification_explainability_v1",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "explainability_contract": {
+            "answers": [
+                "what_intent_was_detected",
+                "why_this_intent_was_detected",
+                "which_existing_layers_contributed",
+                "what_confidence_or_evidence_supported_it",
+                "which_runtime_boundaries_were_not_changed",
+            ],
+            "evidence_model": get_semantic_intent_evidence_contract_v1(),
+            "schema_model": get_unified_semantic_intent_schema_v1(),
+            "registry_model": get_semantic_intent_registry_v1(),
+        },
+        "supported_explanations": {
+            "intent_type": "Explains the normalized universal intent category.",
+            "intent_confidence": "Explains confidence as evidence strength without forcing runtime decisions.",
+            "intent_evidence": "Lists human-readable reasons from distributed semantic systems.",
+            "evidence_sources": "Shows which existing engines contributed intent signals.",
+            "runtime_boundaries": "Confirms no RB2, scoring, ranking, pool, or highlight mutation occurred.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "target_ranking": "not_modified",
+            "semantic_scoring": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "owner_console_ready": True,
+            "api_sdk_ready": True,
+        },
+    }
+
+
+INFORMATIONAL_INTENT_SCHEMA_V1 = {
+    "schema_name": "informational_intent_schema",
+    "schema_version": "1.8.2.1_v1",
+    "parent_schema": "unified_semantic_intent_schema",
+    "intent_type": "informational",
+    "scope": "universal_cross_niche_informational_intelligence",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "core_characteristics": {
+        "educational": True,
+        "guidance_oriented": True,
+        "explanatory": True,
+        "learning_focused": True,
+        "tutorial_capable": True,
+    },
+    "recognized_patterns": [
+        "how to",
+        "what is",
+        "guide",
+        "tutorial",
+        "walkthrough",
+        "learn",
+        "educational",
+        "explains",
+        "explanation",
+    ],
+    "existing_runtime_sources": [
+        "_extract_intent_candidates",
+        "_looks_like_intent_phrase",
+        "_is_intent_phrase",
+        "_semantic_intent_signals",
+        "semantic_intent_score",
+        "semantic_route_score",
+    ],
+    "supported_verticals": {
+        "health": True,
+        "finance": True,
+        "legal": True,
+        "technology": True,
+        "education": True,
+        "ecommerce": True,
+        "saas": True,
+        "marketing": True,
+        "universal": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_informational_intent_schema_v1() -> Dict[str, Any]:
+    return dict(INFORMATIONAL_INTENT_SCHEMA_V1)
+
+
+INFORMATIONAL_INTENT_EVIDENCE_NORMALIZATION_V1 = {
+    "normalizer_name": "informational_intent_evidence_normalization",
+    "normalizer_version": "1.8.2.2_v1",
+    "intent_type": "informational",
+    "scope": "universal_cross_niche_informational_evidence",
+    "runtime_effect": "normalization_contract_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "normalized_evidence_fields": {
+        "intent_type": "informational",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "human_readable_evidence_list",
+        "evidence_sources": "distributed_engine_source_list",
+        "evidence_reasoning": "why_the_signal_is_informational",
+    },
+    "accepted_signal_families": {
+        "question_patterns": [
+            "how to",
+            "what is",
+            "why does",
+            "how does",
+        ],
+        "education_patterns": [
+            "guide",
+            "tutorial",
+            "walkthrough",
+            "learn",
+            "educational",
+            "explains",
+            "explanation",
+        ],
+        "runtime_sources": [
+            "_extract_intent_candidates",
+            "_looks_like_intent_phrase",
+            "_is_intent_phrase",
+            "_semantic_intent_signals",
+            "semantic_intent_score",
+            "semantic_route_score",
+        ],
+    },
+    "normalization_rules": {
+        "primary_intent": "informational",
+        "allow_secondary_intents": True,
+        "preserve_mixed_intent": True,
+        "do_not_override_existing_scores": True,
+        "do_not_modify_runtime_ranking": True,
+        "do_not_modify_target_selection": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_informational_intent_evidence_normalization_v1() -> Dict[str, Any]:
+    return dict(INFORMATIONAL_INTENT_EVIDENCE_NORMALIZATION_V1)
+
+
+def explain_informational_intent_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "informational_intent_orchestration",
+        "layer": "1.8.2_informational_intent_orchestration_v1",
+        "intent_type": "informational",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_informational_intent_schema_v1(),
+        "evidence_normalization": get_informational_intent_evidence_normalization_v1(),
+        "existing_distributed_sources": {
+            "smart_phrase_extractor": [
+                "_extract_intent_candidates",
+                "_score_topic_alignment",
+                "_weighted_extractor_score",
+            ],
+            "phrase_quality_gate": [
+                "_intent_lane",
+                "_score_after_lane",
+                "classify_phrase_strength",
+            ],
+            "phrase_selectors": [
+                "_looks_like_intent_phrase",
+                "_is_intent_phrase",
+                "_looks_like_question_or_intent",
+            ],
+            "target_pools": [
+                "_classify_page_type",
+                "_semantic_intent_signals",
+                "_classify_page_type_hint",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "transition_score",
+            ],
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_informational_intent_intelligence",
+            "reason": "Informational intent signals already exist across extraction, phrase selection, target pools, and target intelligence. This wrapper centralizes explanation and contracts without changing runtime behavior.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "semantic_route_score": "not_modified",
+            "semantic_intent_score": "not_modified",
+            "target_ranking": "not_modified",
+            "target_pools": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_informational_intent_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "informational_intent_explainability",
+        "layer": "1.8.2_informational_intent_explainability_v1",
+        "intent_type": "informational",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "schema": get_informational_intent_schema_v1(),
+        "evidence_normalization": get_informational_intent_evidence_normalization_v1(),
+        "explains": {
+            "what": "Explains when a phrase, page, or target appears educational, explanatory, tutorial-based, or guidance-oriented.",
+            "why": "Uses normalized evidence such as how-to patterns, guide/tutorial language, educational signals, and existing semantic route signals.",
+            "how": "Reports distributed informational intent sources without changing extraction, scoring, ranking, routing, or highlights.",
+        },
+        "supported_explanation_fields": {
+            "intent_type": "informational",
+            "recognized_patterns": [
+                "how to",
+                "what is",
+                "guide",
+                "tutorial",
+                "walkthrough",
+                "learn",
+                "educational",
+                "explanation",
+            ],
+            "evidence_sources": [
+                "smart_phrase_extractor",
+                "phrase_quality_gate",
+                "phrase_selectors",
+                "target_pools",
+                "target_intelligence",
+            ],
+            "runtime_boundaries": [
+                "rb2_runtime_not_modified",
+                "engine_run_not_modified",
+                "semantic_scoring_not_modified",
+                "target_ranking_not_modified",
+                "highlight_runtime_not_modified",
+            ],
+        },
+        "owner_console_summary": {
+            "ready": True,
+            "summary": "Can explain informational intent decisions for future Owner Console, API, SDK, and diagnostics views.",
+        },
+        "api_sdk_summary": {
+            "ready": True,
+            "summary": "Can expose normalized informational intent metadata without exposing or changing core scoring logic.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+TRANSACTIONAL_INTENT_SCHEMA_V1 = {
+    "schema_name": "transactional_intent_schema",
+    "schema_version": "1.8.3.1_v1",
+    "parent_schema": "unified_semantic_intent_schema",
+    "intent_type": "transactional",
+    "scope": "universal_cross_niche_transactional_intelligence",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "core_characteristics": {
+        "commercial_action_oriented": True,
+        "pricing_oriented": True,
+        "purchase_or_signup_oriented": True,
+        "conversion_focused": True,
+        "subscription_or_checkout_capable": True,
+    },
+    "recognized_patterns": [
+        "buy",
+        "price",
+        "pricing",
+        "purchase",
+        "order",
+        "subscribe",
+        "subscription",
+        "checkout",
+        "commercial",
+        "conversion",
+        "signup",
+        "sign up",
+    ],
+    "existing_runtime_sources": [
+        "_extract_intent_candidates",
+        "_intent_lane",
+        "semantic_intent_score",
+        "semantic_route_score",
+        "normalized_target_score",
+        "transition_score",
+        "apply_vertical_policy_score",
+    ],
+    "supported_verticals": {
+        "health": True,
+        "finance": True,
+        "legal": True,
+        "technology": True,
+        "education": True,
+        "ecommerce": True,
+        "saas": True,
+        "marketing": True,
+        "insurance": True,
+        "real_estate": True,
+        "universal": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_transactional_intent_schema_v1() -> Dict[str, Any]:
+    return dict(TRANSACTIONAL_INTENT_SCHEMA_V1)
+
+
+TRANSACTIONAL_INTENT_EVIDENCE_NORMALIZATION_V1 = {
+    "normalizer_name": "transactional_intent_evidence_normalization",
+    "normalizer_version": "1.8.3.2_v1",
+    "intent_type": "transactional",
+    "scope": "universal_cross_niche_transactional_evidence",
+    "runtime_effect": "normalization_contract_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "normalized_evidence_fields": {
+        "intent_type": "transactional",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "human_readable_evidence_list",
+        "evidence_sources": "distributed_engine_source_list",
+        "evidence_reasoning": "why_the_signal_is_transactional",
+    },
+    "accepted_signal_families": {
+        "commercial_action_patterns": [
+            "buy",
+            "purchase",
+            "order",
+            "subscribe",
+            "signup",
+            "sign up",
+        ],
+        "pricing_patterns": [
+            "price",
+            "pricing",
+            "subscription",
+            "checkout",
+        ],
+        "conversion_patterns": [
+            "commercial",
+            "conversion",
+            "checkout",
+        ],
+        "runtime_sources": [
+            "_extract_intent_candidates",
+            "_intent_lane",
+            "semantic_intent_score",
+            "semantic_route_score",
+            "normalized_target_score",
+            "transition_score",
+            "apply_vertical_policy_score",
+        ],
+    },
+    "normalization_rules": {
+        "primary_intent": "transactional",
+        "allow_secondary_intents": True,
+        "preserve_mixed_intent": True,
+        "do_not_override_existing_scores": True,
+        "do_not_modify_runtime_ranking": True,
+        "do_not_modify_target_selection": True,
+        "do_not_modify_conversion_logic": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_transactional_intent_evidence_normalization_v1() -> Dict[str, Any]:
+    return dict(TRANSACTIONAL_INTENT_EVIDENCE_NORMALIZATION_V1)
+
+
+def explain_transactional_intent_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "transactional_intent_orchestration",
+        "layer": "1.8.3_transactional_intent_orchestration_v1",
+        "intent_type": "transactional",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_transactional_intent_schema_v1(),
+        "evidence_normalization": get_transactional_intent_evidence_normalization_v1(),
+        "existing_distributed_sources": {
+            "smart_phrase_extractor": [
+                "_extract_intent_candidates",
+                "_weighted_extractor_score",
+                "_score_topic_alignment",
+            ],
+            "phrase_quality_gate": [
+                "_intent_lane",
+                "_score_after_lane",
+                "classify_phrase_strength",
+            ],
+            "phrase_vertical_policy": [
+                "apply_vertical_policy_score",
+                "get_vertical_min_score",
+            ],
+            "target_pools": [
+                "_classify_page_type",
+                "_semantic_intent_signals",
+                "_classify_page_type_hint",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "transition_score",
+            ],
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_transactional_intent_intelligence",
+            "reason": "Transactional intent signals already exist across phrase extraction, phrase gates, vertical policy, target pools, and target intelligence. This wrapper centralizes explanation and contracts without changing runtime behavior.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "semantic_route_score": "not_modified",
+            "semantic_intent_score": "not_modified",
+            "target_ranking": "not_modified",
+            "target_pools": "not_modified",
+            "conversion_logic": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_transactional_intent_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "transactional_intent_explainability",
+        "layer": "1.8.3_transactional_intent_explainability_v1",
+        "intent_type": "transactional",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "schema": get_transactional_intent_schema_v1(),
+        "evidence_normalization": get_transactional_intent_evidence_normalization_v1(),
+        "explains": {
+            "what": "Explains when a phrase, page, or target appears commercial, pricing-oriented, purchase-oriented, signup-oriented, subscription-oriented, or conversion-focused.",
+            "why": "Uses normalized evidence such as buy, price, pricing, subscription, checkout, commercial, conversion, signup, and existing semantic route signals.",
+            "how": "Reports distributed transactional intent sources without changing extraction, scoring, ranking, conversion logic, routing, or highlights.",
+        },
+        "supported_explanation_fields": {
+            "intent_type": "transactional",
+            "recognized_patterns": [
+                "buy",
+                "price",
+                "pricing",
+                "purchase",
+                "order",
+                "subscribe",
+                "subscription",
+                "checkout",
+                "commercial",
+                "conversion",
+                "signup",
+                "sign up",
+            ],
+            "evidence_sources": [
+                "smart_phrase_extractor",
+                "phrase_quality_gate",
+                "phrase_vertical_policy",
+                "target_pools",
+                "target_intelligence",
+            ],
+            "runtime_boundaries": [
+                "rb2_runtime_not_modified",
+                "engine_run_not_modified",
+                "semantic_scoring_not_modified",
+                "target_ranking_not_modified",
+                "conversion_logic_not_modified",
+                "target_pools_not_modified",
+                "highlight_runtime_not_modified",
+            ],
+        },
+        "owner_console_summary": {
+            "ready": True,
+            "summary": "Can explain transactional/commercial intent decisions for future Owner Console, API, SDK, and diagnostics views.",
+        },
+        "api_sdk_summary": {
+            "ready": True,
+            "summary": "Can expose normalized transactional intent metadata without exposing or changing core scoring, ranking, or conversion logic.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+PREVENTIVE_INTENT_SCHEMA_V1 = {
+    "schema_name": "preventive_intent_schema",
+    "schema_version": "1.8.4.1_v1",
+    "parent_schema": "unified_semantic_intent_schema",
+    "intent_type": "preventive",
+    "scope": "universal_cross_niche_preventive_intelligence",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "core_characteristics": {
+        "risk_reduction_oriented": True,
+        "warning_oriented": True,
+        "protection_oriented": True,
+        "safety_oriented": True,
+        "mitigation_capable": True,
+    },
+    "recognized_patterns": [
+        "prevent",
+        "avoid",
+        "risk",
+        "reduce risk",
+        "warning",
+        "protect",
+        "safe",
+        "safety",
+        "mitigate",
+        "mitigation",
+        "reduce",
+        "stop",
+    ],
+    "existing_runtime_sources": [
+        "_extract_intent_candidates",
+        "_intent_lane",
+        "semantic_intent_score",
+        "semantic_route_score",
+        "normalized_target_score",
+        "transition_score",
+        "link_worthiness_score",
+    ],
+    "supported_verticals": {
+        "health": True,
+        "finance": True,
+        "legal": True,
+        "technology": True,
+        "education": True,
+        "ecommerce": True,
+        "saas": True,
+        "marketing": True,
+        "security": True,
+        "compliance": True,
+        "universal": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_preventive_intent_schema_v1() -> Dict[str, Any]:
+    return dict(PREVENTIVE_INTENT_SCHEMA_V1)
+
+
+PREVENTIVE_INTENT_EVIDENCE_NORMALIZATION_V1 = {
+    "normalizer_name": "preventive_intent_evidence_normalization",
+    "normalizer_version": "1.8.4.2_v1",
+    "intent_type": "preventive",
+    "scope": "universal_cross_niche_preventive_evidence",
+    "runtime_effect": "normalization_contract_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "normalized_evidence_fields": {
+        "intent_type": "preventive",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "human_readable_evidence_list",
+        "evidence_sources": "distributed_engine_source_list",
+        "evidence_reasoning": "why_the_signal_is_preventive",
+    },
+    "accepted_signal_families": {
+        "risk_reduction_patterns": [
+            "prevent",
+            "avoid",
+            "risk",
+            "reduce risk",
+            "reduce",
+        ],
+        "protection_patterns": [
+            "protect",
+            "safe",
+            "safety",
+            "warning",
+        ],
+        "mitigation_patterns": [
+            "mitigate",
+            "mitigation",
+            "stop",
+        ],
+        "runtime_sources": [
+            "_extract_intent_candidates",
+            "_intent_lane",
+            "semantic_intent_score",
+            "semantic_route_score",
+            "normalized_target_score",
+            "transition_score",
+            "link_worthiness_score",
+        ],
+    },
+    "normalization_rules": {
+        "primary_intent": "preventive",
+        "allow_secondary_intents": True,
+        "preserve_mixed_intent": True,
+        "do_not_override_existing_scores": True,
+        "do_not_modify_runtime_ranking": True,
+        "do_not_modify_target_selection": True,
+        "do_not_modify_safety_logic": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_preventive_intent_evidence_normalization_v1() -> Dict[str, Any]:
+    return dict(PREVENTIVE_INTENT_EVIDENCE_NORMALIZATION_V1)
+
+
+def explain_preventive_intent_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "preventive_intent_orchestration",
+        "layer": "1.8.4_preventive_intent_orchestration_v1",
+        "intent_type": "preventive",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_preventive_intent_schema_v1(),
+        "evidence_normalization": get_preventive_intent_evidence_normalization_v1(),
+        "existing_distributed_sources": {
+            "smart_phrase_extractor": [
+                "_extract_intent_candidates",
+                "_weighted_extractor_score",
+                "_score_topic_alignment",
+            ],
+            "phrase_quality_gate": [
+                "_intent_lane",
+                "_score_after_lane",
+                "classify_phrase_strength",
+            ],
+            "phrase_strength_scorer": [
+                "score_phrase_strength",
+                "_universal_precision_score",
+                "_domain_cohesion_score",
+            ],
+            "target_pools": [
+                "_classify_page_type",
+                "_semantic_intent_signals",
+                "_classify_page_type_hint",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "transition_score",
+            ],
+            "highlight_intelligence": [
+                "link_worthiness_score",
+                "contextual_naturalness_score",
+            ],
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_preventive_intent_intelligence",
+            "reason": "Preventive intent signals already exist across phrase extraction, phrase gates, phrase scoring, target pools, target intelligence, and highlight intelligence. This wrapper centralizes explanation and contracts without changing runtime behavior.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "semantic_route_score": "not_modified",
+            "semantic_intent_score": "not_modified",
+            "target_ranking": "not_modified",
+            "target_pools": "not_modified",
+            "safety_logic": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_preventive_intent_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "preventive_intent_explainability",
+        "layer": "1.8.4_preventive_intent_explainability_v1",
+        "intent_type": "preventive",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "schema": get_preventive_intent_schema_v1(),
+        "evidence_normalization": get_preventive_intent_evidence_normalization_v1(),
+        "explains": {
+            "what": "Explains when a phrase, page, or target appears risk-reduction, warning, protection, safety, or mitigation oriented.",
+            "why": "Uses normalized evidence such as prevent, avoid, risk, warning, protect, safety, mitigation, reduce, stop, and existing semantic route signals.",
+            "how": "Reports distributed preventive intent sources without changing extraction, scoring, ranking, safety logic, routing, or highlights.",
+        },
+        "supported_explanation_fields": {
+            "intent_type": "preventive",
+            "recognized_patterns": [
+                "prevent",
+                "avoid",
+                "risk",
+                "reduce risk",
+                "warning",
+                "protect",
+                "safe",
+                "safety",
+                "mitigate",
+                "mitigation",
+                "reduce",
+                "stop",
+            ],
+            "evidence_sources": [
+                "smart_phrase_extractor",
+                "phrase_quality_gate",
+                "phrase_strength_scorer",
+                "target_pools",
+                "target_intelligence",
+                "highlight_intelligence",
+            ],
+            "runtime_boundaries": [
+                "rb2_runtime_not_modified",
+                "engine_run_not_modified",
+                "semantic_scoring_not_modified",
+                "target_ranking_not_modified",
+                "safety_logic_not_modified",
+                "target_pools_not_modified",
+                "highlight_runtime_not_modified",
+            ],
+        },
+        "owner_console_summary": {
+            "ready": True,
+            "summary": "Can explain preventive/risk-reduction intent decisions for future Owner Console, API, SDK, and diagnostics views.",
+        },
+        "api_sdk_summary": {
+            "ready": True,
+            "summary": "Can expose normalized preventive intent metadata without exposing or changing core scoring, ranking, routing, or safety logic.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+DIAGNOSTIC_INTENT_SCHEMA_V1 = {
+    "schema_name": "diagnostic_intent_schema",
+    "schema_version": "1.8.5.1_v1",
+    "parent_schema": "unified_semantic_intent_schema",
+    "intent_type": "diagnostic",
+    "scope": "universal_cross_niche_diagnostic_intelligence",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "core_characteristics": {
+        "problem_identification_oriented": True,
+        "cause_analysis_oriented": True,
+        "symptom_or_issue_oriented": True,
+        "troubleshooting_capable": True,
+        "failure_analysis_capable": True,
+    },
+    "recognized_patterns": [
+        "diagnostic",
+        "diagnose",
+        "diagnosis",
+        "symptom",
+        "symptoms",
+        "cause",
+        "causes",
+        "why",
+        "problem",
+        "issue",
+        "error",
+        "troubleshoot",
+        "troubleshooting",
+        "root cause",
+        "check",
+        "failure",
+        "failed",
+    ],
+    "existing_runtime_sources": [
+        "_extract_intent_candidates",
+        "_looks_like_intent_phrase",
+        "_is_intent_phrase",
+        "_intent_lane",
+        "semantic_intent_score",
+        "semantic_route_score",
+        "normalized_target_score",
+        "transition_score",
+        "diagnostics_for_document_registry_targets",
+    ],
+    "supported_verticals": {
+        "health": True,
+        "finance": True,
+        "legal": True,
+        "technology": True,
+        "education": True,
+        "ecommerce": True,
+        "saas": True,
+        "marketing": True,
+        "security": True,
+        "compliance": True,
+        "software_debugging": True,
+        "universal": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_diagnostic_intent_schema_v1() -> Dict[str, Any]:
+    return dict(DIAGNOSTIC_INTENT_SCHEMA_V1)
+
+
+DIAGNOSTIC_INTENT_EVIDENCE_NORMALIZATION_V1 = {
+    "normalizer_name": "diagnostic_intent_evidence_normalization",
+    "normalizer_version": "1.8.5.2_v1",
+    "intent_type": "diagnostic",
+    "scope": "universal_cross_niche_diagnostic_evidence",
+    "runtime_effect": "normalization_contract_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "normalized_evidence_fields": {
+        "intent_type": "diagnostic",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "human_readable_evidence_list",
+        "evidence_sources": "distributed_engine_source_list",
+        "evidence_reasoning": "why_the_signal_is_diagnostic",
+    },
+    "accepted_signal_families": {
+        "problem_identification_patterns": [
+            "problem",
+            "issue",
+            "check",
+            "why",
+        ],
+        "cause_analysis_patterns": [
+            "cause",
+            "causes",
+            "root cause",
+        ],
+        "symptom_diagnosis_patterns": [
+            "diagnostic",
+            "diagnose",
+            "diagnosis",
+            "symptom",
+            "symptoms",
+        ],
+        "troubleshooting_patterns": [
+            "error",
+            "troubleshoot",
+            "troubleshooting",
+            "failure",
+            "failed",
+        ],
+        "runtime_sources": [
+            "_extract_intent_candidates",
+            "_looks_like_intent_phrase",
+            "_is_intent_phrase",
+            "_intent_lane",
+            "semantic_intent_score",
+            "semantic_route_score",
+            "normalized_target_score",
+            "transition_score",
+            "diagnostics_for_document_registry_targets",
+        ],
+    },
+    "normalization_rules": {
+        "primary_intent": "diagnostic",
+        "allow_secondary_intents": True,
+        "preserve_mixed_intent": True,
+        "do_not_override_existing_scores": True,
+        "do_not_modify_runtime_ranking": True,
+        "do_not_modify_target_selection": True,
+        "do_not_modify_diagnostic_logic": True,
+        "do_not_modify_dis_learning": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_diagnostic_intent_evidence_normalization_v1() -> Dict[str, Any]:
+    return dict(DIAGNOSTIC_INTENT_EVIDENCE_NORMALIZATION_V1)
+
+
+def explain_diagnostic_intent_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "diagnostic_intent_orchestration",
+        "layer": "1.8.5_diagnostic_intent_orchestration_v1",
+        "intent_type": "diagnostic",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_diagnostic_intent_schema_v1(),
+        "evidence_normalization": get_diagnostic_intent_evidence_normalization_v1(),
+        "existing_distributed_sources": {
+            "smart_phrase_extractor": [
+                "_extract_intent_candidates",
+                "_weighted_extractor_score",
+                "_score_topic_alignment",
+            ],
+            "phrase_quality_gate": [
+                "_intent_lane",
+                "_score_after_lane",
+                "classify_phrase_strength",
+            ],
+            "phrase_strength_scorer": [
+                "score_phrase_strength",
+                "_universal_precision_score",
+                "_domain_cohesion_score",
+            ],
+            "phrase_selectors": [
+                "_looks_like_intent_phrase",
+                "_is_intent_phrase",
+                "_looks_like_question_or_intent",
+            ],
+            "target_pools": [
+                "_classify_page_type",
+                "_semantic_intent_signals",
+                "_classify_page_type_hint",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "transition_score",
+                "diagnostics_for_document_registry_targets",
+            ],
+            "dis_learning": [
+                "_infer_failure_category",
+                "rejection_signatures",
+                "pipeline_failure_patterns",
+            ],
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_diagnostic_intent_intelligence",
+            "reason": "Diagnostic intent signals already exist across phrase extraction, phrase gates, phrase scoring, phrase selectors, target pools, target intelligence, and DIS learning. This wrapper centralizes explanation and contracts without changing runtime behavior.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "semantic_route_score": "not_modified",
+            "semantic_intent_score": "not_modified",
+            "target_ranking": "not_modified",
+            "target_pools": "not_modified",
+            "diagnostic_logic": "not_modified",
+            "dis_learning": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_diagnostic_intent_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "diagnostic_intent_explainability",
+        "layer": "1.8.5_diagnostic_intent_explainability_v1",
+        "intent_type": "diagnostic",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "schema": get_diagnostic_intent_schema_v1(),
+        "evidence_normalization": get_diagnostic_intent_evidence_normalization_v1(),
+        "explains": {
+            "what": "Explains when a phrase, page, or target appears problem-identification, cause-analysis, symptom/diagnosis, troubleshooting, or failure-analysis oriented.",
+            "why": "Uses normalized evidence such as diagnostic, diagnose, symptom, cause, why, problem, issue, error, troubleshooting, root cause, failure, and existing semantic route signals.",
+            "how": "Reports distributed diagnostic intent sources without changing extraction, scoring, ranking, diagnostic logic, DIS learning, routing, or highlights.",
+        },
+        "supported_explanation_fields": {
+            "intent_type": "diagnostic",
+            "recognized_patterns": [
+                "diagnostic",
+                "diagnose",
+                "diagnosis",
+                "symptom",
+                "symptoms",
+                "cause",
+                "causes",
+                "why",
+                "problem",
+                "issue",
+                "error",
+                "troubleshoot",
+                "troubleshooting",
+                "root cause",
+                "check",
+                "failure",
+                "failed",
+            ],
+            "evidence_sources": [
+                "smart_phrase_extractor",
+                "phrase_quality_gate",
+                "phrase_strength_scorer",
+                "phrase_selectors",
+                "target_pools",
+                "target_intelligence",
+                "dis_learning",
+            ],
+            "runtime_boundaries": [
+                "rb2_runtime_not_modified",
+                "engine_run_not_modified",
+                "semantic_scoring_not_modified",
+                "target_ranking_not_modified",
+                "diagnostic_logic_not_modified",
+                "dis_learning_not_modified",
+                "target_pools_not_modified",
+                "highlight_runtime_not_modified",
+            ],
+        },
+        "owner_console_summary": {
+            "ready": True,
+            "summary": "Can explain diagnostic/problem-analysis intent decisions for future Owner Console, API, SDK, diagnostics, and support intelligence views.",
+        },
+        "api_sdk_summary": {
+            "ready": True,
+            "summary": "Can expose normalized diagnostic intent metadata without exposing or changing core scoring, ranking, routing, diagnostic logic, or DIS learning.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+COMPARISON_INTENT_SCHEMA_V1 = {
+    "schema_name": "comparison_intent_schema",
+    "schema_version": "1.8.6.1_v1",
+    "parent_schema": "unified_semantic_intent_schema",
+    "intent_type": "comparison",
+    "scope": "universal_cross_niche_comparison_intelligence",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "core_characteristics": {
+        "alternative_evaluation_oriented": True,
+        "difference_analysis_oriented": True,
+        "versus_oriented": True,
+        "best_fit_oriented": True,
+        "tradeoff_analysis_capable": True,
+    },
+    "recognized_patterns": [
+        "comparison",
+        "compare",
+        "versus",
+        "vs",
+        "difference",
+        "differences",
+        "alternative",
+        "alternatives",
+        "better than",
+        "best",
+        "pros",
+        "cons",
+        "tradeoff",
+        "trade-off",
+        "which is better",
+    ],
+    "existing_runtime_sources": [
+        "_extract_intent_candidates",
+        "_looks_like_intent_phrase",
+        "_is_intent_phrase",
+        "_intent_lane",
+        "semantic_intent_score",
+        "semantic_route_score",
+        "normalized_target_score",
+        "publish_transition_score",
+        "rank_draft_targets",
+        "best_draft_target",
+    ],
+    "supported_verticals": {
+        "health": True,
+        "finance": True,
+        "legal": True,
+        "technology": True,
+        "education": True,
+        "ecommerce": True,
+        "saas": True,
+        "marketing": True,
+        "security": True,
+        "software": True,
+        "real_estate": True,
+        "universal": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_comparison_intent_schema_v1() -> Dict[str, Any]:
+    return dict(COMPARISON_INTENT_SCHEMA_V1)
+
+
+COMPARISON_INTENT_EVIDENCE_NORMALIZATION_V1 = {
+    "normalizer_name": "comparison_intent_evidence_normalization",
+    "normalizer_version": "1.8.6.2_v1",
+    "intent_type": "comparison",
+    "scope": "universal_cross_niche_comparison_evidence",
+    "runtime_effect": "normalization_contract_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "normalized_evidence_fields": {
+        "intent_type": "comparison",
+        "intent_confidence": "float_between_0_and_1",
+        "intent_evidence": "human_readable_evidence_list",
+        "evidence_sources": "distributed_engine_source_list",
+        "evidence_reasoning": "why_the_signal_is_comparison_oriented",
+    },
+    "accepted_signal_families": {
+        "direct_comparison_patterns": [
+            "comparison",
+            "compare",
+            "versus",
+            "vs",
+            "which is better",
+        ],
+        "difference_patterns": [
+            "difference",
+            "differences",
+            "better than",
+        ],
+        "alternative_evaluation_patterns": [
+            "alternative",
+            "alternatives",
+            "best",
+            "pros",
+            "cons",
+            "tradeoff",
+            "trade-off",
+        ],
+        "runtime_sources": [
+            "_extract_intent_candidates",
+            "_looks_like_intent_phrase",
+            "_is_intent_phrase",
+            "_intent_lane",
+            "semantic_intent_score",
+            "semantic_route_score",
+            "normalized_target_score",
+            "publish_transition_score",
+            "rank_draft_targets",
+            "best_draft_target",
+        ],
+    },
+    "normalization_rules": {
+        "primary_intent": "comparison",
+        "allow_secondary_intents": True,
+        "preserve_mixed_intent": True,
+        "do_not_override_existing_scores": True,
+        "do_not_modify_runtime_ranking": True,
+        "do_not_modify_target_selection": True,
+        "do_not_modify_comparison_logic": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_comparison_intent_evidence_normalization_v1() -> Dict[str, Any]:
+    return dict(COMPARISON_INTENT_EVIDENCE_NORMALIZATION_V1)
+
+
+def explain_comparison_intent_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "comparison_intent_orchestration",
+        "layer": "1.8.6_comparison_intent_orchestration_v1",
+        "intent_type": "comparison",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_comparison_intent_schema_v1(),
+        "evidence_normalization": get_comparison_intent_evidence_normalization_v1(),
+        "existing_distributed_sources": {
+            "smart_phrase_extractor": [
+                "_extract_intent_candidates",
+                "_weighted_extractor_score",
+                "_score_topic_alignment",
+            ],
+            "phrase_quality_gate": [
+                "_intent_lane",
+                "_score_after_lane",
+                "classify_phrase_strength",
+            ],
+            "phrase_strength_scorer": [
+                "score_phrase_strength",
+                "_universal_precision_score",
+                "_domain_cohesion_score",
+            ],
+            "phrase_selectors": [
+                "_looks_like_intent_phrase",
+                "_is_intent_phrase",
+                "_looks_like_question_or_intent",
+            ],
+            "target_pools": [
+                "_classify_page_type",
+                "_semantic_intent_signals",
+                "_classify_page_type_hint",
+                "_apply_strong_intent_balance",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "publish_transition_score",
+                "rank_draft_targets",
+                "best_draft_target",
+            ],
+            "runtime_ui": [
+                "engine_scoring",
+                "context_hooks",
+                "il_modal",
+                "engine_highlights",
+            ],
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_comparison_intent_intelligence",
+            "reason": "Comparison intent signals already exist across phrase extraction, phrase gates, phrase scoring, phrase selectors, target pools, target intelligence, and runtime UI systems. This wrapper centralizes explanation and contracts without changing runtime behavior.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "semantic_route_score": "not_modified",
+            "semantic_intent_score": "not_modified",
+            "target_ranking": "not_modified",
+            "target_pools": "not_modified",
+            "comparison_logic": "not_modified",
+            "runtime_ui": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_comparison_intent_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "comparison_intent_explainability",
+        "layer": "1.8.6_comparison_intent_explainability_v1",
+        "intent_type": "comparison",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "schema": get_comparison_intent_schema_v1(),
+        "evidence_normalization": get_comparison_intent_evidence_normalization_v1(),
+        "explains": {
+            "what": "Explains when a phrase, page, or target appears comparison, alternative-evaluation, difference-analysis, versus, best-fit, or tradeoff oriented.",
+            "why": "Uses normalized evidence such as compare, comparison, versus, vs, difference, alternatives, best, pros, cons, tradeoff, and existing semantic route signals.",
+            "how": "Reports distributed comparison intent sources without changing extraction, scoring, ranking, comparison logic, runtime UI, routing, or highlights.",
+        },
+        "supported_explanation_fields": {
+            "intent_type": "comparison",
+            "recognized_patterns": [
+                "comparison",
+                "compare",
+                "versus",
+                "vs",
+                "difference",
+                "differences",
+                "alternative",
+                "alternatives",
+                "better than",
+                "best",
+                "pros",
+                "cons",
+                "tradeoff",
+                "trade-off",
+                "which is better",
+            ],
+            "evidence_sources": [
+                "smart_phrase_extractor",
+                "phrase_quality_gate",
+                "phrase_strength_scorer",
+                "phrase_selectors",
+                "target_pools",
+                "target_intelligence",
+                "runtime_ui",
+            ],
+            "runtime_boundaries": [
+                "rb2_runtime_not_modified",
+                "engine_run_not_modified",
+                "semantic_scoring_not_modified",
+                "target_ranking_not_modified",
+                "comparison_logic_not_modified",
+                "runtime_ui_not_modified",
+                "target_pools_not_modified",
+                "highlight_runtime_not_modified",
+            ],
+        },
+        "owner_console_summary": {
+            "ready": True,
+            "summary": "Can explain comparison/alternative-evaluation intent decisions for future Owner Console, API, SDK, diagnostics, and target-intelligence views.",
+        },
+        "api_sdk_summary": {
+            "ready": True,
+            "summary": "Can expose normalized comparison intent metadata without exposing or changing core scoring, ranking, routing, comparison logic, or runtime UI behavior.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+INTENT_AWARE_LINKING_SCHEMA_V1 = {
+    "schema_name": "intent_aware_linking_schema",
+    "schema_version": "1.8.7.1_v1",
+    "parent_schema": "unified_semantic_intent_schema",
+    "scope": "universal_cross_niche_intent_aware_linking_governance",
+    "runtime_effect": "schema_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "purpose": "Govern how existing intent signals support link selection, target ranking, semantic routing, and highlight naturalness without changing runtime behavior.",
+    "core_linking_signals": {
+        "semantic_intent_score": "existing_target_intelligence_signal",
+        "semantic_route_score": "existing_target_routing_signal",
+        "normalized_target_score": "existing_target_ranking_signal",
+        "transition_score": "existing_context_transition_signal",
+        "link_worthiness_score": "existing_highlight_selection_signal",
+        "contextual_naturalness_score": "existing_highlight_naturalness_signal",
+    },
+    "supported_intent_types": [
+        "informational",
+        "transactional",
+        "preventive",
+        "diagnostic",
+        "comparison",
+        "mixed",
+        "unknown",
+    ],
+    "existing_runtime_sources": [
+        "resolve_intelligent_targets",
+        "_runtime_normalized_score",
+        "_runtime_semantic_dominance_ok",
+        "_filter_and_balance_runtime_targets",
+        "rank_document_registry_targets",
+        "rank_draft_targets",
+        "rank_live_domain_targets",
+        "rank_imported_targets",
+        "best_draft_target",
+        "best_live_domain_target",
+        "best_imported_target",
+        "link_worthiness_score",
+        "contextual_naturalness_score",
+    ],
+    "protected_runtime_boundaries": {
+        "rb2_runtime": "not_modified",
+        "engine_run": "not_modified",
+        "semantic_scoring": "not_modified",
+        "target_ranking": "not_modified",
+        "target_intelligence": "not_modified",
+        "runtime_balancing": "not_modified",
+        "highlight_runtime": "not_modified",
+        "active_phrase_pool": "not_modified",
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+        "schema_only": True,
+    },
+}
+
+def get_intent_aware_linking_schema_v1() -> Dict[str, Any]:
+    return dict(INTENT_AWARE_LINKING_SCHEMA_V1)
+
+
+INTENT_AWARE_LINKING_EVIDENCE_NORMALIZATION_V1 = {
+    "normalizer_name": "intent_aware_linking_evidence_normalization",
+    "normalizer_version": "1.8.7.2_v1",
+    "scope": "universal_cross_niche_intent_aware_linking_evidence",
+    "runtime_effect": "normalization_contract_only_no_runtime_injection",
+    "mutates_existing_intelligence": False,
+    "normalized_evidence_fields": {
+        "intent_type": "normalized_primary_or_mixed_intent",
+        "linking_confidence": "float_between_0_and_1",
+        "linking_evidence": "human_readable_evidence_list",
+        "target_evidence_sources": "distributed_target_engine_source_list",
+        "linking_reasoning": "why_the_linking_signal_supports_this_target_or_anchor",
+    },
+    "accepted_signal_families": {
+        "target_intent_signals": [
+            "semantic_intent_score",
+            "semantic_route_score",
+            "normalized_target_score",
+            "transition_score",
+        ],
+        "highlight_linking_signals": [
+            "link_worthiness_score",
+            "contextual_naturalness_score",
+        ],
+        "runtime_resolution_signals": [
+            "resolve_intelligent_targets",
+            "_runtime_normalized_score",
+            "_runtime_semantic_dominance_ok",
+            "_filter_and_balance_runtime_targets",
+        ],
+        "target_ranking_sources": [
+            "rank_document_registry_targets",
+            "rank_draft_targets",
+            "rank_live_domain_targets",
+            "rank_imported_targets",
+            "best_draft_target",
+            "best_live_domain_target",
+            "best_imported_target",
+        ],
+    },
+    "normalization_rules": {
+        "preserve_existing_runtime_scores": True,
+        "do_not_override_target_ranking": True,
+        "do_not_modify_semantic_route_score": True,
+        "do_not_modify_semantic_intent_score": True,
+        "do_not_modify_runtime_balancing": True,
+        "do_not_modify_highlight_selection": True,
+        "do_not_modify_rb2_runtime": True,
+    },
+    "design_rules": {
+        "cross_niche": True,
+        "vertical_aware": True,
+        "health_specific": False,
+        "hardcoded_industry_logic": False,
+        "runtime_safe": True,
+    },
+}
+
+def get_intent_aware_linking_evidence_normalization_v1() -> Dict[str, Any]:
+    return dict(INTENT_AWARE_LINKING_EVIDENCE_NORMALIZATION_V1)
+
+
+def explain_intent_aware_linking_orchestration_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "orchestration_type": "intent_aware_linking_orchestration",
+        "layer": "1.8.7_intent_aware_linking_orchestration_v1",
+        "uses_existing_layers_only": True,
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "schema": get_intent_aware_linking_schema_v1(),
+        "evidence_normalization": get_intent_aware_linking_evidence_normalization_v1(),
+        "existing_distributed_sources": {
+            "target_resolution": [
+                "resolve_intelligent_targets",
+                "_runtime_normalized_score",
+                "_runtime_semantic_dominance_ok",
+                "_filter_and_balance_runtime_targets",
+            ],
+            "target_intelligence": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "transition_score",
+                "rank_document_registry_targets",
+                "rank_draft_targets",
+                "rank_live_domain_targets",
+                "rank_imported_targets",
+            ],
+            "best_target_selection": [
+                "best_draft_target",
+                "best_live_domain_target",
+                "best_imported_target",
+            ],
+            "highlight_intelligence": [
+                "link_worthiness_score",
+                "contextual_naturalness_score",
+                "score_link_opportunity",
+            ],
+            "semantic_scoring": [
+                "semantic_similarity_score",
+                "ontology_alignment_score",
+                "context_score",
+                "graph_score",
+                "compute_semantic_score",
+            ],
+        },
+        "orchestration_decision": {
+            "decision": "govern_existing_intent_aware_linking_intelligence",
+            "reason": "Intent-aware linking already exists across target resolution, target intelligence, semantic scoring, best-target selection, and highlight intelligence. This wrapper centralizes governance and explanation without changing runtime behavior.",
+        },
+        "protected_boundaries": {
+            "rb2_runtime": "not_modified",
+            "engine_run": "not_modified",
+            "semantic_scoring": "not_modified",
+            "target_ranking": "not_modified",
+            "target_intelligence": "not_modified",
+            "target_selection": "not_modified",
+            "runtime_balancing": "not_modified",
+            "active_phrase_pool": "not_modified",
+            "highlight_runtime": "not_modified",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
+
+def explain_intent_aware_linking_explainability_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+
+    return {
+        "workspace_id": workspace_id,
+        "generated_at": _now_iso(),
+        "explainability_type": "intent_aware_linking_explainability",
+        "layer": "1.8.7_intent_aware_linking_explainability_v1",
+        "runtime_effect": "read_only_no_runtime_injection",
+        "mutates_existing_intelligence": False,
+        "uses_existing_layers_only": True,
+        "schema": get_intent_aware_linking_schema_v1(),
+        "evidence_normalization": get_intent_aware_linking_evidence_normalization_v1(),
+        "explains": {
+            "what": "Explains how existing intent signals support link selection, target ranking, semantic routing, best-target selection, and highlight naturalness.",
+            "why": "Uses normalized evidence from semantic intent score, semantic route score, normalized target score, transition score, link worthiness score, contextual naturalness score, and runtime target resolution signals.",
+            "how": "Reports distributed intent-aware linking sources without changing semantic scoring, target ranking, runtime balancing, target intelligence, RB2 runtime, or highlights.",
+        },
+        "supported_explanation_fields": {
+            "linking_signals": [
+                "semantic_intent_score",
+                "semantic_route_score",
+                "normalized_target_score",
+                "transition_score",
+                "link_worthiness_score",
+                "contextual_naturalness_score",
+            ],
+            "evidence_sources": [
+                "target_resolution",
+                "target_intelligence",
+                "best_target_selection",
+                "highlight_intelligence",
+                "semantic_scoring",
+            ],
+            "runtime_boundaries": [
+                "rb2_runtime_not_modified",
+                "engine_run_not_modified",
+                "semantic_scoring_not_modified",
+                "target_ranking_not_modified",
+                "target_intelligence_not_modified",
+                "target_selection_not_modified",
+                "runtime_balancing_not_modified",
+                "active_phrase_pool_not_modified",
+                "highlight_runtime_not_modified",
+            ],
+        },
+        "owner_console_summary": {
+            "ready": True,
+            "summary": "Can explain intent-aware linking decisions for future Owner Console, target diagnostics, route diagnostics, API, SDK, and audit views.",
+        },
+        "api_sdk_summary": {
+            "ready": True,
+            "summary": "Can expose normalized intent-aware linking metadata without exposing or changing core scoring, ranking, routing, target intelligence, or runtime balancing logic.",
+        },
+        "universal_design_rules": {
+            "cross_niche": True,
+            "vertical_aware": True,
+            "health_specific": False,
+            "hardcoded_industry_logic": False,
+            "runtime_safe": True,
+        },
+    }
+
