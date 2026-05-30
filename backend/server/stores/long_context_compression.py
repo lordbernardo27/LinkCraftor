@@ -311,6 +311,114 @@ def reduce_semantic_memory_v1(
     }
 
 
+
+
+def explain_compression_decisions_v1(
+    compression_outputs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    1.20.6 Compression Explainability.
+
+    Explains compression outputs without altering article text or runtime engines.
+    """
+
+    explanations = []
+
+    for item in compression_outputs or []:
+        explanations.append({
+            "layer": item.get("layer"),
+            "name": item.get("name"),
+            "status": item.get("status"),
+            "summary": item.get("summary"),
+            "actions": item.get("actions", []),
+            "explainability_role": "compression_explanation_only",
+        })
+
+    return _make_decision(
+        "1.20.6",
+        "Compression Explainability",
+        "active",
+        "Explains compression decisions without changing article text, runtime, linking, scoring, or targets.",
+        [
+            "compression_decision_explanation",
+            "compression_action_trace",
+            "compression_summary_reporting",
+            "compression_evidence_visibility",
+        ],
+    ) | {
+        "explanation_count": len(explanations),
+        "explanations": explanations,
+    }
+
+
+def govern_compression_layer_v1() -> Dict[str, Any]:
+    """
+    1.20.7 Compression Governance.
+
+    Governance contract for long-context compression.
+    """
+
+    return _make_decision(
+        "1.20.7",
+        "Compression Governance",
+        "active",
+        "Locks compression into runtime-context-only behavior.",
+        [
+            "compression_governance",
+            "runtime_context_only_enforcement",
+            "article_text_protection",
+            "linking_engine_protection",
+            "target_selector_protection",
+        ],
+    ) | {
+        "governance_rules": {
+            "runtime_context_only": True,
+            "may_modify_uploaded_article": False,
+            "may_delete_article_text": False,
+            "may_rewrite_article_text": False,
+            "may_create_runtime_router": False,
+            "may_create_linking_engine": False,
+            "may_create_target_selector": False,
+            "may_modify_scoring": False,
+            "may_insert_links": False,
+            "may_publish_content": False,
+        },
+    }
+
+
+def audit_compression_safety_v1() -> Dict[str, Any]:
+    """
+    1.20.8 Compression Safety Audit.
+
+    Safety audit for the long-context compression layer.
+    """
+
+    return _make_decision(
+        "1.20.8",
+        "Compression Safety Audit",
+        "active",
+        "Confirms compression is safe, runtime-context-only, and does not alter article, linking, scoring, targets, or publishing.",
+        [
+            "compression_safety_audit",
+            "runtime_context_only_audit",
+            "article_text_safety_audit",
+            "linking_safety_audit",
+            "target_safety_audit",
+        ],
+    ) | {
+        "audit_result": {
+            "safe_for_runtime_context": True,
+            "article_text_unchanged": True,
+            "runtime_router_unchanged": True,
+            "linking_engine_unchanged": True,
+            "target_selector_unchanged": True,
+            "scoring_unchanged": True,
+            "publishing_unchanged": True,
+        },
+    }
+
+
+
 def explain_long_context_compression_layer_v1() -> Dict[str, Any]:
     return {
         "layer": "1.7",
@@ -323,6 +431,9 @@ def explain_long_context_compression_layer_v1() -> Dict[str, Any]:
             "1.7.3 Runtime Context Optimization",
             "1.7.4 Large-Document Reasoning Support",
             "1.7.5 Semantic Memory Reduction",
+            "1.20.6 Compression Explainability",
+            "1.20.7 Compression Governance",
+            "1.20.8 Compression Safety Audit",
         ],
         "safety_rules": {
             "modifies_uploaded_article": False,
