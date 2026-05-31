@@ -65,6 +65,62 @@ def analyze_semantic_closure_v1(
             complete = False
             reasons.append("weak_start_boundary")
 
+        # Reject dangling prepositional tails such as:
+        # "fertile window for natural"
+        # "method for easy"
+        # while preserving complete terms such as:
+        # "natural birth control"
+        dangling_tail_markers = {"for", "of", "to", "with", "without", "during", "before", "after", "in", "on", "at", "by"}
+        weak_tail_modifiers = {
+            "natural", "safe", "easy", "simple", "better", "best", "early",
+            "late", "regular", "irregular", "normal", "personal", "specific",
+            "general", "accurate", "common", "possible", "different",
+        }
+
+        if len(words) >= 4:
+            for i, word in enumerate(words[:-1]):
+                if word.lower() in dangling_tail_markers:
+                    tail = [w.lower() for w in words[i + 1:]]
+                    if len(tail) == 1 and tail[0] in weak_tail_modifiers:
+                        complete = False
+                        reasons.append("dangling_prepositional_tail")
+                        break
+
+        # Reject clause-verb leakage inside extracted noun/condition phrases.
+        # Examples:
+        # "calendar method says fertility"
+        # "business owner wants growth"
+        # "strategy improves ranking"
+        # "patient needs medication"
+        # This is universal and structure-based, not niche-specific.
+        clause_leak_verbs = {
+            "say", "says", "said",
+            "want", "wants", "wanted",
+            "need", "needs", "needed",
+            "use", "uses", "used",
+            "make", "makes", "made",
+            "get", "gets", "got",
+            "mean", "means", "meant",
+            "show", "shows", "showed",
+            "include", "includes", "included",
+            "improve", "improves", "improved",
+            "increase", "increases", "increased",
+            "reduce", "reduces", "reduced",
+            "affect", "affects", "affected",
+            "change", "changes", "changed",
+            "confirm", "confirms", "confirmed",
+            "explain", "explains", "explained",
+            "suggest", "suggests", "suggested",
+            "indicate", "indicates", "indicated",
+        }
+
+        if len(words) >= 4:
+            middle_words = [w.lower() for w in words[1:-1]]
+            if any(w in clause_leak_verbs for w in middle_words):
+                complete = False
+                reasons.append("clause_verb_leakage")
+
+
         results.append({
             "text": text,
             "semantic_closure": "complete" if complete else "incomplete",

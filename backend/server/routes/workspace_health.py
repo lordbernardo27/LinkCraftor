@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
+from backend.server.stores.rebuild_governance import queue_stale_repair_if_needed
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
@@ -72,6 +73,12 @@ def _pool_record(name: str, data_path: Path):
 
 @router.get("/pools")
 def workspace_pools(workspace_id: str = Query(..., description="workspace id")):
+
+    try:
+        queue_stale_repair_if_needed(workspace_id)
+    except Exception:
+        pass
+
     live_data = TARGET_POOLS_DIR / "live_domain" / f"live_domain_target_pool_{workspace_id}.json"
     imported_data = TARGET_POOLS_DIR / "imported" / f"imported_target_pool_{workspace_id}.json"
     draft_data = TARGET_POOLS_DIR / "draft" / f"draft_target_pool_{workspace_id}.json"

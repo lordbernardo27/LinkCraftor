@@ -10,6 +10,11 @@ from typing import Any, Dict, List, Set
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set
 from backend.server.stores.candidate_window_guard import candidate_window_guard
 from backend.server.stores.phrase_strength_scorer import score_phrase_strength
+from backend.server.stores.semantic_completeness_intelligence import (
+    analyze_anchor_intent_completeness_v1,
+    analyze_semantic_closure_v1,
+    analyze_standalone_semantic_integrity_v1,
+)
 from backend.server.utils.text_normalization import fix_mojibake_text
 
 
@@ -152,6 +157,48 @@ def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Di
 
     if not phrase:
         return {"keep": False, "phrase": "", "quality_gate": {}, "strength": {}}
+
+    semantic_closure = analyze_semantic_closure_v1([{"phrase": phrase}])
+    closure_results = semantic_closure.get("results") if isinstance(semantic_closure, dict) else []
+    closure_item = closure_results[0] if closure_results else {}
+
+    standalone_integrity = analyze_standalone_semantic_integrity_v1([{"phrase": phrase}])
+    integrity_results = standalone_integrity.get("results") if isinstance(standalone_integrity, dict) else []
+    integrity_item = integrity_results[0] if integrity_results else {}
+
+    anchor_intent = analyze_anchor_intent_completeness_v1([{"phrase": phrase}])
+    anchor_results = anchor_intent.get("results") if isinstance(anchor_intent, dict) else []
+    anchor_intent_item = anchor_results[0] if anchor_results else anchor_intent
+
+    if closure_item and closure_item.get("is_complete") is False:
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "semantic_closure_incomplete",
+            "quality_gate": {
+                "semantic_completeness": {
+                    "closure": closure_item,
+                    "standalone_integrity": integrity_item,
+                      "anchor_intent_completeness": anchor_intent_item,
+                }
+            },
+            "strength": {},
+        }
+
+    if integrity_item and integrity_item.get("is_valid") is False:
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "standalone_semantic_integrity_failed",
+            "quality_gate": {
+                "semantic_completeness": {
+                    "closure": closure_item,
+                    "standalone_integrity": integrity_item,
+                      "anchor_intent_completeness": anchor_intent_item,
+                }
+            },
+            "strength": {},
+        }
 
     guard = candidate_window_guard(phrase, source_type=source_type or "")
     if not isinstance(guard, dict) or not guard.get("keep"):
@@ -683,6 +730,8 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
             "sentence_fragment",
             "sentence_fragment_phrase",
             "semantic_anchor_validation_failed",
+            "semantic_closure_incomplete",
+            "standalone_semantic_integrity_failed",
         }
 
         if not gate_result.get("keep") and hard_pool_reject:
@@ -810,6 +859,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
                 "topic_coherence",
                 "cross_document_reasoning",
                 "long_context_compression",
+                "semantic_completeness_intelligence",
                 "cross_knowledge_fusion",
                 "ontology_alignment",
                 "intelligent_data_compression",
@@ -856,3 +906,9 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         )
 
     return obj
+
+
+
+
+
+

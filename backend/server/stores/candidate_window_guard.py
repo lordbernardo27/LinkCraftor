@@ -325,10 +325,39 @@ def _is_weak_subject_verb_fragment(tokens: List[str]) -> bool:
 def _is_action_leak_start(tokens: List[str]) -> bool:
     if len(tokens) < 2:
         return False
+
     if tokens[0] not in ACTION_LEAK_STARTS:
         return False
+
     if any(t in CONNECTORS for t in tokens):
         return False
+
+    # Universal compact action-object protection.
+    # Allows useful anchors such as:
+    # "avoid penalties", "reduce churn", "manage inventory",
+    # "monitor rankings", "track expenses", "check credit score".
+    # Still blocks weak action leaks with vague/filler objects.
+    weak_action_objects = (
+        STOPWORDS
+        | WEAK_CARRYOVER_WORDS
+        | GENERIC_ADJECTIVES
+        | GENERIC_HEADS
+        | UNIVERSAL_WEAK_PREFIXES
+        | UNIVERSAL_WEAK_HEADS
+        | WEAK_SUBJECTS
+    )
+
+    object_tokens = tokens[1:]
+
+    if 1 <= len(object_tokens) <= 3:
+        meaningful_objects = [
+            t for t in object_tokens
+            if t not in weak_action_objects
+        ]
+
+        if meaningful_objects:
+            return False
+
     return True
 
 

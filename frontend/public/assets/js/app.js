@@ -6740,3 +6740,236 @@ if (!window.__tmsReplyComposerBound) {
 
 
 
+
+
+
+// =====================================================
+// Rebuild Governance
+// Automatic stale sweep every 3 minutes
+// =====================================================
+
+(function initRebuildGovernanceSweep() {
+
+  if (window.__LC_REBUILD_SWEEP_STARTED) {
+    return;
+  }
+
+  window.__LC_REBUILD_SWEEP_STARTED = true;
+
+  async function runSweep() {
+
+    try {
+
+      const ws = getCurrentWorkspaceId("");
+
+      if (!ws) {
+        return;
+      }
+
+      const API_BASE =
+        (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+        .replace(/\/+$/, "");
+
+      await fetch(
+        `${API_BASE}/api/rebuild/sweep/${encodeURIComponent(ws)}`,
+        {
+          method: "POST"
+        }
+      );
+
+      await fetch(
+        `${API_BASE}/api/rebuild/process/${encodeURIComponent(ws)}?limit=20`,
+        {
+          method: "POST"
+        }
+      );
+
+    } catch (e) {
+      console.warn(
+        "[REBUILD_SWEEP]",
+        e?.message || e
+      );
+    }
+
+  }
+
+  runSweep();
+
+  setInterval(
+    runSweep,
+    180000
+  );
+
+})();
+
+
+
+// =====================================================
+// Reload Governance
+// Automatic frontend reload orchestrator
+// =====================================================
+
+(function initReloadGovernanceOrchestrator() {
+
+  if (window.__LC_RELOAD_ORCHESTRATOR_STARTED) {
+    return;
+  }
+
+  window.__LC_RELOAD_ORCHESTRATOR_STARTED = true;
+
+  async function executeReloadActions(source = "reload_governance") {
+
+    try {
+      const ws = getCurrentWorkspaceId("default");
+
+      try {
+        if (typeof window.__LC_reloadFromBackend === "function") {
+          await window.__LC_reloadFromBackend();
+        } else if (typeof window.reloadFromBackend === "function") {
+          await window.reloadFromBackend();
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] backend_state_reload failed", e?.message || e);
+      }
+
+      try {
+        if (typeof loadImportsFromBackend === "function") {
+          await loadImportsFromBackend();
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] loadImportsFromBackend failed", e?.message || e);
+      }
+
+      try {
+        if (typeof loadDraftsFromBackend === "function") {
+          await loadDraftsFromBackend(ws);
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] loadDraftsFromBackend failed", e?.message || e);
+      }
+
+      try {
+        if (typeof refreshDropdown === "function") {
+          refreshDropdown();
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] refreshDropdown failed", e?.message || e);
+      }
+
+      try {
+        if (typeof underlineLinkedPhrases === "function") {
+          underlineLinkedPhrases();
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] underlineLinkedPhrases failed", e?.message || e);
+      }
+
+      try {
+        if (typeof highlightBucketKeywords === "function") {
+          highlightBucketKeywords();
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] highlightBucketKeywords failed", e?.message || e);
+      }
+
+      try {
+        if (typeof rebuildEngineHighlightsPanel === "function") {
+          rebuildEngineHighlightsPanel();
+        }
+      } catch (e) {
+        console.warn("[RELOAD_GOVERNANCE] rebuildEngineHighlightsPanel failed", e?.message || e);
+      }
+
+      window.__LC_LAST_RELOAD_GOVERNANCE_RUN = {
+        source,
+        workspace_id: ws,
+        ran_at: new Date().toISOString()
+      };
+
+    } catch (e) {
+      console.warn("[RELOAD_GOVERNANCE] reload orchestrator failed", e?.message || e);
+    }
+
+  }
+
+  window.__LC_executeReloadGovernance = executeReloadActions;
+
+})();
+
+
+
+// =====================================================
+// Reload Governance State Poller
+// =====================================================
+
+(function initReloadGovernancePoller() {
+
+  if (window.__LC_RELOAD_POLLER_STARTED) {
+    return;
+  }
+
+  window.__LC_RELOAD_POLLER_STARTED = true;
+
+  async function checkReloadState() {
+
+    try {
+
+      const ws = getCurrentWorkspaceId("");
+
+      if (!ws) {
+        return;
+      }
+
+      const API_BASE =
+        (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+        .replace(/\/+$/, "");
+
+      const res = await fetch(
+        `${API_BASE}/api/reload/state/${encodeURIComponent(ws)}`
+      );
+
+      if (!res.ok) {
+        return;
+      }
+
+      const data = await res.json();
+
+      const lastReloadAt =
+        data?.state?.last_reload_at || null;
+
+      if (!lastReloadAt) {
+        return;
+      }
+
+      const lastProcessed =
+        window.__LC_LAST_RELOAD_STATE_PROCESSED || null;
+
+      if (lastProcessed === lastReloadAt) {
+        return;
+      }
+
+      window.__LC_LAST_RELOAD_STATE_PROCESSED = lastReloadAt;
+
+      if (typeof window.__LC_executeReloadGovernance === "function") {
+        await window.__LC_executeReloadGovernance(
+          "reload_state_poller"
+        );
+      }
+
+    } catch (e) {
+      console.warn(
+        "[RELOAD_STATE_POLLER]",
+        e?.message || e
+      );
+    }
+
+  }
+
+  checkReloadState();
+
+  setInterval(
+    checkReloadState,
+    180000
+  );
+
+})();

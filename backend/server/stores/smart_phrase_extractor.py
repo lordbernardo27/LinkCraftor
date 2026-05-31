@@ -572,7 +572,22 @@ def _is_bad_noun_stack(tokens: List[str]) -> bool:
     return False
 
 
+KNOWN_COMPLETE_ACTION_OBJECTS = {
+    ("calculate", "due", "date"),
+    ("calculate", "fertile", "window"),
+    ("calculate", "body", "mass"),
+    ("measure", "blood", "pressure"),
+    ("track", "cycle", "length"),
+    ("review", "anchor", "text"),
+    ("build", "topic", "clusters"),
+    ("create", "topic", "cluster"),
+}
+
+
 def _is_weak_action_tail(tokens: List[str]) -> bool:
+    if tuple(tokens) in KNOWN_COMPLETE_ACTION_OBJECTS:
+        return False
+
     if len(tokens) < 2:
         return False
 
@@ -1196,6 +1211,456 @@ LOW_INFORMATION_PHRASES = {
 }
 
 
+
+
+def _has_subject_verb_fragment_v2(tokens: List[str]) -> bool:
+    if len(tokens) not in {2, 3}:
+        return False
+
+    subject_like = {
+        "baby", "babies", "clinic", "clinics", "embryo", "embryos",
+        "hormone", "hormones", "cycle", "cycles", "user", "users",
+        "customer", "customers", "student", "students", "patient", "patients",
+        "business", "businesses", "team", "teams", "company", "companies",
+        "market", "markets", "price", "prices", "ranking", "rankings",
+        "traffic", "revenue", "cost", "costs", "system", "systems",
+    }
+
+    verb_like = {
+        "grow", "grows", "grew", "gave", "give", "gives",
+        "attach", "attaches", "follow", "follows", "reset", "resets",
+        "stretch", "stretches", "change", "changes", "changed",
+        "affect", "affects", "affected", "increase", "increases",
+        "decrease", "decreases", "improve", "improves", "improved",
+        "convert", "converts", "identify", "identifies",
+        "remember", "remembers", "estimate", "estimates",
+    }
+
+    return tokens[0] in subject_like and tokens[1] in verb_like
+
+
+def _has_truncated_action_object_v2(tokens: List[str]) -> bool:
+    if len(tokens) not in {2, 3}:
+        return False
+
+    action_starts = {
+        "calculate", "estimate", "measure", "track", "monitor", "check",
+        "compare", "convert", "identify", "choose", "find", "review",
+        "analyze", "score", "rank", "forecast", "plan", "improve",
+    }
+
+    weak_incomplete_objects = {
+        "due", "fertile", "pregnancy", "conception", "children",
+        "child", "average", "pattern", "process", "number", "length",
+        "ratio", "percent", "percentage", "score", "date", "time",
+        "cost", "price", "ranking", "traffic", "revenue",
+        "blood", "body", "mass", "cycle", "cycles", "pressure",
+        "keyword", "keywords", "topic", "topics", "link", "links",
+        "page", "pages", "url", "urls", "content", "article", "anchor",
+    }
+
+    strong_completion_heads = {
+        "date", "window", "calculator", "formula", "method", "strategy",
+        "score", "rate", "forecast", "plan", "guide", "risk", "cost",
+        "price", "revenue", "traffic", "ranking", "performance",
+        "pressure", "index", "length", "cycle", "cycles", "page",
+        "pages", "url", "urls", "topic", "topics", "cluster",
+        "clusters", "article", "articles", "content",
+    }
+
+    known_complete_pairs = {
+        ("calculate", "bmi"),
+        ("calculate", "age"),
+        ("calculate", "tax"),
+        ("calculate", "roi"),
+        ("track", "ovulation"),
+        ("track", "period"),
+        ("monitor", "rankings"),
+        ("monitor", "traffic"),
+        ("check", "pressure"),
+        ("review", "content"),
+        ("audit", "links"),
+        ("optimize", "content"),
+        ("improve", "ranking"),
+    }
+
+    known_complete_triples = {
+        ("calculate", "due", "date"),
+        ("calculate", "fertile", "window"),
+        ("calculate", "body", "mass"),
+        ("measure", "blood", "pressure"),
+        ("track", "cycle", "length"),
+        ("track", "keyword", "rankings"),
+        ("build", "topic", "clusters"),
+        ("create", "topic", "cluster"),
+        ("find", "internal", "links"),
+        ("review", "anchor", "text"),
+    }
+
+    if tokens[0] not in action_starts:
+        return False
+
+    if tuple(tokens) in known_complete_pairs or tuple(tokens) in known_complete_triples:
+        return False
+
+    if tokens[-1] in strong_completion_heads and len(tokens) >= 3:
+        return False
+
+    if len(tokens) == 2 and tokens[-1] in weak_incomplete_objects:
+        return True
+
+    if len(tokens) == 3:
+        if tuple(tokens) in known_complete_triples:
+            return False
+        if tokens[-1] in weak_incomplete_objects and tokens[-1] not in strong_completion_heads:
+            return True
+
+        incomplete_two_word_objects = {
+            ("body", "mass"),
+            ("keyword", "rankings"),
+            ("topic", "cluster"),
+            ("topic", "clusters"),
+            ("internal", "links"),
+            ("external", "links"),
+            ("anchor", "text"),
+        }
+
+        if tuple(tokens[1:]) in incomplete_two_word_objects:
+            return False
+
+    return tokens[-1] in weak_incomplete_objects
+
+
+def _has_narrative_instruction_fragment_v2(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    narrative_starts = {
+        "ask", "know", "mark", "look", "remember", "consider",
+        "explore", "finish", "keep", "arrive", "expecting",
+        "describe", "describing", "getting", "having",
+    }
+
+    if tokens[0] in narrative_starts:
+        return True
+
+    if len(tokens) >= 3 and tokens[0] in {"exact", "actual", "final", "assigned"} and tokens[-1] in {
+        "day", "date", "timestamp", "encounter", "calculation", "verdict"
+    }:
+        return True
+
+    return False
+
+
+def _has_incomplete_tail_concept_v2(tokens: List[str]) -> bool:
+    if len(tokens) < 2:
+        return False
+
+    weak_tails = {
+        "minus", "relative", "further", "each", "let", "process",
+        "temperature", "average", "remember", "convert", "identify",
+        "imperial", "provisional", "placeholder", "tricks",
+    }
+
+    if tokens[-1] in weak_tails:
+        return True
+
+    if len(tokens) >= 4 and tokens[-2:] in [
+        ["the", "process"],
+        ["the", "temperature"],
+        ["the", "pattern"],
+        ["the", "average"],
+    ]:
+        return True
+
+    return False
+
+
+def _has_reversed_semantic_structure_v2(tokens: List[str]) -> bool:
+    if len(tokens) != 2:
+        return False
+
+    reversed_tail_verbs = {
+        "convert", "identify", "remember", "average", "imperial",
+        "stretch", "stretches", "affected", "reset", "attaches",
+    }
+
+    return tokens[-1] in reversed_tail_verbs
+
+
+
+
+
+
+def get_semantic_expansion_advisory_v1(
+    phrase: str,
+    snippet: str = "",
+    vertical: str = "general",
+) -> dict:
+    """
+    1.16.10 Semantic Expansion Engine ? Advisory Only.
+
+    Connected to future ATR / Topic Intelligence.
+    Does NOT rewrite extractor candidates.
+    Does NOT affect highlighting, scoring, target selection, or runtime linking.
+    """
+
+    phrase_norm = re.sub(r"\s+", " ", str(phrase or "")).strip(" .,:;!?()[]{}\"'")
+    snippet_norm = re.sub(r"\s+", " ", str(snippet or "")).strip()
+
+    advisory = {
+        "layer": "semantic_expansion_engine_v1",
+        "mode": "advisory_only",
+        "connected_to": [
+            "advanced_topic_reasoning_layer",
+            "topic_intelligence",
+            "topic_cluster_generator",
+            "topic_gap_filler",
+            "future_writing_intelligence",
+        ],
+        "can_modify_extractor_candidate": False,
+        "can_affect_runtime_linking": False,
+        "can_enter_upload_pool": False,
+        "can_enter_active_pool": False,
+        "input_phrase": phrase_norm,
+        "vertical": vertical,
+        "suggestions": [],
+    }
+
+    if not phrase_norm or not snippet_norm:
+        return advisory
+
+    phrase_tokens = phrase_norm.lower().split()
+    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_norm)
+    snippet_lower_tokens = [t.lower() for t in snippet_tokens]
+
+    blocked_expansion_boundaries = {
+        "from", "with", "for", "by", "after", "before", "into",
+        "around", "during", "through", "without", "within", "because",
+    }
+
+    expansion_stop_words = {
+        "can", "could", "should", "would", "may", "might",
+        "help", "helps", "helped",
+        "need", "needs", "needed",
+        "allow", "allows", "allowed",
+        "provide", "provides", "provided",
+        "support", "supports", "supported",
+        "improve", "improves", "improved",
+        "create", "creates", "created",
+        "detect", "detects", "detected",
+        "track", "tracks", "tracked",
+        "using", "use", "used",
+        "generate", "generates", "generated",
+        "build", "builds", "built",
+    }
+
+
+    n = len(phrase_tokens)
+
+    for i in range(0, len(snippet_lower_tokens) - n + 1):
+        if snippet_lower_tokens[i:i + n] != phrase_tokens:
+            continue
+
+        for extra in (1, 2):
+            end = i + n + extra
+            if end > len(snippet_tokens):
+                break
+
+            added = snippet_lower_tokens[i + n:end]
+
+            if any(t in blocked_expansion_boundaries for t in added):
+                continue
+
+            if any(t in expansion_stop_words for t in added):
+                continue
+
+            candidate_tokens = snippet_tokens[i:end]
+            candidate = re.sub(r"\s+", " ", " ".join(candidate_tokens)).strip(" .,:;!?()[]{}\"'")
+            candidate_lower_tokens = candidate.lower().split()
+
+            if len(candidate_lower_tokens) <= len(phrase_tokens):
+                continue
+
+            if len(candidate_lower_tokens) > 4:
+                continue
+
+            if candidate.lower() not in snippet_norm.lower():
+                continue
+
+            if _has_semantic_completion_failure(candidate_lower_tokens):
+                continue
+
+            advisory["suggestions"].append({
+                "expanded_phrase": candidate,
+                "reason": "snippet_local_specificity_expansion",
+                "safe_for_runtime_rewrite": False,
+                "recommended_use": [
+                    "topic_cluster_generator",
+                    "topic_gap_filler",
+                    "advanced_topic_reasoning_layer",
+                ],
+            })
+
+    return advisory
+
+
+def _semantic_reconstruction_v1(
+    phrase: str,
+    snippet: str,
+) -> str:
+    """
+    1.16.13 Semantic Reconstruction Engine.
+
+    Reconstructs incomplete noun/object anchors by adding missing left-side
+    action/intent tokens only when the reconstructed phrase exists literally
+    in the same snippet.
+    """
+
+    phrase_norm = re.sub(r"\s+", " ", str(phrase or "")).strip(" .,:;!?()[]{}\"'")
+    snippet_norm = re.sub(r"\s+", " ", str(snippet or "")).strip()
+
+    if not phrase_norm or not snippet_norm:
+        return phrase
+
+    phrase_tokens = phrase_norm.lower().split()
+    if len(phrase_tokens) < 2:
+        return phrase
+
+    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_norm)
+    snippet_lower_tokens = [t.lower() for t in snippet_tokens]
+
+    n = len(phrase_tokens)
+
+    allowed_left_heads = ACTION_TOKENS | {"how", "best", "what", "when"}
+
+    for i in range(0, len(snippet_lower_tokens) - n + 1):
+        if snippet_lower_tokens[i:i + n] != phrase_tokens:
+            continue
+
+        # Try adding 1 or 2 left-side tokens from the same snippet.
+        for left_extra in (1, 2):
+            start = i - left_extra
+            if start < 0:
+                continue
+
+            candidate_tokens = snippet_tokens[start:i + n]
+            candidate_clean = re.sub(r"\s+", " ", " ".join(candidate_tokens)).strip(" .,:;!?()[]{}\"'")
+            candidate_lower_tokens = candidate_clean.lower().split()
+
+            if len(candidate_lower_tokens) <= len(phrase_tokens):
+                continue
+
+            if len(candidate_lower_tokens) > 4:
+                continue
+
+            if candidate_lower_tokens[0] not in allowed_left_heads:
+                continue
+
+            if phrase_norm.lower() not in candidate_clean.lower():
+                continue
+
+            if candidate_clean.lower() not in snippet_norm.lower():
+                continue
+
+            if _has_semantic_completion_failure(candidate_lower_tokens):
+                continue
+
+            if candidate_lower_tokens[0] in BAD_STARTS:
+                continue
+
+            if candidate_lower_tokens[-1] in BAD_ENDINGS:
+                continue
+
+            return candidate_clean
+
+    return phrase
+
+
+def _safe_contextual_semantic_completion(
+    phrase: str,
+    snippet: str,
+) -> str:
+    """
+    1.16.11 Contextual Semantic Completion.
+
+    Safely repairs incomplete extracted phrases using only text that already
+    appears in the original sentence/snippet.
+
+    Safety rule:
+    - Never invent new words.
+    - Never complete from outside the snippet.
+    - Only return a longer phrase if it appears exactly in the snippet.
+    """
+
+    phrase_norm = re.sub(r"\s+", " ", str(phrase or "")).strip(" .,:;!?()[]{}\"\'")
+    snippet_norm = re.sub(r"\s+", " ", str(snippet or "")).strip()
+
+    if not phrase_norm or not snippet_norm:
+        return phrase
+
+    phrase_lower = phrase_norm.lower()
+    snippet_lower = snippet_norm.lower()
+
+    if phrase_lower not in snippet_lower:
+        return phrase
+
+    phrase_tokens = phrase_lower.split()
+    if len(phrase_tokens) < 2:
+        return phrase
+
+    # Completion is only allowed for phrases already known to be semantically incomplete.
+    if not _has_semantic_completion_failure(phrase_tokens):
+        return phrase
+
+    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_norm)
+    snippet_lower_tokens = [t.lower() for t in snippet_tokens]
+
+    n = len(phrase_tokens)
+
+    best = phrase_norm
+
+    for i in range(0, len(snippet_lower_tokens) - n + 1):
+        if snippet_lower_tokens[i:i + n] != phrase_tokens:
+            continue
+
+        # Try adding 1 to 4 right-side tokens from the same snippet.
+        for extra in range(1, 5):
+            end = i + n + extra
+            if end > len(snippet_tokens):
+                break
+
+            candidate_tokens = snippet_tokens[i:end]
+            candidate = " ".join(candidate_tokens)
+            candidate_clean = re.sub(r"\s+", " ", str(candidate or "")).strip(" .,:;!?()[]{}\"\'")
+            candidate_lower_tokens = candidate_clean.lower().split()
+
+            if len(candidate_lower_tokens) <= len(phrase_tokens):
+                continue
+
+            # Completed phrase must literally exist inside the original snippet.
+            if candidate_clean.lower() not in snippet_lower:
+                continue
+
+            # It must no longer fail semantic completion.
+            if _has_semantic_completion_failure(candidate_lower_tokens):
+                continue
+
+            # Avoid obvious sentence/list leakage.
+            if candidate_lower_tokens[-1] in BAD_ENDINGS:
+                continue
+            if candidate_lower_tokens[0] in BAD_STARTS:
+                continue
+
+            best = candidate_clean
+            break
+
+        if best != phrase_norm:
+            break
+
+    return best
+
+
 def _has_semantic_completion_failure(tokens: List[str]) -> bool:
     """
     Final universal semantic completion validator.
@@ -1209,6 +1674,21 @@ def _has_semantic_completion_failure(tokens: List[str]) -> bool:
     phrase = " ".join(tokens)
 
     if phrase in LOW_INFORMATION_PHRASES:
+        return True
+
+    if _has_subject_verb_fragment_v2(tokens):
+        return True
+
+    if _has_truncated_action_object_v2(tokens):
+        return True
+
+    if _has_narrative_instruction_fragment_v2(tokens):
+        return True
+
+    if _has_incomplete_tail_concept_v2(tokens):
+        return True
+
+    if _has_reversed_semantic_structure_v2(tokens):
         return True
 
     if tokens[-1] in WEAK_TRAILING_ADJECTIVES:
@@ -1488,6 +1968,49 @@ def _add_candidate(
                 rejection_reason="smart_extractor_missing_universal_head",
             )
             return
+
+    if _has_semantic_completion_failure(tokens):
+        repaired_p = _safe_contextual_semantic_completion(
+            phrase=p,
+            snippet=snippet,
+        )
+        repaired_tokens = _simple_tokens(repaired_p)
+
+        if (
+            repaired_p != p
+            and len(repaired_tokens) > len(tokens)
+            and not _has_semantic_completion_failure(repaired_tokens)
+        ):
+            p = repaired_p
+            tokens = repaired_tokens
+        else:
+            learn_from_pipeline_rejection(
+                workspace_id=workspace_id,
+                document_id=doc_id,
+                vertical=vertical,
+                pipeline_stage="smart_extractor",
+                candidate={
+                    "phrase": p,
+                    "source_type": source_type,
+                    "section_id": section_id,
+                },
+                rejection_reason="smart_extractor_semantic_completion_failure_v2",
+            )
+            return
+
+    reconstructed_p = _semantic_reconstruction_v1(
+        phrase=p,
+        snippet=snippet,
+    )
+    reconstructed_tokens = tokenize(reconstructed_p)
+
+    if (
+        reconstructed_p != p
+        and len(reconstructed_tokens) > len(tokens)
+        and not _has_semantic_completion_failure(reconstructed_tokens)
+    ):
+        p = reconstructed_p
+        tokens = reconstructed_tokens
 
     extractor_intelligence = _extractor_intelligence_result(
         phrase=p,

@@ -42,6 +42,8 @@ from .routes.engine_decisions import router as engine_decisions_router
 from backend.app.routers.rb2_run import router as rb2_runner_router
 from backend.app.routers.document_registry import router as document_registry_router
 from backend.server.routes.workspace_health import router as workspace_health_router
+from backend.server.routes.rebuild_routes import router as rebuild_router
+from backend.server.routes.reload_routes import router as reload_router
 from backend.server.orchestration.routes import router as orchestration_router
 from backend.server.tms.routes import router as tms_router
 
@@ -274,7 +276,14 @@ if not _already_mounted("backend.app.routers.rb2_run", "/api/rb2"):
 
 if not _already_mounted("backend.server.routes.workspace_health", "/api/workspace"):
     app.include_router(workspace_health_router, tags=["workspace"])
-    app.include_router(orchestration_router)
+
+if not _already_mounted("backend.server.routes.rebuild_routes", "/api/rebuild"):
+    app.include_router(rebuild_router)
+
+if not _already_mounted("backend.server.routes.reload_routes", "/api/reload"):
+    app.include_router(reload_router)
+
+app.include_router(orchestration_router)
 
 if not _already_mounted("backend.app.routers.document_registry", "/api/site/target_pools/document_registry"):
     app.include_router(

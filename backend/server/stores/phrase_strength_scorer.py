@@ -355,6 +355,56 @@ def _is_action_phrase(tokens: List[str]) -> bool:
     return bool(tokens and tokens[0] in ACTION_STARTS)
 
 
+def _is_compact_action_object_anchor(tokens: List[str]) -> bool:
+    """
+    Universal compact action-object anchor protection.
+
+    Examples:
+    - calculate safe days
+    - reduce churn
+    - manage inventory
+    - monitor rankings
+    - track expenses
+    - check credit score
+
+    This is niche-neutral and structure-based.
+    """
+
+    if not _is_action_phrase(tokens):
+        return False
+
+    if len(tokens) not in {2, 3, 4}:
+        return False
+
+    object_tokens = tokens[1:]
+
+    if not object_tokens:
+        return False
+
+    weak_object_terms = (
+        STOPWORDS
+        | WEAK_ACTION_OBJECT_HEADS
+        | WEAK_HEADS
+        | UNIVERSAL_WEAK_HEADS
+        | UNIVERSAL_WEAK_PREFIXES
+        | VAGUE_ACTION_MODIFIERS
+    )
+
+    meaningful = [
+        t for t in object_tokens
+        if t not in weak_object_terms
+    ]
+
+    if not meaningful:
+        return False
+
+    if object_tokens[-1] in STOPWORDS:
+        return False
+
+    return True
+
+
+
 def _is_query_style_long_anchor(tokens: List[str]) -> bool:
     if len(tokens) < 5:
         return False
@@ -431,6 +481,9 @@ def _fails_semantic_anchor_validation(tokens: List[str]) -> bool:
         return False
 
     if _has_valid_ordered_pair(tokens):
+        return False
+
+    if _is_compact_action_object_anchor(tokens):
         return False
 
     if len(tokens) == 3 and (tokens[1], tokens[2]) in VALID_ORDERED_PAIRS and tokens[0] not in STOPWORDS:

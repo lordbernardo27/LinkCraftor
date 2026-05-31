@@ -8,6 +8,7 @@ import uuid
 import re
 import html
 import traceback
+from backend.server.stores.rebuild_governance import queue_rebuild_event
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -812,6 +813,19 @@ async def upload_file(
         print("[ACTIVE_TARGET_SET_UPLOAD_DOC_AUTOADD_ERROR]", repr(e))
         traceback.print_exc()
 
+    try:
+        queue_rebuild_event(
+            workspace_id=ws_norm,
+            trigger="document_changed",
+            metadata={
+                "source": "upload_route",
+                "doc_id": doc_id,
+                "filename": str(meta.get("filename") or ""),
+            },
+        )
+    except Exception as e:
+        print("[UPLOAD_REBUILD_QUEUE_ERROR]", repr(e))
+
     return {
         "ok": True,
         "workspace_id": ws_norm,
@@ -869,6 +883,18 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
         _write_active_target_set(ws_norm, active_obj)
     except Exception as e:
         print("[CLEAR_FILE_SESSION_ACTIVE_SET_ERROR]", repr(e))
+
+    try:
+        queue_rebuild_event(
+            workspace_id=ws_norm,
+            trigger="document_changed",
+            metadata={
+                "source": "clear_session",
+                "reason": "session_cleared",
+            },
+        )
+    except Exception as e:
+        print("[CLEAR_SESSION_REBUILD_QUEUE_ERROR]", repr(e))
 
     return {
         "ok": True,
