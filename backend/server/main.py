@@ -46,11 +46,13 @@ from backend.server.routes.rebuild_routes import router as rebuild_router
 from backend.server.routes.reload_routes import router as reload_router
 from backend.server.orchestration.routes import router as orchestration_router
 from backend.server.tms.routes import router as tms_router
+from backend.server.routes.workspace_autosave import router as workspace_autosave_router
 
 log = logging.getLogger("linkcraftor.server")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="LinkCraftor API", version="0.1.0")
+app.include_router(workspace_autosave_router)
 
 
 # =========================

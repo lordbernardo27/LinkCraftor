@@ -6,6 +6,10 @@ if (typeof window.reloadFromBackend !== "function") {
     try { await window.loadImportedUrlsLocal?.(); } catch(e) {}
     try {
   const ws = getCurrentWorkspaceId("");
+
+
+
+
   if (ws) await window.updateUnifiedImportCount?.(ws);
 } catch(e) {}
     try {
@@ -229,6 +233,9 @@ if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback !== "
           action: action || "ui",
           ui: "il-modal"
         });
+
+
+
       }
 
       return { ok:false, error:"emitDecision not available" };
@@ -573,6 +580,7 @@ function getLastEngineOutput() { return LAST_ENGINE_OUTPUT; } // not strictly re
 let highlightEnabled = true;
 
 let LAST_ENGINE_OUTPUT = { internal_strong: [], semantic_optional: [], hidden: [], meta: {} };
+
 
 /* ==========================================================================
    UI HOOKS
@@ -1460,6 +1468,31 @@ LAST_ENGINE_OUTPUT = {
   meta: out.meta || {}
 };
 
+  try {
+    window.LC_LAST_ENGINE_RUN = {
+      completed_at: new Date().toISOString(),
+      internal_strong_count: (out.internal_strong || []).length,
+      semantic_optional_count: (out.semantic_optional || []).length,
+      hidden_count: (out.hidden || []).length
+    };
+
+    if (typeof window.lcAutosaveWorkspaceSession === "function") {
+      window.lcSetAutosaveStatus?.("saving");
+      const autosaveResult = await window.lcAutosaveWorkspaceSession("after_engine_run");
+
+      if (autosaveResult && autosaveResult.ok) {
+        window.lcSetAutosaveStatus?.("saved");
+      } else {
+        window.lcSetAutosaveStatus?.("error", autosaveResult);
+      }
+    }
+  } catch (autosaveErr) {
+    console.warn("[LinkCraftor Autosave] after engine run failed:", autosaveErr);
+    window.lcSetAutosaveStatus?.("error", autosaveErr);
+  }
+
+
+
 return (appliedStrong || 0) + (appliedOptional || 0);
 }
 
@@ -2305,6 +2338,22 @@ fileInput?.addEventListener("change", async () => {
     } catch {}
 
     saveState();
+
+      try {
+        if (typeof window.lcAutosaveWorkspaceSession === "function") {
+          window.lcSetAutosaveStatus?.("saving");
+          const autosaveResult = await window.lcAutosaveWorkspaceSession("after_document_upload");
+          if (autosaveResult && autosaveResult.ok) {
+            window.lcSetAutosaveStatus?.("saved");
+          } else {
+            window.lcSetAutosaveStatus?.("error", autosaveResult);
+          }
+        }
+      } catch (autosaveErr) {
+        console.warn("[LinkCraftor Autosave] after upload failed:", autosaveErr);
+        window.lcSetAutosaveStatus?.("error", autosaveErr);
+      }
+
 
     const msgParts = [`Uploaded ${accepted} file(s)`];
 
@@ -4247,6 +4296,36 @@ function rememberAppliedLink(phrase, topicId, url, title, kind) {
           kind,
           source: "rememberAppliedLink"
         }).catch(e => console.warn("[Decision] accepted emit failed", e));
+
+        try {
+          window.LC_ACCEPTED_LINKS = window.LC_ACCEPTED_LINKS || [];
+          window.LC_ACCEPTED_LINKS.push({
+            phrase,
+            topicId,
+            url,
+            title,
+            kind,
+            accepted_at: new Date().toISOString()
+          });
+
+          if (typeof window.lcAutosaveWorkspaceSession === "function") {
+            window.lcAutosaveWorkspaceSession("after_accept_link")
+              .then(function(result){
+                if (result && result.ok) {
+                  window.lcSetAutosaveStatus?.("saved");
+                } else {
+                  window.lcSetAutosaveStatus?.("error", result);
+                }
+              })
+              .catch(function(err){
+                console.warn("[LinkCraftor Autosave] after accept link failed:", err);
+                window.lcSetAutosaveStatus?.("error", err);
+              });
+          }
+        } catch (autosaveErr) {
+          console.warn("[LinkCraftor Autosave] after accept link setup failed:", autosaveErr);
+        }
+
       }
     } catch (e) {
       console.warn("[Decision] accepted emit setup failed", e);
@@ -5719,6 +5798,22 @@ await fetch(
   { method: "POST" }
 );
 
+
+  try {
+    if (typeof window.lcAutosaveWorkspaceSession === "function") {
+      window.lcSetAutosaveStatus?.("saving");
+      const autosaveResult = await window.lcAutosaveWorkspaceSession("after_draft_import");
+      if (autosaveResult && autosaveResult.ok) {
+        window.lcSetAutosaveStatus?.("saved");
+      } else {
+        window.lcSetAutosaveStatus?.("error", autosaveResult);
+      }
+    }
+  } catch (autosaveErr) {
+    console.warn("[LinkCraftor Autosave] after draft import failed:", autosaveErr);
+    window.lcSetAutosaveStatus?.("error", autosaveErr);
+  }
+
 alert(`Draft saved to backend. Total drafts: ${rows.length}`);
 
 
@@ -5879,6 +5974,33 @@ function wireDecisionButtons(){
       uiControl: isAccept ? "kw-accept" : "kw-reject",
       kind
     });
+
+      try {
+        window.LC_REJECTED_LINKS = window.LC_REJECTED_LINKS || [];
+        window.LC_REJECTED_LINKS.push({
+          phrase,
+          topicId,
+          url,
+          title,
+          kind,
+          rejected_at: new Date().toISOString()
+        });
+
+        if (typeof window.lcAutosaveWorkspaceSession === "function") {
+          window.lcSetAutosaveStatus?.("saving");
+          const autosaveResult = await window.lcAutosaveWorkspaceSession("after_reject_link");
+
+          if (autosaveResult && autosaveResult.ok) {
+            window.lcSetAutosaveStatus?.("saved");
+          } else {
+            window.lcSetAutosaveStatus?.("error", autosaveResult);
+          }
+        }
+      } catch (autosaveErr) {
+        console.warn("[LinkCraftor Autosave] after reject link failed:", autosaveErr);
+        window.lcSetAutosaveStatus?.("error", autosaveErr);
+      }
+
   }, true);
 }
 
@@ -6075,6 +6197,22 @@ try {
   const after = ws ? (await apiLoadImportedUrls(ws, 200000)).length : 0;
 
   if (ws) await updateUnifiedImportCount(ws);
+
+    try {
+      if (typeof window.lcAutosaveWorkspaceSession === "function") {
+        window.lcSetAutosaveStatus?.("saving");
+        const autosaveResult = await window.lcAutosaveWorkspaceSession("after_sitemap_import");
+        if (autosaveResult && autosaveResult.ok) {
+          window.lcSetAutosaveStatus?.("saved");
+        } else {
+          window.lcSetAutosaveStatus?.("error", autosaveResult);
+        }
+      }
+    } catch (autosaveErr) {
+      console.warn("[LinkCraftor Autosave] after sitemap import failed:", autosaveErr);
+      window.lcSetAutosaveStatus?.("error", autosaveErr);
+    }
+
 
   if (ws) {
     try {
@@ -6817,67 +6955,83 @@ if (!window.__tmsReplyComposerBound) {
 
   window.__LC_RELOAD_ORCHESTRATOR_STARTED = true;
 
-  async function executeReloadActions(source = "reload_governance") {
+  async function executeReloadActions(source = "reload_governance", layers = null) {
 
     try {
       const ws = getCurrentWorkspaceId("default");
 
-      try {
-        if (typeof window.__LC_reloadFromBackend === "function") {
-          await window.__LC_reloadFromBackend();
-        } else if (typeof window.reloadFromBackend === "function") {
-          await window.reloadFromBackend();
+      const requestedLayers = layers && typeof layers === "object" ? layers : {};
+      const hasLayer = (name) => {
+        if (!requestedLayers || !Object.keys(requestedLayers).length) return true;
+        return !!requestedLayers[name];
+      };
+
+      if (hasLayer("backend_state_reload")) {
+        try {
+          if (typeof window.__LC_reloadFromBackend === "function") {
+            await window.__LC_reloadFromBackend();
+          } else if (typeof window.reloadFromBackend === "function") {
+            await window.reloadFromBackend();
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] backend_state_reload failed", e?.message || e);
         }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] backend_state_reload failed", e?.message || e);
       }
 
-      try {
-        if (typeof loadImportsFromBackend === "function") {
-          await loadImportsFromBackend();
+      if (hasLayer("runtime_refresh")) {
+        try {
+          if (typeof loadImportsFromBackend === "function") {
+            await loadImportsFromBackend();
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] loadImportsFromBackend failed", e?.message || e);
         }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] loadImportsFromBackend failed", e?.message || e);
+
+        try {
+          if (typeof loadDraftsFromBackend === "function") {
+            await loadDraftsFromBackend(ws);
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] loadDraftsFromBackend failed", e?.message || e);
+        }
       }
 
-      try {
-        if (typeof loadDraftsFromBackend === "function") {
-          await loadDraftsFromBackend(ws);
+      if (hasLayer("panel_refresh")) {
+        try {
+          if (typeof refreshDropdown === "function") {
+            refreshDropdown();
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] refreshDropdown failed", e?.message || e);
         }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] loadDraftsFromBackend failed", e?.message || e);
       }
 
-      try {
-        if (typeof refreshDropdown === "function") {
-          refreshDropdown();
+      if (hasLayer("highlight_repaint")) {
+        try {
+          if (typeof underlineLinkedPhrases === "function") {
+            underlineLinkedPhrases();
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] underlineLinkedPhrases failed", e?.message || e);
         }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] refreshDropdown failed", e?.message || e);
+
+        try {
+          if (typeof highlightBucketKeywords === "function") {
+            highlightBucketKeywords();
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] highlightBucketKeywords failed", e?.message || e);
+        }
       }
 
-      try {
-        if (typeof underlineLinkedPhrases === "function") {
-          underlineLinkedPhrases();
+      if (hasLayer("panel_refresh")) {
+        try {
+          if (typeof rebuildEngineHighlightsPanel === "function") {
+            rebuildEngineHighlightsPanel();
+          }
+        } catch (e) {
+          console.warn("[RELOAD_GOVERNANCE] rebuildEngineHighlightsPanel failed", e?.message || e);
         }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] underlineLinkedPhrases failed", e?.message || e);
-      }
-
-      try {
-        if (typeof highlightBucketKeywords === "function") {
-          highlightBucketKeywords();
-        }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] highlightBucketKeywords failed", e?.message || e);
-      }
-
-      try {
-        if (typeof rebuildEngineHighlightsPanel === "function") {
-          rebuildEngineHighlightsPanel();
-        }
-      } catch (e) {
-        console.warn("[RELOAD_GOVERNANCE] rebuildEngineHighlightsPanel failed", e?.message || e);
       }
 
       window.__LC_LAST_RELOAD_GOVERNANCE_RUN = {
@@ -6950,9 +7104,12 @@ if (!window.__tmsReplyComposerBound) {
 
       window.__LC_LAST_RELOAD_STATE_PROCESSED = lastReloadAt;
 
+      const layers = data?.state?.layers || {};
+
       if (typeof window.__LC_executeReloadGovernance === "function") {
         await window.__LC_executeReloadGovernance(
-          "reload_state_poller"
+          "reload_state_poller",
+          layers
         );
       }
 
@@ -6973,3 +7130,408 @@ if (!window.__tmsReplyComposerBound) {
   );
 
 })();
+
+
+
+// =====================================================
+// Profile Logout / Hard Workspace Disconnect
+// =====================================================
+
+(function initProfileLogoutHardDisconnect() {
+  document.addEventListener("DOMContentLoaded", () => {
+    const profileBtn = document.getElementById("profileMenuBtn");
+    const profileDropdown = document.getElementById("profileDropdown");
+    const logoutBtn = document.getElementById("btnProfileLogout");
+
+    if (!profileBtn || !profileDropdown || !logoutBtn) {
+      return;
+    }
+
+    profileBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      profileDropdown.style.display =
+        profileDropdown.style.display === "none" || !profileDropdown.style.display
+          ? "block"
+          : "none";
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!profileDropdown.contains(e.target) && !profileBtn.contains(e.target)) {
+        profileDropdown.style.display = "none";
+      }
+    });
+
+    logoutBtn.addEventListener("click", async () => {
+      const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+      const ws = getCurrentWorkspaceId("");
+
+        try {
+          if (typeof window.lcAutosaveWorkspaceSession === "function") {
+            window.lcSetAutosaveStatus?.("saving");
+
+            const autosaveResult =
+              await window.lcAutosaveWorkspaceSession("before_logout_final_autosave");
+
+            if (autosaveResult && autosaveResult.ok) {
+              window.lcSetAutosaveStatus?.("saved");
+              console.log("[Logout] Final autosave completed");
+            } else {
+              console.warn("[Logout] Final autosave returned failure", autosaveResult);
+              window.lcSetAutosaveStatus?.("error", autosaveResult);
+              showToast?.(errorBox, "Logout stopped: final autosave failed.", 2600);
+              return;
+            }
+          }
+        } catch (autosaveErr) {
+          console.warn("[Logout] Final autosave failed", autosaveErr);
+          window.lcSetAutosaveStatus?.("error", autosaveErr);
+          showToast?.(errorBox, "Logout stopped: final autosave failed.", 2600);
+          return;
+        }
+
+
+
+      const domainModal = document.getElementById("domainModal");
+      const domainInput = document.getElementById("domainInput");
+
+      if (profileDropdown) {
+        profileDropdown.style.display = "none";
+      }
+
+      if (ws) {
+        try {
+          await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+            method: "POST",
+          });
+        } catch (e) {
+          console.warn("[Logout] file session clear failed:", e?.message || e);
+        }
+
+        try {
+          await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+            method: "POST",
+          });
+        } catch (e) {
+          console.warn("[Logout] URL clear failed:", e?.message || e);
+        }
+
+        try {
+          await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+            method: "POST",
+          });
+        } catch (e) {
+          console.warn("[Logout] draft clear failed:", e?.message || e);
+        }
+      }
+
+      try { localStorage.removeItem("lc_domain"); } catch {}
+      try { localStorage.removeItem("lc_workspace_id"); } catch {}
+
+      window.LINKCRAFTOR_WORKSPACE_ID = "";
+      window.CURRENT_WORKSPACE_ID = "";
+      window.LC_WORKSPACE_ID = "";
+      window.LC_ACTIVE_DOC_ID = "";
+
+      try { IMPORTED_URLS = new Set(); } catch {}
+      try { DRAFT_TOPICS = []; } catch {}
+      try { LAST_ENGINE_OUTPUT = null; } catch {}
+      try { window.__LC_LAST_RELOAD_STATE_PROCESSED = null; } catch {}
+
+      try {
+        if (typeof setImportCount === "function") {
+          setImportCount(0);
+        } else {
+          const importCount = document.getElementById("importCount");
+          if (importCount) importCount.textContent = "0";
+        }
+      } catch {}
+
+      try {
+        const panelIds = [
+          "detectedKeywords",
+          "linkSuggestions",
+          "unmatchedTopics",
+          "engineHighlightsPanel",
+          "draftTopicsPanel"
+        ];
+
+        for (const id of panelIds) {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = "";
+        }
+      } catch {}
+
+      try {
+        document.querySelectorAll("mark.kwd, mark[data-phrase]").forEach((mark) => {
+          const text = document.createTextNode(mark.textContent || "");
+          mark.replaceWith(text);
+        });
+      } catch {}
+
+      try {
+        if (typeof updateConnectionStatus === "function") {
+          updateConnectionStatus("");
+        }
+      } catch {}
+
+      if (domainInput) {
+        domainInput.value = "";
+      }
+
+      if (domainModal) {
+        domainModal.style.display = "flex";
+      }
+
+      console.log("[Logout] Hard workspace disconnect complete. Domain reconnect required.");
+    });
+  });
+})();
+
+
+// ============================================================
+// LinkCraftor Workspace Autosave Engine
+// Phase 3.1: Base autosave function
+// ============================================================
+
+window.LC_AUTOSAVE_STATE = window.LC_AUTOSAVE_STATE || {
+  lastSavedAt: null,
+  saving: false,
+  lastError: null
+};
+
+function lcGetAutosaveWorkspaceId(){
+  try {
+    return (
+      window.LC_WORKSPACE_ID ||
+      window.CURRENT_WORKSPACE_ID ||
+      (typeof getCurrentWorkspaceId === "function" ? getCurrentWorkspaceId("ws_betterhealthcheck_com") : "") ||
+      "ws_betterhealthcheck_com"
+    );
+  } catch(e) {
+    return "ws_betterhealthcheck_com";
+  }
+}
+
+function lcGetAutosaveSessionId(){
+  try {
+    if (window.LC_ACTIVE_SESSION_ID) return window.LC_ACTIVE_SESSION_ID;
+
+    const ws = lcGetAutosaveWorkspaceId();
+    const key = "lc_active_session_id_" + ws;
+    let existing = localStorage.getItem(key);
+
+    if (!existing) {
+      existing = "autosave_" + new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 14);
+      localStorage.setItem(key, existing);
+    }
+
+    window.LC_ACTIVE_SESSION_ID = existing;
+    return existing;
+  } catch(e) {
+    return "autosave_fallback_session";
+  }
+}
+
+function lcGetEditorSnapshot(){
+  const editor =
+    document.querySelector("#editor") ||
+    document.querySelector(".ql-editor") ||
+    document.querySelector("[contenteditable='true']");
+
+  const html = editor ? editor.innerHTML : "";
+  const text = editor ? editor.innerText : "";
+
+  return {
+    document_id: window.LC_ACTIVE_DOCUMENT_ID || window.ACTIVE_DOCUMENT_ID || "active_document",
+    title: window.LC_ACTIVE_DOCUMENT_TITLE || document.title || "Untitled Document",
+    filename: window.LC_ACTIVE_DOCUMENT_FILENAME || "",
+    html: html,
+    text: text,
+    metadata: {
+      source: "frontend_autosave",
+      captured_at: new Date().toISOString()
+    }
+  };
+}
+
+async function lcAutosaveWorkspaceSession(reason){
+  if (window.LC_AUTOSAVE_STATE.saving) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: "autosave_already_running"
+    };
+  }
+
+  window.LC_AUTOSAVE_STATE.saving = true;
+  window.LC_AUTOSAVE_STATE.lastError = null;
+
+  try {
+    const ws = lcGetAutosaveWorkspaceId();
+    const sessionId = lcGetAutosaveSessionId();
+    const doc = lcGetEditorSnapshot();
+
+    const payload = {
+      workspace_id: ws,
+      session_id: sessionId,
+      domain: window.LC_CONNECTED_DOMAIN || window.CURRENT_DOMAIN || "",
+      title: window.LC_ACTIVE_SESSION_TITLE || "Autosaved Workspace Session",
+      active_document_id: doc.document_id,
+      documents: [doc],
+      imported_urls: window.IMPORTED_URLS || window.LC_IMPORTED_URLS || [],
+      draft_topics: window.DRAFT_TOPICS || window.LC_DRAFT_TOPICS || [],
+      engine_state: {
+        reason: reason || "manual_autosave",
+        last_engine_run: window.LC_LAST_ENGINE_RUN || null,
+        accepted_links: window.LC_ACCEPTED_LINKS || [],
+        rejected_links: window.LC_REJECTED_LINKS || [],
+        manual_links: window.LC_MANUAL_LINKS || []
+      },
+      decisions: window.LC_LINK_DECISIONS || []
+    };
+
+    const res = await fetch("/api/workspace/autosave", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data.detail || "Autosave failed");
+    }
+
+    window.LC_AUTOSAVE_STATE.lastSavedAt = data.saved_at || new Date().toISOString();
+    window.LC_AUTOSAVE_STATE.saving = false;
+
+    console.log("[LinkCraftor Autosave] saved", data);
+
+    return data;
+  } catch (err) {
+    window.LC_AUTOSAVE_STATE.saving = false;
+    window.LC_AUTOSAVE_STATE.lastError = String(err && err.message ? err.message : err);
+
+    console.warn("[LinkCraftor Autosave] failed", err);
+
+    return {
+      ok: false,
+      error: window.LC_AUTOSAVE_STATE.lastError
+    };
+  }
+}
+
+window.lcAutosaveWorkspaceSession = lcAutosaveWorkspaceSession;
+
+
+
+// ============================================================
+// LinkCraftor Workspace Autosave Engine
+// Phase 3.2 + 3.9: Autosave timer and status display
+// ============================================================
+
+function lcEnsureAutosaveStatusEl(){
+  let el = document.getElementById("lcAutosaveStatus");
+
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "lcAutosaveStatus";
+    el.style.position = "fixed";
+    el.style.right = "18px";
+    el.style.bottom = "18px";
+    el.style.zIndex = "99999";
+    el.style.padding = "8px 12px";
+    el.style.borderRadius = "999px";
+    el.style.background = "rgba(15, 23, 42, 0.92)";
+    el.style.color = "#ffffff";
+    el.style.fontSize = "12px";
+    el.style.fontWeight = "600";
+    el.style.boxShadow = "0 8px 24px rgba(0,0,0,0.18)";
+    el.style.display = "none";
+    el.textContent = "Saved";
+    document.body.appendChild(el);
+  }
+
+  return el;
+}
+
+function lcSetAutosaveStatus(status, detail){
+  const el = lcEnsureAutosaveStatusEl();
+
+  if (status === "saving") {
+    el.textContent = "Saving...";
+    el.style.display = "block";
+    return;
+  }
+
+  if (status === "saved") {
+    el.textContent = "Saved";
+    el.style.display = "block";
+
+    setTimeout(function(){
+      if (el.textContent === "Saved") {
+        el.style.display = "none";
+      }
+    }, 2500);
+
+    return;
+  }
+
+  if (status === "error") {
+    el.textContent = "Autosave failed";
+    el.style.display = "block";
+    console.warn("[LinkCraftor Autosave Status]", detail || "");
+  }
+}
+
+async function lcRunTimedAutosave(){
+  try {
+    lcSetAutosaveStatus("saving");
+    const result = await window.lcAutosaveWorkspaceSession?.("timer_30_seconds");
+
+    if (result && result.ok) {
+      lcSetAutosaveStatus("saved");
+    } else {
+      lcSetAutosaveStatus("error", result);
+    }
+
+    return result;
+  } catch(e) {
+    lcSetAutosaveStatus("error", e);
+    return {
+      ok: false,
+      error: String(e && e.message ? e.message : e)
+    };
+  }
+}
+
+function lcStartAutosaveTimer(){
+  if (window.LC_AUTOSAVE_TIMER_STARTED) {
+    return;
+  }
+
+  window.LC_AUTOSAVE_TIMER_STARTED = true;
+
+  window.LC_AUTOSAVE_TIMER = setInterval(function(){
+    lcRunTimedAutosave();
+  }, 30000);
+
+  console.log("[LinkCraftor Autosave] 30-second timer started");
+}
+
+window.lcSetAutosaveStatus = lcSetAutosaveStatus;
+window.lcRunTimedAutosave = lcRunTimedAutosave;
+window.lcStartAutosaveTimer = lcStartAutosaveTimer;
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", function(){
+    lcStartAutosaveTimer();
+  });
+} else {
+  lcStartAutosaveTimer();
+}
+

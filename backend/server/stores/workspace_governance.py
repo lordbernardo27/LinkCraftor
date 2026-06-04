@@ -1244,6 +1244,47 @@ def detect_stale_runtime_state(
     return issues
 
 
+
+
+def classify_stale_issue_severity(issue: GovernanceIssue) -> str:
+    code = str(issue.code or "")
+
+    info_codes = {
+        "stale_upload_structure_validation",
+        "stale_upload_structure_snapshot",
+    }
+
+    warning_codes = {
+        "stale_active_phrase_set_from_upload_phrase_pool",
+        "stale_target_pool_from_active_phrase_pool",
+        "stale_runtime_state_from_active_phrase_pool",
+        "stale_runtime_cache_from_active_phrase_pool",
+    }
+
+    blocking_codes = {
+        "stale_upload_phrase_pool_from_upload_structure",
+        "stale_active_phrase_pool_from_active_phrase_set",
+    }
+
+    if code in blocking_codes:
+        return "BLOCKING"
+    if code in warning_codes:
+        return "WARNING"
+    if code in info_codes:
+        return "INFO"
+
+    return "WARNING"
+
+
+def decorate_stale_issues(issues: List[GovernanceIssue]) -> List[Dict[str, Any]]:
+    decorated = []
+    for issue in issues:
+        data = asdict(issue)
+        data["stale_severity"] = classify_stale_issue_severity(issue)
+        decorated.append(data)
+    return decorated
+
+
 def generate_workspace_stale_report(
     workspace_id: str,
 ) -> Dict[str, Any]:
@@ -1256,20 +1297,53 @@ def generate_workspace_stale_report(
     issues.extend(detect_stale_target_pools(workspace_id))
     issues.extend(detect_stale_runtime_state(workspace_id))
 
-    stale_detected = len(issues) > 0
+    decorated_issues = decorate_stale_issues(issues)
 
-    status = STALE if stale_detected else HEALTHY
+    blocking_stale_issues = [
+        issue for issue in decorated_issues
+        if issue.get("stale_severity") == "BLOCKING"
+    ]
+
+    warning_stale_issues = [
+        issue for issue in decorated_issues
+        if issue.get("stale_severity") == "WARNING"
+    ]
+
+    info_stale_issues = [
+        issue for issue in decorated_issues
+        if issue.get("stale_severity") == "INFO"
+    ]
+
+    stale_detected = len(blocking_stale_issues) > 0
+    advisory_stale_detected = bool(warning_stale_issues or info_stale_issues)
+
+    if blocking_stale_issues:
+        status = STALE
+    elif warning_stale_issues:
+        status = WARNING
+    elif info_stale_issues:
+        status = HEALTHY
+    else:
+        status = HEALTHY
 
     report = {
         "workspace_id": workspace_id,
         "status": status,
         "health_score": score_for_status(status),
         "stale_detected": stale_detected,
+        "advisory_stale_detected": advisory_stale_detected,
         "issue_count": len(issues),
-        "issues": [asdict(issue) for issue in issues],
+        "blocking_stale_count": len(blocking_stale_issues),
+        "warning_stale_count": len(warning_stale_issues),
+        "info_stale_count": len(info_stale_issues),
+        "issues": decorated_issues,
         "recommended_action": (
-            "recommend_reload_or_rebuild"
-            if stale_detected
+            "queue_blocking_stale_repair"
+            if blocking_stale_issues
+            else "recommend_reload_or_rebuild"
+            if warning_stale_issues
+            else "log_info"
+            if info_stale_issues
             else "no_action"
         ),
         "checked_at": utc_now_iso(),
@@ -2088,6 +2162,16 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
 
         repair_type = item.get("repair_type")
 
+        if should_escalate_repair(item):
+            mark_repair_escalated(
+                item,
+                reason="Repair exceeded maximum retry attempts before execution.",
+            )
+            skipped.append(item)
+            continue
+
+        mark_repair_attempt_started(item)
+
         try:
             # -------------------------
             # EXECUTION DISPATCHER
@@ -2156,7 +2240,10 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
                 state["last_runtime_refresh_executed"] = utc_now_iso()
 
             else:
-                item["status"] = "unknown_repair_type"
+                mark_repair_escalated(
+                    item,
+                    reason=f"Unknown repair type cannot be executed automatically: {repair_type}",
+                )
                 skipped.append(item)
                 continue
 
@@ -2174,18 +2261,27 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
 
             validation_failed = bool(
                 (validation_report.get("drift") or {}).get("drift_detected")
-                or (validation_report.get("stale") or {}).get("stale_detected")
+                or int((validation_report.get("drift") or {}).get("blocking_issue_count") or 0) > 0
                 or str(validation_report.get("status") or "").upper() in {
                     "DRIFTED",
-                    "STALE",
                     "REPAIR_REQUIRED",
                     "CRITICAL",
                 }
             )
 
             if validation_failed:
-                item["status"] = "failed_validation"
                 item["failed_validation_at"] = utc_now_iso()
+
+                if should_escalate_repair(item):
+                    mark_repair_escalated(
+                        item,
+                        reason=f"Repair failed validation after {get_repair_attempt_count(item)} attempt(s).",
+                    )
+                else:
+                    item["status"] = "queued"
+                    item["retry_reason"] = "post_repair_validation_failed"
+                    item["next_retry_allowed"] = True
+
                 skipped.append(item)
                 continue
 
@@ -2196,8 +2292,19 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
             processed.append(item)
 
         except Exception as e:
-            item["status"] = "failed"
             item["error"] = str(e)
+            item["last_failed_at"] = utc_now_iso()
+
+            if should_escalate_repair(item):
+                mark_repair_escalated(
+                    item,
+                    reason=f"Repair failed after {get_repair_attempt_count(item)} attempt(s): {e}",
+                )
+            else:
+                item["status"] = "queued"
+                item["retry_reason"] = str(e)
+                item["next_retry_allowed"] = True
+
             skipped.append(item)
 
     # update queue state
@@ -2405,3 +2512,219 @@ def stop_workspace_governance_scheduler():
 
 
 
+
+
+
+
+MAX_REPAIR_RETRY_ATTEMPTS = 3
+
+
+def get_repair_attempt_count(item: Dict[str, Any]) -> int:
+    return int(item.get("attempt_count") or 0)
+
+
+def mark_repair_attempt_started(item: Dict[str, Any]) -> Dict[str, Any]:
+    item["attempt_count"] = get_repair_attempt_count(item) + 1
+    item["last_attempt_started_at"] = utc_now_iso()
+    return item
+
+
+def should_escalate_repair(item: Dict[str, Any]) -> bool:
+    return get_repair_attempt_count(item) >= MAX_REPAIR_RETRY_ATTEMPTS
+
+
+def mark_repair_escalated(
+    item: Dict[str, Any],
+    reason: str,
+) -> Dict[str, Any]:
+    item["status"] = "escalated"
+    item["escalated_at"] = utc_now_iso()
+    item["escalation_reason"] = str(reason or "Repair exceeded retry limit.")
+    item["requires_manual_review"] = True
+    return item
+
+
+
+def generate_owner_admin_repair_alert_summary(workspace_id: str) -> Dict[str, Any]:
+    """
+    OWNER / ADMIN REPAIR ALERT SUMMARY
+
+    Summarizes repair queue state for Owner Console display.
+    """
+    queue = load_workspace_repair_queue(workspace_id)
+    state = load_workspace_state(workspace_id)
+
+    escalated = [
+        item for item in queue
+        if str(item.get("status") or "").lower() == "escalated"
+    ]
+
+    manual_review_required = [
+        item for item in queue
+        if bool(item.get("requires_manual_review"))
+    ]
+
+    failed_validation = [
+        item for item in queue
+        if str(item.get("status") or "").lower() == "failed_validation"
+    ]
+
+    failed = [
+        item for item in queue
+        if str(item.get("status") or "").lower() == "failed"
+    ]
+
+    queued = [
+        item for item in queue
+        if str(item.get("status") or "").lower() == "queued"
+    ]
+
+    completed = [
+        item for item in queue
+        if str(item.get("status") or "").lower() == "completed"
+    ]
+
+    summary = {
+        "workspace_id": workspace_id,
+        "alert_type": "owner_admin_repair_alert_summary",
+        "total_repair_items": len(queue),
+        "queued_count": len(queued),
+        "completed_count": len(completed),
+        "failed_count": len(failed),
+        "failed_validation_count": len(failed_validation),
+        "escalated_count": len(escalated),
+        "manual_review_required_count": len(manual_review_required),
+        "has_owner_alerts": bool(escalated or manual_review_required or failed_validation or failed),
+        "latest_escalated": escalated[-1] if escalated else None,
+        "latest_manual_review_required": manual_review_required[-1] if manual_review_required else None,
+        "latest_failed_validation": failed_validation[-1] if failed_validation else None,
+        "latest_failed": failed[-1] if failed else None,
+        "last_auto_rebuild_executed": state.get("last_auto_rebuild_executed"),
+        "last_auto_rebuild_upload_phrase_count": state.get("last_auto_rebuild_upload_phrase_count"),
+        "last_auto_rebuild_active_phrase_count": state.get("last_auto_rebuild_active_phrase_count"),
+        "last_auto_reload_executed": state.get("last_auto_reload_executed"),
+        "last_auto_reload_processed": state.get("last_auto_reload_processed"),
+        "last_auto_reload_remaining": state.get("last_auto_reload_remaining"),
+        "last_repair_execution_run": state.get("last_repair_execution_run"),
+        "last_repair_processed_count": state.get("last_repair_processed_count"),
+        "last_repair_skipped_count": state.get("last_repair_skipped_count"),
+        "checked_at": utc_now_iso(),
+    }
+
+    state["last_owner_admin_repair_alert_summary"] = summary
+    state["last_owner_admin_repair_alert_checked_at"] = summary["checked_at"]
+    save_workspace_state(workspace_id, state)
+
+    return summary
+
+
+def compact_repair_item_for_owner_console(item: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """
+    Converts a full repair queue item into a compact Owner Console card payload.
+    """
+    if not isinstance(item, dict):
+        return None
+
+    return {
+        "repair_id": item.get("repair_id"),
+        "workspace_id": item.get("workspace_id"),
+        "repair_type": item.get("repair_type"),
+        "status": item.get("status"),
+        "reason": item.get("reason"),
+        "attempt_count": item.get("attempt_count"),
+        "requires_manual_review": bool(item.get("requires_manual_review")),
+        "escalation_reason": item.get("escalation_reason"),
+        "retry_reason": item.get("retry_reason"),
+        "error": item.get("error"),
+        "created_at": item.get("created_at"),
+        "updated_at": item.get("updated_at"),
+        "completed_at": item.get("completed_at"),
+        "failed_validation_at": item.get("failed_validation_at"),
+        "last_failed_at": item.get("last_failed_at"),
+        "escalated_at": item.get("escalated_at"),
+    }
+
+
+def generate_owner_admin_repair_alert_display_payload(workspace_id: str) -> Dict[str, Any]:
+    """
+    Compact Owner Console-ready repair alert payload.
+    """
+    summary = generate_owner_admin_repair_alert_summary(workspace_id)
+
+    queue = load_workspace_repair_queue(workspace_id)
+
+    escalated = [
+        compact_repair_item_for_owner_console(item)
+        for item in queue
+        if str(item.get("status") or "").lower() == "escalated"
+    ]
+
+    manual_review_required = [
+        compact_repair_item_for_owner_console(item)
+        for item in queue
+        if bool(item.get("requires_manual_review"))
+    ]
+
+    failed_validation = [
+        compact_repair_item_for_owner_console(item)
+        for item in queue
+        if str(item.get("status") or "").lower() == "failed_validation"
+    ]
+
+    failed = [
+        compact_repair_item_for_owner_console(item)
+        for item in queue
+        if str(item.get("status") or "").lower() == "failed"
+    ]
+
+    recent_activity = [
+        compact_repair_item_for_owner_console(item)
+        for item in queue[-10:]
+    ]
+
+    payload = {
+        "workspace_id": workspace_id,
+        "display_type": "owner_admin_repair_alert_display_payload",
+        "has_owner_alerts": summary.get("has_owner_alerts"),
+        "counts": {
+            "total": summary.get("total_repair_items"),
+            "queued": summary.get("queued_count"),
+            "completed": summary.get("completed_count"),
+            "failed": summary.get("failed_count"),
+            "failed_validation": summary.get("failed_validation_count"),
+            "escalated": summary.get("escalated_count"),
+            "manual_review_required": summary.get("manual_review_required_count"),
+        },
+        "cards": {
+            "latest_escalated": compact_repair_item_for_owner_console(summary.get("latest_escalated")),
+            "latest_manual_review_required": compact_repair_item_for_owner_console(summary.get("latest_manual_review_required")),
+            "latest_failed_validation": compact_repair_item_for_owner_console(summary.get("latest_failed_validation")),
+            "latest_failed": compact_repair_item_for_owner_console(summary.get("latest_failed")),
+        },
+        "lists": {
+            "escalated": escalated[-10:],
+            "manual_review_required": manual_review_required[-10:],
+            "failed_validation": failed_validation[-10:],
+            "failed": failed[-10:],
+            "recent_activity": recent_activity,
+        },
+        "last_rebuild_reload": {
+            "last_auto_rebuild_executed": summary.get("last_auto_rebuild_executed"),
+            "last_auto_rebuild_upload_phrase_count": summary.get("last_auto_rebuild_upload_phrase_count"),
+            "last_auto_rebuild_active_phrase_count": summary.get("last_auto_rebuild_active_phrase_count"),
+            "last_auto_reload_executed": summary.get("last_auto_reload_executed"),
+            "last_auto_reload_processed": summary.get("last_auto_reload_processed"),
+            "last_auto_reload_remaining": summary.get("last_auto_reload_remaining"),
+            "last_repair_execution_run": summary.get("last_repair_execution_run"),
+            "last_repair_processed_count": summary.get("last_repair_processed_count"),
+            "last_repair_skipped_count": summary.get("last_repair_skipped_count"),
+        },
+        "checked_at": utc_now_iso(),
+    }
+
+    state = load_workspace_state(workspace_id)
+    state["last_owner_admin_repair_alert_display_payload"] = payload
+    state["last_owner_admin_repair_alert_display_checked_at"] = payload["checked_at"]
+    save_workspace_state(workspace_id, state)
+
+    return payload
