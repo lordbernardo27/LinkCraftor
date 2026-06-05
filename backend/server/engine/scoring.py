@@ -1,5 +1,8 @@
 from __future__ import annotations
 from typing import Any, Dict, List, Optional
+from backend.server.stores.logical_inference_intelligence import analyze_logical_inference_v1
+from backend.server.stores.analogical_reasoning_intelligence import analyze_analogical_reasoning_v1
+from backend.server.stores.anchor_purpose_intelligence import analyze_anchor_purpose_v1
 import math
 import re
 
@@ -1112,6 +1115,52 @@ def score_candidates_for_phrase(
         )
 
         final_score = max(0.0, min(1.0, float(final_score)))
+        logical_inference = analyze_logical_inference_v1(
+            anchor_phrase=str(
+                phrase_ctx.get("phraseText")
+                or phrase_ctx.get("phrase")
+                or ""
+            ),
+            target_title=str(cand.get("title") or ""),
+            target_url=str(cand.get("url") or ""),
+            context=str(
+                phrase_ctx.get("context")
+                or phrase_ctx.get("sentence")
+                or ""
+            ),
+            link_type=str(best_kind or "internal"),
+        )
+
+        analogical_reasoning = analyze_analogical_reasoning_v1(
+            anchor_phrase=str(
+                phrase_ctx.get("phraseText")
+                or phrase_ctx.get("phrase")
+                or ""
+            ),
+            target_title=str(cand.get("title") or ""),
+            target_url=str(cand.get("url") or ""),
+            context=str(
+                phrase_ctx.get("context")
+                or phrase_ctx.get("sentence")
+                or ""
+            ),
+            link_type=str(best_kind or "internal"),
+        )
+
+        anchor_purpose = analyze_anchor_purpose_v1(
+            anchor_phrase=str(
+                phrase_ctx.get("phraseText")
+                or phrase_ctx.get("phrase")
+                or ""
+            ),
+            context=str(
+                phrase_ctx.get("context")
+                or phrase_ctx.get("sentence")
+                or ""
+            ),
+            link_type=str(best_kind or "internal"),
+        )
+
         result_item = {
             "id": cand.get("id"),
             "title": cand.get("title"),
@@ -1120,6 +1169,9 @@ def score_candidates_for_phrase(
             "kind": best_kind,
             "tier": tier,
             "score": float(final_score),
+            "logical_inference": logical_inference,
+            "analogical_reasoning": analogical_reasoning,
+            "anchor_purpose": anchor_purpose,
             "scores": signals,
             "feedback": {
                 "accepts": accepts,
