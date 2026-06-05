@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 
 import mammoth
+from backend.server.owner.audit_routes import router as owner_audit_router
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, RedirectResponse, Response, StreamingResponse
@@ -52,6 +53,8 @@ log = logging.getLogger("linkcraftor.server")
 logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="LinkCraftor API", version="0.1.0")
+
+app.include_router(owner_audit_router)
 app.include_router(workspace_autosave_router)
 
 
@@ -91,6 +94,10 @@ if STATIC_DIR.is_dir():
 
 if BUSINESS_DIR.is_dir():
     app.mount("/business", StaticFiles(directory=str(BUSINESS_DIR), html=True), name="business")
+
+OWNER_DIR = Path("backend/server/owner")
+if OWNER_DIR.is_dir():
+    app.mount("/owner", StaticFiles(directory=str(OWNER_DIR), html=True), name="owner")
 
 
 @app.get("/business", include_in_schema=False)

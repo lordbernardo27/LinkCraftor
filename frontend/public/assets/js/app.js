@@ -1594,7 +1594,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
           // No session yet ? show everything except killers
           btn.style.display = "";
         }
-      });
+      }).filter(Boolean);
     } catch {}
   }
 
@@ -5035,6 +5035,29 @@ function renderDoc(i){
   saveState();
 }
 function updateDocNavButtons(){ const b1 = $("btnPrevDoc"), b2=$("btnNextDoc"); if (!b1||!b2) return; b1.disabled = currentIndex<=0; b2.disabled = currentIndex>=docs.length-1 || docs.length===0; }
+
+function lcInstallDocsSnapshotBridge(){
+  try {
+    window.LC_getDocsSnapshot = function(){
+      try {
+        return Array.isArray(docs) ? docs : [];
+      } catch(e) {
+        return [];
+      }
+    };
+
+    window.LC_getCurrentDocIndex = function(){
+      try {
+        return typeof currentIndex === "number" ? currentIndex : 0;
+      } catch(e) {
+        return 0;
+      }
+    };
+  } catch(e) {}
+}
+
+lcInstallDocsSnapshotBridge();
+
 function saveState(){ try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ docs, currentIndex })); } catch {} }
 function loadState(){
   try{
@@ -6330,6 +6353,45 @@ function updateConnectionStatus(domain = "") {
   }
 }
 
+
+function lcMakeNewWorkspaceIdentity(domain, projectName){
+  const cleanDomain = String(domain || "")
+    .trim()
+    .replace(/^https?:\/\//i, "")
+    .replace(/^www\./i, "")
+    .replace(/\/.*$/, "");
+
+  const base = cleanDomain
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toLowerCase() || "workspace";
+
+  const now = new Date();
+  const stamp =
+    now.getFullYear().toString() +
+    String(now.getMonth() + 1).padStart(2, "0") +
+    String(now.getDate()).padStart(2, "0") +
+    "_" +
+    String(now.getHours()).padStart(2, "0") +
+    String(now.getMinutes()).padStart(2, "0") +
+    String(now.getSeconds()).padStart(2, "0");
+
+  const workspaceId = "ws_" + base + "_" + stamp;
+
+  const displayTime =
+    now.getFullYear().toString() + "-" +
+    String(now.getMonth() + 1).padStart(2, "0") + "-" +
+    String(now.getDate()).padStart(2, "0") + " " +
+    String(now.getHours()).padStart(2, "0") + ":" +
+    String(now.getMinutes()).padStart(2, "0");
+
+  const baseName = String(projectName || "").trim() || cleanDomain;
+  const workspaceName = baseName + " - " + displayTime;
+  const sessionId = "session_" + base + "_" + stamp;
+
+  return { workspaceId, workspaceName, sessionId, cleanDomain };
+}
+
 // ===============================
 // DOMAIN CONNECT POPUP
 // ===============================
@@ -6338,6 +6400,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const domainModal = document.getElementById("domainModal");
   const domainInput = document.getElementById("domainInput");
   const btnConnectDomain = document.getElementById("btnConnectDomain");
+    const workspaceNameInput = document.getElementById("workspaceNameInput");
 
   const savedDomain = localStorage.getItem("lc_domain") || "";
 
@@ -6387,28 +6450,51 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      const fallbackWorkspaceId =
-        "ws_" +
-        domain
-          .replace(/[^a-zA-Z0-9]+/g, "_")
-          .replace(/^_+|_+$/g, "")
-          .toLowerCase();
+        const customWorkspaceName = (workspaceNameInput?.value || "").trim();
+        const identity = lcMakeNewWorkspaceIdentity(data.domain || domain, customWorkspaceName);
 
-      const workspaceId = data.workspace_id || data.workspaceId || fallbackWorkspaceId;
-      const cleanDomain = data.domain || domain;
+        const workspaceId = identity.workspaceId;
+        const workspaceName = identity.workspaceName;
+        const sessionId = identity.sessionId;
+        const cleanDomain = identity.cleanDomain;
 
-      localStorage.setItem("lc_workspace_id", workspaceId);
-      localStorage.setItem("lc_domain", cleanDomain);
+        localStorage.setItem("lc_workspace_id", workspaceId);
+        localStorage.setItem("lc_domain", cleanDomain);
+        localStorage.setItem("lc_active_session_id_" + workspaceId, sessionId);
 
-      window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+        window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+        window.CURRENT_WORKSPACE_ID = workspaceId;
+        window.LC_WORKSPACE_ID = workspaceId;
+        window.LC_ACTIVE_SESSION_ID = sessionId;
+        window.LC_ACTIVE_SESSION_TITLE = workspaceName;
+        window.LC_CONNECTED_DOMAIN = cleanDomain;
+        window.CURRENT_DOMAIN = cleanDomain;
 
-      updateConnectionStatus(cleanDomain);
+        try {
+          await fetch("/api/workspace/workspace-folder/name", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              workspace_id: workspaceId,
+              workspace_name: workspaceName
+            })
+          });
+        } catch (profileErr) {
+          console.warn("[Domain Connect] workspace name save failed:", profileErr);
+        }
 
-      if (domainModal) {
-        domainModal.style.display = "none";
-      }
+        updateConnectionStatus(cleanDomain);
 
-      console.log("[Domain Connect] Saved workspace:", workspaceId, cleanDomain);
+        if (domainModal) {
+          domainModal.style.display = "none";
+        }
+
+        console.log("[Domain Connect] New workspace:", {
+          workspaceId,
+          workspaceName,
+          sessionId,
+          cleanDomain
+        });
     } catch (err) {
       console.error(err);
       alert("Server connection failed");
@@ -7234,6 +7320,37 @@ if (!window.__tmsReplyComposerBound) {
       window.LC_WORKSPACE_ID = "";
       window.LC_ACTIVE_DOC_ID = "";
 
+        // LC_LOGOUT_HARD_RESET_PATCH_V1
+        try { if (ws) localStorage.removeItem("lc_active_session_id_" + ws); } catch {}
+        try { localStorage.removeItem("workspace_id"); } catch {}
+
+        window.LC_ACTIVE_SESSION_ID = "";
+        window.LC_ACTIVE_SESSION_TITLE = "";
+        window.LC_CONNECTED_DOMAIN = "";
+        window.CURRENT_DOMAIN = "";
+
+        try { clearState(); } catch {}
+        try { docs.splice(0, docs.length); } catch {}
+        try { currentIndex = -1; } catch {}
+
+        try {
+          if (viewerEl) {
+            viewerEl.innerHTML = "<div class='doc-root'><p>Upload a document to begin editing...</p></div>";
+          }
+        } catch {}
+
+        try {
+          if (editor) editor.innerHTML = "";
+        } catch {}
+
+        try {
+          if (allDocs) allDocs.innerHTML = "<option value=''>All docs</option>";
+        } catch {}
+
+        try { safeSetText(topMeta, "No document loaded", "topMeta"); } catch {}
+        try { safeSetText(docMeta, "Code: ?", "docMeta"); } catch {}
+        try { safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta"); } catch {}
+
       try { IMPORTED_URLS = new Set(); } catch {}
       try { DRAFT_TOPICS = []; } catch {}
       try { LAST_ENGINE_OUTPUT = null; } catch {}
@@ -7356,6 +7473,94 @@ function lcGetEditorSnapshot(){
   };
 }
 
+
+
+
+function lcFixMojibakeText(value){
+  let text = String(value || "");
+
+  const replacements = [
+    ["\u00e2\u20ac\u201d", "\u2014"],
+    ["\u00e2\u20ac\u201c", "\u2013"],
+    ["\u00e2\u20ac\u02dc", "\u2018"],
+    ["\u00e2\u20ac\u2122", "\u2019"],
+    ["\u00e2\u20ac\u0153", "\u201c"],
+    ["\u00e2\u20ac\u009d", "\u201d"],
+    ["\u00e2\u20ac\u00a6", "\u2026"],
+    ["\u00c2\u00a0", " "],
+    ["\u00c2", ""]
+  ];
+
+  for (const pair of replacements) {
+    text = text.split(pair[0]).join(pair[1]);
+  }
+
+  return text;
+}
+
+function lcGetAutosaveDocumentsSnapshot(){
+  try {
+    const docsSource = (typeof window.LC_getDocsSnapshot === "function") ? window.LC_getDocsSnapshot() : [];
+    if (Array.isArray(docsSource) && docsSource.length) {
+      return docsSource.map(function(d, index){
+        const rawText = lcFixMojibakeText(d.text || "").trim();
+        const rawHtml = lcFixMojibakeText(d.html || "").trim();
+
+        const isPlaceholder =
+          rawText === "Upload a document to begin editing?" ||
+          rawText === "Upload a document to begin editing?" ||
+          rawHtml.includes("Upload a document to begin editing");
+
+        if (isPlaceholder) return null;
+
+        const id = d.doc_id || d.docId || d.document_id || ("doc_" + (index + 1));
+        return {
+          document_id: id,
+          doc_id: id,
+          docId: id,
+          title: lcFixMojibakeText(d.title || d.filename || ("Document " + (index + 1))),
+          filename: lcFixMojibakeText(d.filename || ""),
+          ext: d.ext || ((d.filename || "").match(/\.[^.]+$/)?.[0] || ""),
+          html: rawHtml,
+          text: rawText,
+          metadata: d.metadata || {},
+          code: d.code || d.shortCode || ""
+        };
+      });
+    }
+
+    const fallback = lcGetEditorSnapshot();
+
+    const isPlaceholder =
+      String(fallback.text || "").trim() === "Upload a document to begin editing?" ||
+      String(fallback.text || "").trim() === "Upload a document to begin editing?";
+
+    if (isPlaceholder) {
+      return [];
+    }
+
+    return [fallback];
+  } catch(e) {
+    return [];
+  }
+}
+
+function lcAutosaveArray(value){
+  try {
+    if (!value) return [];
+    if (Array.isArray(value)) return value;
+    if (value instanceof Set) return Array.from(value).map(function(item){
+      if (typeof item === "string") return { url: item };
+      return item;
+    });
+    if (value instanceof Map) return Array.from(value.values());
+    if (typeof value === "object") return Object.values(value);
+    return [];
+  } catch(e) {
+    return [];
+  }
+}
+
 async function lcAutosaveWorkspaceSession(reason){
   if (window.LC_AUTOSAVE_STATE.saving) {
     return {
@@ -7371,7 +7576,8 @@ async function lcAutosaveWorkspaceSession(reason){
   try {
     const ws = lcGetAutosaveWorkspaceId();
     const sessionId = lcGetAutosaveSessionId();
-    const doc = lcGetEditorSnapshot();
+    const autosaveDocuments = lcGetAutosaveDocumentsSnapshot();
+    const doc = autosaveDocuments[0] || lcGetEditorSnapshot();
 
     const payload = {
       workspace_id: ws,
@@ -7379,17 +7585,17 @@ async function lcAutosaveWorkspaceSession(reason){
       domain: window.LC_CONNECTED_DOMAIN || window.CURRENT_DOMAIN || "",
       title: window.LC_ACTIVE_SESSION_TITLE || "Autosaved Workspace Session",
       active_document_id: doc.document_id,
-      documents: [doc],
-      imported_urls: window.IMPORTED_URLS || window.LC_IMPORTED_URLS || [],
-      draft_topics: window.DRAFT_TOPICS || window.LC_DRAFT_TOPICS || [],
+      documents: autosaveDocuments,
+      imported_urls: lcAutosaveArray(window.IMPORTED_URLS || window.LC_IMPORTED_URLS),
+      draft_topics: lcAutosaveArray(window.DRAFT_TOPICS || window.LC_DRAFT_TOPICS),
       engine_state: {
         reason: reason || "manual_autosave",
         last_engine_run: window.LC_LAST_ENGINE_RUN || null,
-        accepted_links: window.LC_ACCEPTED_LINKS || [],
-        rejected_links: window.LC_REJECTED_LINKS || [],
-        manual_links: window.LC_MANUAL_LINKS || []
+        accepted_links: lcAutosaveArray(window.LC_ACCEPTED_LINKS),
+        rejected_links: lcAutosaveArray(window.LC_REJECTED_LINKS),
+        manual_links: lcAutosaveArray(window.LC_MANUAL_LINKS)
       },
-      decisions: window.LC_LINK_DECISIONS || []
+      decisions: lcAutosaveArray(window.LC_LINK_DECISIONS)
     };
 
     const res = await fetch("/api/workspace/autosave", {
@@ -7534,4 +7740,128 @@ if (document.readyState === "loading") {
 } else {
   lcStartAutosaveTimer();
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+// ============================================================
+// Workspace Folder Restore
+// Opens a saved workspace file directly into the editor
+// ============================================================
+
+window.LC_openWorkspaceFileInEditor = async function(workspaceId, sessionId){
+  if (!workspaceId || !sessionId) {
+    alert("This workspace has no saved session yet.");
+    return;
+  }
+
+  try {
+    const res = await fetch(
+      `/api/workspace/saved-session?workspace_id=${encodeURIComponent(workspaceId)}&session_id=${encodeURIComponent(sessionId)}`
+    );
+
+    const data = await res.json();
+
+    if (!res.ok || !data.ok) {
+      throw new Error(data.detail || "Could not open workspace");
+    }
+
+    const documentsBlock = data.documents || {};
+    const savedDocs = Array.isArray(documentsBlock.documents)
+      ? documentsBlock.documents
+      : [];
+
+    if (!savedDocs.length) {
+      alert("Workspace opened, but no saved documents were found.");
+      return;
+    }
+
+    window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+    window.CURRENT_WORKSPACE_ID = workspaceId;
+    window.LC_WORKSPACE_ID = workspaceId;
+    window.LC_ACTIVE_SESSION_ID = sessionId;
+
+    try { localStorage.setItem("lc_workspace_id", workspaceId); } catch {}
+
+    docs.splice(0, docs.length, ...savedDocs.map(function(d, index){
+      return {
+        doc_id: d.document_id || d.doc_id || ("restored_doc_" + (index + 1)),
+        docId: d.document_id || d.docId || d.doc_id || ("restored_doc_" + (index + 1)),
+        title: d.title || d.filename || ("Restored Document " + (index + 1)),
+        filename: d.filename || d.title || ("restored-document-" + (index + 1)),
+        html: d.html || "",
+        text: d.text || "",
+        metadata: d.metadata || {}
+      };
+    }));
+
+    currentIndex = 0;
+
+    try { saveState(); } catch(e) {}
+    try { refreshDropdown(); } catch(e) {}
+    try { updateDocNavButtons(); } catch(e) {}
+    try { renderDoc(0); } catch(e) { console.warn("[Workspace Restore] renderDoc failed:", e); }
+
+    try {
+      if (documentsBlock.active_document_id) {
+        const activeIdx = docs.findIndex(function(d){
+          return String(d.doc_id || d.docId || "") === String(documentsBlock.active_document_id);
+        });
+        if (activeIdx >= 0) {
+          currentIndex = activeIdx;
+          renderDoc(activeIdx);
+        }
+      }
+    } catch(e) {}
+
+    try {
+      const importsBlock = data.imported_sitemaps || {};
+      const imported = Array.isArray(importsBlock.imported_urls) ? importsBlock.imported_urls : [];
+      window.LC_IMPORTED_URLS = imported;
+      window.IMPORTED_URLS = new Set(imported);
+    } catch(e) {}
+
+    try {
+      const draftsBlock = data.draft_topics || {};
+      const draftRows = Array.isArray(draftsBlock.draft_topics) ? draftsBlock.draft_topics : [];
+      window.LC_DRAFT_TOPICS = draftRows;
+      window.DRAFT_TOPICS = draftRows;
+    } catch(e) {}
+
+    try {
+      const engineBlock = data.engine_state || {};
+      window.LC_LAST_ENGINE_RUN = engineBlock.last_engine_run || null;
+      window.LC_ACCEPTED_LINKS = engineBlock.accepted_links || [];
+      window.LC_REJECTED_LINKS = engineBlock.rejected_links || [];
+      window.LC_MANUAL_LINKS = engineBlock.manual_links || [];
+    } catch(e) {}
+
+    try { updateImportBadge(); } catch(e) {}
+    try { updateUnifiedImportCount?.(workspaceId); } catch(e) {}
+
+    const panel = document.getElementById("workFolderPanel");
+    if (panel) panel.style.display = "none";
+
+    try { showToast(errorBox, "Workspace opened.", 1800); } catch(e) {}
+
+    console.log("[Workspace Restore] opened", {
+      workspaceId,
+      sessionId,
+      documents: docs.length
+    });
+
+  } catch(e) {
+    console.warn("[Workspace Restore] failed:", e);
+    alert("Could not open workspace: " + (e.message || e));
+  }
+};
 

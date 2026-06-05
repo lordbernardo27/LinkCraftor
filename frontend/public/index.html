@@ -1231,10 +1231,6 @@ mark.kwd-sem:hover .kw-ctl{
 
     <div class="spacer"></div>
 
-    <div id="connectionStatus" class="connection-status" aria-live="polite">
-      <span id="connectionDot" class="connection-dot disconnected"></span>
-      <span id="connectionText">Disconnected</span>
-    </div>
 
     <button class="iconbtn" title="Notifications" aria-label="Notifications" type="button">🔔</button>
     <button class="iconbtn" title="Help" aria-label="Help" type="button">?</button>
@@ -1245,7 +1241,7 @@ mark.kwd-sem:hover .kw-ctl{
       title="Work Folder"
       aria-label="Work Folder"
       type="button"
-    >📁</button>
+    >WS</button>
 
     
 <div class="profile-menu-wrap">
@@ -1733,15 +1729,12 @@ mark.kwd-sem:hover .kw-ctl{
   </div>
 
   <div style="padding:12px 14px;">
-    <div style="opacity:.75;font-size:13px;margin-bottom:10px;">
-      This folder will automatically store uploads, batch runs, editor saves, and versions.
-    </div>
 
     <div id="workFolderEmpty" style="padding:14px;border:1px dashed rgba(0,0,0,.18);border-radius:12px;opacity:.75;">
-      No items yet. Upload a file or run a batch and it will appear here automatically.
+        No saved workspaces yet.
     </div>
 
-    <div id="workFolderList" style="display:none;"></div>
+    <div id="workFolderList" style="display:none;max-height:320px;overflow-y:auto;padding-right:4px;"></div>
   </div>
 </div>
 
@@ -1831,7 +1824,7 @@ mark.kwd-sem:hover .kw-ctl{
 
     <div style="padding:10px 0;font-size:13px;color:#6b7280;">
       Enter the website domain you want to work with.
-      This will create or load its workspace.
+      This will create a new saved workspace file.
     </div>
 
     <input
@@ -1841,6 +1834,14 @@ mark.kwd-sem:hover .kw-ctl{
       class="il-input"
       style="margin-top:8px;"
     />
+
+      <input
+        id="workspaceNameInput"
+        type="text"
+        placeholder="Workspace name, e.g. Pregnancy Content Sprint"
+        class="il-input"
+        style="margin-top:8px;"
+      />
 
     <div style="display:flex;gap:10px;margin-top:12px;">
       <button id="btnConnectDomain" class="btn-primary" type="button">
@@ -1856,8 +1857,258 @@ mark.kwd-sem:hover .kw-ctl{
     const panel = document.getElementById("workFolderPanel");
     const close = document.getElementById("workFolderClose");
 
+
+
+    async function loadWorkspaceFileIntoEditor(workspaceId, sessionId){
+      if (!workspaceId || !sessionId) {
+        alert("This workspace has no saved session yet.");
+        return;
+      }
+
+      try {
+        const res = await fetch(
+          `/api/workspace/saved-session?workspace_id=${encodeURIComponent(workspaceId)}&session_id=${encodeURIComponent(sessionId)}`
+        );
+        const data = await res.json();
+
+        if (!res.ok || !data.ok) {
+          throw new Error(data.detail || "Could not open workspace");
+        }
+
+        const documentsBlock = data.documents || {};
+        const savedDocs = Array.isArray(documentsBlock.documents)
+          ? documentsBlock.documents
+          : [];
+
+        if (!savedDocs.length) {
+          alert("Workspace opened, but no saved documents were found.");
+          return;
+        }
+
+        window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+        window.CURRENT_WORKSPACE_ID = workspaceId;
+        window.LC_WORKSPACE_ID = workspaceId;
+        window.LC_ACTIVE_SESSION_ID = sessionId;
+
+        try { localStorage.setItem("lc_workspace_id", workspaceId); } catch {}
+
+        if (typeof docs !== "undefined" && Array.isArray(docs)) {
+          docs.splice(0, docs.length, ...savedDocs.map(function(d, index){
+            return {
+              doc_id: d.document_id || d.doc_id || ("restored_doc_" + (index + 1)),
+              docId: d.document_id || d.docId || d.doc_id || ("restored_doc_" + (index + 1)),
+              title: d.title || d.filename || ("Restored Document " + (index + 1)),
+              filename: d.filename || d.title || ("restored-document-" + (index + 1)),
+              html: d.html || "",
+              text: d.text || "",
+              metadata: d.metadata || {}
+            };
+          }));
+        }
+
+        if (typeof currentIndex !== "undefined") {
+          currentIndex = 0;
+        }
+
+        try {
+          if (typeof refreshDropdown === "function") refreshDropdown();
+        } catch(e) {}
+
+        try {
+          if (typeof renderDoc === "function") renderDoc(0);
+        } catch(e) {
+          console.warn("[Workspace Folder] renderDoc restore failed:", e);
+        }
+
+        try {
+          if (typeof updateImportBadge === "function") updateImportBadge();
+        } catch(e) {}
+
+        try {
+          if (typeof showToast === "function") {
+            showToast(document.getElementById("error"), "Workspace opened.", 1800);
+          }
+        } catch(e) {}
+
+        const panel = document.getElementById("workFolderPanel");
+        if (panel) panel.style.display = "none";
+
+        console.log("[Workspace Folder] workspace opened", {
+          workspaceId,
+          sessionId,
+          documents: savedDocs.length
+        });
+
+      } catch(e) {
+        console.warn("[Workspace Folder] open workspace failed:", e);
+        alert("Could not open workspace: " + (e.message || e));
+      }
+    }
+
+    async function loadWorkspaceFilesIntoOldFolder(){
+      const empty = document.getElementById("workFolderEmpty");
+      const list = document.getElementById("workFolderList");
+
+      if (!list) return;
+
+      if (empty) empty.style.display = "none";
+      list.style.display = "block";
+      list.innerHTML = '<div style="font-size:13px;color:#64748b;">Loading workspaces...</div>';
+
+      function relativeTime(value){
+        try {
+          if (!value) return "";
+          const then = new Date(value).getTime();
+          const diff = Math.max(0, Math.floor((Date.now() - then) / 1000));
+          if (diff < 60) return "Last edited: just now";
+          if (diff < 3600) return "Last edited: " + Math.floor(diff / 60) + " mins ago";
+          if (diff < 86400) return "Last edited: " + Math.floor(diff / 3600) + " hours ago";
+          if (diff < 172800) return "Last edited: Yesterday";
+          return "Last edited: " + Math.floor(diff / 86400) + " days ago";
+        } catch(e) {
+          return "";
+        }
+      }
+
+      try {
+        const res = await fetch("/api/workspace/workspace-folder");
+        const data = await res.json();
+
+        if (!res.ok || !data.ok) throw new Error(data.detail || "Could not load workspace folder");
+
+        const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+
+        if (!workspaces.length) {
+          list.innerHTML = '<div style="font-size:13px;color:#64748b;">No saved workspaces yet.</div>';
+          return;
+        }
+
+        workspaces.sort(function(a, b){
+          return String(b.updated_at || "").localeCompare(String(a.updated_at || ""));
+        });
+
+        list.innerHTML = workspaces.map(function(ws){
+          const name = ws.workspace_name || ws.workspace_id || "Untitled Workspace";
+          const updated = relativeTime(ws.updated_at);
+          const workspaceId = String(ws.workspace_id || "").replace(/"/g, "&quot;");
+          const sessionId = String(ws.latest_session_id || "").replace(/"/g, "&quot;");
+
+            return `
+              <div
+                class="lc-workspace-card"
+                data-workspace-id="${workspaceId}"
+                data-session-id="${sessionId}"
+                data-workspace-name="${String(name).replace(/"/g, "&quot;")}"
+                style="
+                  width:100%;
+                  display:block;
+                  text-align:left;
+                  padding:12px;
+                  margin-bottom:8px;
+                  border:1px solid rgba(148,163,184,0.4);
+                  border-radius:12px;
+                  background:#f8fafc;
+                "
+              >
+                <button
+                  type="button"
+                  class="lc-workspace-file"
+                  data-workspace-id="${workspaceId}"
+                  data-session-id="${sessionId}"
+                  style="width:100%;text-align:left;border:0;background:transparent;padding:0;cursor:pointer;"
+                >
+                  <div style="font-weight:800;color:#0f172a;font-size:14px;">${name}</div>
+                  <div style="font-size:12px;color:#64748b;margin-top:4px;">${updated}</div>
+                </button>
+
+                <div style="display:flex;gap:8px;margin-top:10px;">
+                  <button type="button" class="lc-workspace-rename" data-workspace-id="${workspaceId}" data-workspace-name="${String(name).replace(/"/g, "&quot;")}" style="font-size:12px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:6px 8px;cursor:pointer;">Rename</button>
+                  <button type="button" class="lc-workspace-delete" data-workspace-id="${workspaceId}" data-workspace-name="${String(name).replace(/"/g, "&quot;")}" style="font-size:12px;border:1px solid #fecaca;background:#fff5f5;color:#b91c1c;border-radius:8px;padding:6px 8px;cursor:pointer;">Delete</button>
+                </div>
+              </div>
+            `;
+        }).join("");
+
+        list.querySelectorAll(".lc-workspace-file").forEach(function(btn){
+          btn.addEventListener("click", async function(){
+            if (typeof window.LC_openWorkspaceFileInEditor === "function") {
+              await window.LC_openWorkspaceFileInEditor(
+                btn.getAttribute("data-workspace-id"),
+                btn.getAttribute("data-session-id")
+              );
+            } else {
+              alert("Workspace opener is not ready yet. Refresh and try again.");
+            }
+          });
+        });
+
+          list.querySelectorAll(".lc-workspace-rename").forEach(function(btn){
+            btn.addEventListener("click", async function(e){
+              e.preventDefault();
+              e.stopPropagation();
+
+              const workspaceId = btn.getAttribute("data-workspace-id");
+              const oldName = btn.getAttribute("data-workspace-name") || "";
+              const nextName = prompt("Rename workspace:", oldName);
+
+              if (!nextName || !nextName.trim()) return;
+
+              try {
+                const res = await fetch("/api/workspace/workspace-folder/name", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    workspace_id: workspaceId,
+                    workspace_name: nextName.trim()
+                  })
+                });
+
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.detail || "Rename failed");
+
+                await loadWorkspaceFilesIntoOldFolder();
+              } catch(err) {
+                alert("Could not rename workspace: " + (err.message || err));
+              }
+            });
+          });
+
+          list.querySelectorAll(".lc-workspace-delete").forEach(function(btn){
+            btn.addEventListener("click", async function(e){
+              e.preventDefault();
+              e.stopPropagation();
+
+              const workspaceId = btn.getAttribute("data-workspace-id");
+              const name = btn.getAttribute("data-workspace-name") || workspaceId;
+
+              if (!confirm("Delete this workspace permanently?\\n\\n" + name)) return;
+
+              try {
+                const res = await fetch("/api/workspace/workspace-folder?workspace_id=" + encodeURIComponent(workspaceId), {
+                  method: "DELETE"
+                });
+
+                const data = await res.json();
+                if (!res.ok || !data.ok) throw new Error(data.detail || "Delete failed");
+
+                await loadWorkspaceFilesIntoOldFolder();
+              } catch(err) {
+                alert("Could not delete workspace: " + (err.message || err));
+              }
+            });
+          });
+
+
+
+      } catch(e) {
+        list.innerHTML = '<div style="font-size:13px;color:#dc2626;">Failed to load workspaces.</div>';
+        console.warn("[Work Folder] failed to load workspace files:", e);
+      }
+    }
+
     function openPanel(){
       if(panel) panel.style.display = "block";
+      loadWorkspaceFilesIntoOldFolder();
     }
 
     function closePanel(){

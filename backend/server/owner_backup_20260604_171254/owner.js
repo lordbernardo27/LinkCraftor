@@ -8,7 +8,7 @@ window.__OWNER_JS_BUILD__ = "2026-01-15-B";
 
 // =====================================================
 // Owner auth + auto-retry (canonical for Owner Console)
-// File: backend/app/static/owner/owner.js
+// File: backend/server/owner/owner.js
 // =====================================================
 
 // ------------------------------
@@ -73,32 +73,11 @@ window.RB_LAST = RB_LAST;
 // ------------------------------
 const OWNER_KEY_STORAGE = "LINKCRAFTOR_OWNER_KEY";
 
+
 async function ownerLoginFlow({ silent = false } = {}){
-  let key = (sessionStorage.getItem(OWNER_KEY_STORAGE) || "").trim();
-
-  if(!key){
-    if(silent) return false;
-    key = prompt("Enter Owner Key (LinkCraftor Control Tower):");
-    key = (key || "").trim();
-    if(!key) return false;
-  }
-
-  const loginRes = await fetch("/owner-api/login", {
-    method: "POST",
-    headers: {"Content-Type":"application/json"},
-    credentials: "include",
-    body: JSON.stringify({ key })
-  });
-
-  const data = await loginRes.json().catch(()=>({}));
-
-  if(!loginRes.ok || data.ok === false){
-    sessionStorage.removeItem(OWNER_KEY_STORAGE);
-    if(!silent) alert("Invalid Owner Key.");
-    return false;
-  }
-
-  sessionStorage.setItem(OWNER_KEY_STORAGE, key);
+  // TEMP DEV MODE: Owner Console password disabled while UI is being built.
+  sessionStorage.setItem(OWNER_KEY_STORAGE, "DEV_OWNER_UI_MODE");
+  setSessionChip("ok");
   return true;
 }
 
@@ -2039,7 +2018,7 @@ $("btnRbClearHistory")?.addEventListener("click", ()=>{
 
 
   // login
-  const ok = await ownerLoginFlow({ silent: false });
+  const ok = true; await ownerLoginFlow({ silent: true });
   if(!ok){
     const msg = $("msg");
     if(msg) msg.textContent = "Login cancelled.";
