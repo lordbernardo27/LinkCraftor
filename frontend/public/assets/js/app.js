@@ -135,7 +135,7 @@ async function emitDecision(eventType, phraseCtx, candidate, meta){
       (phraseCtx && phraseCtx.workspaceId) ||
       window.LC_WORKSPACE_ID ||
       window.CURRENT_WORKSPACE_ID ||
-      getCurrentWorkspaceId("ws_betterhealthcheck_com")
+      getCurrentWorkspaceId("")
     ).trim();
 const doc = String((phraseCtx && phraseCtx.docId) || window.LC_ACTIVE_DOC_ID || "doc_demo_001").trim();
 const user = String(window.LC_USER_ID || "bernard").trim();
@@ -352,37 +352,64 @@ async function apiEngineRun(payload){
   // ---- END TARGET NORMALIZATION ----
 
   // ? IMPORTANT FIX: correct backend RB2 route
-  const res = await fetch(`${base}/api/engine/run`, {
+  console.log("[RB2 FETCH START]", `${base}/api/engine/run`);
 
+  const res = await fetch(`${base}/api/engine/run`, {
     method: "POST",
     headers: { "Content-Type": "application/json; charset=utf-8" },
     body: JSON.stringify({
-      html: payload?.html || "",
+      html: "",
       text: payload?.text || "",
-      workspace_id: payload?.workspaceId || payload?.workspace_id || "ws_betterhealthcheck_com",
-      workspaceId: payload?.workspaceId || payload?.workspace_id || "ws_betterhealthcheck_com",
+      workspace_id: payload?.workspaceId || payload?.workspace_id || getCurrentWorkspaceId(""),
+      workspaceId: payload?.workspaceId || payload?.workspace_id || getCurrentWorkspaceId(""),
       docId: payload?.docId || payload?.doc_id || window.LC_ACTIVE_DOC_ID || "",
       doc_id: payload?.docId || payload?.doc_id || window.LC_ACTIVE_DOC_ID || "",
       limit: payload?.limit || 50,
-      targets: Array.isArray(payload?.targets) ? payload.targets : [],
-      include: (payload?.include && typeof payload.include === "object") ? payload.include : {},
-      block: Array.isArray(payload?.block) ? payload.block : [],
-      synonyms: (payload?.synonyms && typeof payload.synonyms === "object") ? payload.synonyms : {},
-      config: (payload?.config && typeof payload.config === "object") ? payload.config : {}
+      targets: []
     })
   });
 
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
-if (!data || data.ok !== true) throw new Error(data?.error || "RB2 backend returned ok:false");
+  console.log("[RB2 FETCH RESPONSE]", { status: res.status, ok: res.ok });
 
-const out = data || {};
+  const rawText = await res.text();
+  console.log("[RB2 FETCH TEXT LEN]", rawText.length);
+
+  let data = {};
+  try {
+    data = JSON.parse(rawText || "{}");
+  } catch (e) {
+    console.error("[RB2 JSON PARSE FAILED]", rawText.slice(0, 500));
+    throw e;
+  }
+
+  if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  if (!data || data.ok !== true) throw new Error(data?.error || "RB2 backend returned ok:false");
+
+  const out = data || {};
   try { window.__RB2_LAST_OUT = out; } catch (e) {}
 
-  console.log("[RB2 BACKEND OUT JSON]", JSON.stringify(out, null, 2));
+  console.log("[RB2 BACKEND OUT JSON]", { ok: out.ok, strong: (out.internal_strong || []).length, optional: (out.semantic_optional || []).length, meta: out.meta || {} });
  
 console.log("[RB2 SAMPLE internal_strong[0]]", (out.internal_strong && out.internal_strong[0]) || null);
 console.log("[RB2 SAMPLE semantic_optional[0]]", (out.semantic_optional && out.semantic_optional[0]) || null);
+
+try {
+  const allPaintCandidates = [
+    ...(Array.isArray(out.internal_strong) ? out.internal_strong : []),
+    ...(Array.isArray(out.semantic_optional) ? out.semantic_optional : [])
+  ];
+
+  console.log("[RB2 URL DIAGNOSTIC ALL]", JSON.stringify(allPaintCandidates.map(x => ({
+    phrase: x.phrase || x.phrase_text || x.text || x.label || "",
+    bucket: x.bucket || "",
+    source: x.source || "",
+    best_target_url: x.best_target_url || "",
+    best_target_title: x.best_target_title || "",
+    resolved_targets: Array.isArray(x.resolved_targets) ? x.resolved_targets.length : 0
+  })), null, 2));
+} catch (e) {
+  console.warn("[RB2 URL DIAGNOSTIC] failed", e);
+}
 
 return {
   internal_strong: Array.isArray(out.internal_strong) ? out.internal_strong : [],
@@ -1260,6 +1287,12 @@ function hideAutolinkProgress() {
 }
 
 async function runRB2PipelineAndHighlight(opts = {}) {
+  if (window.__LC_RB2_RUNNING === true) {
+    console.warn("[RB2] skipped duplicate in-flight run");
+    return 0;
+  }
+  window.__LC_RB2_RUNNING = true;
+  try {
   if (!viewerEl) return 0;
 
   const append        = opts.append !== false;
@@ -1270,7 +1303,26 @@ async function runRB2PipelineAndHighlight(opts = {}) {
 
   const plainText = viewerEl?.textContent || "";
 
-  const wsId = "ws_betterhealthcheck_com";
+  const wsId = (() => {
+    const domain = String(
+      window.LC_CONNECTED_DOMAIN ||
+      window.CURRENT_DOMAIN ||
+      localStorage.getItem("lc_domain") ||
+      ""
+    ).trim();
+
+    if (domain) {
+      return "ws_" + domain
+        .replace(/^https?:\/\//i, "")
+        .replace(/^www\./i, "")
+        .replace(/\/.*$/, "")
+        .replace(/[^a-zA-Z0-9]+/g, "_")
+        .replace(/^_+|_+$/g, "")
+        .toLowerCase();
+    }
+
+    return getCurrentWorkspaceId("");
+  })();
 
  console.log("[RB2 WS CHECK]", {
   wsId,
@@ -1309,6 +1361,13 @@ async function runRB2PipelineAndHighlight(opts = {}) {
     const paras = text.split(/\n{2,}/).map(p => p.trim()).filter(Boolean);
     html = paras.map(p => `<p>${escapeHtml(p).replace(/\n/g, "<br>")}</p>`).join("");
   }
+
+// Hydrate URL/topic targets before building RB2 payload.
+// Otherwise highlights can appear but links remain empty.
+try { await loadImportedUrlsLocal?.(); } catch (e) { console.warn("[RB2 FIX] loadImportedUrlsLocal failed", e); }
+try { await loadImportsFromBackend?.(); } catch (e) { console.warn("[RB2 FIX] loadImportsFromBackend failed", e); }
+try { rebuildPublishedTopics?.(); } catch (e) { console.warn("[RB2 FIX] rebuildPublishedTopics failed", e); }
+try { rebuildTitleUrlDatalists?.(); } catch (e) { console.warn("[RB2 FIX] rebuildTitleUrlDatalists failed", e); }
 
 const urlsFromSet = (IMPORTED_URLS instanceof Set) ? Array.from(IMPORTED_URLS) : [];
 const draftFromMap = (DRAFT_TOPICS instanceof Map) ? Array.from(DRAFT_TOPICS.values()) : [];
@@ -1392,14 +1451,6 @@ const payload = {
   text: cleanedRuntimeText,
   targets
 };
-
-// RB2 FIX: hydrate imported URL targets before engine run.
-// Without this, RB2 can highlight phrases but cannot attach URLs,
-// so Apply Link / Bulk Apply skips every mark because href is empty.
-try { await loadImportedUrlsLocal?.(); } catch (e) { console.warn("[RB2 FIX] loadImportedUrlsLocal failed", e); }
-try { await loadImportsFromBackend?.(); } catch (e) { console.warn("[RB2 FIX] loadImportsFromBackend failed", e); }
-try { rebuildPublishedTopics?.(); } catch (e) { console.warn("[RB2 FIX] rebuildPublishedTopics failed", e); }
-try { rebuildTitleUrlDatalists?.(); } catch (e) { console.warn("[RB2 FIX] rebuildTitleUrlDatalists failed", e); }
 
 console.log(
   "[RB2 FIX CHECK]",
@@ -1494,6 +1545,9 @@ LAST_ENGINE_OUTPUT = {
 
 
 return (appliedStrong || 0) + (appliedOptional || 0);
+  } finally {
+    window.__LC_RB2_RUNNING = false;
+  }
 }
 
 // === Auto-Link main button: run engine on CURRENT document ===
@@ -2266,7 +2320,7 @@ fileInput?.addEventListener("change", async () => {
         continue;
       }
 
-      const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+      const ws = getCurrentWorkspaceId("");
       const uploadedHashes = lcLoadUploadedHashes(ws);
       const fileHash = await lcFileSha256(file);
 
@@ -2492,7 +2546,7 @@ const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIC
 const btnClearSession = $("btnClearSession");
 btnClearSession?.addEventListener("click", async () => {
   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-  const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+  const ws = getCurrentWorkspaceId("");
 
      // Clear backend uploaded document session.
   try {
@@ -2639,6 +2693,8 @@ async function bulkApplyInContainer(root) {
   let skippedNoText = 0;
   let skippedMissingTitle = 0;
   let skippedLowConfidence = 0;
+  let skippedSuggestOnly = 0;
+  let skippedAutoLinkBlocked = 0;
 
   for (let i = 0; i < marks.length; i++) {
     const mark = marks[i];
@@ -2677,9 +2733,38 @@ async function bulkApplyInContainer(root) {
       0
     );
 
+    const suggestOnly =
+      String(ds.suggestOnly || "").toLowerCase() === "true";
+
+    const hasAutoLinkFlag =
+      String(ds.autoLinkAllowed || "").trim() !== "";
+
+    const autoLinkAllowed =
+      String(ds.autoLinkAllowed || "").toLowerCase() === "true";
+
     console.log(
       `[BulkApply] MARK #${i}: phrase="${phrase}" kind="${kind}" strength="${strength}" urlAttr="${urlAttr}" title="${title}"`
     );
+
+    if (suggestOnly) {
+      skippedSuggestOnly++;
+
+      console.log(
+        `[BulkApply] MARK #${i}: SKIP (suggest-only) ? phrase="${phrase}"`
+      );
+
+      continue;
+    }
+
+    if (hasAutoLinkFlag && !autoLinkAllowed) {
+      skippedAutoLinkBlocked++;
+
+      console.log(
+        `[BulkApply] MARK #${i}: SKIP (auto-link blocked) ? phrase="${phrase}"`
+      );
+
+      continue;
+    }
 
     if (!title) {
       skippedMissingTitle++;
@@ -3474,7 +3559,21 @@ function applyMarksFromSuggestions(items = [], opts = {}) {
       const bestTarget =
         Array.isArray(item.resolved_targets) && item.resolved_targets.length
           ? item.resolved_targets[0]
-          : null;
+          : (
+              item.best_target_url ||
+              item.best_target_title ||
+              item.target_url ||
+              item.target_title ||
+              item.url ||
+              item.title
+            )
+              ? {
+                  runtime_url: item.best_target_url || item.target_url || item.url || "",
+                  title: item.best_target_title || item.target_title || item.title || "",
+                  source_type: item.best_target_kind || item.target_kind || item.kind || "internal",
+                  document_id: item.best_target_id || item.target_id || item.topic_id || item.topicId || ""
+                }
+              : null;
 
       if (bestTarget) {
         mark.setAttribute(
@@ -3488,6 +3587,11 @@ function applyMarksFromSuggestions(items = [], opts = {}) {
 
         mark.setAttribute("data-title", bestTarget.title || "");
         mark.setAttribute("data-kind", bestTarget.source_type || "internal");
+
+        mark.setAttribute("data-auto-link-allowed", String(bestTarget.auto_link_allowed === true));
+        mark.setAttribute("data-suggest-only", String(bestTarget.suggest_only === true));
+        mark.setAttribute("data-confidence-reason", bestTarget.confidence_reason || "");
+        mark.setAttribute("data-cluster-confidence-floor", String(bestTarget.cluster_confidence_floor || ""));
 
         mark.setAttribute(
           "data-topic-id",
@@ -4265,7 +4369,7 @@ function rememberAppliedLink(phrase, topicId, url, title, kind) {
       const workspaceId =
         window.LC_WORKSPACE_ID ||
         window.CURRENT_WORKSPACE_ID ||
-        getCurrentWorkspaceId("ws_betterhealthcheck_com");
+        getCurrentWorkspaceId("");
       const docId =
         (window.LC_ACTIVE_DOC_ID || null) ||
         (docs && currentIndex >= 0 && docs[currentIndex]
@@ -4473,6 +4577,11 @@ function findEngineSuggestionsForPhrase(phrase) {
               : 0,
 
           source_type: t.source_type || "",
+
+          auto_link_allowed: t.auto_link_allowed === true,
+          suggest_only: t.suggest_only === true,
+          confidence_reason: t.confidence_reason || "",
+          cluster_confidence_floor: t.cluster_confidence_floor || "",
 
           tier: x.bucket === "strong" ? "high" : "mid",
 
@@ -4883,7 +4992,7 @@ async function syncActiveDocumentMembership(docId) {
     if (!docId) return;
 
     const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const ws = getCurrentWorkspaceId("ws_betterhealthcheck_com");
+    const ws = getCurrentWorkspaceId("");
 
     console.log("[ActiveDocSync]", docId);
 
@@ -5930,7 +6039,7 @@ function wireDecisionButtons(){
     const workspaceId =
         window.LC_WORKSPACE_ID ||
         window.CURRENT_WORKSPACE_ID ||
-        getCurrentWorkspaceId("ws_betterhealthcheck_com");
+        getCurrentWorkspaceId("");
     const docId =
       (window.LC_ACTIVE_DOC_ID || null) ||
       (docs && currentIndex >= 0 && docs[currentIndex] ? (docs[currentIndex].doc_id || docs[currentIndex].docId || null) : null);
@@ -6453,10 +6562,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const customWorkspaceName = (workspaceNameInput?.value || "").trim();
         const identity = lcMakeNewWorkspaceIdentity(data.domain || domain, customWorkspaceName);
 
-        const workspaceId = identity.workspaceId;
-        const workspaceName = identity.workspaceName;
-        const sessionId = identity.sessionId;
-        const cleanDomain = identity.cleanDomain;
+        // Use backend canonical workspace ID for all runtime engines.
+        // Do NOT use timestamped identity.workspaceId for RB2/target pools.
+        const workspaceId = data.workspace_id;
+        const workspaceName = customWorkspaceName || identity.workspaceName;
+        const sessionId = localStorage.getItem("lc_active_session_id_" + workspaceId) || identity.sessionId;
+        const cleanDomain = data.domain || identity.cleanDomain;
+
+        if (!workspaceId) {
+          alert("Could not connect domain: missing backend workspace ID");
+          return;
+        }
 
         localStorage.setItem("lc_workspace_id", workspaceId);
         localStorage.setItem("lc_domain", cleanDomain);
@@ -6607,7 +6723,7 @@ function initSupportTicketForm() {
       requester_user_id: "user_phase3_validation",
       requester_email: "phase3@example.com",
       requester_name: "Phase 3 Validation",
-      workspace_id: "ws_betterhealthcheck_com",
+      workspace_id: getCurrentWorkspaceId(""),
       plan_tier: "starter"
     };
 
@@ -7423,11 +7539,11 @@ function lcGetAutosaveWorkspaceId(){
     return (
       window.LC_WORKSPACE_ID ||
       window.CURRENT_WORKSPACE_ID ||
-      (typeof getCurrentWorkspaceId === "function" ? getCurrentWorkspaceId("ws_betterhealthcheck_com") : "") ||
-      "ws_betterhealthcheck_com"
+      (typeof getCurrentWorkspaceId === "function" ? getCurrentWorkspaceId("") : "") ||
+      ""
     );
   } catch(e) {
-    return "ws_betterhealthcheck_com";
+    return "";
   }
 }
 

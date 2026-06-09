@@ -40,8 +40,8 @@ from .routes.health import router as health_router
 from .routes.engine_run import router as engine_run_router
 from .routes.engine_decisions import router as engine_decisions_router
 
-from backend.app.routers.rb2_run import router as rb2_runner_router
-from backend.app.routers.document_registry import router as document_registry_router
+from backend.server.routes.rb2_run import router as rb2_runner_router
+from backend.server.routes.document_registry import router as document_registry_router
 from backend.server.routes.workspace_health import router as workspace_health_router
 from backend.server.routes.rebuild_routes import router as rebuild_router
 from backend.server.routes.reload_routes import router as reload_router
@@ -247,7 +247,7 @@ async def export_docx(payload: dict = Body(...)):
 site_reader_mount_error = None
 site_reader_router = None
 try:
-    from backend.app.routers.site_reader import router as site_reader_router
+    from backend.server.routes.site_reader import router as site_reader_router
 except Exception as e:
     site_reader_router = None
     site_reader_mount_error = repr(e)
@@ -280,7 +280,7 @@ if not _already_mounted("backend.server.routes.engine_scoring", "/api/engine"):
 if not _already_mounted("backend.server.routes.files", "/api"):
     app.include_router(files_router, tags=["files"])
 
-if not _already_mounted("backend.app.routers.rb2_run", "/api/rb2"):
+if not _already_mounted("backend.server.routes.rb2_run", "/api/rb2"):
     app.include_router(rb2_runner_router, prefix="/api/rb2", tags=["rb2"])
 
 if not _already_mounted("backend.server.routes.workspace_health", "/api/workspace"):
@@ -294,7 +294,7 @@ if not _already_mounted("backend.server.routes.reload_routes", "/api/reload"):
 
 app.include_router(orchestration_router)
 
-if not _already_mounted("backend.app.routers.document_registry", "/api/site/target_pools/document_registry"):
+if not _already_mounted("backend.server.routes.document_registry", "/api/site/target_pools/document_registry"):
     app.include_router(
         document_registry_router,
         prefix="/api/site/target_pools/document_registry",
@@ -305,7 +305,7 @@ if not _already_mounted("backend.server.tms.routes", "/api/tms"):
     app.include_router(tms_router)
 
 if site_reader_router is not None:
-    if not _already_mounted("backend.app.routers.site_reader", "/api/site"):
+    if not _already_mounted("backend.server.routes.site_reader", "/api/site"):
         app.include_router(site_reader_router, prefix="/api/site", tags=["site-reader"])
 
 
@@ -321,3 +321,7 @@ def routes():
         if path:
             out.append({"path": path, "methods": methods})
     return {"routes": out, "site_reader_mount_error": site_reader_mount_error}
+
+
+
+

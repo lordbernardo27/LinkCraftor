@@ -1,4 +1,4 @@
-// public/assets/js/modules/engine-api.js
+﻿// public/assets/js/modules/engine-api.js
 const BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
 
 async function fetchJson(url, opts) {
@@ -8,33 +8,24 @@ async function fetchJson(url, opts) {
   });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`${res.status} ${res.statusText} — ${text}`);
+    throw new Error(`${res.status} ${res.statusText} â€” ${text}`);
   }
   return res.json();
 }
 
-/** External (local) references — returns an array of {title, url, domain, abstract, year, score, provider, id} */
+/** External references — uses the real external resolver at /api/external/resolve */
 export async function getExternalLocal(anchor, { context = "", limit = 8 } = {}) {
   const params = new URLSearchParams({
-    anchor: String(anchor || ""),
-    context: String(context || ""),
-    limit: String(limit || 8),
+    phrase: String(anchor || ""),
+    lang: "en",
   });
 
-  // Try GET first (cheap), then POST fallback
-  try {
-    const j = await fetchJson(`${BASE}/engine/external/local?${params.toString()}`);
-    return Array.isArray(j?.items) ? j.items : [];
-  } catch {
-    const j = await fetchJson(`${BASE}/engine/external/local`, {
-      method: "POST",
-      body: JSON.stringify({ anchor, context, limit }),
-    });
-    return Array.isArray(j?.items) ? j.items : [];
-  }
+  const j = await fetchJson(`${BASE}/api/external/resolve?${params.toString()}`);
+  const items = Array.isArray(j) ? j : (Array.isArray(j?.items) ? j.items : []);
+  return items.slice(0, Math.max(1, Number(limit || 8)));
 }
 
-/** Internal engine — echoes a deterministic demo payload for now */
+/** Internal engine â€” echoes a deterministic demo payload for now */
 export async function runInternalEngine({ html = "", text = "" } = {}) {
   return await fetchJson(`${BASE}/engine/internal`, {
     method: "POST",
@@ -46,3 +37,5 @@ export async function runInternalEngine({ html = "", text = "" } = {}) {
 export async function health() {
   return await fetchJson(`${BASE}/health`);
 }
+
+

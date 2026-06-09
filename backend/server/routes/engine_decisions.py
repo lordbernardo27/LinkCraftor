@@ -8,6 +8,8 @@ import json
 import os
 import time
 
+from backend.server.engine.workspace_topic_cluster_feedback import update_cluster_feedback_from_decision
+
 router = APIRouter(prefix="/api/engine", tags=["engine-decisions"])
 
 # Path: backend/server/data/decisions.jsonl
@@ -320,6 +322,11 @@ def ingest_decision(event: DecisionEvent):
 
     obj = event.model_dump()
     _append_jsonl(obj)
+
+    try:
+        update_cluster_feedback_from_decision(obj)
+    except Exception:
+        pass
 
     return DecisionWriteResponse(
         ok=True,

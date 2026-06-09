@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from urllib.parse import urlparse, unquote
 
 from backend.server.utils.text_normalization import fix_mojibake_text
+from backend.server.pools.target_pools.url_pool_manager import classify_url_for_pool
 
 
 def _data_dir() -> Path:
@@ -124,6 +126,11 @@ def _is_noisy_url(url: str) -> Tuple[bool, str]:
     ]
 
     for part in noisy_parts:
+        if part == "/feed":
+            if re.search(r"(^|/)feed/?$", path):
+                return True, f"excluded_path:{part}"
+            continue
+
         if part in path:
             return True, f"excluded_path:{part}"
 
@@ -167,6 +174,165 @@ def _extract_title(rec: Any, url: str) -> Tuple[str, str]:
                 return title, key
 
     return _slug_title_from_url(url), "slug"
+
+def _active_phrase_pool_path(workspace_id: str) -> Path:
+    return _data_dir() / "phrase_pools" / "active" / f"active_phrase_pool_{str(workspace_id or '').strip()}.json"
+
+
+
+
+def _priority_phrase_set_path(workspace_id: str) -> Path:
+    safe_ws = str(workspace_id or "default").strip() or "default"
+    return Path("backend/server/data/phrase_pools/priority") / f"priority_phrase_set_{safe_ws}.json"
+
+
+def _load_priority_phrases_for_target_pool(workspace_id: str, limit: int | None = None) -> List[str]:
+    path = _priority_phrase_set_path(workspace_id)
+
+    try:
+        if not path.exists():
+            return []
+
+        obj = json.loads(path.read_text(encoding="utf-8"))
+        raw = obj.get("phrases") or []
+
+        phrases: List[str] = []
+        seen = set()
+
+        for item in raw:
+            if isinstance(item, dict):
+                phrase = str(item.get("phrase") or item.get("canonical") or "").strip()
+            else:
+                phrase = str(item or "").strip()
+
+            if not phrase:
+                continue
+
+            key = phrase.lower()
+            if key in seen:
+                continue
+
+            seen.add(key)
+            phrases.append(phrase)
+
+            if limit is not None and len(phrases) >= limit:
+                break
+
+        return phrases
+
+    except Exception:
+        return []
+
+
+def _load_active_phrases_for_target_pool(workspace_id: str, limit: int | None = None) -> List[str]:
+    fp = _active_phrase_pool_path(workspace_id)
+    if not fp.exists():
+        return []
+
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    raw = []
+    if isinstance(obj, dict):
+        phrases = obj.get("phrases") or obj.get("items") or []
+        if isinstance(phrases, dict):
+            raw = list(phrases.values())
+        elif isinstance(phrases, list):
+            raw = phrases
+    elif isinstance(obj, list):
+        raw = obj
+
+    out: List[str] = []
+    seen = set()
+
+    for item in raw:
+        if isinstance(item, dict):
+            phrase = (
+                item.get("phrase")
+                or item.get("phrase_text")
+                or item.get("text")
+                or item.get("label")
+                or ""
+            )
+        else:
+            phrase = str(item or "")
+
+        phrase = str(phrase or '').lower().strip()
+        if not phrase or phrase in seen:
+            continue
+
+        seen.add(phrase)
+        out.append(phrase)
+
+        if limit is not None and len(out) >= limit:
+            break
+
+    return out
+
+
+def _phrase_tokens_for_target_pool(text: str) -> set:
+    stop = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+        "how", "in", "into", "is", "it", "of", "on", "or", "the", "to",
+        "what", "when", "where", "why", "with", "your", "you", "this",
+        "that", "these", "those"
+    }
+    return {
+        t for t in re.findall(r"[a-z0-9]{3,}", str(text or "").lower())
+        if t not in stop
+    }
+
+
+def _score_target_against_active_phrases(url: str, title: str, active_phrases: List[str], max_matches: int = 12) -> Dict[str, Any]:
+    haystack = " ".join([
+        str(title or ""),
+        str(url or "").replace("-", " ").replace("/", " "),
+    ])
+    hay_tokens = _phrase_tokens_for_target_pool(haystack)
+
+    matches: List[Dict[str, Any]] = []
+
+    for phrase in active_phrases or []:
+        phrase_tokens = _phrase_tokens_for_target_pool(phrase)
+        if not phrase_tokens or not hay_tokens:
+            continue
+
+        overlap = phrase_tokens & hay_tokens
+        if not overlap:
+            continue
+
+        overlap_ratio = len(overlap) / max(1, len(phrase_tokens))
+        exact_bonus = 0.35 if str(phrase or '').lower().strip() in str(haystack or '').lower() else 0.0
+        phrase_score = round(overlap_ratio + exact_bonus, 4)
+
+        # Do not store very weak accidental matches.
+        if phrase_score < 0.45:
+            continue
+
+        matches.append({
+            "phrase": phrase,
+            "score": phrase_score,
+            "matched_tokens": sorted(overlap),
+        })
+
+    matches.sort(key=lambda x: x.get("score", 0), reverse=True)
+    top = matches[:max_matches]
+
+    semantic_route_score = round(sum(float(x.get("score") or 0) for x in top), 4)
+    target_score = round((semantic_route_score * 100) + (len(top) * 5), 4)
+
+    return {
+        "matched_phrases": [x["phrase"] for x in top],
+        "active_phrase_matches": len(top),
+        "aliases": [x["phrase"] for x in top],
+        "phrase_match_details": top,
+        "semantic_route_score": semantic_route_score,
+        "target_score": target_score,
+    }
+
+
 
 def _page_type_hint(url: str, title: str) -> str:
     """
@@ -525,19 +691,119 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             })
             continue
 
+        classification = classify_url_for_pool(url, ws)
+        if classification.get("decision") != "keep":
+            rejected.append({
+                "url": url,
+                "reason": classification.get("reason") or "url_pool_manager_reject",
+                "class": classification.get("class"),
+            })
+            continue
+
         quality_urls.append(url)
 
     after_quality_filter = len(quality_urls)
 
     before_active_filter = len(quality_urls)
 
-    # Safety:
-    # only apply active filtering when active URLs exist
+    # Phrase-aware active URL promotion:
+    # Priority pass scans RB2 final-highlight phrases first.
+    # Secondary pass scans the remaining active phrase pool phrases second.
+    active_phrases = _load_active_phrases_for_target_pool(ws, limit=None)
+    priority_phrases = _load_priority_phrases_for_target_pool(ws, limit=None)
+
+    priority_phrase_keys = {
+        str(x or "").strip().lower()
+        for x in priority_phrases
+        if str(x or "").strip()
+    }
+
+    secondary_phrases = [
+        p for p in active_phrases
+        if str(p or "").strip().lower() not in priority_phrase_keys
+    ]
+
+    phrase_promoted_urls_count = 0
+    priority_phrase_promoted_urls_count = 0
+    secondary_phrase_promoted_urls_count = 0
+    phrase_aware_selection_applied = False
+
     if active_live_domain_url_set:
-        quality_urls = [
-            u for u in quality_urls
-            if u in active_live_domain_url_set
-        ]
+        active_limit = max(1, len(active_live_domain_url_set))
+
+        priority_scored_urls = []
+        secondary_scored_urls = []
+        filler_urls = []
+
+        for u in quality_urls:
+            lower_u = str(u or "").lower()
+
+            if (
+                "images." in lower_u
+                or "/images/" in lower_u
+                or "/gcms/" in lower_u
+                or lower_u.endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif", ".pdf"))
+            ):
+                continue
+
+            rec = pages.get(u) or pages.get(u + "/") or {}
+            title, _title_source = _extract_title(rec, u)
+
+            priority_awareness = _score_target_against_active_phrases(
+                url=u,
+                title=title,
+                active_phrases=priority_phrases,
+            )
+
+            priority_match_count = int(priority_awareness.get("active_phrase_matches") or 0)
+            priority_score = float(priority_awareness.get("target_score") or 0)
+
+            if priority_match_count > 0:
+                priority_scored_urls.append((priority_score, priority_match_count, u))
+                continue
+
+            secondary_awareness = _score_target_against_active_phrases(
+                url=u,
+                title=title,
+                active_phrases=secondary_phrases,
+            )
+
+            secondary_match_count = int(secondary_awareness.get("active_phrase_matches") or 0)
+            secondary_score = float(secondary_awareness.get("target_score") or 0)
+
+            if secondary_match_count > 0:
+                secondary_scored_urls.append((secondary_score, secondary_match_count, u))
+            elif u in active_live_domain_url_set:
+                filler_urls.append(u)
+
+        priority_scored_urls.sort(key=lambda x: (x[0], x[1]), reverse=True)
+        secondary_scored_urls.sort(key=lambda x: (x[0], x[1]), reverse=True)
+
+        promoted = []
+        seen_promoted = set()
+
+        for _score, _match_count, u in priority_scored_urls:
+            if u in seen_promoted:
+                continue
+            promoted.append(u)
+            seen_promoted.add(u)
+            if len(promoted) >= active_limit:
+                break
+
+        for _score, _match_count, u in secondary_scored_urls:
+            if len(promoted) >= active_limit:
+                break
+            if u in seen_promoted:
+                continue
+            promoted.append(u)
+            seen_promoted.add(u)
+
+        # Final live-domain target pool must contain phrase-aware URLs only.
+        quality_urls = promoted
+        priority_phrase_promoted_urls_count = len([x for x in priority_scored_urls if x[2] in seen_promoted])
+        secondary_phrase_promoted_urls_count = len([x for x in secondary_scored_urls if x[2] in seen_promoted])
+        phrase_promoted_urls_count = priority_phrase_promoted_urls_count + secondary_phrase_promoted_urls_count
+        phrase_aware_selection_applied = True
 
     after_active_filter = len(quality_urls)
 
@@ -556,6 +822,12 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             title,
             page_type,
             seed_match,
+        )
+
+        phrase_awareness = _score_target_against_active_phrases(
+            url=url,
+            title=title,
+            active_phrases=(priority_phrases + secondary_phrases),
         )
 
         item = {
@@ -581,6 +853,14 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
                 else "valid_content"
             ),
             "page_type_hint": page_type,
+
+            # Phrase-aware target intelligence from active phrase pool.
+            "aliases": phrase_awareness.get("aliases", []),
+            "matched_phrases": phrase_awareness.get("matched_phrases", []),
+            "active_phrase_matches": phrase_awareness.get("active_phrase_matches", 0),
+            "phrase_match_details": phrase_awareness.get("phrase_match_details", []),
+            "semantic_route_score": phrase_awareness.get("semantic_route_score", 0),
+            "target_score": phrase_awareness.get("target_score", 0),
 
             # Universal metadata block
             "metadata": {
@@ -608,12 +888,21 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
         "active_target_set_used": bool(active_fp.exists()),
         "active_filter_applied": bool(active_live_domain_url_set),
         "active_live_domain_urls_count": len(active_live_domain_urls),
+        "active_phrase_pool_used": bool(active_phrases),
+        "active_phrase_count": len(active_phrases),
+        "priority_phrase_set_used": bool(priority_phrases),
+        "priority_phrase_count": len(priority_phrases),
+        "secondary_phrase_count": len(secondary_phrases),
 
         "counts": {
             "candidate_urls_before_quality_filter": before_quality_filter,
             "candidate_urls_after_quality_filter": after_quality_filter,
             "candidate_urls_before_active_filter": before_active_filter,
             "candidate_urls_after_active_filter": after_active_filter,
+            "phrase_aware_selection_applied": phrase_aware_selection_applied,
+            "phrase_promoted_urls_count": phrase_promoted_urls_count,
+            "priority_phrase_promoted_urls_count": priority_phrase_promoted_urls_count,
+            "secondary_phrase_promoted_urls_count": secondary_phrase_promoted_urls_count,
             "rejected_urls": len(rejected),
             "items_written": len(items),
         },

@@ -1,10 +1,13 @@
 from __future__ import annotations
+from pathlib import Path
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Tuple
 import os
 import json
+import traceback
 import glob
 import re
 
@@ -35,6 +38,78 @@ class EngineRunRequest(BaseModel):
         allow_population_by_field_name = True
 
 
+def _priority_phrase_set_path(workspace_id: str) -> Path:
+    safe_ws = str(workspace_id or "default").strip() or "default"
+    return Path("backend/server/data/phrase_pools/priority") / f"priority_phrase_set_{safe_ws}.json"
+
+
+def _save_priority_phrase_set(
+    *,
+    workspace_id: str,
+    doc_id: str,
+    final_highlights: list,
+    selection_stats: dict | None = None,
+    density_stats: dict | None = None,
+) -> dict:
+    """
+    Persist RB2 final highlights as the priority phrase set for phrase-aware target promotion.
+
+    This does not change RB2 phrase selection.
+    It only gives downstream target builders a first-pass list of editor-selected phrases.
+    """
+    path = _priority_phrase_set_path(workspace_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    phrases = []
+    seen = set()
+
+    for item in final_highlights or []:
+        if not isinstance(item, dict):
+            continue
+
+        phrase = str(item.get("phrase") or item.get("text") or item.get("canonical") or "").strip()
+        if not phrase:
+            continue
+
+        key = phrase.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        phrases.append({
+            "phrase": phrase,
+            "canonical": str(item.get("canonical") or phrase).strip(),
+            "bucket": str(item.get("bucket") or item.get("kind") or ""),
+            "score": item.get("score"),
+            "quality_score": item.get("quality_score"),
+            "source_type": item.get("source_type"),
+            "doc_id": doc_id,
+            "section_id": item.get("section_id"),
+            "priority_source": "rb2_final_highlights",
+            "raw": item,
+        })
+
+    obj = {
+        "workspace_id": workspace_id,
+        "doc_id": doc_id,
+        "type": "priority_phrase_set",
+        "source": "rb2_final_highlights",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "priority_phrase_count": len(phrases),
+        "selection_stats": selection_stats or {},
+        "density_stats": density_stats or {},
+        "phrases": phrases,
+    }
+
+    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "saved": True,
+        "path": str(path),
+        "priority_phrase_count": len(phrases),
+    }
+
+
 def _ws_safe(ws: str) -> str:
     ws = (ws or "default").strip().lower()
     ws = re.sub(r"[^a-z0-9_\-]", "_", ws)[:80] or "default"
@@ -49,6 +124,15 @@ def _doc_safe(doc_id: str) -> str:
 
 def _data_dir() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
+
+def _active_phrase_pool_path(ws: str) -> str:
+    return os.path.join(
+        _data_dir(),
+        "phrase_pools",
+        "active",
+        f"active_phrase_pool_{_ws_safe(ws)}.json",
+    )
 
 
 def _upload_phrase_pool_path(ws: str) -> str:
@@ -74,8 +158,12 @@ def _resolve_pool_path(ws: str, doc_id: str) -> Tuple[str, str]:
     if os.path.exists(doc_pool_path):
         return doc_pool_path, "document_specific"
 
+    active_pool_path = _active_phrase_pool_path(ws)
+    if os.path.exists(active_pool_path):
+        return active_pool_path, "active_phrase_pool"
+
     fallback_pool_path = _upload_phrase_pool_path(ws)
-    return fallback_pool_path, "workspace_active_fallback"
+    return fallback_pool_path, "workspace_upload_fallback"
 
 
 def _safe_read_json(path: str) -> Any:
@@ -430,6 +518,7 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
             )
 
             best_target = resolved_targets[0] if resolved_targets else None
+
         except Exception:
             resolved_targets = []
             best_target = None
@@ -492,6 +581,78 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
             ],
         },
     }
+
+
+def _fallback_live_domain_targets(ws: str, phrase: str, limit: int = 5) -> List[Dict[str, Any]]:
+    import json
+    import re
+    from pathlib import Path
+
+    safe_ws = re.sub(r"[^a-zA-Z0-9_]+", "_", str(ws or "default")).strip("_") or "default"
+    data_dir = Path(__file__).resolve().parents[1] / "data"
+    fp = data_dir / f"site_pages_{safe_ws}.json"
+
+    if not fp.exists():
+        return []
+
+    try:
+        data = json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+
+    pages = []
+    if isinstance(data, dict) and isinstance(data.get("pages"), dict):
+        for url, page in data["pages"].items():
+            if isinstance(page, dict):
+                row = dict(page)
+                row.setdefault("url", url)
+                pages.append(row)
+    elif isinstance(data, dict) and isinstance(data.get("pages"), list):
+        pages = [x for x in data["pages"] if isinstance(x, dict)]
+    elif isinstance(data, list):
+        pages = [x for x in data if isinstance(x, dict)]
+
+    phrase_text = str(phrase or "").strip().lower()
+    phrase_tokens = set(re.findall(r"[a-z0-9]{3,}", phrase_text))
+    if not phrase_tokens:
+        return []
+
+    scored = []
+    for page in pages:
+        url = str(page.get("url") or page.get("loc") or "").strip()
+        title = str(page.get("title") or page.get("h1") or page.get("heading") or "").strip()
+        if not url:
+            continue
+
+        haystack = " ".join([
+            title,
+            url,
+            str(page.get("description") or ""),
+            str(page.get("slug") or ""),
+        ]).lower()
+
+        hay_tokens = set(re.findall(r"[a-z0-9]{3,}", haystack))
+        if not hay_tokens:
+            continue
+
+        overlap = len(phrase_tokens & hay_tokens)
+        score = overlap / max(1, len(phrase_tokens))
+
+        if phrase_text and phrase_text in haystack:
+            score += 0.4
+
+        if score >= 0.34:
+            scored.append({
+                "url": url,
+                "runtime_url": url,
+                "title": title or url,
+                "source_type": "live_domain",
+                "runtime_normalized_score": round(score, 4),
+                "via": "engine_run_live_domain_fallback",
+            })
+
+    scored.sort(key=lambda x: x.get("runtime_normalized_score", 0), reverse=True)
+    return scored[:limit]
 
 
 @router.post("/run")
@@ -570,6 +731,21 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     final_highlights = density_result.get("final_highlights", []) or []
 
+    try:
+        priority_phrase_set_result = _save_priority_phrase_set(
+            workspace_id=ws,
+            doc_id=doc_id,
+            final_highlights=final_highlights,
+            selection_stats=selection_result.get("stats", {}),
+            density_stats=density_result.get("stats", {}),
+        )
+    except Exception as e:
+        priority_phrase_set_result = {
+            "saved": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
     bucket_result = classify_highlight_buckets(final_highlights)
 
     internal_strong: List[Dict[str, Any]] = [
@@ -645,6 +821,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "density_stats": density_result.get("stats", {}),
             "selection_rejected_sample": selection_result.get("rejected", [])[:10],
             "final_highlight_count": len(final_highlights),
+            "priority_phrase_set": priority_phrase_set_result,
             "internal_found": len(internal_strong) + len(semantic_optional),
             "internal_strong_count": len(internal_strong),
             "semantic_optional_count": len(semantic_optional),

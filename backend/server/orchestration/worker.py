@@ -97,6 +97,7 @@ def run_document_upload_job(
     from backend.server.stores.upload_intel_store_v2 import build_upload_intelligence
     from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
     from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
+    from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
     from backend.server.stores.highlight_selection_engine import select_highlight_candidates
     from backend.server.stores.highlight_density_engine import apply_highlight_density
 
@@ -194,6 +195,17 @@ def run_document_upload_job(
     if not defer_active_rebuild and not defer_highlight_pipeline:
         active_pool_result = build_active_phrase_pool(workspace_id)
 
+        # Rebuild topic clusters after active phrase pool changes so
+        # cluster intelligence stays aligned with the current workspace phrase set.
+        try:
+            cluster_result = build_workspace_topic_clusters(workspace_id)
+        except Exception as cluster_err:
+            cluster_result = {
+                "ok": False,
+                "error": "topic_cluster_rebuild_failed_after_active_phrase_pool",
+                "detail": str(cluster_err)[:300],
+            }
+
         highlight_selection_result = select_highlight_candidates(
             workspace_id=workspace_id,
             doc_id=doc_id,
@@ -231,6 +243,7 @@ def run_document_upload_job(
         "intel_result": intel_result,
         "upload_pool_phrase_count": upload_pool_result.get("phrase_count") if isinstance(upload_pool_result, dict) else None,
         "active_pool_phrase_count": active_pool_result.get("phrase_count") if isinstance(active_pool_result, dict) else None,
+        "topic_cluster_rebuild": cluster_result if 'cluster_result' in locals() else None,
         "highlight_selection_stats": highlight_selection_result.get("stats") if isinstance(highlight_selection_result, dict) else None,
         "highlight_density_stats": highlight_density_result.get("stats") if isinstance(highlight_density_result, dict) else None,
         "final_highlight_count": (
@@ -488,6 +501,15 @@ def run_batch_upload_job(job_id: str, worker_id: str, payload: Dict[str, Any]) -
 
     final_active_pool_result = build_active_phrase_pool(workspace_id)
 
+    try:
+        final_cluster_result = build_workspace_topic_clusters(workspace_id)
+    except Exception as cluster_err:
+        final_cluster_result = {
+            "ok": False,
+            "error": "topic_cluster_rebuild_failed_after_batch_active_phrase_pool",
+            "detail": str(cluster_err)[:300],
+        }
+
     batch_duration_seconds = round(perf_counter() - batch_started_at, 4)
 
     batch_success_rate = round(
@@ -520,6 +542,7 @@ def run_batch_upload_job(job_id: str, worker_id: str, payload: Dict[str, Any]) -
             if isinstance(final_active_pool_result, dict)
             else None
         ),
+        "final_topic_cluster_rebuild": final_cluster_result if 'final_cluster_result' in locals() else None,
     }
 
     completed = mark_job_completed(
@@ -587,6 +610,7 @@ def run_rebuild_upload_phrase_pool_job(job_id: str, worker_id: str, payload: Dic
             "worker_id": worker_id,
             "workspace_id": workspace_id,
             "phrase_count": result.get("phrase_count") if isinstance(result, dict) else None,
+            "topic_cluster_rebuild": cluster_result if 'cluster_result' in locals() else None,
         },
     )
 
@@ -605,6 +629,7 @@ def run_rebuild_active_phrase_pool_job(job_id: str, worker_id: str, payload: Dic
         raise ValueError("Missing workspace_id for rebuild_active_phrase_pool_job.")
 
     from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
+    from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
     from backend.server.stores.highlight_selection_engine import select_highlight_candidates
     from backend.server.stores.highlight_density_engine import apply_highlight_density
 
@@ -619,6 +644,15 @@ def run_rebuild_active_phrase_pool_job(job_id: str, worker_id: str, payload: Dic
     )
 
     result = build_active_phrase_pool(workspace_id)
+
+    try:
+        cluster_result = build_workspace_topic_clusters(workspace_id)
+    except Exception as cluster_err:
+        cluster_result = {
+            "ok": False,
+            "error": "topic_cluster_rebuild_failed_after_standalone_active_phrase_pool",
+            "detail": str(cluster_err)[:300],
+        }
 
     completed = mark_job_completed(
         job_id,

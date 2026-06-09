@@ -991,12 +991,14 @@ def get_active_target_set(
 async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
     workspace_id = str(payload.get("workspace_id") or "ws_betterhealthcheck_com")
 
+    existing = _load_active_target_set(workspace_id)
+
     obj = {
-        "active_document_ids": list(payload.get("active_document_ids") or []),
-        "active_draft_ids": list(payload.get("active_draft_ids") or []),
-        "active_imported_urls": list(payload.get("active_imported_urls") or []),
-        "active_live_domain_urls": list(payload.get("active_live_domain_urls") or []),
-        "active_upload_ids": list(payload.get("active_upload_ids") or []),
+        "active_document_ids": list(payload.get("active_document_ids") or existing.get("active_document_ids") or []),
+        "active_draft_ids": list(payload.get("active_draft_ids") or existing.get("active_draft_ids") or []),
+        "active_imported_urls": list(payload.get("active_imported_urls") or existing.get("active_imported_urls") or []),
+        "active_live_domain_urls": list(payload.get("active_live_domain_urls") or existing.get("active_live_domain_urls") or []),
+        "active_upload_ids": list(payload.get("active_upload_ids") or existing.get("active_upload_ids") or []),
     }
 
     saved = _write_active_target_set(workspace_id, obj)
