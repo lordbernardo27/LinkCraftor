@@ -158,6 +158,22 @@ def _resolve_pool_path(ws: str, doc_id: str) -> Tuple[str, str]:
     if os.path.exists(doc_pool_path):
         return doc_pool_path, "document_specific"
 
+    # Support timestamped document-specific pool filenames like:
+    # upload_phrase_pool_<ws>_20260606_003745_<doc_id>.json
+    safe_ws = _ws_safe(ws)
+    safe_doc = _doc_safe(doc_id)
+    upload_dir = os.path.join(_data_dir(), "phrase_pools", "upload")
+    pattern = os.path.join(upload_dir, f"upload_phrase_pool_{safe_ws}_*{safe_doc}*.json")
+
+    matches = [
+        p for p in glob.glob(pattern)
+        if os.path.isfile(p)
+    ]
+
+    if matches:
+        matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return matches[0], "document_specific_glob_match"
+
     active_pool_path = _active_phrase_pool_path(ws)
     if os.path.exists(active_pool_path):
         return active_pool_path, "active_phrase_pool"

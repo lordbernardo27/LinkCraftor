@@ -748,10 +748,23 @@ def resolve_intelligent_targets(
 
         cluster_guard_pass = bool(item.get("cluster_runtime_trusted"))
 
-        if not cluster_guard_pass and not _passes_phrase_title_overlap_guard(
-            str(item.get("phrase") or item.get("anchor") or ""),
-            str(item.get("title") or ""),
-            str(item.get("source_type") or ""),
+        phrase_aware_guard_pass = bool(
+            str(item.get("source_type") or "") == "live_domain"
+            and (
+                bool(item.get("target_pool_phrase_exact_match"))
+                or bool(item.get("target_pool_phrase_contains_match"))
+                or int(item.get("target_pool_active_phrase_matches") or 0) >= 2
+            )
+        )
+
+        if (
+            not cluster_guard_pass
+            and not phrase_aware_guard_pass
+            and not _passes_phrase_title_overlap_guard(
+                str(item.get("phrase") or item.get("anchor") or ""),
+                str(item.get("title") or ""),
+                str(item.get("source_type") or ""),
+            )
         ):
             item["resolver_rejected"] = True
             item["resolver_rejection_reason"] = "weak_phrase_title_overlap"
