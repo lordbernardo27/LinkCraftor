@@ -526,6 +526,114 @@ def _apply_article_duplicate_url_guard(
 
 
 
+
+def _rb2_target_quality_gate(hit: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    RB2 post-resolver quality gate.
+    Keeps editor highlights only when resolver found usable target evidence.
+    """
+    if not isinstance(hit, dict):
+        return {"allowed": False, "reason": "invalid_hit"}
+
+    targets = hit.get("resolved_targets") or []
+    best = hit.get("best_target") or {}
+
+    if not targets or not isinstance(best, dict):
+        hit["rb2_target_gate_mode"] = "unlinked_opportunity"
+        hit["resolved_targets"] = []
+        hit["best_target"] = None
+        hit["best_target_url"] = ""
+        return {
+            "allowed": True,
+            "reason": "kept_quality_phrase_without_resolved_target",
+            "mode": "unlinked_opportunity",
+        }
+
+    decision = str(best.get("resolver_decision") or "").upper()
+    if decision == "REJECT":
+        return {"allowed": False, "reason": "rejected_by_resolver_decision"}
+
+    try:
+        runtime_score = float(
+            best.get("runtime_normalized_score")
+            or hit.get("best_target_runtime_score")
+            or 0
+        )
+    except Exception:
+        runtime_score = 0.0
+
+    has_url = bool(
+        hit.get("best_target_url")
+        or best.get("url")
+        or best.get("target_url")
+    )
+
+    has_structure = bool(
+        best.get("cluster_names")
+        or best.get("cluster_keywords")
+        or best.get("section_names")
+        or best.get("section_keywords")
+    )
+
+    auto_allowed = bool(best.get("auto_link_allowed"))
+    suggest_only = bool(best.get("suggest_only"))
+
+    if not has_url:
+        hit["rb2_target_gate_mode"] = "unlinked_opportunity"
+        return {
+            "allowed": True,
+            "reason": "kept_quality_phrase_target_missing_url",
+            "mode": "unlinked_opportunity",
+        }
+
+    if runtime_score < 0.35 and not has_structure:
+        return {"allowed": False, "reason": "rejected_weak_target_score_no_structure"}
+
+    if decision == "SUGGEST_ONLY" or suggest_only:
+        hit["rb2_target_gate_mode"] = "suggest_only"
+
+    if decision == "AUTO_LINK" and auto_allowed:
+        hit["rb2_target_gate_mode"] = "auto_link"
+
+    return {
+        "allowed": True,
+        "reason": "passed_rb2_target_quality_gate",
+        "runtime_score": runtime_score,
+        "has_structure": has_structure,
+        "decision": decision,
+    }
+
+
+def _apply_rb2_target_quality_gate_to_hits(hits: List[Dict[str, Any]]) -> Dict[str, Any]:
+    kept = []
+    rejected = []
+
+    for hit in hits or []:
+        gate = _rb2_target_quality_gate(hit)
+
+        if gate.get("allowed"):
+            hit["rb2_target_quality_gate"] = gate
+            kept.append(hit)
+        else:
+            rejected.append({
+                "phrase": hit.get("phrase") or hit.get("text") or "",
+                "reason": gate.get("reason"),
+                "best_target_url": hit.get("best_target_url"),
+                "hit": hit,
+            })
+
+    return {
+        "kept": kept,
+        "rejected": rejected,
+        "stats": {
+            "input_count": len(hits or []),
+            "kept_count": len(kept),
+            "rejected_count": len(rejected),
+        },
+    }
+
+
+
 def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", workspace_id: str = "") -> Dict[str, Any]:
     phrase = str(
         candidate.get("phrase")
@@ -823,6 +931,25 @@ def engine_run(payload: EngineRunRequest = Body(...)):
     final_highlights = density_result.get("final_highlights", []) or []
 
     try:
+        from pathlib import Path as _Path
+        import json as _json
+        _sel_fp = _Path("backend/server/data/debug_highlight_selection_last.json")
+        _sel_fp.parent.mkdir(parents=True, exist_ok=True)
+        _sel_fp.write_text(
+            _json.dumps({
+                "workspace_id": ws,
+                "doc_id": doc_id,
+                "selection_stats": selection_result.get("stats", {}),
+                "density_stats": density_result.get("stats", {}),
+                "selected_before_density": selection_result.get("selected", []),
+                "final_after_density": final_highlights,
+            }, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception as _sel_debug_err:
+        print("[HIGHLIGHT_SELECTION_DEBUG_WRITE_FAILED]", repr(_sel_debug_err))
+
+    try:
         priority_phrase_set_result = _save_priority_phrase_set(
             workspace_id=ws,
             doc_id=doc_id,
@@ -852,6 +979,19 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         if isinstance(candidate, dict)
         and str(candidate.get("phrase") or "").strip()
     ]
+
+    # RB2 target quality gate is now advisory only.
+    # Quality phrases must remain visible even when no target URL is found.
+    rb2_gate_result = {
+        "kept": internal_strong + semantic_optional,
+        "rejected": [],
+        "stats": {
+            "input_count": len(internal_strong + semantic_optional),
+            "kept_count": len(internal_strong + semantic_optional),
+            "rejected_count": 0,
+            "mode": "advisory_only_keep_unlinked_opportunities",
+        },
+    }
 
     all_runtime_hits = internal_strong + semantic_optional
 

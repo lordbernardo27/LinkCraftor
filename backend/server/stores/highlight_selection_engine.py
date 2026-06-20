@@ -214,35 +214,29 @@ def weak_phrase_reason(phrase: str) -> str:
 
 def score_anchor_quality(phrase: str) -> int:
     """
-    Score how good the phrase is as anchor text.
-    Higher = better.
+    Universal anchor-shape score.
+    Phrase quality itself belongs to Phrase Strength Scorer.
+    This only evaluates whether the phrase has a usable anchor shape.
     """
     words = phrase.split()
     score = 0
 
-    if 2 <= len(words) <= 6:
+    if 2 <= len(words) <= 5:
         score += 30
+    elif 6 <= len(words) <= 8:
+        score += 14
     elif len(words) == 1:
-        score += 8
-    elif 7 <= len(words) <= 8:
-        score += 15
+        score += 4
 
-    if len(phrase) >= 8:
+    if 8 <= len(phrase) <= 80:
         score += 10
-
-    if any(w in phrase for w in [
-        "calculator", "guide", "symptom", "symptoms", "treatment",
-        "medication", "medicine", "pregnancy", "ovulation", "bmi",
-        "blood pressure", "due date", "fertile window",
-    ]):
-        score += 25
 
     stop_count = sum(1 for w in words if w in WEAK_SINGLE_WORDS)
     if words:
         stop_ratio = stop_count / len(words)
-        if stop_ratio <= 0.25:
+        if stop_ratio <= 0.20:
             score += 15
-        elif stop_ratio <= 0.4:
+        elif stop_ratio <= 0.35:
             score += 5
 
     return score
@@ -323,25 +317,24 @@ def candidate_matches_rc2_pattern(
 
 def score_link_opportunity(phrase: str) -> int:
     """
-    Score whether a phrase is useful for internal linking.
+    Universal internal-link opportunity score.
+    Avoids niche hardcoding; rewards reusable topic-like anchors.
     """
+    words = phrase.split()
     score = 0
 
-    high_value_terms = [
-        "calculator", "guide", "symptom", "symptoms", "treatment",
-        "medication", "medicine", "pregnancy", "ovulation", "bmi",
-        "blood pressure", "due date", "fertile window", "gestational age",
-        "basal body temperature", "side effects", "dosage", "causes",
-        "risk", "risks", "normal range",
-    ]
+    if 2 <= len(words) <= 5:
+        score += 18
+    elif 6 <= len(words) <= 8:
+        score += 8
 
-    for term in high_value_terms:
-        if term in phrase:
-            score += 20
-            break
+    # Multi-word noun/topic phrases are generally linkable across niches.
+    if len(words) >= 2 and not any(w in WEAK_SINGLE_WORDS for w in words[-1:]):
+        score += 12
 
-    if 2 <= len(phrase.split()) <= 5:
-        score += 10
+    # Phrases with prepositions often represent specific concepts.
+    if any(w in words for w in {"of", "for", "with", "during", "after", "before", "in"}):
+        score += 6
 
     return score
 
@@ -741,69 +734,101 @@ def link_worthiness_score(
     phrase: str,
 ) -> int:
     """
-    Estimate whether a phrase is genuinely worth linking.
-    Pattern-based editorial/SEO scoring.
-    """
-    score = 50
+    Universal editorial link-worthiness score.
 
-    lower_phrase = phrase.lower()
+    Niche-neutral rule:
+    reward phrases that can stand alone as reusable topics/entities/concepts.
+    penalize sentence fragments, vague context fragments, and non-topic phrases.
+    """
+    phrase = normalize_phrase(phrase)
     tokens = phrase.split()
 
-    high_value_terms = {
-        "disease",
-        "syndrome",
-        "treatment",
-        "therapy",
-        "deficiency",
-        "blockers",
-        "pressure",
-        "osteoporosis",
-        "fractures",
-        "medications",
-        "vitamin",
-        "absorption",
-        "calcium",
-        "electrolyte",
-        "regulation",
-        "disorder",
-        "infection",
-        "diabetes",
-        "hypertension",
+    if not phrase or not tokens:
+        return 0
+
+    score = 50
+
+    weak_starts = {
+        "single", "exact", "personal", "specific", "clear", "simple",
+        "this", "that", "these", "those", "your", "their", "our",
+        "many", "several", "various", "certain",
     }
 
-    weak_value_terms = {
-        "thing",
-        "various",
-        "many",
-        "certain",
-        "more",
-        "levels",
-        "effects",
-        "issues",
-        "problems",
-        "risk",
+    weak_endings = {
+        "day", "thing", "things", "way", "ways", "number", "numbers",
+        "practice", "process", "case", "cases", "part", "parts",
+        "level", "levels", "issue", "issues", "problem", "problems",
     }
 
-    for token in tokens:
-        token_lower = token.lower()
+    fragment_verbs = {
+        "started", "starts", "begin", "begins", "began",
+        "ended", "ends", "assuming", "blends", "notice",
+        "noticed", "using", "following", "getting", "making",
+        "trying", "becoming", "seems", "appears",
+    }
 
-        if token_lower in high_value_terms:
-            score += 12
+    topic_nouns = {
+        "calculator", "guide", "checklist", "template", "software",
+        "tool", "tools", "platform", "policy", "strategy", "method",
+        "methods", "system", "systems", "process", "framework",
+        "model", "models", "plan", "plans", "rate", "rates",
+        "cost", "costs", "price", "prices", "risk", "risks",
+        "symptom", "symptoms", "treatment", "treatments",
+        "law", "clause", "contract", "insurance", "loan", "mortgage",
+        "tax", "visa", "travel", "hotel", "recipe", "product",
+        "service", "services", "course", "program", "training",
+        "metric", "metrics", "forecast", "report", "chart",
+        "definition", "comparison", "review", "tutorial",
+    }
 
-        if token_lower in weak_value_terms:
-            score -= 10
-
-    if len(tokens) >= 3:
-        score += 10
-
-    if len(tokens) == 1:
+    # Ideal anchor length across niches.
+    if 2 <= len(tokens) <= 5:
+        score += 18
+    elif 6 <= len(tokens) <= 7:
+        score += 4
+    elif len(tokens) == 1:
+        score -= 25
+    elif len(tokens) > 7:
         score -= 20
 
-    if re.search(r"\b(how|why|when|what)\b", lower_phrase):
-        score += 8
+    # Penalize sentence/context fragments.
+    if tokens[0] in weak_starts:
+        score -= 18
 
-    if re.search(r"\b(of|with|for|in)\b", lower_phrase):
-        score += 5
+    if tokens[-1] in weak_endings and len(tokens) <= 4:
+        score -= 14
+
+    if any(t in fragment_verbs for t in tokens):
+        score -= 25
+
+    # Date/context fragments are rarely reusable anchors.
+    if any(t in {
+        "today", "tomorrow", "yesterday",
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+    } for t in tokens):
+        score -= 20
+
+    # Reward standalone topic/entity-like phrases.
+    if any(t in topic_nouns for t in tokens):
+        score += 14
+
+    # Reward common conceptual constructions.
+    if any(t in {"of", "for", "with", "without", "during", "after", "before", "between"} for t in tokens):
+        score += 6
+
+    # Reward compact noun-like phrases with low stopword load.
+    stop_count = sum(1 for t in tokens if t in WEAK_SINGLE_WORDS)
+    stop_ratio = stop_count / max(len(tokens), 1)
+
+    if len(tokens) >= 2 and stop_ratio <= 0.25:
+        score += 10
+    elif stop_ratio > 0.45:
+        score -= 20
+
+    # Penalize phrases that look like sentence snippets.
+    if re.search(r"\b(rather than|so that|because|although|when you|if you)\b", phrase):
+        score -= 30
 
     return max(score, 0)
 
@@ -838,12 +863,186 @@ def suppress_low_link_worthiness(
 
     return kept, rejected
 
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None:
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def _norm_phrase_key(value: Any) -> str:
+    import re
+    s = str(value or "").strip().lower()
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def build_resolver_signal_map(resolved_targets: Any) -> Dict[str, Dict[str, Any]]:
+    """
+    Build phrase -> resolver/target signal map.
+
+    Accepts list/dict payloads from resolver/RB2 without assuming one exact schema.
+    """
+    signal_map: Dict[str, Dict[str, Any]] = {}
+
+    if not resolved_targets:
+        return signal_map
+
+    if isinstance(resolved_targets, dict):
+        raw_items = (
+            resolved_targets.get("items")
+            or resolved_targets.get("resolved_targets")
+            or resolved_targets.get("targets")
+            or resolved_targets.get("results")
+            or []
+        )
+    elif isinstance(resolved_targets, list):
+        raw_items = resolved_targets
+    else:
+        raw_items = []
+
+    for rec in raw_items:
+        if not isinstance(rec, dict):
+            continue
+
+        phrase = (
+            rec.get("phrase")
+            or rec.get("anchor")
+            or rec.get("anchor_text")
+            or rec.get("source_phrase")
+            or rec.get("matched_phrase")
+            or ""
+        )
+
+        key = _norm_phrase_key(phrase)
+        if not key:
+            continue
+
+        target = (
+            rec.get("target")
+            or rec.get("best_target")
+            or rec.get("resolved_target")
+            or rec
+        )
+
+        if not isinstance(target, dict):
+            target = rec
+
+        resolver_confidence = max(
+            _safe_float(rec.get("resolver_confidence")),
+            _safe_float(rec.get("confidence")),
+            _safe_float(rec.get("score")),
+            _safe_float(rec.get("match_score")),
+            _safe_float(rec.get("target_confidence")),
+            _safe_float(target.get("resolver_confidence")),
+            _safe_float(target.get("confidence")),
+        )
+
+        target_score = max(
+            _safe_float(rec.get("target_score")),
+            _safe_float(target.get("target_score")),
+            _safe_float(target.get("semantic_route_score")),
+            _safe_float(target.get("score")),
+        )
+
+        cluster_score = max(
+            _safe_float(rec.get("cluster_score")),
+            _safe_float(target.get("cluster_score")),
+            1.0 if (target.get("cluster_names") or target.get("cluster_keywords")) else 0.0,
+        )
+
+        section_score = max(
+            _safe_float(rec.get("section_score")),
+            _safe_float(target.get("section_score")),
+            1.0 if (target.get("section_names") or target.get("section_keywords")) else 0.0,
+        )
+
+        has_url = bool(
+            rec.get("url")
+            or rec.get("target_url")
+            or target.get("url")
+            or target.get("target_url")
+        )
+
+        signal_map[key] = {
+            "resolver_found_target": has_url,
+            "resolver_confidence": resolver_confidence,
+            "target_score": target_score,
+            "cluster_score": cluster_score,
+            "section_score": section_score,
+            "target_url": rec.get("target_url") or rec.get("url") or target.get("url") or "",
+            "target_title": rec.get("target_title") or target.get("title") or target.get("label") or "",
+        }
+
+    return signal_map
+
+
+def apply_resolver_highlight_gate(
+    item: Dict[str, Any],
+    resolver_signal_map: Dict[str, Dict[str, Any]],
+) -> Dict[str, Any]:
+    phrase = item.get("phrase", "")
+    key = _norm_phrase_key(phrase)
+    sig = resolver_signal_map.get(key, {})
+
+    if not resolver_signal_map:
+        item["resolver_gate_enabled"] = False
+        item["resolver_highlight_allowed"] = True
+        item["resolver_gate_reason"] = "resolver_signals_not_supplied"
+        return item
+
+    item["resolver_gate_enabled"] = True
+    item["resolver_found_target"] = bool(sig.get("resolver_found_target"))
+    item["resolver_confidence"] = _safe_float(sig.get("resolver_confidence"))
+    item["target_score"] = _safe_float(sig.get("target_score"))
+    item["cluster_score"] = _safe_float(sig.get("cluster_score"))
+    item["section_score"] = _safe_float(sig.get("section_score"))
+    item["target_url"] = sig.get("target_url", "")
+    item["target_title"] = sig.get("target_title", "")
+
+    if not item["resolver_found_target"]:
+        item["resolver_highlight_allowed"] = False
+        item["resolver_gate_reason"] = "rejected_no_resolved_target"
+        return item
+
+    # Accept either confidence-style 0-1 or score-style 0-100.
+    confidence_score = item["resolver_confidence"]
+    if confidence_score <= 1:
+        confidence_score *= 100
+
+    target_quality_score = item["target_score"]
+    if target_quality_score <= 1:
+        target_quality_score *= 100
+
+    structural_score = max(item["cluster_score"], item["section_score"])
+    if structural_score <= 1:
+        structural_score *= 100
+
+    item["resolver_confidence_score"] = int(confidence_score)
+    item["target_quality_score"] = int(target_quality_score)
+    item["structural_target_score"] = int(structural_score)
+
+    if confidence_score < 55 and target_quality_score < 55 and structural_score < 55:
+        item["resolver_highlight_allowed"] = False
+        item["resolver_gate_reason"] = "rejected_weak_resolver_target_evidence"
+        return item
+
+    item["resolver_highlight_allowed"] = True
+    item["resolver_gate_reason"] = "passed_resolver_target_evidence"
+    return item
+
+
+
 def select_highlight_candidates(
     *,
     workspace_id: str,
     doc_id: str,
     article_text: str,
     active_phrase_pool: Any,
+    resolved_targets: Any = None,
 ) -> Dict[str, Any]:
     """
     Select and rank highlight candidates from the active phrase pool.
@@ -854,6 +1053,7 @@ def select_highlight_candidates(
 
     candidates = extract_phrase_candidates(active_phrase_pool)
     unique_candidates, rejected = normalize_and_dedupe_candidates(candidates)
+    resolver_signal_map = build_resolver_signal_map(resolved_targets)
 
     article_matched: List[Dict[str, Any]] = []
 
@@ -886,18 +1086,63 @@ def select_highlight_candidates(
         item["dis_signal_reasons"] = rc2_match.get("failure_reasons", [])
         item["dis_can_block"] = False
         item["dis_advisory_only"] = True
+        strength_score = (
+            item.get("strength_score")
+            or item.get("quality_score")
+            or item.get("score")
+            or item.get("phrase_score")
+            or 0
+        )
+
+        try:
+            phrase_quality_score = int(float(strength_score) * 100)
+        except Exception:
+            phrase_quality_score = 0
+
+        item["phrase_quality_score"] = phrase_quality_score
         item["anchor_quality_score"] = score_anchor_quality(phrase)
         item["article_relevance_score"] = score_article_relevance(phrase, article_text)
         item["occurrence_count"] = count_phrase_occurrences(phrase, article_text)
         item["link_opportunity_score"] = score_link_opportunity(phrase)
-        item["selection_score"] = (
-            item["anchor_quality_score"]
-            + item["article_relevance_score"]
-            + item["link_opportunity_score"]
+
+        # Selection Engine should rank article fit, but phrase quality must come
+        # from Phrase Strength Scorer.
+        item = apply_resolver_highlight_gate(item, resolver_signal_map)
+
+        resolver_bonus = (
+            item.get("resolver_confidence_score", 0)
+            + item.get("target_quality_score", 0)
+            + item.get("structural_target_score", 0)
         )
 
+        item["selection_score"] = (
+            phrase_quality_score
+            + item["article_relevance_score"]
+            + item["link_opportunity_score"]
+            + resolver_bonus
+        )
+
+        if phrase_quality_score < 66:
+            rejected.append({
+                "phrase": phrase,
+                "reason": "rejected_low_phrase_strength_score",
+            })
+            continue
+
+        if item.get("resolver_gate_enabled") and not item.get("resolver_highlight_allowed"):
+            rejected.append({
+                "phrase": phrase,
+                "reason": item.get("resolver_gate_reason", "rejected_resolver_target_gate"),
+                "item": item,
+            })
+            continue
+
         item["selection_status"] = "selected_candidate"
-        item["selection_reason"] = "selected_quality_relevance_link_opportunity"
+        item["selection_reason"] = (
+            "selected_quality_relevance_link_opportunity_target_evidence"
+            if item.get("resolver_gate_enabled")
+            else "selected_quality_relevance_link_opportunity"
+        )
 
         article_matched.append(item)
 

@@ -1250,6 +1250,19 @@ def resolve_intelligent_targets(
                 and float(intent_intelligence.get("intent_match_score") or 0) < 0.50
             )
 
+            semantic_drift_reject = bool(
+                clear_intent_mismatch
+                and phrase_evidence_value < 0.45
+                and concept_alignment_value < 0.45
+                and alias_match_score < 0.50
+                and not phrase_pool_exact
+                and not phrase_pool_contains
+                and not strong_cluster_evidence
+            )
+
+            if semantic_drift_reject:
+                continue
+
             auto_link_allowed = bool(
                 runtime_normalized_score >= confidence_floor
                 and not clear_intent_mismatch

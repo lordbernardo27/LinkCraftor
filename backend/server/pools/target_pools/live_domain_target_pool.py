@@ -600,6 +600,146 @@ def _priority_bucket(url: str, title: str = "", page_type_hint: str = "", seed_m
 
 
 def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
+
+
+    def _load_section_membership_index() -> Dict[str, Dict[str, Any]]:
+        """
+        Bridge: section clusters -> live domain target items.
+        Adds broad URL-section evidence without polluting strict topic clusters.
+        """
+        section_fp = _data_dir() / "topic_clusters" / f"workspace_section_clusters_{ws}.json"
+        obj = _safe_read_json(section_fp) if section_fp.exists() else {}
+
+        sections = obj.get("sections") if isinstance(obj, dict) else {}
+        rows = sections.values() if isinstance(sections, dict) else sections if isinstance(sections, list) else []
+
+        index: Dict[str, Dict[str, Any]] = {}
+
+        for sec in rows:
+            if not isinstance(sec, dict):
+                continue
+
+            section_id = str(sec.get("section_id") or "").strip()
+            section_name = str(sec.get("name") or section_id).strip()
+            section_keywords = sec.get("keywords") or []
+            section_score = sec.get("confidence") or 0
+
+            for u in sec.get("urls") or []:
+                if isinstance(u, dict):
+                    raw_url = u.get("url")
+                    matched_terms = u.get("matched_terms") or []
+                else:
+                    raw_url = u
+                    matched_terms = []
+
+                url_key = _norm_url(str(raw_url or ""))
+                if not url_key:
+                    continue
+
+                existing = index.setdefault(url_key, {
+                    "section_ids": [],
+                    "section_names": [],
+                    "section_keywords": [],
+                    "section_matched_terms": [],
+                    "section_score": 0,
+                })
+
+                if section_id and section_id not in existing["section_ids"]:
+                    existing["section_ids"].append(section_id)
+
+                if section_name and section_name not in existing["section_names"]:
+                    existing["section_names"].append(section_name)
+
+                for kw in section_keywords:
+                    kw = str(kw or "").strip()
+                    if kw and kw not in existing["section_keywords"]:
+                        existing["section_keywords"].append(kw)
+
+                for mt in matched_terms:
+                    mt = str(mt or "").strip()
+                    if mt and mt not in existing["section_matched_terms"]:
+                        existing["section_matched_terms"].append(mt)
+
+                try:
+                    existing["section_score"] = max(float(existing["section_score"] or 0), float(section_score or 0))
+                except Exception:
+                    pass
+
+        return index
+
+
+    def _load_cluster_membership_index() -> Dict[str, Dict[str, Any]]:
+        """
+        Bridge: topic clusters -> live domain target items.
+        Builds URL -> cluster metadata index so every target carries cluster evidence.
+        """
+        cluster_fp = _data_dir() / "topic_clusters" / f"workspace_topic_clusters_{ws}.json"
+        obj = _safe_read_json(cluster_fp) if cluster_fp.exists() else {}
+
+        clusters = obj.get("clusters") if isinstance(obj, dict) else {}
+        rows = clusters.values() if isinstance(clusters, dict) else clusters if isinstance(clusters, list) else []
+
+        index: Dict[str, Dict[str, Any]] = {}
+
+        for c in rows:
+            if not isinstance(c, dict):
+                continue
+
+            cluster_id = str(c.get("cluster_id") or "").strip()
+            cluster_name = str(c.get("name") or c.get("label") or c.get("primary_token") or cluster_id).strip()
+            cluster_keywords = c.get("keywords") or []
+            cluster_score = c.get("confidence") or c.get("score") or 0
+            purity_score = c.get("purity_score") or 0
+
+            for u in c.get("urls") or []:
+                if isinstance(u, dict):
+                    raw_url = u.get("url")
+                    matched_terms = u.get("matched_terms") or []
+                else:
+                    raw_url = u
+                    matched_terms = []
+
+                url_key = _norm_url(str(raw_url or ""))
+                if not url_key:
+                    continue
+
+                existing = index.setdefault(url_key, {
+                    "cluster_ids": [],
+                    "cluster_names": [],
+                    "cluster_keywords": [],
+                    "cluster_matched_terms": [],
+                    "cluster_score": 0,
+                    "cluster_purity_score": 0,
+                })
+
+                if cluster_id and cluster_id not in existing["cluster_ids"]:
+                    existing["cluster_ids"].append(cluster_id)
+
+                if cluster_name and cluster_name not in existing["cluster_names"]:
+                    existing["cluster_names"].append(cluster_name)
+
+                for kw in cluster_keywords:
+                    kw = str(kw or "").strip()
+                    if kw and kw not in existing["cluster_keywords"]:
+                        existing["cluster_keywords"].append(kw)
+
+                for mt in matched_terms:
+                    mt = str(mt or "").strip()
+                    if mt and mt not in existing["cluster_matched_terms"]:
+                        existing["cluster_matched_terms"].append(mt)
+
+                try:
+                    existing["cluster_score"] = max(float(existing["cluster_score"] or 0), float(cluster_score or 0))
+                except Exception:
+                    pass
+
+                try:
+                    existing["cluster_purity_score"] = max(float(existing["cluster_purity_score"] or 0), float(purity_score or 0))
+                except Exception:
+                    pass
+
+        return index
+
     """
     Live-Domain Target Pool Builder v2 (English-only).
 
@@ -668,11 +808,13 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             if seed and seed not in seed_paths:
                 seed_paths.append(seed)
 
-        for raw_url in source.get("sitemap_urls") or []:
-            url = _norm_url(str(raw_url or ""))
+    # Live Domain Target Pool must be built from cleaned Site Pages,
+    # not directly from raw sitemap URLs.
+    for raw_url in pages.keys():
+        url = _norm_url(str(raw_url or ""))
 
-            if url and url not in candidate_urls:
-                candidate_urls.append(url)
+        if url and url not in candidate_urls:
+            candidate_urls.append(url)
 
     before_quality_filter = len(candidate_urls)
 
@@ -803,16 +945,20 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             promoted.append(u)
             seen_promoted.add(u)
 
-        # Final live-domain target pool must contain phrase-aware URLs only.
-        quality_urls = promoted
+        # Live Domain Target Pool must remain a full valid site-page inventory.
+        # Phrase-aware promotion is diagnostic only here.
+        # Do NOT replace quality_urls with promoted URLs at this stage.
         priority_phrase_promoted_urls_count = len([x for x in priority_scored_urls if x[2] in seen_promoted])
         secondary_phrase_promoted_urls_count = len([x for x in secondary_scored_urls if x[2] in seen_promoted])
         phrase_promoted_urls_count = priority_phrase_promoted_urls_count + secondary_phrase_promoted_urls_count
-        phrase_aware_selection_applied = True
+        phrase_aware_selection_applied = False
 
     after_active_filter = len(quality_urls)
 
     items: List[Dict[str, Any]] = []
+
+    cluster_membership_index = _load_cluster_membership_index()
+    section_membership_index = _load_section_membership_index()
 
     for url in quality_urls:
         rec = pages.get(url) or pages.get(url + "/") or {}
@@ -833,6 +979,18 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             url=url,
             title=title,
             active_phrases=(priority_phrases + secondary_phrases),
+        )
+
+        cluster_meta = (
+            cluster_membership_index.get(url)
+            or cluster_membership_index.get(_norm_url(url))
+            or {}
+        )
+
+        section_meta = (
+            section_membership_index.get(url)
+            or section_membership_index.get(_norm_url(url))
+            or {}
         )
 
         item = {
@@ -866,6 +1024,21 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             "phrase_match_details": phrase_awareness.get("phrase_match_details", []),
             "semantic_route_score": phrase_awareness.get("semantic_route_score", 0),
             "target_score": phrase_awareness.get("target_score", 0),
+
+            # Cluster -> Target bridge enrichment.
+            "cluster_ids": cluster_meta.get("cluster_ids", []),
+            "cluster_names": cluster_meta.get("cluster_names", []),
+            "cluster_keywords": cluster_meta.get("cluster_keywords", [])[:30],
+            "cluster_matched_terms": cluster_meta.get("cluster_matched_terms", [])[:30],
+            "cluster_score": cluster_meta.get("cluster_score", 0),
+            "cluster_purity_score": cluster_meta.get("cluster_purity_score", 0),
+
+            # Section -> Target bridge enrichment.
+            "section_ids": section_meta.get("section_ids", []),
+            "section_names": section_meta.get("section_names", []),
+            "section_keywords": section_meta.get("section_keywords", [])[:30],
+            "section_matched_terms": section_meta.get("section_matched_terms", [])[:30],
+            "section_score": section_meta.get("section_score", 0),
 
             # Universal metadata block
             "metadata": {

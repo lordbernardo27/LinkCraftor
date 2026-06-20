@@ -296,10 +296,9 @@ def apply_highlight_density(
 
     max_allowed = adaptive_density["adaptive_max"]
 
-    quality_filtered = _apply_quality_floor(
-        candidates,
-        minimum_score=80,
-    )
+    # Density Engine should not re-score phrase quality.
+    # Phrase quality belongs to Phrase Strength Scorer and Selection Engine.
+    quality_filtered = candidates
 
     length_balanced = _balance_short_anchors(
         quality_filtered,

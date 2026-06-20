@@ -1660,10 +1660,26 @@ def score_phrase_strength(
         }
     )
 
+    structurally_weak_short_phrase = (
+        token_len in {2, 3, 4}
+        and "short_window_missing_structure" in reasons
+        and "structural_unknown_head" in reasons
+        and not has_canonical_anchor
+        and not has_valid_pair
+        and not has_natural_compound
+        and not structural_signal
+    )
+
+    if structurally_weak_short_phrase:
+        score = min(score, 0.61)
+        threshold = max(threshold, 0.72)
+        reasons.append("blocked_structurally_weak_short_phrase_recovery")
+
     recovery_override = (
         score >= 0.68
         and recovery_reason_hits >= 3
         and soft_penalty_hits >= 2
+        and not structurally_weak_short_phrase
         and "sentence_fragment_phrase" not in reasons
         and "semantic_anchor_validation_failed" not in reasons
         and "malformed_wrapper_validation_failed" not in reasons
