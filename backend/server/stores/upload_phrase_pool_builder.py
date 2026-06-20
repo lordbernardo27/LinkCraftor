@@ -14,6 +14,7 @@ from backend.server.stores.semantic_completeness_intelligence import (
     analyze_anchor_intent_completeness_v1,
     analyze_semantic_closure_v1,
     analyze_standalone_semantic_integrity_v1,
+    repair_phrase_from_context_v1,
 )
 from backend.server.utils.text_normalization import fix_mojibake_text
 
@@ -152,11 +153,99 @@ def _light_normalize_phrase(phrase: str) -> str:
     return _canonical_phrase(phrase)
 
 
-def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "") -> Dict[str, Any]:
+
+
+
+def _phrase_tokens_for_dominance(text: str) -> List[str]:
+    return re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", _light_normalize_phrase(text))
+
+
+def _looks_incomplete_after_context_repair(phrase: str) -> bool:
+    tokens = _phrase_tokens_for_dominance(phrase)
+    if not tokens:
+        return True
+
+    tail = tokens[-1].lower()
+    phrase_l = " ".join(tokens).lower()
+
+    bad_tails = {
+        "for", "with", "about", "after", "before", "to", "as", "from",
+        "hormonal", "timed", "several", "positive", "trained",
+        "cervical", "family", "natural", "target", "pay", "regular",
+        "few", "anovulation", "answer", "guarantee", "deserves",
+    }
+
+    if tail in bad_tails:
+        return True
+
+    # weak action/fragments that need an object or clearer head
+    bad_patterns = [
+        r"away after hormonal",
+        r"days after positive",
+        r"target pay attention",
+        r"watch for egg white cervical",
+        r"working with trained fertility",
+        r"provider about anovulation",
+        r"get universal answer",
+        r"average not guarantee",
+        r"focus intimacy during the few",
+        r"well for people with regular",
+        r"perimenopause deserves",
+        r"ovulate question",
+        r"months for predictable patterns",
+        r"body rhythm for natural family",
+    ]
+
+    if any(re.search(pat, phrase_l) for pat in bad_patterns):
+        return True
+
+    # phrases starting with weak wrappers are usually fragments
+    weak_starts = {"away", "get", "well", "focus", "provider", "average"}
+    if tokens[0].lower() in weak_starts:
+        return True
+
+    return False
+
+
+def _extract_record_snippet(rec: Dict[str, Any]) -> str:
+    snippet = str(rec.get("snippet") or "").strip()
+    if snippet:
+        return snippet
+
+    examples = rec.get("examples")
+    if isinstance(examples, list):
+        for ex in examples:
+            if isinstance(ex, dict):
+                snippet = str(ex.get("snippet") or "").strip()
+                if snippet:
+                    return snippet
+
+    return ""
+
+
+def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "", snippet: str = "") -> Dict[str, Any]:
     phrase = _light_normalize_phrase(phrase)
+
+    repair_item = repair_phrase_from_context_v1(phrase, snippet)
+    if isinstance(repair_item, dict) and repair_item.get("changed"):
+        phrase = _light_normalize_phrase(str(repair_item.get("repaired") or phrase))
 
     if not phrase:
         return {"keep": False, "phrase": "", "quality_gate": {}, "strength": {}}
+
+    if _looks_incomplete_after_context_repair(phrase):
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "contextual_phrase_repair_failed_incomplete_anchor",
+            "quality_gate": {
+                "semantic_completeness": {
+                    "repair": repair_item,
+                    "incomplete_after_repair": True,
+                }
+            },
+            "strength": {},
+        }
 
     semantic_closure = analyze_semantic_closure_v1([{"phrase": phrase}])
     closure_results = semantic_closure.get("results") if isinstance(semantic_closure, dict) else []
@@ -716,6 +805,7 @@ def build_upload_phrase_pool(ws: str) -> Dict[str, Any]:
         gate_result = _quality_gate_phrase_with_metadata(
             phrase_text,
             source_type=source_type or "",
+            snippet=_extract_record_snippet(clean_rec),
         )
 
         gate_reason = str(gate_result.get("reason") or "")

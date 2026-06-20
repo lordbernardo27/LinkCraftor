@@ -610,3 +610,84 @@ def explain_semantic_completeness_intelligence_v1() -> Dict[str, Any]:
             "1.16.17 Semantic Completeness Full Isolation Audit",
         ],
     }
+
+
+def repair_phrase_from_context_v1(phrase: str, snippet: str, max_extra_tokens: int = 4) -> Dict[str, Any]:
+    """
+    Real contextual phrase repair.
+
+    Expands an incomplete phrase only when the longer phrase exists literally
+    in the same snippet. Does not invent words.
+    """
+    phrase_clean = _safe_text(phrase)
+    snippet_clean = _safe_text(snippet)
+
+    if not phrase_clean or not snippet_clean:
+        return {
+            "original": phrase_clean,
+            "repaired": phrase_clean,
+            "changed": False,
+            "reason": "missing_phrase_or_snippet",
+            "role": "contextual_phrase_repair_only",
+        }
+
+    import re
+
+    phrase_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", phrase_clean)
+    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_clean)
+
+    phrase_lower = [t.lower() for t in phrase_tokens]
+    snippet_lower = [t.lower() for t in snippet_tokens]
+
+    if not phrase_lower or not snippet_lower:
+        return {
+            "original": phrase_clean,
+            "repaired": phrase_clean,
+            "changed": False,
+            "reason": "empty_tokens",
+            "role": "contextual_phrase_repair_only",
+        }
+
+    best = phrase_clean
+    n = len(phrase_lower)
+
+    stop_right = {
+        "and", "or", "but", "so", "because", "while", "when", "if",
+        "let", "lets", "can", "may", "might", "should", "will",
+        "the", "a", "an", "this", "that", "these", "those",
+    }
+
+    punctuation_stop = {".", ",", ";", ":", "!", "?", ")", "]", "}"}
+
+    for i in range(0, len(snippet_lower) - n + 1):
+        if snippet_lower[i:i+n] != phrase_lower:
+            continue
+
+        end = i + n
+
+        # Expand right only, conservatively.
+        extra = 0
+        while end < len(snippet_tokens) and extra < max_extra_tokens:
+            next_word = snippet_lower[end]
+            if next_word in stop_right:
+                break
+            if next_word in punctuation_stop:
+                break
+
+            candidate_tokens = snippet_tokens[i:end+1]
+            candidate = " ".join(candidate_tokens).strip()
+
+            # Keep only literal snippet-supported expansions.
+            if candidate.lower() in snippet_clean.lower() and len(candidate_tokens) > len(best.split()):
+                best = candidate
+
+            end += 1
+            extra += 1
+
+    return {
+        "original": phrase_clean,
+        "repaired": best,
+        "changed": best.lower() != phrase_clean.lower(),
+        "reason": "contextual_right_expansion" if best.lower() != phrase_clean.lower() else "no_safe_expansion_found",
+        "role": "contextual_phrase_repair_only",
+    }

@@ -1,33 +1,56 @@
-﻿from __future__ import annotations
+﻿"""
+Smart phrase extractor (rewritten).
+
+Goal: produce *complete* anchor phrases — phrases that read as a whole noun
+phrase or intent and never hang on a dangling article, preposition, or
+conjunction, and are never cut mid-constituent.
+
+Why the previous version produced "hanging" phrases
+---------------------------------------------------
+The old extractor slid fixed 2/3/4-word windows across a token stream and then
+tried to *reject* the bad ones with several hundred hand-written blocklists and
+regexes. Sliding windows inherently slice through the middle of grammatical
+constituents, so "calculate the fertile window" becomes "calculate the",
+"the fertile", "fertile window", etc. The blocklists can never enumerate every
+truncation, so fragments leak through.
+
+This version flips the approach: instead of cutting arbitrary windows and
+filtering, it (1) chunks each sentence into whole noun-phrase / verb-object
+constituents, then (2) trims both ends down to content-word boundaries and
+rejects anything that still starts or ends on a function word. A phrase is kept
+only if it begins and ends on a content word and ends on a noun-like head. That
+single structural rule removes essentially all "hanging" output.
+
+It prefers spaCy or NLTK if installed (best accuracy) and otherwise falls back
+to a self-contained heuristic chunker, so it has **no required dependencies**.
+
+The public function `extract_smart_phrases(...)` keeps the same signature and
+output shape as before, so this is a drop-in replacement.
+"""
+
+from __future__ import annotations
 
 import re
-ORPHAN_CONTRACTION_TOKENS = {
-    "ve", "ll", "re", "d", "m", "s", "t", "x27"
-}
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
+# ---------------------------------------------------------------------------
+# Optional, soft dependencies. Everything degrades gracefully.
+# ---------------------------------------------------------------------------
 
-def _has_orphan_contraction_debris(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
+try:  # learning hook — optional
+    from backend.server.stores.dis_pipeline_learning import (  # type: ignore
+        learn_from_pipeline_rejection,
+    )
+except Exception:  # pragma: no cover - fallback when running standalone
+    def learn_from_pipeline_rejection(**_kwargs: Any) -> None:
+        return None
 
-    tokens = re.findall(r"[a-z0-9]+", text)
-
-    if not tokens:
-        return True
-
-    return any(tok in ORPHAN_CONTRACTION_TOKENS for tok in tokens)
-from typing import Any, Dict, List, Set
-
-from backend.server.stores.dis_pipeline_learning import learn_from_pipeline_rejection
-
-
-try:
-    from backend.server.stores.universal_noun_families import (
+try:  # extra domain vocabulary — optional
+    from backend.server.stores.universal_noun_families import (  # type: ignore
         get_all_universal_nouns,
         get_all_universal_modifiers,
     )
-except ImportError:
+except Exception:
     def get_all_universal_nouns() -> Set[str]:
         return set()
 
@@ -35,292 +58,251 @@ except ImportError:
         return set()
 
 
-WORD_RE = re.compile(r"[a-z0-9]{2,}", re.I)
+# spaCy / NLTK are auto-detected once, lazily.
+_SPACY_NLP = None
+_SPACY_TRIED = False
+_NLTK_OK: Optional[bool] = None
+
+
+def _get_spacy():
+    global _SPACY_NLP, _SPACY_TRIED
+    if _SPACY_TRIED:
+        return _SPACY_NLP
+    _SPACY_TRIED = True
+    try:
+        import spacy  # type: ignore
+        try:
+            _SPACY_NLP = spacy.load("en_core_web_sm", disable=["ner", "lemmatizer"])
+        except Exception:
+            _SPACY_NLP = None
+    except Exception:
+        _SPACY_NLP = None
+    return _SPACY_NLP
+
+def _have_nltk() -> bool:
+    global _NLTK_OK
+
+    if _NLTK_OK is not None:
+        return _NLTK_OK
+
+    try:
+        import nltk  # type: ignore
+
+        # Probe so we fail fast if NLTK data is not downloaded.
+        nltk.pos_tag(nltk.word_tokenize("test sentence"))
+        _NLTK_OK = True
+    except Exception:
+        _NLTK_OK = False
+
+    return _NLTK_OK
+
+
+# ---------------------------------------------------------------------------
+# Lexical resources
+# ---------------------------------------------------------------------------
+
+WORD_RE = re.compile(r"[a-z0-9][a-z0-9'-]*", re.I)
 TAG_RE = re.compile(r"<[^>]+>")
 H_RE = re.compile(r"<h([1-6])[^>]*>(.*?)</h\1>", re.IGNORECASE | re.DOTALL)
 LI_RE = re.compile(r"<li[^>]*>(.*?)</li>", re.IGNORECASE | re.DOTALL)
 P_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
 SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+|\n+")
 
+DETERMINERS: Set[str] = {
+    "a", "an", "the", "this", "that", "these", "those", "my", "your", "his",
+    "her", "its", "our", "their", "some", "any", "each", "every", "no",
+    "another", "such", "much", "many", "more", "most", "all", "both", "either",
+    "neither", "which", "what", "whose",
+}
 
-STOPWORDS: Set[str] = {
-    "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
-    "are", "was", "were", "will", "can", "could", "should", "would", "have",
-    "has", "had", "about", "over", "under", "than", "then", "when", "what",
-    "where", "which", "who", "whom", "why", "how", "a", "an", "to", "of",
-    "in", "on", "at", "by", "or", "as", "is", "it", "be", "not", "no",
-    "if", "but", "so", "because", "after", "before", "during", "while",
-    "through", "up", "down", "out", "off", "too", "very", "also",
+PREPOSITIONS: Set[str] = {
+    "about", "above", "across", "after", "against", "along", "among", "around",
+    "as", "at", "before", "behind", "below", "beneath", "beside", "between",
+    "beyond", "by", "down", "during", "except", "for", "from", "in", "inside",
+    "into", "near", "of", "off", "on", "onto", "out", "outside", "over", "per",
+    "since", "than", "through", "throughout", "to", "toward", "towards",
+    "under", "until", "up", "upon", "via", "with", "within", "without", "like",
+}
+
+CONJUNCTIONS: Set[str] = {
+    "and", "or", "but", "nor", "so", "yet", "because", "although", "though",
+    "while", "whereas", "unless", "until", "whether", "if", "then",
 }
 
 PRONOUNS: Set[str] = {
-    "i", "me", "my", "mine", "you", "your", "yours", "he", "him", "his",
-    "she", "her", "hers", "we", "us", "our", "ours", "they", "them",
-    "their", "theirs", "it", "its", "everyone", "someone", "anyone",
+    "i", "me", "my", "mine", "myself", "you", "yours", "yourself", "he", "him",
+    "his", "she", "her", "hers", "we", "us", "our", "ours", "they", "them",
+    "their", "theirs", "it", "its", "itself", "who", "whom", "whose", "anyone",
+    "someone", "everyone", "everybody", "somebody", "anybody", "nobody",
+    "something", "anything", "everything", "nothing", "one", "ones",
 }
 
-HELPER_VERBS: Set[str] = {
-    "is", "are", "was", "were", "be", "being", "been", "am",
-    "can", "could", "will", "would", "should", "may", "might",
-    "has", "have", "had", "do", "does", "did",
+AUX_VERBS: Set[str] = {
+    "is", "are", "was", "were", "be", "being", "been", "am", "can", "could",
+    "will", "would", "shall", "should", "may", "might", "must", "has", "have",
+    "had", "do", "does", "did", "ought",
 }
 
-CLAUSE_VERBS: Set[str] = {
+PARTICLES_DEGREE: Set[str] = {
+    "not", "very", "too", "also", "just", "only", "even", "still", "quite",
+    "rather", "really", "almost", "always", "never", "often", "sometimes",
+    "usually", "generally", "typically", "currently", "recently", "soon",
+    "later", "now", "today", "tomorrow", "yesterday", "here", "there",
+    "however", "therefore", "meanwhile", "instead", "anyway", "actually",
+    "basically", "simply", "clearly", "finally", "first", "firstly",
+    "second", "secondly", "lastly", "overall", "especially", "particularly",
+}
+
+# Function words = closed-class words that should never start/end a phrase.
+FUNCTION_WORDS: Set[str] = (
+    DETERMINERS | PREPOSITIONS | CONJUNCTIONS | PRONOUNS | AUX_VERBS | PARTICLES_DEGREE
+)
+
+# A few -ly words that are actually nouns, so the adverb heuristic skips them.
+LY_NOUN_EXCEPTIONS: Set[str] = {
+    "family", "supply", "assembly", "anomaly", "ally", "rally", "monopoly",
+    "italy", "july", "belly", "jelly", "reply", "apply", "supply",
+}
+
+
+def _is_adverb_ly(token: str) -> bool:
+    return token.endswith("ly") and len(token) > 4 and token not in LY_NOUN_EXCEPTIONS
+
+
+# Comparative / degree adverbs that should never be a phrase head or tail.
+COMPARATIVES: Set[str] = {
+    "faster", "slower", "better", "worse", "easier", "harder", "longer",
+    "shorter", "higher", "lower", "bigger", "smaller", "greater", "sooner",
+    "later", "more", "less", "fewer", "older", "newer", "cheaper", "stronger",
+    "weaker", "wider", "deeper", "closer", "further", "farther", "best",
+    "worst", "fastest", "slowest", "highest", "lowest", "largest", "smallest",
+}
+
+# Words that may NOT end a phrase (cause "hanging" tails).
+TRAILING_BAN: Set[str] = PREPOSITIONS | CONJUNCTIONS | DETERMINERS | COMPARATIVES | {
+    "and", "or", "to", "of", "the", "a", "an",
+}
+
+# Words that may NOT start a phrase.
+LEADING_BAN: Set[str] = FUNCTION_WORDS
+
+
+def _verb_forms(lemmas: Set[str]) -> Set[str]:
+    """Expand verb lemmas to their common inflected forms (-s/-es/-ed/-ing)."""
+    forms: Set[str] = set()
+    for v in lemmas:
+        forms.add(v)
+        forms.update({v + "s", v + "es", v + "ed", v + "ing"})
+        if v.endswith("e"):
+            forms.update({v[:-1] + "es", v[:-1] + "ed", v[:-1] + "ing"})
+        if v.endswith("y"):
+            forms.add(v[:-1] + "ies")
+    return forms
+
+
+# Lexical verbs we treat as clause signals (a phrase containing one mid-stream
+# is usually a sentence fragment, not a noun phrase). Kept deliberately small;
+# the chunker handles the rest structurally.
+COMMON_LEXICAL_VERBS: Set[str] = {
     "runs", "run", "falls", "fall", "lands", "land", "becomes", "become",
-    "means", "mean", "depends", "depend", "explains", "explain",
-    "unlocks", "unlock", "turns", "turn", "makes", "make", "shows", "show",
-    "happens", "happen", "passes", "pass", "rises", "rise", "stays", "stay",
-    "confuses", "confuse", "offers", "offer", "works", "work", "holds",
-    "hold", "starts", "start", "ends", "end", "uses", "use",
-    "publish", "publishes", "create", "creates", "improve", "improves",
-    "increase", "increases", "reduce", "reduces", "guide", "guides",
-    "summarize", "summarizes", "map", "maps", "contain", "contains",
-    "mention", "mentions", "fit", "fits", "gain", "gains",
-    "interpret", "interprets", "support", "supports", "combine", "combines",
-    "understand", "understands", "view", "views", "select", "selects",
-    "request", "requests", "invite", "invites", "connect", "connects",
-    "complete", "completes", "compare", "compares", "help", "helps",
-    "include", "includes", "provide", "provides", "require", "requires",
-    "reveal", "reveals",
+    "means", "mean", "depends", "depend", "explains", "explain", "turns",
+    "turn", "makes", "make", "shows", "show", "happens", "happen", "rises",
+    "rise", "stays", "stay", "offers", "offer", "works", "work", "holds",
+    "hold", "starts", "start", "ends", "end", "uses", "use", "gives", "give",
+    "gets", "get", "goes", "go", "comes", "come", "takes", "take", "needs",
+    "need", "wants", "want", "knows", "know", "says", "say", "tells", "tell",
+    "grows", "grow", "affects", "affect", "changes", "change",
+    "watch", "look", "see", "let", "keep", "try", "learn", "read", "note",
+    "avoid", "consider", "remember", "ensure", "pick", "set", "add", "put",
+    "ask", "tell", "call", "send", "give", "show", "let", "follow", "apply",
+    "enter", "click", "tap", "visit", "open", "close", "save", "share",
 }
 
-ACTION_TOKENS: Set[str] = {
+# Verbs that head an action/intent anchor ("calculate due date").
+ACTION_VERBS: Set[str] = {
     "calculate", "track", "confirm", "compare", "choose", "check", "measure",
     "estimate", "build", "create", "fix", "improve", "optimize", "reduce",
     "increase", "manage", "treat", "prevent", "diagnose", "review", "audit",
     "forecast", "plan", "write", "design", "analyze", "monitor", "test",
     "rank", "score", "publish", "import", "export", "sync", "validate",
-    "protect",
+    "protect", "find", "convert", "identify", "select", "schedule", "generate",
 }
 
-BAD_STARTS: Set[str] = {
-    "and", "or", "but", "so", "then", "this", "that", "these", "those",
-    "your", "you", "many", "people", "because", "whether", "rather",
-    "without", "with", "into", "from", "for", "to", "at", "on", "by",
-    "if", "while", "often", "still", "just", "as", "based", "brief",
-    "trained", "everyone", "someone", "anyone", "most", "time", "back",
-    "inside", "outside", "category", "such",
+# All inflected forms of every verb we know about -> reliable verb detection
+# in the heuristic tagger (catches "improves", "falls", "uses", "helps"...).
+VERB_FORMS: Set[str] = _verb_forms(ACTION_VERBS | COMMON_LEXICAL_VERBS | {
+    "help", "allow", "provide", "support", "include", "require", "reveal",
+    "publish", "contain", "mention", "combine", "understand", "request",
+    "invite", "connect", "complete", "summarize", "interpret", "guide",
+    "depend", "explain", "unlock", "confuse", "pass", "lean",
+})
+
+# Gerund (-ing) forms frequently act as noun modifiers ("tracking guide",
+# "marketing strategy"), so they are allowed inside a noun phrase. Finite and
+# past-participle forms ("improves", "improved") are clause signals.
+GERUND_FORMS: Set[str] = {v for v in VERB_FORMS if v.endswith("ing")}
+FINITE_VERB_FORMS: Set[str] = VERB_FORMS - GERUND_FORMS
+
+# Interior determiners/possessives are safe to drop from an anchor.
+STRIP_INTERIOR: Set[str] = {
+    "the", "a", "an", "this", "that", "these", "those",
+    "my", "your", "his", "her", "its", "our", "their",
 }
 
-BAD_ENDINGS: Set[str] = {
-    "and", "or", "but", "so", "then", "this", "that", "your", "someone",
-    "ask", "depends", "changes", "because", "about", "before", "after",
-    "during", "through", "with", "without", "than", "rather", "into",
-    "from", "for", "to", "by", "if", "when", "while", "at", "on",
-    "a", "an", "the", "last", "much", "main", "one", "of", "most",
-    "near", "afterward", "afterwards",
-}
-
-VAGUE_ADVERB_ENDINGS: Set[str] = {
-    "afterward", "afterwards", "later", "soon", "today", "tomorrow",
-    "yesterday", "eventually", "recently", "currently",
-}
-
-VAGUE_FILLER_TOKENS = {
-    "thing", "things", "something", "everything", "anything",
-    "someone", "somebody", "everyone", "everybody"
-}
-
-SENTENCE_FLOW_STARTERS = {
-    "ever", "there", "around", "only", "any"
-}
-
-SENTENCE_FRAGMENT_PATTERNS = [
-    re.compile(r"\b(from|with|for|about|into|over|under|through)\s+(thing|things|something|everything|anything)\b"),
-    re.compile(r"\b(for|over|during|within)\s+the\s+(next|last|same|first)\b"),
-    re.compile(r"\b(there|something|everything|anything)\s+\w+\s+(something|thing|things|anything)\b"),
-]
-
-INTENT_STARTS = (
-    "how to",
-    "how many",
-    "what is",
-    "what are",
-    "when do",
-    "when does",
-    "best way",
-    "best time",
-    "signs of",
-    "symptoms of",
-    "causes of",
-    "treatment for",
-    "guide to",
-    "tips for",
+INTENT_STARTS: Tuple[str, ...] = (
+    "how to", "how many", "what is", "what are", "when to", "when do",
+    "best way to", "best time to", "signs of", "symptoms of", "causes of",
+    "treatment for", "guide to", "tips for", "ways to",
 )
 
-CONDITION_CONNECTORS: Set[str] = {
-    "after", "before", "during", "without", "with", "near", "for",
-}
-
-
-WEAK_CONNECTOR_STARTS = (
-    "based on",
-    "with a",
-    "with an",
-    "without a",
-    "without an",
-    "before getting",
-    "after getting",
-    "rather than",
-    "back into",
-    "inside the",
-    "outside the",
-    "such as",
-)
-
-WEAK_ENDING_PHRASES = (
-    "the day",
-    "on day",
-    "start date",
-    "end date",
-    "first step",
-    "next step",
-    "last step",
-    "the product",
-    "the application",
-    "the page",
-    "the site",
-)
-
-THIN_MODIFIERS: Set[str] = {
-    "brief", "trained", "simple", "basic", "easy", "quick", "perfect",
-    "general", "common", "normal", "regular", "main", "major", "minor",
-    "good", "bad", "better", "best", "new", "old", "early", "late",
-    "clear", "full", "important", "highlighted", "recommended",
-}
-
+# Generic heads that are too weak to stand alone unless well qualified.
 GENERIC_WEAK_HEADS: Set[str] = {
-    "date", "day", "days", "time", "thing", "things",
-    "way", "ways", "step", "steps", "part", "parts", "case", "cases",
-    "reason", "reasons", "example", "examples", "number", "point",
-    "points", "area", "level", "type", "types", "form", "forms",
-    "stuff",
+    "thing", "things", "stuff", "way", "ways", "part", "parts", "case",
+    "cases", "point", "points", "area", "areas", "level", "type", "types",
+    "form", "forms", "kind", "kinds", "sort", "sorts", "lot", "bit",
 }
 
-CLAUSE_CONNECTORS: Set[str] = {
-    "when", "because", "while", "than", "although",
-    "unless", "since", "whereas", "though",
-}
-
-UNIVERSAL_HEAD_SUFFIXES: Set[str] = {
+# Strong content heads (domain vocab can extend these via the optional import).
+UNIVERSAL_HEADS: Set[str] = {
     "software", "tool", "tools", "platform", "system", "strategy", "workflow",
     "automation", "integration", "pipeline", "dashboard", "api", "app",
     "application", "plugin", "extension", "database", "storage", "security",
-    "seo", "keyword", "keywords", "content", "backlink", "audit",
-    "optimization", "conversion", "landing", "page", "traffic", "ranking",
-    "analytics", "yield", "rate", "rates", "forecast", "tax", "reporting",
-    "investment", "lease", "agreement", "contract", "review", "lawyer",
-    "visa", "property", "mortgage", "insurance", "calculator", "checklist",
-    "service", "services", "pricing", "prices", "policy", "delivery",
-    "menu", "reservation", "restaurant", "hotel", "airport", "coverage",
-    "rental", "checkout", "cart", "product", "customer", "tutoring",
-    "study", "management", "project", "ideas", "questions",
-    "resume", "interview", "course", "lesson", "training", "symptoms",
-    "causes", "treatment", "medication", "dosage", "foods", "options",
-    "therapy", "performance", "settings", "guide", "benefits",
-    "contractor", "estimate", "schedule", "routine", "collection",
-    "trends", "quotes", "report", "analysis", "assessment", "plan",
-    "budget", "template", "framework", "model", "engine", "module",
-    "feature", "features", "component", "components", "source", "sources",
-    "url", "urls", "link", "links", "topic", "topics", "cluster",
-    "clusters", "entity", "entities", "schema", "score", "scoring",
-}.union(get_all_universal_nouns())
+    "keyword", "keywords", "content", "backlink", "audit", "optimization",
+    "conversion", "page", "traffic", "ranking", "analytics", "rate", "rates",
+    "forecast", "tax", "investment", "lease", "agreement", "contract",
+    "review", "property", "mortgage", "insurance", "calculator", "checklist",
+    "service", "services", "pricing", "policy", "menu", "reservation",
+    "restaurant", "hotel", "rental", "product", "customer", "study",
+    "management", "project", "resume", "interview", "course", "lesson",
+    "training", "symptoms", "causes", "treatment", "medication", "dosage",
+    "therapy", "performance", "settings", "guide", "benefits", "estimate",
+    "schedule", "routine", "report", "analysis", "assessment", "plan",
+    "budget", "template", "framework", "model", "engine", "module", "feature",
+    "features", "component", "source", "topic", "topics", "cluster", "score",
+    "window", "cycle", "length", "date", "checkout", "subscription",
+} | set(get_all_universal_nouns())
 
 UNIVERSAL_MODIFIERS: Set[str] = {
     "pricing", "landing", "checkout", "subscription", "onboarding",
-    "management", "marketing", "analytics", "email", "project",
-    "technical", "seo", "conversion", "setup", "customer",
-    "saas", "enterprise", "security", "billing", "internal",
-    "external", "keyword", "content", "product", "support",
-    "usage", "search", "brand", "branded", "trial", "demo",
-}.union(get_all_universal_modifiers())
+    "management", "marketing", "analytics", "email", "project", "technical",
+    "conversion", "setup", "customer", "saas", "enterprise", "security",
+    "billing", "internal", "external", "keyword", "content", "product",
+    "support", "usage", "search", "brand", "branded", "trial", "demo",
+} | set(get_all_universal_modifiers())
 
 
-EXTRACTOR_INTELLIGENCE_WEIGHTS: Dict[str, float] = {
-    "entity_density": 0.25,
-    "anchor_strength": 0.25,
-    "semantic_cohesion": 0.20,
-    "wrapper_noise_control": 0.15,
-    "topic_alignment": 0.15,
-}
-
-SOURCE_TYPE_THRESHOLDS: Dict[str, float] = {
-    "title": 0.45,
-    "heading_h1": 0.45,
-    "heading_h2": 0.48,
-    "heading_h3": 0.50,
-    "heading_h4": 0.52,
-    "heading_h5": 0.52,
-    "heading_h6": 0.52,
-    "list_item": 0.55,
-    "intent": 0.55,
-    "action_object": 0.58,
-    "condition_phrase": 0.58,
-    "noun_phrase": 0.52,
-}
-
-VERB_WRAPPER_STARTS: Set[str] = {
-    "avoid", "prevent", "reduce", "improve", "increase", "manage",
-    "check", "monitor", "review", "forecast", "optimize", "build",
-    "create", "fix", "protect", "treat",
-}
-
-FRAGMENT_PATTERNS = (
-    r"\b(\w+)\s+\1\b",
-    r"\brather than\b",
-    r"\bthan someone\b",
-    r"\banswer depends\b",
-    r"\bresult depends\b",
-    r"\bdo this\b",
-    r"\bcan show\b",
-    r"\bend up\b",
-    r"\blean more\b",
-    r"\boften falls\b",
-    r"\boften lands\b",
-    r"\bhas likely\b",
-    r"\bfixed number\b",
-    r"\bpeople often ask\b",
-    r"\bmany people ask\b",
-    r"\bmany users say\b",
-    r"\bbecause they\b",
-    r"\bbecause you\b",
-    r"\bwith \d+\b",
-    r"\bwithout an\b",
-    r"\bwithout a\b",
-    r"\bwith an\b",
-    r"\bwith a\b",
-    r"\bbefore getting\b",
-    r"\bafter getting\b",
-    r"\binto highly\b",
-    r"\bfind answers\b",
-    r"\bmeasure your\b",
-    r"\bestimate your\b",
-    r"\bconfirm you\b",
-    r"\bfact unlocks\b",
-    r"\bguide explains\b",
-    r"\bexplains simple\b",
-    r"\bis often near\b",
-    r"\blands near\b",
-    r"\boften near\b",
-    r"\bbased on\b",
-    r"\beveryone\b",
-    r"\bintercourse the day\b",
-    r"\bholds for\b",
-    r"\bis one\b",
-    r"\bis one of\b",
-    r"\bsuch as\b",
-    r"\bback into\b",
-    r"\binside the\b",
-    r"\boutside the\b",
-    r"\bhelps?\s+\w+\b",
-)
-
+# ---------------------------------------------------------------------------
+# Text utilities
+# ---------------------------------------------------------------------------
 
 def canonical_phrase(text: str) -> str:
     s = (text or "").strip().lower()
-    s = s.replace("â€™", "'").replace("â€œ", '"').replace("â€", '"')
-    s = re.sub(r"^\s*(?:\d+[\.\)]\s+|[â€¢\-â€“]\s+)", "", s)
-    s = re.sub(r"^[\"'â€œâ€â€˜â€™\(\[\{]+|[\"'â€œâ€â€˜â€™\)\]\}:;,\.\!\?]+$", "", s)
+    s = s.replace("\u2019", "'").replace("\u2018", "'")
+    s = s.replace("\u201c", '"').replace("\u201d", '"')
+    # strip leading list markers / numbering
+    s = re.sub(r"^\s*(?:\d+[.)]\s+|[\u2022\u2013\u2014\-]\s+)", "", s)
+    # strip wrapping punctuation
+    s = re.sub(r"^[\"'(\[{]+|[\"')\]}:;,.!?]+$", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -331,10 +313,6 @@ def strip_tags(text: str) -> str:
 
 def tokenize(text: str) -> List[str]:
     return [t.lower() for t in WORD_RE.findall(text or "")]
-
-
-def content_tokens(tokens: List[str]) -> List[str]:
-    return [t for t in tokens if t not in STOPWORDS]
 
 
 def split_sentences(text: str) -> List[str]:
@@ -349,27 +327,23 @@ def extract_paragraphs(html: str = "", text: str = "") -> List[str]:
     paras = [p for p in paras if p]
     if paras:
         return paras
-
     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     return [x.strip() for x in re.split(r"\n\s*\n+", raw) if x.strip()]
 
 
 def extract_headings_and_lists(html: str = "") -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
-
     for lvl, inner in H_RE.findall(html or ""):
         txt = strip_tags(inner)
         if not txt:
             continue
-        level = int(lvl)
-        source_type = "heading_h1" if level == 1 else f"heading_h{level}"
+        source_type = f"heading_h{int(lvl)}"
         out.append({
             "phrase": canonical_phrase(txt),
             "source_type": source_type,
             "section_id": f"{source_type}_{len(out)}",
             "snippet": txt,
         })
-
     for li in [strip_tags(x) for x in LI_RE.findall(html or "")]:
         if li:
             out.append({
@@ -378,1464 +352,424 @@ def extract_headings_and_lists(html: str = "") -> List[Dict[str, Any]]:
                 "section_id": f"list_item_{len(out)}",
                 "snippet": li,
             })
-
     return out
 
 
-def _clamp_score(value: float) -> float:
-    return max(0.0, min(1.0, round(float(value), 4)))
+# ---------------------------------------------------------------------------
+# POS tagging (spaCy -> NLTK -> heuristic)
+# ---------------------------------------------------------------------------
 
-
-def _contains_bad_fragment(p: str) -> bool:
-    return any(re.search(pat, p) for pat in FRAGMENT_PATTERNS)
-
-
-def _is_clean_content_compound(tokens: List[str]) -> bool:
-    if not tokens:
-        return False
-
-    if len(tokens) < 2 or len(tokens) > 5:
-        return False
-
-    if tokens[0] in BAD_STARTS or tokens[-1] in BAD_ENDINGS:
-        return False
-
-    if tokens[0] in STOPWORDS or tokens[-1] in STOPWORDS:
-        return False
-
-    if any(t in PRONOUNS for t in tokens):
-        return False
-
-    if any(t in HELPER_VERBS for t in tokens):
-        return False
-
-    if any(t in CLAUSE_VERBS for t in tokens):
-        return False
-
-    if tokens[-1] in VAGUE_ADVERB_ENDINGS:
-        return False
-
-    content = content_tokens(tokens)
-
-    if len(content) < 2:
-        return False
-
-    long_terms = [t for t in content if len(t) >= 5]
-    solid_terms = [t for t in content if len(t) >= 4]
-
-    if len(long_terms) >= 2:
-        return True
-
-    if len(content) >= 3 and len(solid_terms) >= 2:
-        return True
-
-    if len(content) == 2 and all(len(t) >= 4 for t in content):
-        return True
-
-    return False
-
-def _has_universal_residue_pattern(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
-
-    patterns = [
-        # narration/search-intent residue
-        r"\b(searched|searching|looked|looking)\s+for\s+how\s+to\b",
-
-        # broken transition residue
-        r"\b\w+\s+(see|read|watch|check)\s+\w+",
-
-        # trailing weak verb residue
-        r"\b\w+\s+\w+\s+\w+\s+(making|giving|getting|becoming|feeling|seeming)$",
-
-        # vague time residue
-        r"^(same|next|last|first|second|third)\s+(year|month|week|day|time)$",
-
-        # weak adjective + vague noun
-        r"\b(healthy|shared|accurate|simple|real|same|quick)\s+(care|timeline|thing|things|way|language|numbers?)\b",
-
-        # number + weak abstract noun
-        r"^number\s+\w+",
-    ]
-
-    return any(re.search(pattern, text) for pattern in patterns)
-
-def _has_universal_head(tokens: List[str]) -> bool:
-    if not tokens:
-        return False
-
-    if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
-        return True
-
-    if _is_clean_content_compound(tokens):
-        return True
-
-    return False
-
-
-def _starts_with_weak_connector(p: str) -> bool:
-    return any(p.startswith(x + " ") or p == x for x in WEAK_CONNECTOR_STARTS)
-
-
-def _ends_with_weak_phrase(p: str) -> bool:
-    return any(p.endswith(" " + x) or p == x for x in WEAK_ENDING_PHRASES)
-
-
-def _is_thin_modifier_phrase(tokens: List[str]) -> bool:
-    if len(tokens) == 2 and tokens[0] in THIN_MODIFIERS:
-        return True
-    if len(tokens) == 3 and tokens[0] in THIN_MODIFIERS and tokens[-1] in GENERIC_WEAK_HEADS:
-        return True
-    return False
-
-
-def _is_generic_weak_head_phrase(tokens: List[str]) -> bool:
-    if not tokens:
-        return True
-
-    if _is_clean_content_compound(tokens):
-        return False
-
-    if tokens[-1] not in GENERIC_WEAK_HEADS:
-        return False
-
-    if len(tokens) <= 2:
-        return True
-
-    strong_non_generic = [
-        t for t in tokens[:-1]
-        if t not in STOPWORDS
-        and t not in THIN_MODIFIERS
-        and t not in GENERIC_WEAK_HEADS
-        and not t.isdigit()
-    ]
-    return len(strong_non_generic) < 2
-
-
-def _looks_like_sentence_fragment(tokens: List[str]) -> bool:
-    if not tokens:
-        return True
-
-    if _is_clean_content_compound(tokens):
-        return False
-
-    if any(t in HELPER_VERBS for t in tokens):
-        return True
-    if any(t in PRONOUNS for t in tokens):
-        return True
-    if any(t in CLAUSE_VERBS for t in tokens):
-        return True
-    if tokens[0] in CONDITION_CONNECTORS:
-        return True
-    return False
-
-
-def _contains_clause_connector(tokens: List[str]) -> bool:
-    if len(tokens) <= 2:
-        return False
-    return any(t in CLAUSE_CONNECTORS for t in tokens[1:-1])
-
-
-def _has_mid_stopword_chain(tokens: List[str]) -> bool:
-    if len(tokens) < 3:
-        return False
-
-    if _is_clean_content_compound(tokens):
-        return False
-
-    return any(t in STOPWORDS for t in tokens[1:-1])
-
-
-def _is_bad_noun_stack(tokens: List[str]) -> bool:
-    if len(tokens) < 3:
-        return False
-
-    if _is_clean_content_compound(tokens):
-        return False
-
-    if any(t in STOPWORDS for t in tokens):
-        return False
-
-    if len(tokens) >= 5:
-        return True
-
-    weak_count = sum(1 for t in tokens if t in GENERIC_WEAK_HEADS)
-    modifier_count = sum(1 for t in tokens[:-1] if t in UNIVERSAL_MODIFIERS)
-
-    if weak_count >= 2 and modifier_count == 0:
-        return True
-
-    if len(tokens) == 4 and modifier_count == 0 and tokens[-1] not in UNIVERSAL_HEAD_SUFFIXES:
-        return True
-
-    return False
-
-
-KNOWN_COMPLETE_ACTION_OBJECTS = {
-    ("calculate", "due", "date"),
-    ("calculate", "fertile", "window"),
-    ("calculate", "body", "mass"),
-    ("measure", "blood", "pressure"),
-    ("track", "cycle", "length"),
-    ("review", "anchor", "text"),
-    ("build", "topic", "clusters"),
-    ("create", "topic", "cluster"),
+# Heuristic suffixes that strongly suggest a noun.
+_NOUN_SUFFIXES = ("tion", "sion", "ment", "ness", "ity", "ship", "ance",
+                  "ence", "ics", "ism", "age", "ure", "or", "er", "ist", "ery")
+# Suffixes that suggest a (lexical) verb when not in the noun exception set.
+_VERB_SUFFIXES = ("ize", "ise", "ate", "ify", "ed", "ing")
+# Common -ing / -ed words that are actually nouns/adjectives.
+_ING_ED_NOUNS = {
+    "marketing", "branding", "onboarding", "training", "ranking", "rankings",
+    "pricing", "billing", "listing", "listings", "meeting", "meetings",
+    "setting", "settings", "building", "buildings", "reporting", "advertising",
+    "engineering", "accounting", "funding", "spending", "earnings", "savings",
+    "advanced", "automated", "integrated", "detailed", "dedicated", "related",
+    "recommended", "estimated", "extended",
 }
 
 
-def _is_weak_action_tail(tokens: List[str]) -> bool:
-    if tuple(tokens) in KNOWN_COMPLETE_ACTION_OBJECTS:
+def _heuristic_tag(word: str) -> str:
+    w = word.lower()
+    if w in FUNCTION_WORDS:
+        if w in DETERMINERS:
+            return "DET"
+        if w in PREPOSITIONS:
+            return "ADP"
+        if w in CONJUNCTIONS:
+            return "CONJ"
+        if w in PRONOUNS:
+            return "PRON"
+        if w in AUX_VERBS:
+            return "AUX"
+        return "ADV"
+    if w.isdigit():
+        return "NUM"
+    if w in FINITE_VERB_FORMS and w not in _ING_ED_NOUNS:
+        return "VERB"
+    if w in ACTION_VERBS or w in COMMON_LEXICAL_VERBS:
+        return "VERB"
+    if w in UNIVERSAL_HEADS or w in UNIVERSAL_MODIFIERS or w in GENERIC_WEAK_HEADS:
+        return "NOUN"
+    if w in _ING_ED_NOUNS:
+        return "NOUN"
+    if w.endswith(_NOUN_SUFFIXES):
+        return "NOUN"
+    if w.endswith("ly") and len(w) > 4:
+        return "ADV"
+    if w.endswith(_VERB_SUFFIXES):
+        return "VERB"
+    # default: treat unknown content words as nouns (safer for NP chunking)
+    return "NOUN"
+
+
+def pos_tag(tokens: List[str]) -> List[Tuple[str, str]]:
+    """Return [(token, coarse_tag), ...] using the best available tagger."""
+    if not tokens:
+        return []
+    if _have_nltk():
+        try:
+            import nltk  # type: ignore
+            raw = nltk.pos_tag(tokens)
+            return [(w, _coarsen_ptb(t)) for w, t in raw]
+        except Exception:
+            pass
+    return [(t, _heuristic_tag(t)) for t in tokens]
+
+
+def _coarsen_ptb(tag: str) -> str:
+    if tag.startswith("NN"):
+        return "NOUN"
+    if tag.startswith("VB"):
+        return "VERB"
+    if tag.startswith("JJ"):
+        return "ADJ"
+    if tag.startswith("RB"):
+        return "ADV"
+    if tag in {"DT", "PDT", "WDT"}:
+        return "DET"
+    if tag == "IN":
+        return "ADP"
+    if tag == "CC":
+        return "CONJ"
+    if tag in {"PRP", "PRP$", "WP", "WP$"}:
+        return "PRON"
+    if tag == "CD":
+        return "NUM"
+    if tag == "MD":
+        return "AUX"
+    return "X"
+
+
+# ---------------------------------------------------------------------------
+# Boundary trimming — the core "no hanging phrases" logic
+# ---------------------------------------------------------------------------
+
+def _trim_boundaries(tokens: List[str]) -> List[str]:
+    """Strip leading/trailing function words so the phrase begins and ends on
+    a content word. This is what removes 'hanging' phrases."""
+    toks = list(tokens)
+    while toks and ((toks[0] in LEADING_BAN or _is_adverb_ly(toks[0]))
+                    or (toks[0] in COMMON_LEXICAL_VERBS
+                        and toks[0] not in ACTION_VERBS)):
+        toks.pop(0)
+    while toks and (toks[-1] in TRAILING_BAN or toks[-1] in AUX_VERBS
+                    or toks[-1] in PARTICLES_DEGREE or _is_adverb_ly(toks[-1])):
+        toks.pop()
+    return toks
+
+
+def _is_noun_like_head(token: str) -> bool:
+    if token in COMPARATIVES or _is_adverb_ly(token):
         return False
-
-    if len(tokens) < 2:
+    if token in _ING_ED_NOUNS:
+        return True
+    if token in UNIVERSAL_HEADS:
+        return True
+    if token in FINITE_VERB_FORMS:
         return False
-
-    if tokens[0] not in ACTION_TOKENS:
+    if token in GENERIC_WEAK_HEADS:
+        return True  # weak but still a noun; quality filter handles it
+    if token in COMMON_LEXICAL_VERBS:
         return False
-
-    if len(tokens) > 4:
-        return True
-
-    if tokens[-1] in GENERIC_WEAK_HEADS:
-        return True
-
-    if len(tokens) == 3 and tokens[-1] not in UNIVERSAL_HEAD_SUFFIXES and not _is_clean_content_compound(tokens):
-        return True
-
-    return False
-
-def _looks_like_sentence_fragment(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
-
-    tokens = re.findall(r"[a-z0-9]+", text)
-    if not tokens:
-        return True
-
-    # Reject vague filler tokens unless phrase has a strong domain head.
-    if any(tok in VAGUE_FILLER_TOKENS for tok in tokens):
-        return True
-
-    # Reject sentence-flow starts when phrase is longer than 2 words.
-    if len(tokens) >= 3 and tokens[0] in SENTENCE_FLOW_STARTERS:
-        return True
-
-    # Reject generic "for the next", "from things", etc.
-    for pat in SENTENCE_FRAGMENT_PATTERNS:
-        if pat.search(text):
-            return True
-
-    return False
+    if token in AUX_VERBS or token in PREPOSITIONS or token in CONJUNCTIONS:
+        return False
+    if token in PRONOUNS or token in DETERMINERS:
+        return False
+    # past participle head is usually a clause fragment ("rate improved");
+    # gerund head is usually nominal ("cycle tracking") and allowed.
+    if token.endswith("ed") and token not in _ING_ED_NOUNS:
+        return False
+    return True
 
 
-def _score_entity_density(tokens: List[str]) -> float:
-    if not tokens:
-        return 0.0
-
-    content = content_tokens(tokens)
-    if not content:
-        return 0.0
-
-    entity_hits = 0
-    for token in content:
-        if token in UNIVERSAL_HEAD_SUFFIXES or token in UNIVERSAL_MODIFIERS:
-            entity_hits += 1
-        elif len(token) >= 5:
-            entity_hits += 0.65
-
-    if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
-        entity_hits += 1
-
-    return _clamp_score(entity_hits / max(1, len(content)))
-
-
-def _score_anchor_strength(tokens: List[str], source_type: str) -> float:
-    if not tokens:
-        return 0.0
-
-    score = 0.35
-
-    if 2 <= len(tokens) <= 4:
-        score += 0.20
-    elif 5 <= len(tokens) <= 6:
-        score += 0.10
-
-    if tokens[-1] in UNIVERSAL_HEAD_SUFFIXES:
-        score += 0.25
-
-    if _is_clean_content_compound(tokens):
-        score += 0.20
-
-    if any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]):
-        score += 0.15
-
-    if source_type in {"title", "heading_h1", "heading_h2", "heading_h3"}:
-        score += 0.10
-
-    if source_type in {"intent", "action_object", "condition_phrase"}:
-        score += 0.08
-
-    if _is_thin_modifier_phrase(tokens) or _is_generic_weak_head_phrase(tokens):
-        score -= 0.35
-
-    if _looks_like_sentence_fragment(tokens):
-        score -= 0.40
-
-    return _clamp_score(score)
-
-
-def _score_semantic_cohesion(tokens: List[str]) -> float:
-    if not tokens:
-        return 0.0
-
-    score = 0.55
-
-    if len(tokens) <= 4:
-        score += 0.15
-
-    if _has_universal_head(tokens):
-        score += 0.15
-
-    if _is_clean_content_compound(tokens):
-        score += 0.15
-
-    if any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]):
-        score += 0.10
-
-    if _has_mid_stopword_chain(tokens):
-        score -= 0.35
-
-    if _is_bad_noun_stack(tokens):
-        score -= 0.35
-
-    if _contains_clause_connector(tokens):
-        score -= 0.25
-
-    return _clamp_score(score)
-
-
-def _score_wrapper_noise_control(phrase: str, tokens: List[str]) -> float:
-    score = 1.0
-
-    if _contains_bad_fragment(phrase):
-        score -= 0.60
-
-    if tokens and (tokens[0] in BAD_STARTS or tokens[-1] in BAD_ENDINGS):
-        score -= 0.45
-
-    if _starts_with_weak_connector(phrase) or _ends_with_weak_phrase(phrase):
-        score -= 0.45
-
+def _is_complete_phrase(tokens: List[str]) -> bool:
+    """A phrase is complete iff it is a clean constituent:
+    - 2..6 tokens, >=2 content words
+    - starts and ends on a content word
+    - ends on a noun-like head (no dangling preposition/verb/article)
+    - contains no finite clause verb / auxiliary / pronoun in the interior
+    - not purely generic filler
+    """
+    if not (2 <= len(tokens) <= 6):
+        return False
+    if tokens[0] in LEADING_BAN or tokens[-1] in TRAILING_BAN:
+        return False
+    if not _is_noun_like_head(tokens[-1]):
+        return False
+    if any(t in AUX_VERBS for t in tokens):
+        return False
     if any(t in PRONOUNS for t in tokens):
-        score -= 0.35
-
-    if any(t in HELPER_VERBS for t in tokens):
-        score -= 0.35
-
-    if tokens and tokens[-1] in VAGUE_ADVERB_ENDINGS:
-        score -= 0.30
-
-    return _clamp_score(score)
-
-
-def _score_topic_alignment(tokens: List[str], snippet: str) -> float:
-    if not tokens:
-        return 0.0
-
-    snippet_tokens = set(tokenize(snippet))
-    phrase_tokens = set(tokens)
-    content = set(content_tokens(tokens))
-
-    score = 0.45
-
-    if phrase_tokens and phrase_tokens.issubset(snippet_tokens):
-        score += 0.20
-
-    if any(t in UNIVERSAL_HEAD_SUFFIXES for t in content):
-        score += 0.15
-
-    if _is_clean_content_compound(tokens):
-        score += 0.15
-
-    if any(t in UNIVERSAL_MODIFIERS for t in content):
-        score += 0.10
-
-    if len(content) >= 2:
-        score += 0.10
-
-    return _clamp_score(score)
+        return False
+    # a finite verb in the true interior, or a non-action finite verb in front,
+    # signals a glued-together clause. (Gerund modifiers and noun/verb-ambiguous
+    # heads like "guide" / "review" are handled by head + boundary checks.)
+    if tokens[0] in FINITE_VERB_FORMS and tokens[0] not in ACTION_VERBS:
+        return False
+    if any(t in FINITE_VERB_FORMS for t in tokens[1:-1]):
+        return False
+    if any(t in STRIP_INTERIOR for t in tokens[1:-1]):
+        return False
+    # interior conjunctions/prepositions usually mean a glued-together fragment,
+    # except a single linking "of"/"for"/"and" between two content words.
+    interior = tokens[1:-1]
+    bad_interior = [t for t in interior if t in CONJUNCTIONS
+                    or (t in PREPOSITIONS and t != "of")]
+    if bad_interior:
+        return False
+    # finite lexical verb in the interior => clause fragment
+    if any(t in COMMON_LEXICAL_VERBS and t not in ACTION_VERBS for t in tokens):
+        return False
+    content = [t for t in tokens if t not in FUNCTION_WORDS]
+    if len(content) < 2:
+        return False
+    # reject "all generic" phrases (e.g. "the main thing")
+    if all(t in GENERIC_WEAK_HEADS or t in FUNCTION_WORDS for t in tokens):
+        return False
+    return True
 
 
-def _weighted_extractor_score(signals: Dict[str, float]) -> float:
-    total = 0.0
-    for key, weight in EXTRACTOR_INTELLIGENCE_WEIGHTS.items():
-        total += float(signals.get(key, 0.0)) * weight
-    return _clamp_score(total)
+# ---------------------------------------------------------------------------
+# Chunkers — yield COMPLETE constituents (never mid-constituent windows)
+# ---------------------------------------------------------------------------
+
+def _spacy_chunks(sent: str) -> List[str]:
+    nlp = _get_spacy()
+    if nlp is None:
+        return []
+    out: List[str] = []
+    doc = nlp(sent)
+    for nc in doc.noun_chunks:
+        toks = tokenize(nc.text)
+        toks = _trim_boundaries(toks)
+        if _is_complete_phrase(toks):
+            out.append(" ".join(toks))
+    # verb + direct object -> action phrase
+    for tok in doc:
+        if tok.pos_ == "VERB" and tok.lemma_.lower() in ACTION_VERBS:
+            for child in tok.children:
+                if child.dep_ in {"dobj", "obj"}:
+                    span = doc[tok.i:child.right_edge.i + 1]
+                    cand = _trim_action(tokenize(span.text))
+                    if cand:
+                        out.append(cand)
+    return out
 
 
-def _extractor_threshold(source_type: str) -> float:
-    return SOURCE_TYPE_THRESHOLDS.get(source_type, 0.58)
+def _noun_chunks_pos(sent: str) -> List[str]:
+    """POS-driven NP chunking for the NLTK / heuristic paths.
+
+    Grammar: an NP is a run of (NOUN|ADJ|NUM) tokens optionally joined by a
+    single 'of'/'for'. We always anchor the phrase on the rightmost noun head
+    and trim the left boundary, so output is never cut mid-head."""
+    out: List[str] = []
+    # split on clause punctuation so phrases never glue across a comma/clause
+    for segment in re.split(r"[,;:()\u2013\u2014\u2022]| - ", sent):
+        out.extend(_noun_chunks_segment(segment))
+    return out
 
 
-def _extractor_intelligence_result(
-    phrase: str,
-    tokens: List[str],
-    source_type: str,
-    snippet: str,
-) -> Dict[str, Any]:
-    signals = {
-        "entity_density": _score_entity_density(tokens),
-        "anchor_strength": _score_anchor_strength(tokens, source_type),
-        "semantic_cohesion": _score_semantic_cohesion(tokens),
-        "wrapper_noise_control": _score_wrapper_noise_control(phrase, tokens),
-        "topic_alignment": _score_topic_alignment(tokens, snippet),
-    }
+def _noun_chunks_segment(sent: str) -> List[str]:
+    tokens = tokenize(sent)
+    tags = pos_tag(tokens)
+    out: List[str] = []
 
-    score = _weighted_extractor_score(signals)
-    threshold = _extractor_threshold(source_type)
+    np_tags = {"NOUN", "ADJ", "NUM"}
+    i = 0
+    n = len(tags)
+    while i < n:
+        if tags[i][1] not in np_tags:
+            i += 1
+            continue
+        j = i
+        while j < n:
+            w, t = tags[j]
+            if t in np_tags:
+                j += 1
+                continue
+            # allow a single linking 'of' inside an NP ("rate of return")
+            if w == "of" and j + 1 < n and tags[j + 1][1] in np_tags:
+                j += 2
+                continue
+            break
+        chunk = [w for w, _ in tags[i:j]]
+        # Emit the full chunk and its head-anchored suffixes, so we keep the
+        # head noun but also offer tighter sub-phrases. Every variant still
+        # ends on the same noun head -> never hanging.
+        for start in range(0, len(chunk) - 1):
+            cand = _trim_boundaries(chunk[start:])
+            if _is_complete_phrase(cand):
+                out.append(" ".join(cand))
+        i = j
+
+    # action verb + following NP head
+    for k, (w, t) in enumerate(tags):
+        if w in ACTION_VERBS:
+            tail = [tw for tw, tt in tags[k + 1:k + 5]]
+            cand = _trim_action([w] + tail)
+            if cand:
+                out.append(cand)
+    return out
+
+
+def _trim_action(tokens: List[str]) -> Optional[str]:
+    """Build a complete action phrase: verb + its object NP (ending on a head)."""
+    if len(tokens) < 2 or tokens[0] not in ACTION_VERBS:
+        return None
+    head = tokens[0]
+    # take following tokens until we hit a function word that ends the object
+    obj: List[str] = []
+    for t in tokens[1:]:
+        if t in DETERMINERS and not obj:
+            continue  # skip a leading determiner in the object
+        if t in (PREPOSITIONS | CONJUNCTIONS | AUX_VERBS | PRONOUNS):
+            break
+        if t in PARTICLES_DEGREE:
+            break
+        obj.append(t)
+        if len(obj) >= 3:
+            break
+    # trim trailing weak boundary on the object
+    while obj and (obj[-1] in TRAILING_BAN or not _is_noun_like_head(obj[-1])):
+        obj.pop()
+    if not obj:
+        return None
+    phrase = [head] + obj
+    if not (2 <= len(phrase) <= 5):
+        return None
+    return " ".join(phrase)
+
+
+def _intent_phrases(sent: str) -> List[str]:
+    s = canonical_phrase(sent)
+    out: List[str] = []
+    for start in INTENT_STARTS:
+        idx = s.find(start)
+        if idx == -1:
+            continue
+        tail = tokenize(s[idx:])
+        # grow from the intent start to the next clause boundary, then trim
+        cand: List[str] = []
+        for t in tail:
+            if t in (CONJUNCTIONS | AUX_VERBS) and len(cand) >= len(start.split()):
+                break
+            cand.append(t)
+            if len(cand) >= 7:
+                break
+        # trim trailing function words, keep a noun-like head
+        while cand and (cand[-1] in TRAILING_BAN or cand[-1] in AUX_VERBS
+                        or not _is_noun_like_head(cand[-1])):
+            cand.pop()
+        if len(cand) >= 3 and not any(t in PRONOUNS for t in cand):
+            out.append(" ".join(cand))
+    return out
+
+
+def _candidate_phrases(sent: str) -> List[str]:
+    """Dispatch to the best chunker available."""
+    if _get_spacy() is not None:
+        chunks = _spacy_chunks(sent)
+    else:
+        chunks = _noun_chunks_pos(sent)
+    chunks.extend(_intent_phrases(sent))
+    # dedupe preserving order
+    seen: Set[str] = set()
+    uniq: List[str] = []
+    for c in chunks:
+        if c and c not in seen:
+            seen.add(c)
+            uniq.append(c)
+    return uniq
+
+
+# ---------------------------------------------------------------------------
+# Lightweight, transparent quality scoring
+# ---------------------------------------------------------------------------
+
+SOURCE_WEIGHT: Dict[str, float] = {
+    "title": 0.20, "heading_h1": 0.18, "heading_h2": 0.16, "heading_h3": 0.14,
+    "heading_h4": 0.12, "heading_h5": 0.12, "heading_h6": 0.12,
+    "list_item": 0.08, "intent": 0.12, "action_object": 0.10, "noun_phrase": 0.10,
+}
+
+ACCEPT_THRESHOLD = 0.50
+
+
+def _score_phrase(tokens: List[str], source_type: str, snippet: str) -> Dict[str, Any]:
+    content = [t for t in tokens if t not in FUNCTION_WORDS]
+    n_content = max(1, len(content))
+
+    # headedness: phrase ends on a strong/known head
+    head = 0.0
+    if tokens[-1] in UNIVERSAL_HEADS:
+        head = 1.0
+    elif tokens[-1] in GENERIC_WEAK_HEADS:
+        head = 0.25
+    else:
+        head = 0.6  # plausible noun head
+
+    # entity density: share of strong/long content tokens
+    strong = sum(1 for t in content
+                 if t in UNIVERSAL_HEADS or t in UNIVERSAL_MODIFIERS or len(t) >= 6)
+    density = strong / n_content
+
+    # specificity: modifier + head reads as a real concept
+    has_modifier = any(t in UNIVERSAL_MODIFIERS for t in tokens[:-1]) or \
+        any(len(t) >= 5 for t in tokens[:-1])
+    specificity = 0.6 if has_modifier else 0.3
+
+    # length sweet spot (2-4 content words)
+    length = 1.0 if 2 <= len(content) <= 4 else 0.55
+
+    # coverage in source snippet
+    snip = set(tokenize(snippet))
+    coverage = 1.0 if set(tokens).issubset(snip) else 0.6
+
+    score = (
+        0.28 * head +
+        0.24 * density +
+        0.18 * specificity +
+        0.15 * length +
+        0.15 * coverage +
+        SOURCE_WEIGHT.get(source_type, 0.08)
+    )
+    score = max(0.0, min(1.0, round(score, 4)))
 
     return {
         "score": score,
-        "threshold": threshold,
-        "decision": "ACCEPT" if score >= threshold else "REJECT",
-        "signals": signals,
-        "layers": [
-            "entity_map",
-            "intention_recognition",
-            "content_aware_context",
-            "semantic_similarity",
-            "topic_coherence",
-            "long_context_compression",
-            "transfer_learning",
-        ],
+        "threshold": ACCEPT_THRESHOLD,
+        "decision": "ACCEPT" if score >= ACCEPT_THRESHOLD else "REJECT",
+        "signals": {
+            "headedness": round(head, 3),
+            "entity_density": round(density, 3),
+            "specificity": round(specificity, 3),
+            "length": round(length, 3),
+            "coverage": round(coverage, 3),
+        },
     }
 
 
-# ---------------------------------------------------------------------
-# Final universal extractor intelligence layers
-# ---------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Candidate assembly
+# ---------------------------------------------------------------------------
+
+def _reject(candidate: Dict[str, Any], reason: str,
+            workspace_id: str, doc_id: str, vertical: str) -> None:
+    learn_from_pipeline_rejection(
+        workspace_id=workspace_id,
+        document_id=doc_id,
+        vertical=vertical,
+        pipeline_stage="smart_extractor",
+        candidate=candidate,
+        rejection_reason=reason,
+    )
 
-VALID_NUMERIC_HEADS = {
-    "age", "ages", "amount", "average", "budget", "cycle", "cycles",
-    "day", "days", "deadline", "duration", "forecast", "growth", "hour",
-    "hours", "index", "interval", "length", "limit", "month", "months",
-    "period", "periods", "price", "rate", "ratio", "revenue", "risk",
-    "score", "scores", "size", "term", "trial", "value", "week", "weeks",
-    "window", "year", "years",
-}
-
-DISCOURSE_TRANSITION_TERMS = {
-    "actually", "also", "anyway", "basically", "behind", "briefly",
-    "clearly", "especially", "even", "finally", "first", "firstly",
-    "generally", "however", "including", "instead", "just", "lastly",
-    "mainly", "meanwhile", "mostly", "normally", "often", "overall",
-    "particularly", "rather", "really", "second", "secondly", "simply",
-    "sometimes", "still", "therefore", "though", "today", "usually",
-}
-
-UNSTABLE_INTERNAL_CONNECTORS = {
-    "and", "but", "or", "so", "because", "although", "though", "while",
-    "whereas", "unless", "since",
-}
-
-VALID_PAIR_PATTERNS = {
-    ("risks", "benefits"),
-    ("risk", "benefit"),
-    ("signs", "symptoms"),
-    ("supply", "demand"),
-    ("pros", "cons"),
-    ("privacy", "security"),
-    ("cost", "benefit"),
-    ("costs", "benefits"),
-    ("strengths", "weaknesses"),
-    ("cause", "effect"),
-    ("causes", "effects"),
-    ("input", "output"),
-    ("inputs", "outputs"),
-    ("assets", "liabilities"),
-    ("revenue", "expenses"),
-    ("income", "expenses"),
-    ("growth", "profitability"),
-}
-
-
-def _has_numeric_semantic_pollution(tokens: List[str]) -> bool:
-    """
-    Universal numeric-window guard.
-
-    Rejects broken numeric windows while preserving normal numeric anchors:
-    - keep: 30 day trial, 12 month revenue forecast, 28 day cycle
-    - reject: 24 hours and sperm, 17 with the most fertile
-    """
-    if not tokens or not any(t.isdigit() for t in tokens):
-        return False
-
-    # Pure numeric tail was already handled elsewhere, but keep this safe.
-    if tokens[-1].isdigit():
-        return True
-
-    numeric_positions = [i for i, t in enumerate(tokens) if t.isdigit()]
-
-    for idx in numeric_positions:
-        prev_tok = tokens[idx - 1] if idx > 0 else ""
-        next_tok = tokens[idx + 1] if idx + 1 < len(tokens) else ""
-        next2_tok = tokens[idx + 2] if idx + 2 < len(tokens) else ""
-
-        # Valid numeric unit/metric phrase: 30 day trial, 12 month forecast.
-        if next_tok in VALID_NUMERIC_HEADS:
-            continue
-
-        # Valid phrase where the numeric unit is before the number is rare in
-        # anchors, but allow meaningful metric heads around the number.
-        if prev_tok in VALID_NUMERIC_HEADS or next2_tok in VALID_NUMERIC_HEADS:
-            continue
-
-        # Numeric value followed by connector/discourse is usually a sentence shard.
-        if next_tok in STOPWORDS or next_tok in UNSTABLE_INTERNAL_CONNECTORS:
-            return True
-
-        # Bare number inside a phrase without a known numeric head is unstable.
-        return True
-
-    return False
-
-def _has_broken_residue_pattern(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
-
-    patterns = [
-        # broken contractions / auxiliaries: aren, isn, doesn, don, etc.
-        r"\b[a-z]+n\s+\w+",
-
-        # emotion/conversation residue: monitor confused, feeling worried
-        r"\b\w+\s+(confused|frustrated|wondering|worried)\b",
-        r"\b(confused|frustrated|wondering|worried)\s+\w+\b",
-
-        # video/article reminder residue
-        r"\b(reminder|video|article|guide|post|section)\b",
-
-        # disclaimer residue
-        r"\b(purposes?\s+only|educational\s+purposes?|informational\s+purposes?)\b",
-
-        # impossible subject-verb residue
-        r"\b(world|numbers|body|timeline|shared)\s+\w+ing\b",
-    ]
-
-    return any(re.search(pattern, text) for pattern in patterns)
-
-
-def _has_discourse_transition_leak(tokens: List[str]) -> bool:
-    """
-    Rejects sentence-bridge/discourse fragments that are not stable anchors.
-    """
-    if not tokens:
-        return False
-
-    # Good anchors can contain ordinary modifiers, but should not start/end with
-    # discourse transition terms.
-    if tokens[0] in DISCOURSE_TRANSITION_TERMS:
-        return True
-
-    if tokens[-1] in DISCOURSE_TRANSITION_TERMS:
-        return True
-
-    # Internal discourse terms are usually bad unless the phrase is a known
-    # clean content compound.
-    internal = tokens[1:-1]
-    if any(t in DISCOURSE_TRANSITION_TERMS for t in internal):
-        return True
-
-    # Common narrative fragments.
-    phrase = " ".join(tokens)
-    if phrase in {
-        "behind the scenes",
-        "same number",
-        "single fact",
-        "main reason",
-        "main point",
-        "next step",
-        "first step",
-    }:
-        return True
-
-    return False
-
-
-def _has_unstable_internal_connector(tokens: List[str]) -> bool:
-    """
-    Reject unstable connector windows but preserve valid paired concepts.
-    """
-    if len(tokens) < 3:
-        return False
-
-    for i, tok in enumerate(tokens[1:-1], start=1):
-        if tok not in UNSTABLE_INTERNAL_CONNECTORS:
-            continue
-
-        left = tokens[i - 1]
-        right = tokens[i + 1]
-
-        if (left, right) in VALID_PAIR_PATTERNS:
-            continue
-
-        # Allow stable noun-pair anchors like "research and development" only
-        # when both sides are content-heavy.
-        if tok == "and" and len(left) >= 5 and len(right) >= 5:
-            continue
-
-        return True
-
-    return False
-
-INCOMPLETE_TAIL_TERMS = {
-    "around", "widely", "itself", "typically", "usually", "often",
-    "likely", "roughly", "generally", "seriously", "accurately",
-    "realizing", "finding", "trying", "based",
-}
-
-WEAK_COMPLETION_STARTS = {
-    "using", "planning", "working", "range", "vary", "hit", "mark",
-    "know", "search", "refine", "focus",
-}
-
-BAD_BOUNDARY_BIGRAMS = {
-    ("body", "better"),
-    ("better", "learning"),
-    ("conceive", "trying"),
-    ("ovulation", "answer"),
-    ("cycle", "math"),
-    ("powerful", "starting"),
-}
-
-
-def _has_numeric_phrase_shape_error(tokens: List[str]) -> bool:
-    if not tokens or not any(t.isdigit() for t in tokens):
-        return False
-
-    stable_units = {
-        "day", "days", "week", "weeks", "month", "months", "year", "years",
-        "hour", "hours", "minute", "minutes", "percent", "percentage",
-        "rate", "ratio", "score", "index", "cycle", "window", "trial",
-        "period", "forecast", "budget", "revenue", "growth", "risk",
-    }
-
-    stable_heads = {
-        "cycle", "window", "trial", "forecast", "rate", "ratio", "score",
-        "index", "period", "budget", "revenue", "growth", "risk",
-        "length", "duration", "deadline", "timeline", "plan",
-    }
-
-    for i, tok in enumerate(tokens):
-        if not tok.isdigit():
-            continue
-
-        next_tok = tokens[i + 1] if i + 1 < len(tokens) else ""
-        next2_tok = tokens[i + 2] if i + 2 < len(tokens) else ""
-
-        if next_tok in stable_units and (next2_tok in stable_heads or len(tokens) <= 3):
-            continue
-
-        if next_tok in stable_units and len(tokens) == 2:
-            continue
-
-        return True
-
-    return False
-
-
-def _has_boundary_stitch_error(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    for pair in zip(tokens, tokens[1:]):
-        if pair in BAD_BOUNDARY_BIGRAMS:
-            return True
-
-    if tokens[-1] in {"trying", "finding", "realizing", "using", "tracking"}:
-        return True
-
-    return False
-
-
-def _has_incomplete_phrase_completion(tokens: List[str]) -> bool:
-    if not tokens:
-        return False
-
-    if tokens[-1] in INCOMPLETE_TAIL_TERMS:
-        return True
-
-    if tokens[0] in WEAK_COMPLETION_STARTS and len(tokens) <= 3:
-        return True
-
-    phrase = " ".join(tokens)
-    if phrase in {
-        "using this principle",
-        "planning around",
-        "range more widely",
-        "working length",
-        "last three",
-        "personal average",
-        "same subtraction rule",
-        "ovulation the answer",
-    }:
-        return True
-
-    return False
-
-
-UNSTABLE_NUMERIC_CONTEXT_TERMS = {
-    "ovulation", "profit", "revenue", "traffic", "ranking", "conversion",
-    "growth", "risk", "score", "price", "cost", "budget", "users",
-    "customers", "patients", "students", "sales", "leads",
-}
-
-LOW_VALUE_STANDALONE_PHRASES = {
-    "want proof",
-    "likely passed",
-    "next period",
-    "calendar math",
-    "putting prediction",
-    "same subtraction rule",
-}
-
-UNSTABLE_PREFIX_TERMS = {
-    "re", "cost", "putting", "likely", "want", "notice", "searches",
-    "confirmation", "signaling",
-}
-
-
-def _has_unstable_numeric_context(tokens: List[str]) -> bool:
-    """
-    Universal V3 numeric-context guard.
-
-    Rejects: 28 days ovulation, 12 months revenue, 5 users growth
-    Preserves: 28 day cycle, 12 month revenue forecast, 5 year growth rate
-    """
-    if not tokens or not any(t.isdigit() for t in tokens):
-        return False
-
-    stable_metric_heads = {
-        "cycle", "window", "trial", "forecast", "rate", "ratio", "score",
-        "index", "period", "budget", "plan", "timeline", "duration",
-        "length", "cost", "price", "revenue", "growth", "risk",
-    }
-
-    for i, tok in enumerate(tokens):
-        if not tok.isdigit():
-            continue
-
-        next_tok = tokens[i + 1] if i + 1 < len(tokens) else ""
-        next2_tok = tokens[i + 2] if i + 2 < len(tokens) else ""
-
-        if next_tok in {"day", "days", "week", "weeks", "month", "months", "year", "years", "hour", "hours"}:
-            if next2_tok in stable_metric_heads:
-                continue
-
-            if len(tokens) <= 2:
-                continue
-
-            return True
-
-        if next_tok and next_tok not in stable_metric_heads:
-            return True
-
-    return False
-
-
-def _has_low_value_standalone_shape(tokens: List[str]) -> bool:
-    """
-    Rejects low-value sentence pieces that are not stable anchors.
-    Universal, not niche-specific.
-    """
-    if not tokens:
-        return False
-
-    phrase = " ".join(tokens)
-
-    if phrase in LOW_VALUE_STANDALONE_PHRASES:
-        return True
-
-    if tokens[0] in UNSTABLE_PREFIX_TERMS and len(tokens) <= 4:
-        return True
-
-    if tokens[0] in UNSTABLE_PREFIX_TERMS and not _is_clean_content_compound(tokens):
-        return True
-
-    return False
-
-
-def _has_unfinished_narrative_window(tokens: List[str]) -> bool:
-    """
-    Rejects narrative fragments that look like sentence motion, not anchors.
-    """
-    if len(tokens) < 2:
-        return False
-
-    unstable_tails = {
-        "passed", "proof", "prediction", "together", "whether", "nothing",
-        "right", "widely", "seriously", "usually", "typically",
-    }
-
-    if tokens[-1] in unstable_tails:
-        return True
-
-    if len(tokens) >= 3 and tokens[0] in {"re", "cost", "putting", "confirmation"}:
-        return True
-
-    return False
-
-
-WEAK_TRAILING_ADJECTIVES = {
-    "trickier", "possible", "expected", "predictable",
-    "broader", "steady", "targeted", "clearer",
-    "wetter", "easiest", "special",
-}
-
-WEAK_CONTEXT_ENDINGS = {
-    "people", "averages", "range", "speak",
-    "evaluation", "release", "routine",
-    "situations", "principle",
-}
-
-LOW_INFORMATION_PHRASES = {
-    "well for people",
-    "less on averages",
-    "cycles range",
-    "period speak",
-    "special situations",
-    "expected release",
-    "possible evaluation",
-}
-
-
-
-
-def _has_subject_verb_fragment_v2(tokens: List[str]) -> bool:
-    if len(tokens) not in {2, 3}:
-        return False
-
-    subject_like = {
-        "baby", "babies", "clinic", "clinics", "embryo", "embryos",
-        "hormone", "hormones", "cycle", "cycles", "user", "users",
-        "customer", "customers", "student", "students", "patient", "patients",
-        "business", "businesses", "team", "teams", "company", "companies",
-        "market", "markets", "price", "prices", "ranking", "rankings",
-        "traffic", "revenue", "cost", "costs", "system", "systems",
-    }
-
-    verb_like = {
-        "grow", "grows", "grew", "gave", "give", "gives",
-        "attach", "attaches", "follow", "follows", "reset", "resets",
-        "stretch", "stretches", "change", "changes", "changed",
-        "affect", "affects", "affected", "increase", "increases",
-        "decrease", "decreases", "improve", "improves", "improved",
-        "convert", "converts", "identify", "identifies",
-        "remember", "remembers", "estimate", "estimates",
-    }
-
-    return tokens[0] in subject_like and tokens[1] in verb_like
-
-
-def _has_truncated_action_object_v2(tokens: List[str]) -> bool:
-    if len(tokens) not in {2, 3}:
-        return False
-
-    action_starts = {
-        "calculate", "estimate", "measure", "track", "monitor", "check",
-        "compare", "convert", "identify", "choose", "find", "review",
-        "analyze", "score", "rank", "forecast", "plan", "improve",
-    }
-
-    weak_incomplete_objects = {
-        "due", "fertile", "pregnancy", "conception", "children",
-        "child", "average", "pattern", "process", "number", "length",
-        "ratio", "percent", "percentage", "score", "date", "time",
-        "cost", "price", "ranking", "traffic", "revenue",
-        "blood", "body", "mass", "cycle", "cycles", "pressure",
-        "keyword", "keywords", "topic", "topics", "link", "links",
-        "page", "pages", "url", "urls", "content", "article", "anchor",
-    }
-
-    strong_completion_heads = {
-        "date", "window", "calculator", "formula", "method", "strategy",
-        "score", "rate", "forecast", "plan", "guide", "risk", "cost",
-        "price", "revenue", "traffic", "ranking", "performance",
-        "pressure", "index", "length", "cycle", "cycles", "page",
-        "pages", "url", "urls", "topic", "topics", "cluster",
-        "clusters", "article", "articles", "content",
-    }
-
-    known_complete_pairs = {
-        ("calculate", "bmi"),
-        ("calculate", "age"),
-        ("calculate", "tax"),
-        ("calculate", "roi"),
-        ("track", "ovulation"),
-        ("track", "period"),
-        ("monitor", "rankings"),
-        ("monitor", "traffic"),
-        ("check", "pressure"),
-        ("review", "content"),
-        ("audit", "links"),
-        ("optimize", "content"),
-        ("improve", "ranking"),
-    }
-
-    known_complete_triples = {
-        ("calculate", "due", "date"),
-        ("calculate", "fertile", "window"),
-        ("calculate", "body", "mass"),
-        ("measure", "blood", "pressure"),
-        ("track", "cycle", "length"),
-        ("track", "keyword", "rankings"),
-        ("build", "topic", "clusters"),
-        ("create", "topic", "cluster"),
-        ("find", "internal", "links"),
-        ("review", "anchor", "text"),
-    }
-
-    if tokens[0] not in action_starts:
-        return False
-
-    if tuple(tokens) in known_complete_pairs or tuple(tokens) in known_complete_triples:
-        return False
-
-    if tokens[-1] in strong_completion_heads and len(tokens) >= 3:
-        return False
-
-    if len(tokens) == 2 and tokens[-1] in weak_incomplete_objects:
-        return True
-
-    if len(tokens) == 3:
-        if tuple(tokens) in known_complete_triples:
-            return False
-        if tokens[-1] in weak_incomplete_objects and tokens[-1] not in strong_completion_heads:
-            return True
-
-        incomplete_two_word_objects = {
-            ("body", "mass"),
-            ("keyword", "rankings"),
-            ("topic", "cluster"),
-            ("topic", "clusters"),
-            ("internal", "links"),
-            ("external", "links"),
-            ("anchor", "text"),
-        }
-
-        if tuple(tokens[1:]) in incomplete_two_word_objects:
-            return False
-
-    return tokens[-1] in weak_incomplete_objects
-
-
-def _has_narrative_instruction_fragment_v2(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    narrative_starts = {
-        "ask", "know", "mark", "look", "remember", "consider",
-        "explore", "finish", "keep", "arrive", "expecting",
-        "describe", "describing", "getting", "having",
-    }
-
-    if tokens[0] in narrative_starts:
-        return True
-
-    if len(tokens) >= 3 and tokens[0] in {"exact", "actual", "final", "assigned"} and tokens[-1] in {
-        "day", "date", "timestamp", "encounter", "calculation", "verdict"
-    }:
-        return True
-
-    return False
-
-
-def _has_incomplete_tail_concept_v2(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    weak_tails = {
-        "minus", "relative", "further", "each", "let", "process",
-        "temperature", "average", "remember", "convert", "identify",
-        "imperial", "provisional", "placeholder", "tricks",
-    }
-
-    if tokens[-1] in weak_tails:
-        return True
-
-    if len(tokens) >= 4 and tokens[-2:] in [
-        ["the", "process"],
-        ["the", "temperature"],
-        ["the", "pattern"],
-        ["the", "average"],
-    ]:
-        return True
-
-    return False
-
-
-def _has_reversed_semantic_structure_v2(tokens: List[str]) -> bool:
-    if len(tokens) != 2:
-        return False
-
-    reversed_tail_verbs = {
-        "convert", "identify", "remember", "average", "imperial",
-        "stretch", "stretches", "affected", "reset", "attaches",
-    }
-
-    return tokens[-1] in reversed_tail_verbs
-
-
-
-
-
-
-def get_semantic_expansion_advisory_v1(
-    phrase: str,
-    snippet: str = "",
-    vertical: str = "general",
-) -> dict:
-    """
-    1.16.10 Semantic Expansion Engine ? Advisory Only.
-
-    Connected to future ATR / Topic Intelligence.
-    Does NOT rewrite extractor candidates.
-    Does NOT affect highlighting, scoring, target selection, or runtime linking.
-    """
-
-    phrase_norm = re.sub(r"\s+", " ", str(phrase or "")).strip(" .,:;!?()[]{}\"'")
-    snippet_norm = re.sub(r"\s+", " ", str(snippet or "")).strip()
-
-    advisory = {
-        "layer": "semantic_expansion_engine_v1",
-        "mode": "advisory_only",
-        "connected_to": [
-            "advanced_topic_reasoning_layer",
-            "topic_intelligence",
-            "topic_cluster_generator",
-            "topic_gap_filler",
-            "future_writing_intelligence",
-        ],
-        "can_modify_extractor_candidate": False,
-        "can_affect_runtime_linking": False,
-        "can_enter_upload_pool": False,
-        "can_enter_active_pool": False,
-        "input_phrase": phrase_norm,
-        "vertical": vertical,
-        "suggestions": [],
-    }
-
-    if not phrase_norm or not snippet_norm:
-        return advisory
-
-    phrase_tokens = phrase_norm.lower().split()
-    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_norm)
-    snippet_lower_tokens = [t.lower() for t in snippet_tokens]
-
-    blocked_expansion_boundaries = {
-        "from", "with", "for", "by", "after", "before", "into",
-        "around", "during", "through", "without", "within", "because",
-    }
-
-    expansion_stop_words = {
-        "can", "could", "should", "would", "may", "might",
-        "help", "helps", "helped",
-        "need", "needs", "needed",
-        "allow", "allows", "allowed",
-        "provide", "provides", "provided",
-        "support", "supports", "supported",
-        "improve", "improves", "improved",
-        "create", "creates", "created",
-        "detect", "detects", "detected",
-        "track", "tracks", "tracked",
-        "using", "use", "used",
-        "generate", "generates", "generated",
-        "build", "builds", "built",
-    }
-
-
-    n = len(phrase_tokens)
-
-    for i in range(0, len(snippet_lower_tokens) - n + 1):
-        if snippet_lower_tokens[i:i + n] != phrase_tokens:
-            continue
-
-        for extra in (1, 2):
-            end = i + n + extra
-            if end > len(snippet_tokens):
-                break
-
-            added = snippet_lower_tokens[i + n:end]
-
-            if any(t in blocked_expansion_boundaries for t in added):
-                continue
-
-            if any(t in expansion_stop_words for t in added):
-                continue
-
-            candidate_tokens = snippet_tokens[i:end]
-            candidate = re.sub(r"\s+", " ", " ".join(candidate_tokens)).strip(" .,:;!?()[]{}\"'")
-            candidate_lower_tokens = candidate.lower().split()
-
-            if len(candidate_lower_tokens) <= len(phrase_tokens):
-                continue
-
-            if len(candidate_lower_tokens) > 4:
-                continue
-
-            if candidate.lower() not in snippet_norm.lower():
-                continue
-
-            if _has_semantic_completion_failure(candidate_lower_tokens):
-                continue
-
-            advisory["suggestions"].append({
-                "expanded_phrase": candidate,
-                "reason": "snippet_local_specificity_expansion",
-                "safe_for_runtime_rewrite": False,
-                "recommended_use": [
-                    "topic_cluster_generator",
-                    "topic_gap_filler",
-                    "advanced_topic_reasoning_layer",
-                ],
-            })
-
-    return advisory
-
-
-def _semantic_reconstruction_v1(
-    phrase: str,
-    snippet: str,
-) -> str:
-    """
-    1.16.13 Semantic Reconstruction Engine.
-
-    Reconstructs incomplete noun/object anchors by adding missing left-side
-    action/intent tokens only when the reconstructed phrase exists literally
-    in the same snippet.
-    """
-
-    phrase_norm = re.sub(r"\s+", " ", str(phrase or "")).strip(" .,:;!?()[]{}\"'")
-    snippet_norm = re.sub(r"\s+", " ", str(snippet or "")).strip()
-
-    if not phrase_norm or not snippet_norm:
-        return phrase
-
-    phrase_tokens = phrase_norm.lower().split()
-    if len(phrase_tokens) < 2:
-        return phrase
-
-    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_norm)
-    snippet_lower_tokens = [t.lower() for t in snippet_tokens]
-
-    n = len(phrase_tokens)
-
-    allowed_left_heads = ACTION_TOKENS | {"how", "best", "what", "when"}
-
-    for i in range(0, len(snippet_lower_tokens) - n + 1):
-        if snippet_lower_tokens[i:i + n] != phrase_tokens:
-            continue
-
-        # Try adding 1 or 2 left-side tokens from the same snippet.
-        for left_extra in (1, 2):
-            start = i - left_extra
-            if start < 0:
-                continue
-
-            candidate_tokens = snippet_tokens[start:i + n]
-            candidate_clean = re.sub(r"\s+", " ", " ".join(candidate_tokens)).strip(" .,:;!?()[]{}\"'")
-            candidate_lower_tokens = candidate_clean.lower().split()
-
-            if len(candidate_lower_tokens) <= len(phrase_tokens):
-                continue
-
-            if len(candidate_lower_tokens) > 4:
-                continue
-
-            if candidate_lower_tokens[0] not in allowed_left_heads:
-                continue
-
-            if phrase_norm.lower() not in candidate_clean.lower():
-                continue
-
-            if candidate_clean.lower() not in snippet_norm.lower():
-                continue
-
-            if _has_semantic_completion_failure(candidate_lower_tokens):
-                continue
-
-            if candidate_lower_tokens[0] in BAD_STARTS:
-                continue
-
-            if candidate_lower_tokens[-1] in BAD_ENDINGS:
-                continue
-
-            return candidate_clean
-
-    return phrase
-
-
-def _safe_contextual_semantic_completion(
-    phrase: str,
-    snippet: str,
-) -> str:
-    """
-    1.16.11 Contextual Semantic Completion.
-
-    Safely repairs incomplete extracted phrases using only text that already
-    appears in the original sentence/snippet.
-
-    Safety rule:
-    - Never invent new words.
-    - Never complete from outside the snippet.
-    - Only return a longer phrase if it appears exactly in the snippet.
-    """
-
-    phrase_norm = re.sub(r"\s+", " ", str(phrase or "")).strip(" .,:;!?()[]{}\"\'")
-    snippet_norm = re.sub(r"\s+", " ", str(snippet or "")).strip()
-
-    if not phrase_norm or not snippet_norm:
-        return phrase
-
-    phrase_lower = phrase_norm.lower()
-    snippet_lower = snippet_norm.lower()
-
-    if phrase_lower not in snippet_lower:
-        return phrase
-
-    phrase_tokens = phrase_lower.split()
-    if len(phrase_tokens) < 2:
-        return phrase
-
-    # Completion is only allowed for phrases already known to be semantically incomplete.
-    if not _has_semantic_completion_failure(phrase_tokens):
-        return phrase
-
-    snippet_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9'-]*", snippet_norm)
-    snippet_lower_tokens = [t.lower() for t in snippet_tokens]
-
-    n = len(phrase_tokens)
-
-    best = phrase_norm
-
-    for i in range(0, len(snippet_lower_tokens) - n + 1):
-        if snippet_lower_tokens[i:i + n] != phrase_tokens:
-            continue
-
-        # Try adding 1 to 4 right-side tokens from the same snippet.
-        for extra in range(1, 5):
-            end = i + n + extra
-            if end > len(snippet_tokens):
-                break
-
-            candidate_tokens = snippet_tokens[i:end]
-            candidate = " ".join(candidate_tokens)
-            candidate_clean = re.sub(r"\s+", " ", str(candidate or "")).strip(" .,:;!?()[]{}\"\'")
-            candidate_lower_tokens = candidate_clean.lower().split()
-
-            if len(candidate_lower_tokens) <= len(phrase_tokens):
-                continue
-
-            # Completed phrase must literally exist inside the original snippet.
-            if candidate_clean.lower() not in snippet_lower:
-                continue
-
-            # It must no longer fail semantic completion.
-            if _has_semantic_completion_failure(candidate_lower_tokens):
-                continue
-
-            # Avoid obvious sentence/list leakage.
-            if candidate_lower_tokens[-1] in BAD_ENDINGS:
-                continue
-            if candidate_lower_tokens[0] in BAD_STARTS:
-                continue
-
-            best = candidate_clean
-            break
-
-        if best != phrase_norm:
-            break
-
-    return best
-
-
-def _has_semantic_completion_failure(tokens: List[str]) -> bool:
-    """
-    Final universal semantic completion validator.
-
-    Rejects semantically incomplete phrases while preserving
-    stable anchor concepts across niches.
-    """
-    if not tokens:
-        return False
-
-    phrase = " ".join(tokens)
-
-    if phrase in LOW_INFORMATION_PHRASES:
-        return True
-
-    if _has_subject_verb_fragment_v2(tokens):
-        return True
-
-    if _has_truncated_action_object_v2(tokens):
-        return True
-
-    if _has_narrative_instruction_fragment_v2(tokens):
-        return True
-
-    if _has_incomplete_tail_concept_v2(tokens):
-        return True
-
-    if _has_reversed_semantic_structure_v2(tokens):
-        return True
-
-    if tokens[-1] in WEAK_TRAILING_ADJECTIVES:
-        return True
-
-    if tokens[-1] in WEAK_CONTEXT_ENDINGS:
-        return True
-
-    # Reject weak two-word adjective tails.
-    if len(tokens) == 2:
-        if tokens[1] in {
-            "trickier", "possible", "steady",
-            "targeted", "broader", "predictable",
-        }:
-            return True
-
-    return False
-
-
-def _basic_reject(phrase: str) -> bool:
-    p = canonical_phrase(phrase)
-    tokens = tokenize(p)
-    content = content_tokens(tokens)
-
-    if not p:
-        return True
-    if len(tokens) < 2 or len(tokens) > 7:
-        return True
-    if len(content) < 2:
-        return True
-
-    if _has_numeric_semantic_pollution(tokens):
-        return True
-    if _has_discourse_transition_leak(tokens):
-        return True
-    if _has_unstable_internal_connector(tokens):
-        return True
-    if _has_numeric_phrase_shape_error(tokens):
-        return True
-    if _has_boundary_stitch_error(tokens):
-        return True
-    if _has_incomplete_phrase_completion(tokens):
-        return True
-    if _has_unstable_numeric_context(tokens):
-        return True
-    if _has_low_value_standalone_shape(tokens):
-        return True
-    if _has_unfinished_narrative_window(tokens):
-        return True
-    if _has_semantic_completion_failure(tokens):
-        return True
-    if tokens[0] in BAD_STARTS:
-        return True
-    if tokens[-1] in BAD_ENDINGS:
-        return True
-    if tokens[-1] in VAGUE_ADVERB_ENDINGS:
-        return True
-    if tokens[-1].isdigit():
-        return True
-    if tokens[-1] in PRONOUNS:
-        return True
-    if any(t in PRONOUNS for t in tokens[1:]):
-        return True
-    if any(t in HELPER_VERBS for t in tokens):
-        return True
-    if _contains_bad_fragment(p):
-        return True
-    if _starts_with_weak_connector(p):
-        return True
-    if _ends_with_weak_phrase(p):
-        return True
-    if _is_thin_modifier_phrase(tokens):
-        return True
-    if _is_generic_weak_head_phrase(tokens):
-        return True
-    if _contains_clause_connector(tokens):
-        return True
-    if _has_mid_stopword_chain(tokens):
-        return True
-    if _is_bad_noun_stack(tokens):
-        return True
-    if _is_weak_action_tail(tokens):
-        return True
-    if tokens[0] not in ACTION_TOKENS and any(t in CLAUSE_VERBS for t in tokens):
-        return True
-
-    return False
-
-def _has_incomplete_phrase_shape(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
-
-    patterns = [
-        # ends with vague/incomplete adjective or adverb
-        r"\b(with|for|by|to|from|into|around|after|before)\s+(real|healthy|accurate|same|simple|quick|much|next|last)$",
-
-        # explanatory "stands for..." fragments
-        r"\bstands\s+for\s+\w+",
-
-        # trailing gerund after already complete concept
-        r"\b(calculate|estimate|measure|translate)\s+\w+(\s+\w+){0,3}\s+(figuring|using|making|giving|getting|adjusting)$",
-
-        # sentence-like subject + weak verb
-        r"^(world|body|numbers|pressure|accuracy)\s+\w+$",
-
-        # vague metric/event phrases
-        r"^(every|each)\s+\w+\s+\w+$",
-
-        # timeline + weak adjective
-        r"\btimeline\s+for\s+\w+$",
-
-        # adverbial ending residue
-        r"\b\w+\s+\w+\s+immediately$",
-    ]
-
-    return any(re.search(pattern, text) for pattern in patterns)
-
-def _has_final_incomplete_residue_pattern(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
-
-    patterns = [
-        # incomplete calculate/diagnose verb-object
-        r"^(calculate|diagnose|measure|estimate|translate)\s+(adult|body)$",
-
-        # incomplete medical/body-object fragments
-        r"^diagnose\s+body(\s+fat)?$",
-
-        # associated-with fragments
-        r"\bassociated\s+with\s+(lower|higher|increased|reduced|decreased)$",
-
-        # conversational timing residue
-        r"\bright\s+now\s+the\s+\w+$",
-
-        # sentence residue with vague framing
-        r"\bsome\s+perspective\s+there\s+\w+$",
-
-        # subject + verb/adverb residue
-        r"^\w+\s+(gives|adjusting|arrive|arrives|shoot|shoots)\b",
-
-        # not/deadline comparison residue
-        r"\bnot\s+(deadline|diagnosis|treatment|medical\s+advice)$",
-    ]
-
-    return any(re.search(pattern, text) for pattern in patterns)
 
 def _add_candidate(
     out: List[Dict[str, Any]],
@@ -1849,195 +783,26 @@ def _add_candidate(
     vertical: str = "general",
 ) -> None:
     p = canonical_phrase(phrase)
+    tokens = _trim_boundaries(tokenize(p))
+    # drop interior determiners/possessives ("estimate your due date" -> "estimate due date")
+    if len(tokens) > 2:
+        tokens = [tokens[0]] + [t for t in tokens[1:-1] if t not in STRIP_INTERIOR] + [tokens[-1]]
+    tokens = _trim_boundaries(tokens)
+    p = " ".join(tokens)
+    record = {"phrase": p, "source_type": source_type, "section_id": section_id}
 
-    if _basic_reject(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_basic_reject",
-        )
+    if not _is_complete_phrase(tokens):
+        _reject(record, "incomplete_or_hanging_phrase", workspace_id, doc_id, vertical)
         return
 
-    if _has_orphan_contraction_debris(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_orphan_contraction_debris",
-        )
-        return
-
-    if _looks_like_sentence_fragment(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_sentence_fragment",
-        )
-        return
-    if _has_broken_residue_pattern(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_broken_residue_pattern",
-        )
-        return
-    if _has_universal_residue_pattern(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_universal_residue_pattern",
-        )
-        return
-    if _has_incomplete_phrase_shape(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_incomplete_phrase_shape",
-        )
-        return
-    if _has_final_incomplete_residue_pattern(p):
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_final_incomplete_residue_pattern",
-        )
-        return
-
-    tokens = tokenize(p)
-
-    if source_type in {"noun_phrase", "condition_phrase"}:
-        if not _has_universal_head(tokens):
-            learn_from_pipeline_rejection(
-                workspace_id=workspace_id,
-                document_id=doc_id,
-                vertical=vertical,
-                pipeline_stage="smart_extractor",
-                candidate={
-                    "phrase": p,
-                    "source_type": source_type,
-                    "section_id": section_id,
-                },
-                rejection_reason="smart_extractor_missing_universal_head",
-            )
-            return
-
-    if _has_semantic_completion_failure(tokens):
-        repaired_p = _safe_contextual_semantic_completion(
-            phrase=p,
-            snippet=snippet,
-        )
-        repaired_tokens = _simple_tokens(repaired_p)
-
-        if (
-            repaired_p != p
-            and len(repaired_tokens) > len(tokens)
-            and not _has_semantic_completion_failure(repaired_tokens)
-        ):
-            p = repaired_p
-            tokens = repaired_tokens
-        else:
-            learn_from_pipeline_rejection(
-                workspace_id=workspace_id,
-                document_id=doc_id,
-                vertical=vertical,
-                pipeline_stage="smart_extractor",
-                candidate={
-                    "phrase": p,
-                    "source_type": source_type,
-                    "section_id": section_id,
-                },
-                rejection_reason="smart_extractor_semantic_completion_failure_v2",
-            )
-            return
-
-    reconstructed_p = _semantic_reconstruction_v1(
-        phrase=p,
-        snippet=snippet,
-    )
-    reconstructed_tokens = tokenize(reconstructed_p)
-
-    if (
-        reconstructed_p != p
-        and len(reconstructed_tokens) > len(tokens)
-        and not _has_semantic_completion_failure(reconstructed_tokens)
-    ):
-        p = reconstructed_p
-        tokens = reconstructed_tokens
-
-    extractor_intelligence = _extractor_intelligence_result(
-        phrase=p,
-        tokens=tokens,
-        source_type=source_type,
-        snippet=snippet,
-    )
-
-    if extractor_intelligence["decision"] != "ACCEPT":
-        learn_from_pipeline_rejection(
-            workspace_id=workspace_id,
-            document_id=doc_id,
-            vertical=vertical,
-            pipeline_stage="smart_extractor",
-            candidate={
-                "phrase": p,
-                "source_type": source_type,
-                "section_id": section_id,
-            },
-            rejection_reason="smart_extractor_intelligence_reject",
-        )
+    scoring = _score_phrase(tokens, source_type, snippet)
+    if scoring["decision"] != "ACCEPT":
+        _reject(record, "below_quality_threshold", workspace_id, doc_id, vertical)
         return
 
     key = f"{source_type}:{p}:{section_id}"
     if key in seen:
         return
-
     seen.add(key)
 
     out.append({
@@ -2046,193 +811,13 @@ def _add_candidate(
         "section_id": section_id,
         "doc_id": doc_id,
         "snippet": snippet,
-        "extractor_intelligence": extractor_intelligence,
+        "extractor_intelligence": scoring,
     })
 
 
-def _extract_intent_candidates(sent: str, section_id: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    s = canonical_phrase(sent)
-
-    for start in INTENT_STARTS:
-        idx = s.find(start)
-        if idx == -1:
-            continue
-
-        tail_tokens = tokenize(s[idx:])
-
-        for n in range(3, min(7, len(tail_tokens)) + 1):
-            chunk = tail_tokens[:n]
-            if not chunk:
-                continue
-            if any(t in HELPER_VERBS for t in chunk[2:]):
-                continue
-            if chunk[-1] in BAD_ENDINGS or chunk[-1] in PRONOUNS or chunk[-1].isdigit():
-                continue
-            if chunk[-1] in VAGUE_ADVERB_ENDINGS:
-                continue
-            if len(chunk) >= 5 and not _has_universal_head(chunk):
-                continue
-            if _has_mid_stopword_chain(chunk):
-                continue
-            if _is_bad_noun_stack(chunk):
-                continue
-
-            _add_candidate(out, seen, " ".join(chunk), "intent", section_id, sent)
-
-    return out
-
-
-def _extract_action_object_candidates(sent: str, section_id: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    tokens = tokenize(sent)
-
-    for i, tok in enumerate(tokens):
-        if tok not in ACTION_TOKENS:
-            continue
-
-        for n in (2, 3, 4):
-            chunk = tokens[i:i + n]
-            if len(chunk) < 2:
-                continue
-            if chunk[-1] in STOPWORDS or chunk[-1] in BAD_ENDINGS:
-                continue
-            if chunk[-1] in VAGUE_ADVERB_ENDINGS:
-                continue
-            if chunk[-1].isdigit():
-                continue
-            if any(t in PRONOUNS for t in chunk[1:]):
-                continue
-            if any(t in HELPER_VERBS for t in chunk[1:]):
-                continue
-            if any(t in CLAUSE_VERBS for t in chunk[1:]):
-                continue
-            if _is_weak_action_tail(chunk):
-                continue
-            if _has_mid_stopword_chain(chunk):
-                continue
-            if _is_bad_noun_stack(chunk):
-                continue
-
-            _add_candidate(out, seen, " ".join(chunk), "action_object", section_id, sent)
-
-    return out
-
-
-def _extract_condition_candidates(sent: str, section_id: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    tokens = tokenize(sent)
-
-    for i, tok in enumerate(tokens):
-        if tok not in CONDITION_CONNECTORS:
-            continue
-
-        for left_n in (1, 2):
-            left_start = i - left_n
-            if left_start < 0:
-                continue
-
-            left = tokens[left_start:i]
-            if not left or left[0] in STOPWORDS:
-                continue
-            if any(t in HELPER_VERBS or t in CLAUSE_VERBS for t in left):
-                continue
-
-            for right_n in (1, 2, 3):
-                right = tokens[i + 1:i + 1 + right_n]
-                if not right:
-                    continue
-                if right[-1] in STOPWORDS or right[-1] in BAD_ENDINGS:
-                    continue
-                if right[-1] in VAGUE_ADVERB_ENDINGS:
-                    continue
-                if right[-1].isdigit():
-                    continue
-                if any(t in PRONOUNS for t in right):
-                    continue
-                if any(t in HELPER_VERBS or t in CLAUSE_VERBS for t in right):
-                    continue
-
-                chunk = left + [tok] + right
-
-                if not _has_universal_head(chunk):
-                    continue
-                if _has_mid_stopword_chain(chunk):
-                    continue
-                if _is_bad_noun_stack(chunk):
-                    continue
-
-                _add_candidate(out, seen, " ".join(chunk), "condition_phrase", section_id, sent)
-
-    return out
-
-
-def _extract_clean_compound_candidates(sent: str, section_id: str) -> List[Dict[str, Any]]:
-    out: List[Dict[str, Any]] = []
-    seen: Set[str] = set()
-    tokens = tokenize(sent)
-
-    for n in (4, 3, 2):
-        if len(tokens) < n:
-            continue
-
-        for i in range(0, len(tokens) - n + 1):
-            chunk = tokens[i:i + n]
-
-            if chunk[0] in STOPWORDS or chunk[-1] in STOPWORDS:
-                continue
-            if chunk[0] in BAD_STARTS:
-                continue
-            if chunk[0] in VERB_WRAPPER_STARTS:
-                continue
-            if chunk[0] in ACTION_TOKENS and len(chunk) <= 2:
-                continue
-            if any(t in ACTION_TOKENS for t in chunk[1:]):
-                continue
-            if chunk[-1] in VAGUE_ADVERB_ENDINGS:
-                continue
-            if any(t in PRONOUNS for t in chunk):
-                continue
-            if any(t in HELPER_VERBS or t in CLAUSE_VERBS for t in chunk):
-                continue
-            if chunk[-1].isdigit():
-                continue
-            if not _has_universal_head(chunk):
-                continue
-            if _is_thin_modifier_phrase(chunk):
-                continue
-            if _is_generic_weak_head_phrase(chunk):
-                continue
-            if _has_mid_stopword_chain(chunk):
-                continue
-            if _is_bad_noun_stack(chunk):
-                continue
-
-            if i > 0:
-                prev_token = tokens[i - 1]
-                if prev_token not in STOPWORDS and prev_token not in HELPER_VERBS:
-                    previous_extended = tokens[i - 1:i + n]
-                    if len(previous_extended) <= 5 and _has_universal_head(previous_extended):
-                        continue
-
-            if i + n < len(tokens):
-                next_token = tokens[i + n]
-                if next_token not in STOPWORDS and next_token not in HELPER_VERBS:
-                    next_extended = tokens[i:i + n + 1]
-                    if len(next_extended) <= 5 and _has_universal_head(next_extended):
-                        continue
-
-            content = content_tokens(chunk)
-            if len(content) < 2:
-                continue
-
-            _add_candidate(out, seen, " ".join(chunk), "noun_phrase", section_id, sent)
-
-    return out
-
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def extract_smart_phrases(
     *,
@@ -2244,56 +829,70 @@ def extract_smart_phrases(
     workspace_id: str = "default",
     vertical: str = "general",
 ) -> List[Dict[str, Any]]:
+    """Extract clean, complete anchor phrases from a document.
+
+    Drop-in replacement for the previous version: same signature, same output
+    dict shape ({phrase, source_type, section_id, doc_id, snippet,
+    extractor_intelligence}).
+    """
     out: List[Dict[str, Any]] = []
     seen: Set[str] = set()
 
     if title:
-        _add_candidate(out, seen, title, "title", "title_0", title, doc_id, workspace_id, vertical)
+        _add_candidate(out, seen, title, "title", "title_0", title,
+                       doc_id, workspace_id, vertical)
 
     for h in extract_headings_and_lists(html):
-        _add_candidate(
-            out,
-            seen,
-            h.get("phrase") or "",
-            h.get("source_type") or "heading",
-            h.get("section_id") or "heading_0",
-            h.get("snippet") or "",
-            doc_id,
-            workspace_id,
-            vertical,
-        )
+        _add_candidate(out, seen, h.get("phrase") or "",
+                       h.get("source_type") or "list_item",
+                       h.get("section_id") or "section_0",
+                       h.get("snippet") or "", doc_id, workspace_id, vertical)
+        if len(out) >= max_candidates:
+            return out[:max_candidates]
 
     paragraphs = extract_paragraphs(html=html, text=text)
-
     for pi, para in enumerate(paragraphs):
         for si, sent in enumerate(split_sentences(para)):
             section_id = f"p{pi}_s{si}"
-
-            for item in _extract_intent_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
-
-            for item in _extract_action_object_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
-
-            for item in _extract_condition_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
-
-            for item in _extract_clean_compound_candidates(sent, section_id):
-                _add_candidate(out, seen, item["phrase"], item["source_type"], item["section_id"], item["snippet"], doc_id, workspace_id, vertical)
-
-            if len(out) >= max_candidates:
-                return out[:max_candidates]
+            for phrase in _candidate_phrases(sent):
+                source_type = "intent" if phrase.split()[0] in {
+                    "how", "what", "when", "best", "signs", "symptoms",
+                    "causes", "treatment", "guide", "tips", "ways",
+                } else ("action_object" if phrase.split()[0] in ACTION_VERBS
+                        else "noun_phrase")
+                _add_candidate(out, seen, phrase, source_type, section_id,
+                               sent, doc_id, workspace_id, vertical)
+                if len(out) >= max_candidates:
+                    return out[:max_candidates]
 
     return out[:max_candidates]
 
 
+if __name__ == "__main__":
+    sample_text = (
+        "Many people want to calculate their fertile window before trying to "
+        "conceive. The most accurate ovulation calculator uses your average "
+        "cycle length and the date of your last period. You can also track "
+        "cycle length over time. With a 28 day cycle, ovulation usually falls "
+        "around day 14. This guide explains the simple calendar math. "
+        "Our keyword research tool helps you build topic clusters and improve "
+        "search ranking for your landing page."
+    )
+    sample_title = "Fertility Tracking Guide"
+    sample_html = (
+        "<h1>Ovulation Calculator</h1>"
+        "<h2>How to calculate your fertile window</h2>"
+        "<ul><li>Track cycle length</li><li>Estimate your due date</li></ul>"
+        "<p>The conversion rate optimization checklist improves your "
+        "landing page performance.</p>"
+    )
 
-
-
-
-
-
-
-
-
-
+    backend = "spaCy" if _get_spacy() else ("NLTK" if _have_nltk() else "heuristic")
+    print(f"[chunker backend: {backend}]\n")
+    results = extract_smart_phrases(
+        text=sample_text, html=sample_html, title=sample_title, doc_id="demo",
+    )
+    for r in results:
+        print(f"{r['extractor_intelligence']['score']:.2f}  "
+              f"[{r['source_type']:<13}] {r['phrase']}")
+    print(f"\nTotal: {len(results)} phrases")

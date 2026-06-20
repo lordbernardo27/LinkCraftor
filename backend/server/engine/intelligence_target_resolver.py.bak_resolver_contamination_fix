@@ -334,11 +334,7 @@ _UNIVERSAL_SYNONYM_GROUPS = [
     {"pattern", "patterns", "trend", "rhythm", "sequence", "cycle"},
     {"calculate", "calculation", "calculator", "compute", "estimate", "formula"},
     {"method", "approach", "technique", "strategy", "process", "system"},
-    # Keep "window" narrow. Do not expand it into phase/stage/period.
-    # That caused "fertile window" to match unrelated "labor phases/stages" pages.
-    {"window", "range", "span"},
-    {"phase", "stage"},
-    {"period"},
+    {"window", "range", "period", "span", "phase", "stage"},
     {"personal", "custom", "customized", "individual", "specific"},
     {"short", "shortest", "small", "minimum", "min"},
     {"long", "longest", "large", "maximum", "max"},
@@ -389,11 +385,8 @@ def _phrase_evidence_score(anchor_text: Any, target_text: Any, aliases: List[Any
     target_norm = _norm_text(target_text)
     alias_texts = [_norm_text(x) for x in (aliases or []) if str(x or "").strip()]
 
-    # Phrase evidence must be literal, not semantic.
-    # Semantic expansion belongs in concept alignment / alias / intent layers.
-    # This prevents "begins" matching unrelated "starting preschool" pages.
-    anchor_tokens = _meaningful_tokens(anchor_norm)
-    target_tokens = _meaningful_tokens(target_norm)
+    anchor_tokens = _expanded_meaningful_tokens(anchor_norm)
+    target_tokens = _expanded_meaningful_tokens(" ".join([target_norm] + alias_texts))
 
     overlap = anchor_tokens & target_tokens
     ratio = (len(overlap) / max(1, len(anchor_tokens))) if anchor_tokens else 0.0
@@ -887,14 +880,10 @@ def resolve_intelligent_targets(
             except Exception:
                 universal_aliases = []
 
-            # IMPORTANT:
-            # Phrase evidence must be computed from real target surface text only.
-            # Do NOT include target matched_phrases, aliases, or resolver-generated aliases here.
-            # Those can contaminate evidence and make unrelated URLs look like exact matches.
             phrase_evidence = _phrase_evidence_score(
                 anchor_phrase,
                 target_text_for_concepts,
-                [],
+                universal_aliases + resolver_aliases,
             )
             phrase_evidence_value = float(phrase_evidence.get("phrase_evidence_score") or 0)
 
@@ -1041,18 +1030,6 @@ def resolve_intelligent_targets(
             phrase_aware_aliases = target.get("aliases") if isinstance(target.get("aliases"), list) else []
             phrase_aware_count = int(target.get("active_phrase_matches") or 0)
 
-            if phrase_aware_count:
-                try:
-                    print(
-                        "[RESOLVER_TARGET_POOL_DEBUG]",
-                        "phrase=", str(anchor_phrase or "")[:90],
-                        "title=", str(title or "")[:90],
-                        "active_phrase_matches=", phrase_aware_count,
-                        "matched_sample=", phrase_aware_matches[:5],
-                    )
-                except Exception:
-                    pass
-
             anchor_norm = _norm_text(anchor_phrase)
             phrase_pool_exact = any(_norm_text(x) == anchor_norm for x in phrase_aware_matches + phrase_aware_aliases)
             phrase_pool_contains = any(
@@ -1146,12 +1123,14 @@ def resolve_intelligent_targets(
             if rb2_weight_score is None:
                 rb2_weight_score = diagnostics.get("rb2_weight_score", 0)
 
-            # Cluster matching must be phrase-first.
-            # Do NOT include target title/url/path here, or the target page can drag
-            # itself into a strong but unrelated cluster.
             cluster_matches = find_topic_clusters_for_text(
                 workspace_id,
-                str(anchor_phrase or ""),
+                " ".join([
+                    str(anchor_phrase or ""),
+                    str(title or ""),
+                    str(url or ""),
+                    str(intelligence.get("path") or ""),
+                ]),
                 limit=3,
             )
 
@@ -1499,6 +1478,7 @@ def resolve_intelligent_targets(
             and (
                 bool(item.get("target_pool_phrase_exact_match"))
                 or bool(item.get("target_pool_phrase_contains_match"))
+                or int(item.get("target_pool_active_phrase_matches") or 0) >= 2
             )
         )
 

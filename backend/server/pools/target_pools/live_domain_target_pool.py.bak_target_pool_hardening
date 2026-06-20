@@ -307,12 +307,8 @@ def _score_target_against_active_phrases(url: str, title: str, active_phrases: L
         exact_bonus = 0.35 if str(phrase or '').lower().strip() in str(haystack or '').lower() else 0.0
         phrase_score = round(overlap_ratio + exact_bonus, 4)
 
-        # Do not store weak accidental matches.
-        # Target-pool phrase memory must require strong, multi-token evidence.
-        if phrase_score < 0.75:
-            continue
-
-        if len(overlap) < 2:
+        # Do not store very weak accidental matches.
+        if phrase_score < 0.45:
             continue
 
         matches.append({
@@ -330,8 +326,7 @@ def _score_target_against_active_phrases(url: str, title: str, active_phrases: L
     return {
         "matched_phrases": [x["phrase"] for x in top],
         "active_phrase_matches": len(top),
-        # Do not manufacture aliases from historical phrase matches.
-        "aliases": [],
+        "aliases": [x["phrase"] for x in top],
         "phrase_match_details": top,
         "semantic_route_score": semantic_route_score,
         "target_score": target_score,
@@ -763,7 +758,7 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             priority_match_count = int(priority_awareness.get("active_phrase_matches") or 0)
             priority_score = float(priority_awareness.get("target_score") or 0)
 
-            if priority_match_count >= 2:
+            if priority_match_count > 0:
                 priority_scored_urls.append((priority_score, priority_match_count, u))
                 continue
 
@@ -776,7 +771,7 @@ def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
             secondary_match_count = int(secondary_awareness.get("active_phrase_matches") or 0)
             secondary_score = float(secondary_awareness.get("target_score") or 0)
 
-            if secondary_match_count >= 2:
+            if secondary_match_count > 0:
                 secondary_scored_urls.append((secondary_score, secondary_match_count, u))
             elif u in active_live_domain_url_set:
                 filler_urls.append(u)

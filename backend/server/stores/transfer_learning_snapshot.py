@@ -600,3 +600,531 @@ def validate_transfer_safety_v1(
             "metadata_only": True,
         },
     }
+
+
+
+def assess_transfer_approval_v1(
+    transfer_safety_validation: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    2.5.5.2 Transfer Approval Assessment.
+
+    Advisory only:
+    - Reviews transfer safety validation.
+    - Produces approval status.
+    - Does NOT approve automatic runtime transfer.
+    - Does NOT apply learning.
+    - Does NOT modify scores, targets, URLs, highlights, or linking.
+    """
+
+    safety_inputs = (
+        transfer_safety_validation.get("safety_inputs")
+        if isinstance(transfer_safety_validation.get("safety_inputs"), dict)
+        else {}
+    )
+
+    transfer_safe = bool(transfer_safety_validation.get("transfer_safe"))
+    transfer_blocked = bool(transfer_safety_validation.get("transfer_blocked"))
+
+    overall_similarity = float(
+        safety_inputs.get("overall_similarity_score") or 0
+    )
+
+    transfer_suitability = str(
+        safety_inputs.get("transfer_suitability") or "unknown"
+    )
+
+    recommendation_strength = str(
+        safety_inputs.get("recommendation_strength") or "unknown"
+    )
+
+    validation_reasons = (
+        transfer_safety_validation.get("validation_reasons")
+        if isinstance(transfer_safety_validation.get("validation_reasons"), list)
+        else []
+    )
+
+    if transfer_blocked or not transfer_safe:
+        approval_status = "rejected"
+        approval_reason = "transfer_failed_safety_validation"
+        requires_human_approval = True
+
+    elif overall_similarity >= 0.70 and transfer_suitability == "high":
+        approval_status = "approved_with_review"
+        approval_reason = "high_similarity_but_manual_review_required"
+        requires_human_approval = True
+
+    elif overall_similarity >= 0.40 and transfer_suitability in {"moderate", "high"}:
+        approval_status = "manual_review_required"
+        approval_reason = "moderate_similarity_requires_owner_review"
+        requires_human_approval = True
+
+    elif overall_similarity > 0:
+        approval_status = "manual_review_required"
+        approval_reason = "low_similarity_requires_owner_review"
+        requires_human_approval = True
+
+    else:
+        approval_status = "rejected"
+        approval_reason = "insufficient_similarity_overlap"
+        requires_human_approval = True
+
+    return {
+        "build_id": BUILD_ID,
+        "layer": "2.5.5.2 Transfer Approval Assessment",
+        "advisory_only": True,
+        "can_change_runtime": False,
+
+        "source_workspace_id":
+            transfer_safety_validation.get("source_workspace_id"),
+
+        "target_workspace_id":
+            transfer_safety_validation.get("target_workspace_id"),
+
+        "approval_status": approval_status,
+        "approval_reason": approval_reason,
+        "requires_human_approval": requires_human_approval,
+
+        "approval_inputs": {
+            "transfer_safe": transfer_safe,
+            "transfer_blocked": transfer_blocked,
+            "overall_similarity_score": overall_similarity,
+            "transfer_suitability": transfer_suitability,
+            "recommendation_strength": recommendation_strength,
+            "validation_reasons": validation_reasons,
+        },
+
+        "approval_scope": {
+            "automatic_runtime_transfer_allowed": False,
+            "manual_review_only": True,
+            "owner_approval_required_before_runtime_use": True,
+        },
+
+        "safety_flags": {
+            "changes_highlight_selection": False,
+            "changes_target_selection": False,
+            "changes_phrase_scoring": False,
+            "changes_url_assignment": False,
+            "changes_runtime_linking": False,
+            "applies_learning_to_target_workspace": False,
+            "metadata_only": True,
+        },
+    }
+
+
+
+def assess_transfer_risk_v1(
+    transfer_approval_assessment: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    2.5.5.3 Transfer Risk Assessment.
+
+    Advisory only:
+    - Reviews transfer approval assessment.
+    - Produces risk score, risk level, and risk reasons.
+    - Does NOT apply learning.
+    - Does NOT modify runtime, scores, targets, URLs, highlights, or linking.
+    """
+
+    approval_inputs = (
+        transfer_approval_assessment.get("approval_inputs")
+        if isinstance(transfer_approval_assessment.get("approval_inputs"), dict)
+        else {}
+    )
+
+    approval_status = str(
+        transfer_approval_assessment.get("approval_status") or "unknown"
+    )
+
+    approval_reason = str(
+        transfer_approval_assessment.get("approval_reason") or "unknown"
+    )
+
+    requires_human_approval = bool(
+        transfer_approval_assessment.get("requires_human_approval")
+    )
+
+    overall_similarity = float(
+        approval_inputs.get("overall_similarity_score") or 0
+    )
+
+    transfer_suitability = str(
+        approval_inputs.get("transfer_suitability") or "unknown"
+    )
+
+    recommendation_strength = str(
+        approval_inputs.get("recommendation_strength") or "unknown"
+    )
+
+    transfer_safe = bool(approval_inputs.get("transfer_safe"))
+    transfer_blocked = bool(approval_inputs.get("transfer_blocked"))
+
+    validation_reasons = (
+        approval_inputs.get("validation_reasons")
+        if isinstance(approval_inputs.get("validation_reasons"), list)
+        else []
+    )
+
+    risk_score = 0
+    risk_reasons = []
+
+    if transfer_blocked or not transfer_safe:
+        risk_score += 40
+        risk_reasons.append("transfer_failed_safety_validation")
+
+    if approval_status == "rejected":
+        risk_score += 35
+        risk_reasons.append("approval_rejected")
+
+    elif approval_status == "manual_review_required":
+        risk_score += 20
+        risk_reasons.append("manual_review_required")
+
+    elif approval_status == "approved_with_review":
+        risk_score += 10
+        risk_reasons.append("approved_but_review_required")
+
+    if overall_similarity < 0.40:
+        risk_score += 25
+        risk_reasons.append("low_workspace_similarity")
+
+    elif overall_similarity < 0.70:
+        risk_score += 10
+        risk_reasons.append("moderate_workspace_similarity")
+
+    if transfer_suitability in {"low", "unknown", "insufficient_overlap"}:
+        risk_score += 15
+        risk_reasons.append("weak_transfer_suitability")
+
+    if recommendation_strength in {"low", "unknown", "insufficient_overlap"}:
+        risk_score += 15
+        risk_reasons.append("weak_recommendation_strength")
+
+    if requires_human_approval:
+        risk_score += 5
+        risk_reasons.append("human_approval_required")
+
+    if validation_reasons:
+        risk_score += min(20, len(validation_reasons) * 5)
+        risk_reasons.extend(validation_reasons)
+
+    risk_score = min(100, risk_score)
+
+    if risk_score >= 70:
+        risk_level = "high"
+    elif risk_score >= 35:
+        risk_level = "moderate"
+    elif risk_score > 0:
+        risk_level = "low"
+    else:
+        risk_level = "none"
+
+    return {
+        "build_id": BUILD_ID,
+        "layer": "2.5.5.3 Transfer Risk Assessment",
+        "advisory_only": True,
+        "can_change_runtime": False,
+
+        "source_workspace_id":
+            transfer_approval_assessment.get("source_workspace_id"),
+
+        "target_workspace_id":
+            transfer_approval_assessment.get("target_workspace_id"),
+
+        "risk_score": risk_score,
+        "risk_level": risk_level,
+        "risk_reasons": risk_reasons,
+
+        "risk_inputs": {
+            "approval_status": approval_status,
+            "approval_reason": approval_reason,
+            "requires_human_approval": requires_human_approval,
+            "overall_similarity_score": overall_similarity,
+            "transfer_suitability": transfer_suitability,
+            "recommendation_strength": recommendation_strength,
+            "transfer_safe": transfer_safe,
+            "transfer_blocked": transfer_blocked,
+            "validation_reasons": validation_reasons,
+        },
+
+        "safety_flags": {
+            "changes_highlight_selection": False,
+            "changes_target_selection": False,
+            "changes_phrase_scoring": False,
+            "changes_url_assignment": False,
+            "changes_runtime_linking": False,
+            "applies_learning_to_target_workspace": False,
+            "metadata_only": True,
+        },
+    }
+
+
+
+def build_transfer_governance_summary_v1(
+    transfer_safety_validation: Dict[str, Any],
+    transfer_approval_assessment: Dict[str, Any],
+    transfer_risk_assessment: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    2.5.5.4 Transfer Governance Summary.
+
+    Advisory only:
+    - Aggregates safety, approval, and risk outputs.
+    - Produces final governance status.
+    - Does NOT apply transfer learning.
+    - Does NOT modify runtime, scores, targets, URLs, highlights, or linking.
+    """
+
+    transfer_safe = bool(
+        transfer_safety_validation.get("transfer_safe")
+    )
+
+    transfer_blocked = bool(
+        transfer_safety_validation.get("transfer_blocked")
+    )
+
+    approval_status = str(
+        transfer_approval_assessment.get("approval_status") or "unknown"
+    )
+
+    approval_reason = str(
+        transfer_approval_assessment.get("approval_reason") or "unknown"
+    )
+
+    requires_human_approval = bool(
+        transfer_approval_assessment.get("requires_human_approval")
+    )
+
+    risk_score = int(
+        transfer_risk_assessment.get("risk_score") or 0
+    )
+
+    risk_level = str(
+        transfer_risk_assessment.get("risk_level") or "unknown"
+    )
+
+    if transfer_blocked or not transfer_safe:
+        governance_status = "blocked"
+        governance_decision = "do_not_transfer"
+
+    elif approval_status == "rejected":
+        governance_status = "blocked"
+        governance_decision = "do_not_transfer"
+
+    elif risk_level == "high":
+        governance_status = "review_required"
+        governance_decision = "owner_review_required_before_any_use"
+
+    elif requires_human_approval:
+        governance_status = "review_required"
+        governance_decision = "manual_review_required"
+
+    else:
+        governance_status = "advisory_supported"
+        governance_decision = "advisory_use_only"
+
+    return {
+        "build_id": BUILD_ID,
+        "layer": "2.5.5.4 Transfer Governance Summary",
+        "advisory_only": True,
+        "can_change_runtime": False,
+
+        "source_workspace_id":
+            transfer_safety_validation.get("source_workspace_id"),
+
+        "target_workspace_id":
+            transfer_safety_validation.get("target_workspace_id"),
+
+        "governance_status": governance_status,
+        "governance_decision": governance_decision,
+
+        "owner_review_required":
+            governance_status == "review_required"
+            or requires_human_approval,
+
+        "runtime_transfer_allowed": False,
+        "automatic_transfer_allowed": False,
+        "manual_review_only": True,
+
+        "governance_inputs": {
+            "transfer_safe": transfer_safe,
+            "transfer_blocked": transfer_blocked,
+            "approval_status": approval_status,
+            "approval_reason": approval_reason,
+            "requires_human_approval": requires_human_approval,
+            "risk_score": risk_score,
+            "risk_level": risk_level,
+        },
+
+        "safety_flags": {
+            "changes_highlight_selection": False,
+            "changes_target_selection": False,
+            "changes_phrase_scoring": False,
+            "changes_url_assignment": False,
+            "changes_runtime_linking": False,
+            "applies_learning_to_target_workspace": False,
+            "metadata_only": True,
+        },
+    }
+
+
+
+def build_transfer_governance_explainability_v1(
+    transfer_governance_summary: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    2.5.5.5 Transfer Governance Explainability.
+
+    Advisory only:
+    - Explains the transfer governance decision.
+    - Produces owner-console-friendly reasoning.
+    - Does NOT apply transfer learning.
+    - Does NOT modify runtime, scores, targets, URLs, highlights, or linking.
+    """
+
+    governance_status = str(
+        transfer_governance_summary.get("governance_status") or "unknown"
+    )
+
+    governance_decision = str(
+        transfer_governance_summary.get("governance_decision") or "unknown"
+    )
+
+    owner_review_required = bool(
+        transfer_governance_summary.get("owner_review_required")
+    )
+
+    runtime_transfer_allowed = bool(
+        transfer_governance_summary.get("runtime_transfer_allowed")
+    )
+
+    automatic_transfer_allowed = bool(
+        transfer_governance_summary.get("automatic_transfer_allowed")
+    )
+
+    governance_inputs = (
+        transfer_governance_summary.get("governance_inputs")
+        if isinstance(transfer_governance_summary.get("governance_inputs"), dict)
+        else {}
+    )
+
+    risk_level = str(governance_inputs.get("risk_level") or "unknown")
+    risk_score = int(governance_inputs.get("risk_score") or 0)
+    approval_status = str(governance_inputs.get("approval_status") or "unknown")
+    approval_reason = str(governance_inputs.get("approval_reason") or "unknown")
+    transfer_safe = bool(governance_inputs.get("transfer_safe"))
+    transfer_blocked = bool(governance_inputs.get("transfer_blocked"))
+    requires_human_approval = bool(governance_inputs.get("requires_human_approval"))
+
+    explanation = []
+
+    if transfer_blocked or not transfer_safe:
+        explanation.append(
+            "Transfer is blocked because safety validation did not pass."
+        )
+    else:
+        explanation.append(
+            "Transfer passed advisory safety validation."
+        )
+
+    if approval_status == "manual_review_required":
+        explanation.append(
+            "Governance requires manual review before any use."
+        )
+    elif approval_status == "approved_with_review":
+        explanation.append(
+            "Governance supports the transfer only with review."
+        )
+    elif approval_status == "rejected":
+        explanation.append(
+            "Governance rejected the transfer recommendation."
+        )
+    else:
+        explanation.append(
+            "Governance approval status is advisory and unresolved."
+        )
+
+    if approval_reason and approval_reason != "unknown":
+        explanation.append(
+            f"Approval reason: {approval_reason}."
+        )
+
+    if risk_level == "high":
+        explanation.append(
+            f"Risk is high with score {risk_score}; owner review is required."
+        )
+    elif risk_level == "moderate":
+        explanation.append(
+            f"Risk is moderate with score {risk_score}; review is recommended."
+        )
+    elif risk_level == "low":
+        explanation.append(
+            f"Risk is low with score {risk_score}; still advisory-only."
+        )
+    else:
+        explanation.append(
+            "Risk level is unknown or not established."
+        )
+
+    if requires_human_approval:
+        explanation.append(
+            "Human approval is required before any runtime use."
+        )
+
+    if not runtime_transfer_allowed:
+        explanation.append(
+            "Runtime transfer is disabled."
+        )
+
+    if not automatic_transfer_allowed:
+        explanation.append(
+            "Automatic transfer is disabled."
+        )
+
+    return {
+        "build_id": BUILD_ID,
+        "layer": "2.5.5.5 Transfer Governance Explainability",
+        "advisory_only": True,
+        "can_change_runtime": False,
+
+        "source_workspace_id":
+            transfer_governance_summary.get("source_workspace_id"),
+
+        "target_workspace_id":
+            transfer_governance_summary.get("target_workspace_id"),
+
+        "governance_status": governance_status,
+        "governance_decision": governance_decision,
+        "owner_review_required": owner_review_required,
+
+        "explanation": explanation,
+
+        "explainability_inputs": {
+            "risk_level": risk_level,
+            "risk_score": risk_score,
+            "approval_status": approval_status,
+            "approval_reason": approval_reason,
+            "transfer_safe": transfer_safe,
+            "transfer_blocked": transfer_blocked,
+            "requires_human_approval": requires_human_approval,
+            "runtime_transfer_allowed": runtime_transfer_allowed,
+            "automatic_transfer_allowed": automatic_transfer_allowed,
+        },
+
+        "explainability_scope": {
+            "owner_console_friendly": True,
+            "human_readable": True,
+            "runtime_decision_authority": False,
+            "transfer_execution_authority": False,
+        },
+
+        "safety_flags": {
+            "changes_highlight_selection": False,
+            "changes_target_selection": False,
+            "changes_phrase_scoring": False,
+            "changes_url_assignment": False,
+            "changes_runtime_linking": False,
+            "applies_learning_to_target_workspace": False,
+            "metadata_only": True,
+        },
+    }
