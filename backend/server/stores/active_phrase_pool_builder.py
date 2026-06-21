@@ -20,11 +20,40 @@ CONNECTORS = {
     "with", "without", "while", "whether", "rather",
 }
 
+RUNTIME_STRONG_HEADS = {
+    "calculator", "date", "cycle", "window", "mucus", "temperature",
+    "phase", "period", "pregnancy", "ovulation", "fertility",
+    "methods", "tracking", "tool", "tools", "guide", "checklist",
+    "template", "strategy", "software", "platform", "audit",
+}
+
+RUNTIME_STRONG_MODIFIERS = {
+    "ovulation", "fertile", "fertility", "cervical", "luteal",
+    "follicular", "menstrual", "basal", "hormonal", "birth",
+    "pregnancy", "due", "real", "personalized", "typical",
+}
+
+RUNTIME_WEAK_HEADS = {
+    "feels", "right", "length", "examples", "budget", "app",
+    "tools", "date", "day", "days", "window",
+}
+
 RUNTIME_BAD_STARTS = {
     "from", "with", "without", "before", "after", "during", "because",
     "rather", "inside", "outside", "into", "based", "confirm", "estimate",
     "guess", "guessing", "identify", "put", "shift", "shorter", "longer",
     "early", "late", "adjust",
+}
+
+RUNTIME_WEAK_STARTS = {
+    "actual", "average", "basic", "best", "common", "general", "main",
+    "new", "old", "real", "single", "small", "strong", "typical",
+    "usual", "working",
+}
+
+RUNTIME_WEAK_ENDS = {
+    "app", "budget", "date", "day", "days", "feels", "length",
+    "right", "tools", "window", "examples",
 }
 
 RUNTIME_BAD_ENDS = {
@@ -278,21 +307,32 @@ def _is_semantic_competitor(a: str, b: str) -> bool:
 
 
 def _record_score(rec: Dict[str, Any]) -> float:
-    builder = rec.get("builder_intelligence") if isinstance(rec.get("builder_intelligence"), dict) else {}
-    selector = rec.get("selector_intelligence") if isinstance(rec.get("selector_intelligence"), dict) else {}
-    strength = rec.get("strength") if isinstance(rec.get("strength"), dict) else {}
-    qg = rec.get("quality_gate") if isinstance(rec.get("quality_gate"), dict) else {}
+    """
+    Prefer extractor score. Downstream scores are fallback only.
+    """
+    if not isinstance(rec, dict):
+        return 0.0
+
+    ei = rec.get("extractor_intelligence")
+    if isinstance(ei, dict):
+        v = _normalize_unit_score(ei.get("score"))
+        if v > 0:
+            return v
 
     candidates = [
-        builder.get("builder_score"),
-        selector.get("selector_score"),
-        strength.get("score"),
-        qg.get("quality_gate_score"),
-        rec.get("builder_score"),
         rec.get("score"),
         rec.get("quality_score"),
+        rec.get("builder_score"),
         rec.get("strength_score"),
     ]
+
+    builder = rec.get("builder_intelligence") if isinstance(rec.get("builder_intelligence"), dict) else {}
+    selector = rec.get("selector_intelligence") if isinstance(rec.get("selector_intelligence"), dict) else {}
+
+    candidates.extend([
+        builder.get("builder_score"),
+        selector.get("selector_score"),
+    ])
 
     return max(_normalize_unit_score(x) for x in candidates)
 
@@ -336,233 +376,87 @@ def _multi_layer_confidence(
     )
 
 
+
 def _quarantine_phrase(
     phrase: str,
     rec: Dict[str, Any],
     source_name: str,
 ) -> Tuple[bool, str, Dict[str, Any]]:
+    """
+    Active pool trusts extractor decisions.
+
+    Runtime dirty gates, candidate window guards,
+    strength scoring and adaptive thresholds are
+    no longer allowed to override extractor output.
+    """
+
     phrase = _canonical_phrase(phrase)
 
     if not phrase:
         return False, "empty_phrase", {}
 
-    runtime_dirty, runtime_reason = _is_runtime_dirty_phrase(phrase)
-    if runtime_dirty:
-        return False, runtime_reason, {}
-
-    source_type = str(rec.get("source_type") or "")
-
-    guard = candidate_window_guard(phrase, source_type=source_type)
-    if isinstance(guard, dict) and not guard.get("keep"):
-        return False, f"quality_gate_{guard.get('reason') or 'reject'}", {
-            "quality_gate": guard.get("quality_gate") if isinstance(guard.get("quality_gate"), dict) else {}
-        }
-
-    guarded_phrase = _canonical_phrase(
-        str(guard.get("phrase") or phrase) if isinstance(guard, dict) else phrase
-    )
-
-    strength = score_phrase_strength(phrase=guarded_phrase, source_type=source_type)
-
-    if isinstance(strength, dict) and not strength.get("keep"):
-        return False, f"strength_{strength.get('reason') or 'reject'}", {
-            "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
-            "strength": strength,
-        }
-
     enriched = dict(rec)
-    enriched["phrase"] = guarded_phrase
-    enriched["canonical"] = guarded_phrase
-    enriched["runtime_source"] = "upload_phrase_pool"
-    enriched["highlight_authority"] = "upload_only"
+    enriched["phrase"] = phrase
 
-    if isinstance(guard, dict) and isinstance(guard.get("quality_gate"), dict):
-        enriched["quality_gate"] = guard.get("quality_gate")
-
-    if isinstance(strength, dict):
-        enriched["strength"] = strength
-
-    base_score = _record_score(enriched)
-    source_score = _source_priority(source_name, enriched)
-
-    quality_gate_score = _normalize_unit_score(
-        (enriched.get("quality_gate") or {}).get("quality_gate_score", 0.0)
-    )
-
-    strength_score = _normalize_unit_score(
-        (enriched.get("strength") or {}).get("score", 0.0)
-    )
-
-    confidence_stack = _multi_layer_confidence(
-        quality_gate_score=quality_gate_score,
-        strength_score=strength_score,
-        source_priority=source_score,
-    )
-
-    adaptive_threshold = _adaptive_threshold(
-        source_type=str(enriched.get("source_type") or ""),
-        vertical=str(enriched.get("vertical") or ""),
-    )
-
-    active_score = round(
-        (base_score * 0.35)
-        + (quality_gate_score * 0.20)
-        + (strength_score * 0.20)
-        + (confidence_stack * 0.25),
-        4,
-    )
-
-    if active_score < adaptive_threshold:
-        return False, "adaptive_threshold_reject", {
-            "active_score": active_score,
-            "adaptive_threshold": adaptive_threshold,
-            "confidence_stack": confidence_stack,
-        }
-
-    enriched["active_pool_intelligence"] = {
-        "active_score": active_score,
-        "source_priority": round(source_score, 4),
-        "base_phrase_score": round(base_score, 4),
-        "adaptive_threshold": adaptive_threshold,
-        "confidence_stack": confidence_stack,
-        "decision": "ACCEPT",
-        "reason": "upload_only_active_pool_accept",
-        "highlight_authority": "upload_phrase_pool_only",
-        "supporting_pools_allowed_to_highlight": False,
-        "layers": ACTIVE_POOL_INTELLIGENCE_LAYERS,
-    }
-
-    enriched["di_metadata"] = {
-        "runtime_role": "primary_highlight_phrase",
-        "highlight_layer": "PRIMARY_HIGHLIGHT_LAYER",
-        "supporting_intelligence_eligible": True,
-        "supporting_sources": SUPPORTING_INTELLIGENCE_LAYERS,
-    }
-
-    enriched["active_score"] = active_score
-
-    return True, "upload_only_active_pool_accept", enriched
-
-RUNTIME_WEAK_STARTS = {
-    "using", "know", "mark", "track", "tracking", "calculate", "predict",
-    "understand", "confirm", "estimate", "adjust", "count", "counting",
-    "record", "check", "watch", "look", "looking",
-}
-
-RUNTIME_WEAK_ENDS = {
-    "for", "with", "without", "from", "into", "during", "before",
-    "after", "because", "than", "that", "care", "natural",
-}
-
-RUNTIME_WEAK_WRAPPERS = {
-    "using", "know", "mark", "track", "tracking", "calculate", "predict",
-    "understand", "confirm", "estimate", "adjust", "count", "counting",
-    "record", "check", "watch", "look", "looking", "expected", "typical",
-}
-
-RUNTIME_STRONG_HEADS = {
-    "ovulation", "fertile", "fertility", "cycle", "period", "mucus",
-    "temperature", "bbt", "luteal", "phase", "calculator", "kits",
-    "symptoms", "date", "window", "days", "clues", "patterns",
-}
+    return True, "trusted_extractor_phrase", enriched
 
 
 def _runtime_phrase_quality(phrase: str) -> float:
-    p = _canonical_phrase(phrase)
-    toks = _tokens(p)
-
-    if not p or not toks:
-        return 0.0
-
-    score = 0.50
-    token_count = len(toks)
-
-    if 2 <= token_count <= 4:
-        score += 0.18
-    elif token_count == 5:
-        score += 0.08
-    elif token_count >= 6:
-        score -= 0.16
-
-    if toks[0] in RUNTIME_STRONG_HEADS:
-        score += 0.12
-
-    if any(t in RUNTIME_STRONG_HEADS for t in toks):
-        score += 0.10
-
-    if toks[0] in RUNTIME_WEAK_STARTS:
-        score -= 0.18
-
-    if toks[-1] in RUNTIME_WEAK_ENDS:
-        score -= 0.22
-
-    weak_wrapper_count = sum(1 for t in toks if t in RUNTIME_WEAK_WRAPPERS)
-    if weak_wrapper_count:
-        score -= min(0.20, weak_wrapper_count * 0.07)
-
-    if re.search(r"\b(for|with|without|from|into|during|before|after)\s+[a-z0-9]+$", p):
-        score -= 0.12
-
-    if re.search(r"\b(know|mark|using|calculate|track|tracking)\s+the\b", p):
-        score -= 0.18
-
-    if re.search(r"\b(months|days)\s+for\b", p):
-        score -= 0.16
-
-    if re.search(r"\bfor\s+(natural|care)$", p):
-        score -= 0.20
-
-    return round(max(0.0, min(1.0, score)), 4)
+    """
+    Deprecated. Active pool no longer judges phrase quality.
+    Kept only for backward-compatible metadata.
+    """
+    return 1.0
 
 
 def _runtime_selection_score(rec: Dict[str, Any]) -> float:
-    phrase = str(rec.get("phrase") or "")
-    active_score = _safe_float(rec.get("active_score"), _record_score(rec))
-    quality = _runtime_phrase_quality(phrase)
+    """
+    Runtime ranking now uses carried extractor/builder scores only.
+    No old runtime phrase-quality constants are required.
+    """
+    if not isinstance(rec, dict):
+        return 0.0
 
-    toks = _tokens(phrase)
-    length_bonus = 0.0
+    for key in ("active_score", "builder_score", "quality_score", "score", "strength_score"):
+        try:
+            value = float(rec.get(key) or 0.0)
+            if value > 0:
+                return value
+        except Exception:
+            pass
 
-    if 2 <= len(toks) <= 4:
-        length_bonus = 0.05
-    elif len(toks) == 5:
-        length_bonus = 0.02
-    elif len(toks) >= 6:
-        length_bonus = -0.06
+    ei = rec.get("extractor_intelligence")
+    if isinstance(ei, dict):
+        try:
+            value = float(ei.get("score") or 0.0)
+            if value > 0:
+                return value
+        except Exception:
+            pass
 
-    return round(
-        (active_score * 0.60)
-        + (quality * 0.35)
-        + length_bonus,
-        4,
-    )
+    return 0.5
 
 
 def _better_record(current: Dict[str, Any], challenger: Dict[str, Any]) -> Dict[str, Any]:
-    current_selection_score = _runtime_selection_score(current)
-    challenger_selection_score = _runtime_selection_score(challenger)
+    """
+    Choose between duplicate/competing records using carried extractor/builder score.
+    No runtime re-gating. No old quality constants.
+    """
+    current_score = _runtime_selection_score(current)
+    challenger_score = _runtime_selection_score(challenger)
 
-    current_phrase = str(current.get("phrase") or "")
-    challenger_phrase = str(challenger.get("phrase") or "")
-
-    current["runtime_selection_quality"] = {
-        "phrase_quality": _runtime_phrase_quality(current_phrase),
-        "selection_score": current_selection_score,
-    }
-
-    challenger["runtime_selection_quality"] = {
-        "phrase_quality": _runtime_phrase_quality(challenger_phrase),
-        "selection_score": challenger_selection_score,
-    }
-
-    if challenger_selection_score > current_selection_score:
+    if challenger_score > current_score:
         return challenger
 
-    if challenger_selection_score == current_selection_score:
+    if challenger_score == current_score:
+        current_phrase = str(current.get("phrase") or "")
+        challenger_phrase = str(challenger.get("phrase") or "")
+
         current_tokens = len(_tokens(current_phrase))
         challenger_tokens = len(_tokens(challenger_phrase))
 
-        if 2 <= challenger_tokens <= 4 and challenger_tokens < current_tokens:
+        # Prefer more specific phrase, but avoid very long fragments.
+        if 2 <= challenger_tokens <= 6 and challenger_tokens > current_tokens:
             return challenger
 
     return current

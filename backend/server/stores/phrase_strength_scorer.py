@@ -1364,345 +1364,56 @@ def score_phrase_strength(
     allow_trim: bool = True,
     **kwargs: Any,
 ) -> Dict[str, Any]:
-    workspace_id = str(kwargs.get("workspace_id", "default") or "default")
-    document_id = str(kwargs.get("document_id", "") or "")
-    vertical = str(kwargs.get("vertical", "general") or "general")
+    """
+    Score-only phrase strength layer.
 
+    Smart phrase extractor is now the single phrase-quality authority.
+    This scorer must not reject, trim, repair, or rewrite extractor-approved phrases.
+    It only provides a ranking score and metadata for downstream ordering.
+    """
     p = canonical_phrase(phrase)
     tokens = tokenize(p)
 
-    if not p or len(tokens) < 2:
-        return _reject_score_phrase(
-            p,
-            "too_short",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if len(tokens) > 10:
-        return _reject_score_phrase(
-            p,
-            "too_long",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if _is_universal_weak_semantic_phrase(tokens):
-        return _reject_score_phrase(
-            p,
-            "universal_weak_semantic_phrase",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if _is_sentence_fragment_phrase(tokens):
-        return _reject_score_phrase(
-            p,
-            "sentence_fragment_phrase",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if _fails_semantic_anchor_validation(tokens):
-        return _reject_score_phrase(
-            p,
-            "semantic_anchor_validation_failed",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if _fails_malformed_wrapper_validation(tokens):
-        return _reject_score_phrase(
-            p,
-            "malformed_wrapper_validation_failed",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if _has_reversed_ordered_pair(tokens):
-        return _reject_score_phrase(
-            p,
-            "reversed_ordered_pair",
-            score=0.0,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if allow_trim and _should_trim_bad_long_phrase(tokens):
-        trimmed = trim_bad_long_phrase(tokens)
-        if trimmed != tokens:
-            p = " ".join(trimmed)
-            tokens = trimmed
-
-    hard_rejects = [
-        (_is_cross_niche_stitched_stack(tokens), "cross_niche_stitched_stack"),
-        (_is_long_list_chain(tokens), "long_list_chain"),
-        (_is_multi_cluster_phrase(tokens), "multi_cluster_phrase"),
-        (_is_short_orphan_collision(tokens), "short_orphan_collision"),
-        (_is_prefix_suffix_spillover(tokens), "prefix_suffix_spillover"),
-        (_has_orphan_tail_start(tokens), "orphan_tail_start"),
-        (_has_boundary_spillover(tokens), "boundary_spillover"),
-        (_has_long_clause_leakage(tokens), "long_clause_leakage"),
-    ]
-
-    for bad, reason in hard_rejects:
-        if bad:
-            return _reject_score_phrase(
-                p,
-                reason,
-                score=0.0,
-                workspace_id=workspace_id,
-                document_id=document_id,
-                vertical=vertical,
-            )
-
-    if tokens[0] in WEAK_STARTS and not _is_exact_canonical_anchor(tokens) and not _is_natural_compound_phrase(tokens):
-        return _reject_score_phrase(
-            p,
-            "weak_start",
-            score=0.10,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    if tokens[-1] in WEAK_ENDINGS and not _is_exact_canonical_anchor(tokens) and not _is_natural_compound_phrase(tokens):
-        return _reject_score_phrase(
-            p,
-            "weak_ending",
-            score=0.10,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
-    score = 0.40
-    reasons: List[str] = []
-
-    scoring_layers = [
-        _head_quality_score(tokens),
-        _modifier_quality_score(tokens),
-        _standalone_score(tokens, source_type),
-        _fragment_penalty(tokens, p),
-        _cohesion_penalty(tokens),
-        _domain_cohesion_score(tokens),
-        _action_object_score(tokens),
-        _short_window_structure_penalty(tokens, source_type),
-        _long_phrase_naturalness_score(tokens, source_type),
-        _universal_precision_score(tokens),
-    ]
-
-    for layer_score, layer_reasons in scoring_layers:
-        score += layer_score
-        reasons.extend(layer_reasons)
-
-    content_tokens = _content_tokens(tokens)
-    unique_ratio = len(set(tokens)) / max(1, len(tokens))
-
-    compact_contentful_phrase = (
-        2 <= len(tokens) <= 5
-        and len(content_tokens) >= 2
-        and unique_ratio >= 0.75
-        and not _is_sentence_fragment_phrase(tokens)
-        and not _is_universal_weak_semantic_phrase(tokens)
-    )
-
-    high_value_compact_phrase = (
-        compact_contentful_phrase
-        and (
-            _has_valid_ordered_pair(tokens)
-            or _is_natural_compound_phrase(tokens)
-            or any(len(t) >= 6 for t in content_tokens)
-        )
-    )
-
-    if high_value_compact_phrase:
-        score += 0.34
-        reasons.append("high_value_compact_phrase")
-
-        recovery_hits = 0
-
-        if "short_window_missing_structure" in reasons:
-            score += 0.18
-            recovery_hits += 1
-            reasons.append("softened_short_window_missing_structure")
-
-        if "low_domain_cohesion" in reasons:
-            score += 0.16
-            recovery_hits += 1
-            reasons.append("softened_low_domain_cohesion")
-
-        if "structural_unknown_head" in reasons:
-            score += 0.14
-            recovery_hits += 1
-            reasons.append("softened_structural_unknown_head")
-
-        if "list_style_stack" in reasons:
-            score += 0.08
-            recovery_hits += 1
-            reasons.append("softened_list_style_stack")
-
-        if recovery_hits >= 2:
-            score = max(score, 0.72)
-            reasons.append("multi_signal_recovery_floor")
-
-    score = max(0.0, min(1.0, round(score, 3)))
-
-    if _is_query_style_long_anchor(tokens) and len(_content_tokens(tokens)) >= 4:
-        score = max(score, 0.78)
-        reasons.append("query_style_score_floor")
-
-    if _is_exact_canonical_anchor(tokens):
-        score = max(score, 0.84)
-        reasons.append("canonical_score_floor")
-    elif _is_natural_compound_phrase(tokens):
-        score = max(score, 0.76)
-        reasons.append("natural_compound_score_floor")
-    elif _has_valid_ordered_pair(tokens) and len(tokens) in {2, 3, 4}:
-        score = max(score, 0.80)
-        reasons.append("ordered_pair_score_floor")
-
-    threshold = 0.66
-    token_len = len(tokens)
-
-    has_canonical_anchor = _is_exact_canonical_anchor(tokens)
-    has_valid_pair = _has_valid_ordered_pair(tokens)
-    has_natural_compound = _is_natural_compound_phrase(tokens)
-    query_style = _is_query_style_long_anchor(tokens)
-
-    structural_signal, structural_reasons = _has_structural_signal(tokens, source_type)
-    vertical_hits = _vertical_keyword_hits(tokens)
-
-    if has_canonical_anchor:
-        threshold = 0.52
-    elif has_valid_pair:
-        threshold = 0.58
-    elif has_natural_compound:
-        threshold = 0.58
-
-    if query_style:
-        threshold = min(threshold, 0.60)
-
-    if structural_signal:
-        threshold -= 0.05
-        reasons.extend(structural_reasons)
-
-    cohesion = phrase_domain_cohesion(set(tokens))
-    if bool(cohesion.get("is_cohesive")):
-        threshold -= 0.04
-
-    if vertical_hits >= 2 and token_len <= 5:
-        threshold -= 0.04
-
-    if _is_action_phrase(tokens):
-        head = tokens[-1]
-        if (
-            head not in STRONG_ACTION_OBJECT_HEADS
-            and head not in STRONG_CONCEPT_HEADS
-            and head not in GENERIC_BUT_ALLOWED_HEADS
-        ):
-            threshold += 0.08
-
-    if token_len >= 7:
-        threshold += 0.06
-    elif token_len >= 5:
-        threshold += 0.02
-
-    if not structural_signal and token_len in {2, 3, 4} and not has_valid_pair and not has_natural_compound:
-        threshold += 0.10
-
-    if (
-        source_type == "noun_phrase"
-        and not structural_signal
-        and not has_valid_pair
-        and not has_canonical_anchor
-        and not has_natural_compound
-    ):
-        threshold += 0.08
-
-    threshold = max(0.50, min(0.86, threshold))
-
-    recovery_reason_hits = sum(
-        1 for r in reasons
-        if r in {
-            "high_value_compact_phrase",
-            "multi_signal_recovery_floor",
-            "ordered_pair_score_floor",
-            "natural_compound_score_floor",
-            "canonical_score_floor",
-            "valid_ordered_pair",
-            "natural_compound_precision",
-            "contentful",
+    if not p:
+        return {
+            "keep": False,
+            "score": 0.0,
+            "phrase": "",
+            "reason": "empty_phrase",
+            "score_only_mode": True,
         }
-    )
 
-    soft_penalty_hits = sum(
-        1 for r in reasons
-        if r in {
-            "low_domain_cohesion",
-            "short_window_missing_structure",
-            "structural_unknown_head",
-            "list_style_stack",
-            "mid_stopword_fragment_softened",
-        }
-    )
+    # Conservative universal score:
+    # - exact/canonical compounds get high confidence
+    # - ordered/natural compounds get strong confidence
+    # - normal extractor-approved phrases get medium-high confidence
+    score = 0.68
+    reasons: List[str] = ["score_only_trust_extractor"]
 
-    structurally_weak_short_phrase = (
-        token_len in {2, 3, 4}
-        and "short_window_missing_structure" in reasons
-        and "structural_unknown_head" in reasons
-        and not has_canonical_anchor
-        and not has_valid_pair
-        and not has_natural_compound
-        and not structural_signal
-    )
-
-    if structurally_weak_short_phrase:
-        score = min(score, 0.61)
-        threshold = max(threshold, 0.72)
-        reasons.append("blocked_structurally_weak_short_phrase_recovery")
-
-    recovery_override = (
-        score >= 0.68
-        and recovery_reason_hits >= 3
-        and soft_penalty_hits >= 2
-        and not structurally_weak_short_phrase
-        and "sentence_fragment_phrase" not in reasons
-        and "semantic_anchor_validation_failed" not in reasons
-        and "malformed_wrapper_validation_failed" not in reasons
-    )
-
-    keep = score >= threshold or recovery_override
+    try:
+        if _is_exact_canonical_anchor(tokens):
+            score = max(score, 0.90)
+            reasons.append("exact_canonical_anchor")
+        elif _has_valid_ordered_pair(tokens):
+            score = max(score, 0.84)
+            reasons.append("valid_ordered_pair")
+        elif _is_natural_compound_phrase(tokens):
+            score = max(score, 0.80)
+            reasons.append("natural_compound_phrase")
+        elif len(tokens) >= 3:
+            score = max(score, 0.74)
+            reasons.append("specific_multiword_phrase")
+    except Exception:
+        reasons.append("legacy_scoring_helpers_unavailable")
 
     return {
-        "keep": keep,
-        "score": score,
+        "keep": True,
+        "score": round(float(score), 3),
         "phrase": p,
-        "reason": "+".join(reasons) if reasons else "neutral",
+        "reason": "trusted_extractor_phrase",
+        "reasons": reasons,
+        "score_only_mode": True,
+        "source_type": source_type,
     }
-
-
-
-
-
-
-
-
-
-
-
 
 

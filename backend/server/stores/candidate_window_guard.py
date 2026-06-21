@@ -573,204 +573,42 @@ def candidate_window_guard(
     document_id: str = "",
     vertical: str = "general",
 ) -> Dict[str, Any]:
+    """
+    Pass-through guard.
+
+    Smart phrase extractor is now the single phrase-quality authority.
+    This layer only normalizes and attaches guard metadata.
+    It must not reject, trim, repair, or rewrite extractor-approved phrases.
+    """
     phrase = " ".join(tokenize(candidate))
 
-    def reject_guard(
-        phrase_value: str,
-        reason: str,
-        signals: Dict[str, float] | None = None,
-    ) -> Dict[str, Any]:
-        return _reject(
-            phrase_value,
-            reason,
-            signals,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
-
     if not phrase:
-        return reject_guard("", "empty_candidate")
-
-    tokens = phrase.split()
-
-    if len(tokens) < 2:
-        return reject_guard(
-            phrase,
-            "too_short",
-            {
-                "logical_structure": 0.30,
-                "pragmatic_anchor_value": 0.15,
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "empty_candidate",
+            "quality_gate": {
+                "candidate_window_guard": {
+                    "decision": "REJECT_EMPTY",
+                    "passthrough_mode": True,
+                }
             },
-        )
+        }
 
-    compressed_phrase = _compress_long_wrapper(tokens)
-    compressed_tokens = compressed_phrase.split()
-
-    if compressed_phrase != phrase and len(compressed_tokens) >= 2:
-        phrase = compressed_phrase
-        tokens = compressed_tokens
-
-    if len(tokens) > 10:
-        return reject_guard(
-            phrase,
-            "too_long",
-            {
-                "logical_structure": 0.40,
-                "context_fit": 0.45,
-                "pragmatic_anchor_value": 0.30,
-            },
-        )
-
-    if _starts_or_ends_badly(tokens):
-        return reject_guard(
-            phrase,
-            "bad_boundary",
-            {
-                "logical_structure": 0.25,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
-
-    if _has_reversed_ordered_pair(tokens):
-        return reject_guard(
-            phrase,
-            "reversed_ordered_pair",
-            {
-                "logical_structure": 0.10,
-                "pragmatic_anchor_value": 0.20,
-                "topic_coherence": 0.45,
-            },
-        )
-
-    if _is_weak_subject_verb_fragment(tokens):
-        return reject_guard(
-            phrase,
-            "weak_subject_verb_fragment",
-            {
-                "logical_structure": 0.35,
-                "context_fit": 0.45,
-                "pragmatic_anchor_value": 0.10,
-                "topic_coherence": 0.35,
-            },
-        )
-
-    if _is_action_leak_start(tokens):
-        return reject_guard(
-            phrase,
-            "action_leak_start",
-            {
-                "logical_structure": 0.35,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
-
-    if _is_short_multi_head_collision(tokens):
-        return reject_guard(
-            phrase,
-            "short_multi_head_collision",
-            {
-                "logical_structure": 0.30,
-                "pragmatic_anchor_value": 0.25,
-                "topic_coherence": 0.40,
-            },
-        )
-
-    if _is_long_carryover_stack(tokens):
-        return reject_guard(
-            phrase,
-            "long_carryover_stack",
-            {
-                "logical_structure": 0.25,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.15,
-            },
-        )
-
-    if _has_clause_leak(tokens):
-        return reject_guard(
-            phrase,
-            "clause_leak",
-            {
-                "logical_structure": 0.25,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
-
-    if _is_stitched_vertical_list(tokens):
-        return reject_guard(
-            phrase,
-            "stitched_vertical_list",
-            {
-                "logical_structure": 0.20,
-                "context_fit": 0.25,
-                "pragmatic_anchor_value": 0.15,
-                "topic_coherence": 0.30,
-            },
-        )
-
-    if _is_dense_noun_chain(tokens):
-        return reject_guard(
-            phrase,
-            "dense_noun_chain",
-            {
-                "logical_structure": 0.25,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.25,
-            },
-        )
-
-    if _has_repeated_or_duplicate_noise(tokens):
-        return reject_guard(
-            phrase,
-            "duplicate_noise",
-            {
-                "logical_structure": 0.25,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
-
-    if _is_generic_short_false_positive(tokens):
-        return reject_guard(
-            phrase,
-            "generic_short_false_positive",
-            {
-                "logical_structure": 0.40,
-                "pragmatic_anchor_value": 0.15,
-                "topic_coherence": 0.35,
-            },
-        )
-
-    if _matches_universal_guard_noise_pattern(phrase):
-       return reject_guard(
-        phrase,
-        "universal_guard_noise_pattern",
-        {
-            "logical_structure": 0.25,
-            "context_fit": 0.30,
-            "pragmatic_anchor_value": 0.15,
-            "topic_coherence": 0.25,
+    return {
+        "keep": True,
+        "phrase": phrase,
+        "reason": "trusted_extractor_phrase",
+        "quality_gate": {
+            "candidate_window_guard": {
+                "decision": "TRUST_EXTRACTOR",
+                "passthrough_mode": True,
+                "source_type": source_type,
+                "workspace_id": workspace_id,
+                "document_id": document_id,
+                "vertical": vertical,
+            }
         },
-    )
-
-    if _is_universal_weak_semantic_phrase(tokens):
-        return reject_guard(
-            phrase,
-            "universal_weak_semantic_phrase",
-            {
-                "logical_structure": 0.35,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.10,
-                "topic_coherence": 0.30,
-            },
-        )
-
-    return _accept(phrase, "guard_pass")
-
-
-
-
-
+    }
 
 
