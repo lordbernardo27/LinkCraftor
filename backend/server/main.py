@@ -154,6 +154,7 @@ from backend.server.routes.external.resolver import router as resolver_runtime_r
 from backend.server.routes.external.manual import router as manual_runtime_router
 from backend.server.routes.external.sources import router as sources_runtime_router
 from backend.server.routes.external.import_runs import router as import_runs_runtime_router
+from backend.server.routes.external.auto_cleanup import router as auto_cleanup_runtime_router
 
 
 
@@ -1015,5 +1016,12 @@ if not _already_mounted("backend.server.routes.external.import_runs", "/api/exte
     app.include_router(
         import_runs_runtime_router,
         prefix="/api/external/import_runs_runtime",
+    )
+
+
+if not _already_mounted("backend.server.routes.external.auto_cleanup", "/api/external/auto_cleanup_runtime"):
+    app.include_router(
+        auto_cleanup_runtime_router,
+        prefix="/api/external/auto_cleanup_runtime",
     )
 
