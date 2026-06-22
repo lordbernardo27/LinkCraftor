@@ -66,18 +66,6 @@ export function initILModal(ctx) {
   const ilToast       = $("ilToast");
   const ilSourceLabel = $("ilSourceLabel");
 
-  const ilTitleMatchBadge = $("ilTitleMatchBadge");
-  const ilMatchScore      = $("ilMatchScore");
-  const ilMatchBadge      = $("ilMatchBadge");
-  const ilPreviewTitle    = $("ilPreviewTitle");
-  const ilPreviewUrl      = $("ilPreviewUrl");
-  const ilPreviewDesc     = $("ilPreviewDesc");
-  const ilPreviewType     = $("ilPreviewType");
-  const ilPreviewWords    = $("ilPreviewWords");
-  const ilPreviewStatus   = $("ilPreviewStatus");
-  const ilPreviewTopic    = $("ilPreviewTopic");
-  const ilPreviewRelevance= $("ilPreviewRelevance");
-
   // ========= Extended UI (Top Targets, domain hint, etc.) =========
   const ilDomain            = $("ilDomain");          // optional domain hint (may be null)
   const ilTTUPrimary        = $("ilTTUPrimary");      // Top Targets (Strong)
@@ -543,72 +531,6 @@ for (const r of source.slice(0,12)){
     ilSourceLabel.textContent = txt;
   }
 
-
-  function getILPercent(s){
-    const raw = getSafeSuggestionConfidence(s);
-    if (!raw) return 92;
-    return Math.max(1, Math.min(99, Math.round(raw <= 1 ? raw * 100 : raw)));
-  }
-
-  function inferPreviewType(kind){
-    const k = String(kind || "").toLowerCase();
-    if (k.includes("draft")) return "Draft Page";
-    if (k.includes("sitemap")) return "Sitemap Page";
-    if (k.includes("external")) return "External Source";
-    if (k.includes("semantic")) return "Semantic Target";
-    return "Blog Post";
-  }
-
-  function inferPreviewTopic(title, phrase){
-    const text = `${title || ""} ${phrase || ""}`.toLowerCase();
-    if (text.includes("ovulation") || text.includes("fertility") || text.includes("luteal")) {
-      return "Ovulation / Fertility";
-    }
-    if (text.includes("pregnancy")) return "Pregnancy";
-    if (text.includes("bmi")) return "BMI / Health";
-    return "Internal Link";
-  }
-
-  function updateILPreview(suggestion, phrase){
-    const title = String(suggestion?.title || ilTitle?.value || "").trim();
-    const url   = String(suggestion?.url   || ilUrl?.value   || "").trim();
-    const kind  = String(suggestion?.kind  || "").trim();
-    const pct   = suggestion ? getILPercent(suggestion) : 92;
-
-    if (ilMatchScore) ilMatchScore.textContent = String(pct);
-    if (ilTitleMatchBadge) ilTitleMatchBadge.textContent = `${pct}% match`;
-
-    if (ilMatchBadge) {
-      ilMatchBadge.textContent = pct >= 80 ? "High Match" : pct >= 55 ? "Medium Match" : "Manual Match";
-    }
-
-    if (ilPreviewTitle) ilPreviewTitle.textContent = title || "No page selected";
-    if (ilPreviewUrl) ilPreviewUrl.textContent = url || "Choose a target page";
-
-    if (ilPreviewDesc) {
-      ilPreviewDesc.textContent =
-        suggestion?.description ||
-        (title
-          ? `Learn more about ${title.toLowerCase()} and how it connects to this paragraph context.`
-          : "Select a target page to preview its linking context.");
-    }
-
-    if (ilPreviewType) ilPreviewType.textContent = inferPreviewType(kind);
-    if (ilPreviewWords) ilPreviewWords.textContent = suggestion?.word_count || suggestion?.words || "1,852";
-    if (ilPreviewStatus) ilPreviewStatus.textContent = kind && kind.toLowerCase().includes("draft") ? "Draft" : "Mar 10, 2024";
-    if (ilPreviewTopic) ilPreviewTopic.textContent = inferPreviewTopic(title, phrase);
-
-    if (ilPreviewRelevance) {
-      ilPreviewRelevance.textContent =
-        pct >= 80
-          ? "High ? directly matches your content context."
-          : pct >= 55
-            ? "Medium ? related to the selected phrase."
-            : "Manual ? verify before applying.";
-    }
-  }
-
-
   // ------------------------------------------------------------
   // Open / Close modal
   // ------------------------------------------------------------
@@ -650,12 +572,6 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
         if (ilText) ilText.value = currPhrase || "";
         showDomainHint(markUrl);
         setSourceLabel(markKind || "internal");
-        updateILPreview({
-          title: markTitle,
-          url: markUrl,
-          kind: markKind || "internal",
-          runtime_normalized_score: 0.92
-        }, currPhrase);
         syncILApplyButton();
 
         if (ilToast) ilToast.textContent = "";
@@ -712,13 +628,6 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
 
       if (ilTitle) ilTitle.value = pick ? (pick.title || "") : "";
       if (ilUrl)   ilUrl.value   = pick ? (pick.url   || "") : "";
-
-      updateILPreview(pick || {
-        title: ilTitle?.value || "",
-        url: ilUrl?.value || "",
-        kind: "internal",
-        runtime_normalized_score: 0.92
-      }, currPhrase);
 
       syncILApplyButton();
       if (ilText)  ilText.value  = currPhrase || "";
@@ -818,12 +727,10 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
   ["input","change"].forEach(evt=>{
     ilUrl?.addEventListener(evt, ()=>{
       showDomainHint(ilUrl.value||"");
-      updateILPreview(null, ctx.state.getCurrentPhrase());
       if (validateILFieldsSilent()) ilApply?.removeAttribute("disabled");
       else ilApply?.setAttribute("disabled","true");
     });
     ilTitle?.addEventListener(evt, ()=>{
-      updateILPreview(null, ctx.state.getCurrentPhrase());
       if (validateILFieldsSilent()) ilApply?.removeAttribute("disabled");
       else ilApply?.setAttribute("disabled","true");
     });
@@ -895,7 +802,6 @@ try { markEl && markEl.setAttribute("data-orig-title", String(markEl.getAttribut
         if(item){
           if(ilTitle) ilTitle.value = item.title || "";
           if(ilUrl)   ilUrl.value   = item.url   || "";
-          updateILPreview(item, ctx.state.getCurrentPhrase());
         }
         if (validateILFieldsSilent()) ilApply?.removeAttribute("disabled");
         ilResults.style.display = "none";

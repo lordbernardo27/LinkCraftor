@@ -8,6 +8,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Set
 
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set
+from backend.server.stores.candidate_window_guard import candidate_window_guard
+from backend.server.stores.phrase_strength_scorer import score_phrase_strength
+from backend.server.stores.semantic_completeness_intelligence import (
+    analyze_anchor_intent_completeness_v1,
+    analyze_semantic_closure_v1,
+    analyze_standalone_semantic_integrity_v1,
+    repair_phrase_from_context_v1,
+)
 from backend.server.utils.text_normalization import fix_mojibake_text
 
 
@@ -216,34 +224,102 @@ def _extract_record_snippet(rec: Dict[str, Any]) -> str:
 
 
 def _quality_gate_phrase_with_metadata(phrase: str, source_type: str = "", snippet: str = "") -> Dict[str, Any]:
-    """
-    Pool builder no longer repairs or re-gates phrases.
-
-    Phrase quality is owned by smart_phrase_extractor.py.
-    This function now only preserves compatibility with the existing builder flow.
-    """
     phrase = _light_normalize_phrase(phrase)
+
+    repair_item = repair_phrase_from_context_v1(phrase, snippet)
+    if isinstance(repair_item, dict) and repair_item.get("changed"):
+        phrase = _light_normalize_phrase(str(repair_item.get("repaired") or phrase))
 
     if not phrase:
         return {"keep": False, "phrase": "", "quality_gate": {}, "strength": {}}
 
+    if _looks_incomplete_after_context_repair(phrase):
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "contextual_phrase_repair_failed_incomplete_anchor",
+            "quality_gate": {
+                "semantic_completeness": {
+                    "repair": repair_item,
+                    "incomplete_after_repair": True,
+                }
+            },
+            "strength": {},
+        }
+
+    semantic_closure = analyze_semantic_closure_v1([{"phrase": phrase}])
+    closure_results = semantic_closure.get("results") if isinstance(semantic_closure, dict) else []
+    closure_item = closure_results[0] if closure_results else {}
+
+    standalone_integrity = analyze_standalone_semantic_integrity_v1([{"phrase": phrase}])
+    integrity_results = standalone_integrity.get("results") if isinstance(standalone_integrity, dict) else []
+    integrity_item = integrity_results[0] if integrity_results else {}
+
+    anchor_intent = analyze_anchor_intent_completeness_v1([{"phrase": phrase}])
+    anchor_results = anchor_intent.get("results") if isinstance(anchor_intent, dict) else []
+    anchor_intent_item = anchor_results[0] if anchor_results else anchor_intent
+
+    if closure_item and closure_item.get("is_complete") is False:
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "semantic_closure_incomplete",
+            "quality_gate": {
+                "semantic_completeness": {
+                    "closure": closure_item,
+                    "standalone_integrity": integrity_item,
+                      "anchor_intent_completeness": anchor_intent_item,
+                }
+            },
+            "strength": {},
+        }
+
+    if integrity_item and integrity_item.get("is_valid") is False:
+        return {
+            "keep": False,
+            "phrase": "",
+            "reason": "standalone_semantic_integrity_failed",
+            "quality_gate": {
+                "semantic_completeness": {
+                    "closure": closure_item,
+                    "standalone_integrity": integrity_item,
+                      "anchor_intent_completeness": anchor_intent_item,
+                }
+            },
+            "strength": {},
+        }
+
+    guard = candidate_window_guard(phrase, source_type=source_type or "")
+    if not isinstance(guard, dict) or not guard.get("keep"):
+        return {
+            "keep": False,
+            "phrase": "",
+            "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
+            "strength": {},
+        }
+
+    guarded_phrase = _light_normalize_phrase(str(guard.get("phrase") or phrase))
+
+    scored = score_phrase_strength(
+        phrase=guarded_phrase,
+        source_type=source_type or "",
+    )
+
+    if not isinstance(scored, dict) or not scored.get("keep"):
+        return {
+            "keep": False,
+            "phrase": "",
+            "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
+            "strength": scored if isinstance(scored, dict) else {},
+        }
+
+    final_phrase = _light_normalize_phrase(str(scored.get("phrase") or guarded_phrase))
+
     return {
         "keep": True,
-        "phrase": phrase,
-        "reason": "extractor_quality_trusted",
-        "quality_gate": {
-            "pool_builder": {
-                "decision": "TRUST_EXTRACTOR",
-                "repair_disabled": True,
-                "regate_disabled": True,
-            }
-        },
-        "strength": {
-            "keep": True,
-            "score": 1.0,
-            "phrase": phrase,
-            "reason": "carried_from_extractor",
-        },
+        "phrase": final_phrase,
+        "quality_gate": guard.get("quality_gate") if isinstance(guard, dict) else {},
+        "strength": scored,
     }
 
 
