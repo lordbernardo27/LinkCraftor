@@ -157,6 +157,7 @@ from backend.server.routes.external.import_runs import router as import_runs_run
 from backend.server.routes.external.auto_cleanup import router as auto_cleanup_runtime_router
 from backend.server.routes.external.sitemap_import import router as sitemap_import_runtime_router
 from backend.server.routes.external.resolve import router as resolve_runtime_router
+from backend.server.routes.external.import_clear import router as import_clear_runtime_router
 
 
 
@@ -1039,5 +1040,12 @@ if not _already_mounted("backend.server.routes.external.resolve", "/api/external
     app.include_router(
         resolve_runtime_router,
         prefix="/api/external/resolve_runtime",
+    )
+
+
+if not _already_mounted("backend.server.routes.external.import_clear", "/api/external/import_clear_runtime"):
+    app.include_router(
+        import_clear_runtime_router,
+        prefix="/api/external/import_clear_runtime",
     )
 
