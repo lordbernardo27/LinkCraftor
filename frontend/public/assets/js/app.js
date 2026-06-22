@@ -6446,8 +6446,10 @@ try {
 
 
 function updateConnectionStatus(domain = "") {
+  // LC_CONNECTION_TOGGLE_STATUS_SYNC_6_1
   const connectionDot = document.getElementById("connectionDot");
   const connectionText = document.getElementById("connectionText");
+  const connectionSwitch = document.getElementById("btnConnectionSwitch");
 
   if (!connectionDot || !connectionText) return;
 
@@ -6455,10 +6457,20 @@ function updateConnectionStatus(domain = "") {
     connectionDot.classList.remove("disconnected");
     connectionDot.classList.add("connected");
     connectionText.textContent = "Connected";
+    if (connectionSwitch) {
+      connectionSwitch.classList.add("is-connected");
+      connectionSwitch.setAttribute("aria-pressed", "true");
+      connectionSwitch.title = "Disconnect workspace domain";
+    }
   } else {
     connectionDot.classList.remove("connected");
     connectionDot.classList.add("disconnected");
     connectionText.textContent = "Disconnected";
+    if (connectionSwitch) {
+      connectionSwitch.classList.remove("is-connected");
+      connectionSwitch.setAttribute("aria-pressed", "false");
+      connectionSwitch.title = "Connect workspace domain";
+    }
   }
 }
 
@@ -6508,13 +6520,19 @@ function lcMakeNewWorkspaceIdentity(domain, projectName){
 document.addEventListener("DOMContentLoaded", () => {
   const domainModal = document.getElementById("domainModal");
   const domainInput = document.getElementById("domainInput");
+  const sitemapInput = document.getElementById("sitemapInput");
   const btnConnectDomain = document.getElementById("btnConnectDomain");
     const workspaceNameInput = document.getElementById("workspaceNameInput");
 
+  // LC_WORKSPACE_RESTORE_ON_REFRESH_6_9
+  const savedWorkspaceId = localStorage.getItem("lc_workspace_id") || "";
   const savedDomain = localStorage.getItem("lc_domain") || "";
 
-  if (savedDomain) {
-    window.LINKCRAFTOR_WORKSPACE_ID = getCurrentWorkspaceId("");
+  if (savedWorkspaceId) {
+    window.LINKCRAFTOR_WORKSPACE_ID = savedWorkspaceId;
+    window.CURRENT_WORKSPACE_ID = savedWorkspaceId;
+    window.LC_WORKSPACE_ID = savedWorkspaceId;
+
     updateConnectionStatus(savedDomain);
 
     if (domainModal) {
@@ -6522,6 +6540,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   } else {
     window.LINKCRAFTOR_WORKSPACE_ID = "";
+    window.CURRENT_WORKSPACE_ID = "";
+    window.LC_WORKSPACE_ID = "";
+
     updateConnectionStatus("");
 
     if (domainModal) {
@@ -6535,6 +6556,157 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   btnConnectDomain.addEventListener("click", async () => {
+    // LC_CONTINUE_ROUTING_PHASE_3_1_DOMAIN_MODE_GUARD
+    const selectedWorkspaceMode = String(
+      window.LC_WORKSPACE_START_MODE ||
+      window.workspaceMode ||
+      document.querySelector('input[name="workspaceStartMode"]:checked')?.value ||
+      "domain"
+    ).trim();
+
+    if (selectedWorkspaceMode === "sitemap") {
+      // LC_CONTINUE_ROUTING_PHASE_3_2_3_SITE_URL_MODE
+      // LC_NORMALIZE_SITE_URL_3_2_4
+      let siteUrl = (sitemapInput?.value || "").trim();
+      const customWorkspaceName = (workspaceNameInput?.value || "").trim();
+
+      siteUrl = siteUrl
+        .replace(/^https?:\/\//i, "")
+        .replace(/^www\./i, "")
+        .replace(/\/.*$/g, "")
+        .trim();
+
+      siteUrl = siteUrl ? "https://" + siteUrl : "";
+
+      if (!siteUrl) {
+        alert("Please enter a site URL");
+        return;
+      }
+
+      const identity = lcMakeNewWorkspaceIdentity(siteUrl, customWorkspaceName);
+      const workspaceId = identity.workspaceId;
+      const workspaceName = customWorkspaceName || identity.workspaceName;
+      const sessionId = localStorage.getItem("lc_active_session_id_" + workspaceId) || identity.sessionId;
+
+      localStorage.setItem("lc_workspace_id", workspaceId);
+      localStorage.setItem("lc_site_url", siteUrl);
+      localStorage.setItem("lc_active_session_id_" + workspaceId, sessionId);
+
+      window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+      window.CURRENT_WORKSPACE_ID = workspaceId;
+      window.LC_WORKSPACE_ID = workspaceId;
+      window.LC_ACTIVE_SESSION_ID = sessionId;
+      window.LC_ACTIVE_SESSION_TITLE = workspaceName;
+      window.LC_WORKSPACE_MODE = "sitemap";
+      window.LC_SITE_URL = siteUrl;
+
+      try {
+        const saveRes = await fetch("/api/workspace/workspace-folder/name", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            workspace_name: workspaceName,
+            workspace_mode: "sitemap",
+            site_url: siteUrl,
+            source_type: "site_url"
+          })
+        });
+
+        const saveData = await saveRes.json().catch(() => ({}));
+        if (!saveRes.ok || !saveData.ok) {
+          throw new Error(saveData.detail || "Could not save site URL workspace");
+        }
+      } catch (profileErr) {
+        console.warn("[Site URL Workspace] profile save failed:", profileErr);
+        alert("Could not create Site URL workspace");
+        return;
+      }
+
+      // LC_FIX_NON_DOMAIN_WORKSPACE_DISCONNECTED_6_10
+      updateConnectionStatus("");
+
+      if (domainModal) {
+        domainModal.style.display = "none";
+      }
+
+      console.log("[Site URL Workspace] New workspace:", {
+        workspaceId,
+        workspaceName,
+        sessionId,
+        siteUrl
+      });
+
+      return;
+    }
+
+    if (selectedWorkspaceMode === "blank") {
+      // LC_CONTINUE_ROUTING_PHASE_3_3_BLANK_MODE
+      const customWorkspaceName = (workspaceNameInput?.value || "").trim();
+
+      const identity = lcMakeNewWorkspaceIdentity("blank-workspace", customWorkspaceName);
+      const workspaceId = identity.workspaceId;
+      const workspaceName = customWorkspaceName || identity.workspaceName;
+      const sessionId = localStorage.getItem("lc_active_session_id_" + workspaceId) || identity.sessionId;
+
+      localStorage.setItem("lc_workspace_id", workspaceId);
+      localStorage.removeItem("lc_domain");
+      localStorage.removeItem("lc_site_url");
+      localStorage.setItem("lc_active_session_id_" + workspaceId, sessionId);
+
+      window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
+      window.CURRENT_WORKSPACE_ID = workspaceId;
+      window.LC_WORKSPACE_ID = workspaceId;
+      window.LC_ACTIVE_SESSION_ID = sessionId;
+      window.LC_ACTIVE_SESSION_TITLE = workspaceName;
+      window.LC_WORKSPACE_MODE = "blank";
+      window.LC_SITE_URL = "";
+      window.LC_CONNECTED_DOMAIN = "";
+      window.CURRENT_DOMAIN = "";
+
+      try {
+        // LC_BLANK_WORKSPACE_CALL_CREATE_ROUTE_3_3_2
+        const saveRes = await fetch("/api/workspace/create_blank", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            workspace_name: workspaceName,
+            session_id: sessionId
+          })
+        });
+
+        const saveData = await saveRes.json().catch(() => ({}));
+        if (!saveRes.ok || !saveData.ok) {
+          throw new Error(saveData.detail || "Could not create blank workspace");
+        }
+      } catch (profileErr) {
+        console.warn("[Blank Workspace] create failed:", profileErr);
+        alert("Could not create blank workspace");
+        return;
+      }
+
+      // LC_FIX_NON_DOMAIN_WORKSPACE_DISCONNECTED_6_10
+      updateConnectionStatus("");
+
+      if (domainModal) {
+        domainModal.style.display = "none";
+      }
+
+      console.log("[Blank Workspace] New workspace:", {
+        workspaceId,
+        workspaceName,
+        sessionId
+      });
+
+      return;
+    }
+
+    if (selectedWorkspaceMode !== "domain") {
+      console.log("[Workspace Continue] Non-domain mode selected; domain pipeline skipped:", selectedWorkspaceMode);
+      return;
+    }
+
     const domain = (domainInput.value || "").trim();
 
     if (!domain) {
@@ -6576,6 +6748,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
         localStorage.setItem("lc_workspace_id", workspaceId);
         localStorage.setItem("lc_domain", cleanDomain);
+        // LC_STORE_DOMAIN_WORKSPACE_MODE_1_3
+        localStorage.setItem("lc_workspace_mode", "domain");
         localStorage.setItem("lc_active_session_id_" + workspaceId, sessionId);
 
         window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
@@ -6592,7 +6766,12 @@ document.addEventListener("DOMContentLoaded", () => {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               workspace_id: workspaceId,
-              workspace_name: workspaceName
+              workspace_name: workspaceName,
+
+              // LC_DOMAIN_WORKSPACE_MODE_4_1
+              workspace_mode: "domain",
+              domain: cleanDomain,
+              source_type: "domain"
             })
           });
         } catch (profileErr) {
@@ -6618,6 +6797,179 @@ document.addEventListener("DOMContentLoaded", () => {
   });
 });
 // ===============================
+
+
+
+
+// LC_CONNECTION_TOGGLE_SMALL_POPUP_6_2_FIX
+document.addEventListener("DOMContentLoaded", function(){
+  const switchBtn = document.getElementById("btnConnectionSwitch");
+  const modal = document.getElementById("connectLaterModal");
+  const input = document.getElementById("connectLaterDomainInput");
+  const cancelBtn = document.getElementById("btnConnectLaterCancel");
+  const submitBtn = document.getElementById("btnConnectLaterSubmit");
+
+  function getCurrentWorkspaceIdSafe(){
+    return String(
+      window.LC_WORKSPACE_ID ||
+      window.CURRENT_WORKSPACE_ID ||
+      window.LINKCRAFTOR_WORKSPACE_ID ||
+      localStorage.getItem("lc_workspace_id") ||
+      ""
+    ).trim();
+  }
+
+  function openConnectLaterModal(){
+    if (!modal) return;
+    modal.style.display = "flex";
+    if (input) {
+      input.value = "";
+      setTimeout(() => input.focus(), 50);
+    }
+  }
+
+  function closeConnectLaterModal(){
+    if (modal) modal.style.display = "none";
+  }
+
+  if (cancelBtn) {
+    cancelBtn.addEventListener("click", closeConnectLaterModal);
+  }
+
+  if (modal) {
+    modal.addEventListener("click", function(e){
+      if (e.target === modal) closeConnectLaterModal();
+    });
+  }
+
+  if (switchBtn) {
+    switchBtn.addEventListener("click", function(){
+      const currentDomain = String(
+        window.LC_CONNECTED_DOMAIN ||
+        window.CURRENT_DOMAIN ||
+        localStorage.getItem("lc_domain") ||
+        ""
+      ).trim();
+
+      if (currentDomain) {
+        // LC_DOMAIN_WORKSPACE_LOCKED_CONNECTION_1_3
+        const currentMode = String(
+          window.LC_WORKSPACE_MODE ||
+          localStorage.getItem("lc_workspace_mode") ||
+          ""
+        ).trim().toLowerCase();
+
+        if (currentMode === "domain") {
+          alert("This is a Domain Workspace. The domain connection is locked for this workspace type.");
+          return;
+        }
+
+        // LC_CONNECTION_TOGGLE_DISCONNECT_6_5
+        const workspaceId = getCurrentWorkspaceIdSafe();
+
+        if (!workspaceId) {
+          alert("No active workspace found.");
+          return;
+        }
+
+        if (!confirm("Disconnect this domain from the current workspace? Your documents, imports, and drafts will remain.")) {
+          return;
+        }
+
+        switchBtn.disabled = true;
+
+        fetch("/api/workspace/disconnect_domain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ workspace_id: workspaceId })
+        })
+          .then(res => res.json().then(data => ({ ok: res.ok, data })))
+          .then(({ ok, data }) => {
+            if (!ok || !data.ok) {
+              throw new Error(data.detail || "Could not disconnect domain");
+            }
+
+            localStorage.removeItem("lc_domain");
+            window.LC_CONNECTED_DOMAIN = "";
+            window.CURRENT_DOMAIN = "";
+
+            updateConnectionStatus("");
+            console.log("[Connect Later] disconnected domain:", data);
+          })
+          .catch(err => {
+            console.error("[Connect Later] disconnect failed:", err);
+            alert("Could not disconnect domain.");
+          })
+          .finally(() => {
+            switchBtn.disabled = false;
+          });
+
+        return;
+      }
+
+      openConnectLaterModal();
+    });
+  }
+
+  if (submitBtn) {
+    submitBtn.addEventListener("click", async function(){
+      const workspaceId = getCurrentWorkspaceIdSafe();
+      const domain = String(input?.value || "").trim();
+
+      if (!workspaceId) {
+        alert("No active workspace found.");
+        return;
+      }
+
+      if (!domain) {
+        alert("Please enter a domain.");
+        return;
+      }
+
+      submitBtn.disabled = true;
+      submitBtn.textContent = "Connecting...";
+
+      try {
+        const res = await fetch(`${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            workspace_id: workspaceId,
+            domain: domain
+          })
+        });
+
+        const data = await res.json().catch(() => ({}));
+
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || data.detail || "Could not connect domain");
+        }
+
+        const cleanDomain = data.domain || domain;
+
+        localStorage.setItem("lc_domain", cleanDomain);
+        window.LC_CONNECTED_DOMAIN = cleanDomain;
+        window.CURRENT_DOMAIN = cleanDomain;
+
+        updateConnectionStatus(cleanDomain);
+        closeConnectLaterModal();
+
+        console.log("[Connect Later] connected domain:", {
+          workspaceId,
+          cleanDomain
+        });
+      } catch (err) {
+        console.error("[Connect Later] failed:", err);
+        alert("Could not connect domain.");
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Connect";
+      }
+    });
+  }
+});
+
+
 // TMS Customer Support Tab Shell
 // ===============================
 function initSupportTabShell() {

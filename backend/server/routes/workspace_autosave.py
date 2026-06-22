@@ -12,6 +12,10 @@ from backend.server.stores.workspace_session_store import (
     write_json,
     read_json,
     utc_now_iso,
+    workspace_root,
+    ensure_workspace_saved_session_dirs,
+    ensure_session_dirs,
+    create_session_id,
 )
 
 
@@ -71,6 +75,57 @@ class AutosavePayload(BaseModel):
     draft_topics: List[Dict[str, Any]] = Field(default_factory=list)
     engine_state: Dict[str, Any] = Field(default_factory=dict)
     decisions: List[Dict[str, Any]] = Field(default_factory=list)
+
+
+
+
+# LC_CREATE_BLANK_WORKSPACE_ROUTE_3_3_1
+@router.post("/create_blank")
+def create_blank_workspace(payload: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = str(payload.get("workspace_id") or "").strip()
+    workspace_name = str(payload.get("workspace_name") or "").strip()
+    session_id = str(payload.get("session_id") or "").strip()
+
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id is required")
+
+    if not workspace_name:
+        workspace_name = workspace_id.replace("ws_", "").replace("_", " ").title()
+
+    if not session_id:
+        session_id = create_session_id("blank_session")
+
+    ensure_workspace_saved_session_dirs(workspace_id)
+    ensure_session_dirs(workspace_id, session_id)
+
+    root = workspace_root(workspace_id)
+    now = utc_now_iso()
+
+    profile = {
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_name,
+        "workspace_mode": "blank",
+        "source_type": "blank",
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    write_json(root / "workspace_profile.json", profile)
+
+    create_session_manifest(
+        workspace_id=workspace_id,
+        session_id=session_id,
+        domain="",
+        title=workspace_name,
+    )
+
+    return {
+        "ok": True,
+        "workspace": profile,
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_name,
+        "session_id": session_id,
+    }
 
 
 @router.post("/autosave")
@@ -293,11 +348,18 @@ def list_workspace_folder_items() -> Dict[str, Any]:
             if not workspace_name:
                 workspace_name = workspace_id.replace("ws_", "").replace("_", " ").title()
 
+            # LC_WORKSPACE_FOLDER_METADATA_3_2_5
             items.append({
                 "workspace_id": workspace_id,
                 "workspace_name": workspace_name,
                 "latest_session_id": latest_session_id,
                 "updated_at": latest_updated,
+                "workspace_mode": profile.get("workspace_mode") if isinstance(profile, dict) else "",
+                "site_url": profile.get("site_url") if isinstance(profile, dict) else "",
+                "domain": profile.get("domain") if isinstance(profile, dict) else "",
+                "source_type": profile.get("source_type") if isinstance(profile, dict) else "",
+                # LC_WORK_FOLDER_CONNECTION_STATUS_6_8_BACKEND
+                "connection_status": profile.get("connection_status") if isinstance(profile, dict) else "",
             })
 
     return {
@@ -323,19 +385,84 @@ def save_workspace_folder_name(payload: Dict[str, Any]) -> Dict[str, Any]:
     root = workspace_root(workspace_id)
     root.mkdir(parents=True, exist_ok=True)
 
-    data = {
-        "workspace_id": workspace_id,
-        "workspace_name": workspace_name,
-        "updated_at": utc_now_iso(),
-    }
+    profile_path = root / "workspace_profile.json"
+    existing = read_json(profile_path) or {}
+    if not isinstance(existing, dict):
+        existing = {}
 
-    write_json(root / "workspace_profile.json", data)
+    # LC_WORKSPACE_PROFILE_STANDARD_STRUCTURE_4_4
+    now = utc_now_iso()
+
+    data = dict(existing)
+    data["workspace_id"] = workspace_id
+    data["workspace_name"] = workspace_name
+    data["workspace_mode"] = str(payload.get("workspace_mode") or data.get("workspace_mode") or "").strip()
+    data["domain"] = str(payload.get("domain") or data.get("domain") or "").strip()
+    data["site_url"] = str(payload.get("site_url") or data.get("site_url") or "").strip()
+    data["source_type"] = str(payload.get("source_type") or data.get("source_type") or "").strip()
+    data["created_at"] = str(data.get("created_at") or now)
+    data["updated_at"] = now
+
+    # Keep legacy sitemap_url only if an old caller still sends it.
+    if payload.get("sitemap_url") is not None:
+        data["sitemap_url"] = str(payload.get("sitemap_url") or "").strip()
+
+    write_json(profile_path, data)
 
     return {
         "ok": True,
         "workspace": data,
     }
 
+
+
+
+
+# LC_DISCONNECT_DOMAIN_ROUTE_6_4
+@router.post("/disconnect_domain")
+def disconnect_workspace_domain(payload: Dict[str, Any]) -> Dict[str, Any]:
+    workspace_id = str(payload.get("workspace_id") or "").strip()
+
+    if not workspace_id:
+        raise HTTPException(status_code=400, detail="workspace_id is required")
+
+    from backend.server.stores.workspace_session_store import workspace_root
+
+    root = workspace_root(workspace_id)
+    root.mkdir(parents=True, exist_ok=True)
+
+    profile_path = root / "workspace_profile.json"
+    profile = read_json(profile_path) or {}
+
+    if not isinstance(profile, dict):
+        profile = {}
+
+    old_domain = str(profile.get("domain") or "").strip()
+
+    profile["workspace_id"] = workspace_id
+    profile["domain"] = ""
+    profile["connection_status"] = "disconnected"
+    profile["disconnected_at"] = utc_now_iso()
+    profile["updated_at"] = utc_now_iso()
+
+    if "site_url" not in profile:
+        profile["site_url"] = ""
+
+    if "workspace_mode" not in profile:
+        profile["workspace_mode"] = "blank"
+
+    if "source_type" not in profile:
+        profile["source_type"] = profile.get("workspace_mode") or "blank"
+
+    write_json(profile_path, profile)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "old_domain": old_domain,
+        "connection_status": "disconnected",
+        "workspace": profile,
+    }
 
 
 @router.delete("/workspace-folder")

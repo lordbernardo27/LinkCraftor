@@ -781,6 +781,7 @@ def clear_active_target_set(
 
 class ConnectDomainPayload(BaseModel):
     domain: str = Field(..., description="Domain entered by the user")
+    workspace_id: str | None = Field(None, description="Optional existing workspace_id to connect domain into")
 
 
 
@@ -795,7 +796,9 @@ def connect_domain(payload: ConnectDomainPayload):
     if not domain:
         return {"ok": False, "error": "invalid_domain"}
 
-    workspace_id = _workspace_id_from_domain(domain)
+    # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
+    requested_workspace_id = str(payload.workspace_id or "").strip()
+    workspace_id = requested_workspace_id or _workspace_id_from_domain(domain)
 
     data_dir = Path("backend/server/data")
     data_dir.mkdir(parents=True, exist_ok=True)
@@ -1150,6 +1153,44 @@ def connect_domain(payload: ConnectDomainPayload):
         json.dumps(active_obj, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+
+    # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
+    try:
+        workspace_profile_dir = Path("backend/server/data/workspaces") / workspace_id
+        workspace_profile_dir.mkdir(parents=True, exist_ok=True)
+        workspace_profile_path = workspace_profile_dir / "workspace_profile.json"
+
+        profile = {}
+        if workspace_profile_path.exists():
+            try:
+                profile = json.loads(workspace_profile_path.read_text(encoding="utf-8"))
+                if not isinstance(profile, dict):
+                    profile = {}
+            except Exception:
+                profile = {}
+
+        now_profile = datetime.now(timezone.utc).isoformat()
+
+        profile["workspace_id"] = workspace_id
+        profile["workspace_name"] = profile.get("workspace_name") or workspace_id.replace("ws_", "").replace("_", " ").title()
+        profile["workspace_mode"] = profile.get("workspace_mode") or "domain"
+        profile["domain"] = domain
+        profile["connection_status"] = "connected"
+        profile["connected_at"] = profile.get("connected_at") or now_profile
+        profile["updated_at"] = now_profile
+
+        if not profile.get("source_type"):
+            profile["source_type"] = "domain"
+
+        if "site_url" not in profile:
+            profile["site_url"] = ""
+
+        workspace_profile_path.write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as profile_err:
+        print("[connect_domain] workspace profile update failed:", profile_err)
 
     try:
         live_out = build_live_domain_target_pool(workspace_id)
