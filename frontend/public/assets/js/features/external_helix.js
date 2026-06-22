@@ -1,4 +1,4 @@
-// assets/js/features/external_helix.js
+﻿// assets/js/features/external_helix.js
 // Fully updated: backend-first resolver (GET), optional provider fallback, no cleanOriginal bug.
 
 (function (global) {
@@ -8,7 +8,7 @@
   // CONFIG
   // --------------------------------------------
   const API_BASE = (global.LINKCRAFTOR_API_BASE || "").replace(/\/+$/,"");
-  const BACKEND_RESOLVE_URL = (API_BASE ? API_BASE : "") + "/api/external/resolve";
+  const BACKEND_RESOLVE_URL = (API_BASE ? API_BASE : "") + "/api/external/runtime/resolve";
 
   // If true: when backend returns no match, DO NOT fall back to provider search URLs.
   // If false: backend no match -> fallback providers (search URLs).
@@ -53,8 +53,8 @@
           "[ExternalRefs] Backend resolver: no match for",
           `"${q}"`,
           DISABLE_PROVIDER_FALLBACK
-            ? "– providers disabled → NO external linking"
-            : "– will fall back to providers"
+            ? "â€“ providers disabled â†’ NO external linking"
+            : "â€“ will fall back to providers"
         );
         return [];
       }
@@ -173,7 +173,7 @@
       }
     },
 
-    // 2–9. Core medical info
+    // 2â€“9. Core medical info
     {
       id: "medlineplus",
       label: "MedlinePlus",
@@ -247,7 +247,7 @@
       }
     },
 
-    // 10–13. Drugs / pharmacology
+    // 10â€“13. Drugs / pharmacology
     {
       id: "drugs",
       label: "Drugs.com",
@@ -285,7 +285,7 @@
       }
     },
 
-    // 14–18. Evidence / guidelines / pregnancy-focused
+    // 14â€“18. Evidence / guidelines / pregnancy-focused
     {
       id: "pubmed",
       label: "PubMed",
@@ -332,7 +332,7 @@
       }
     },
 
-    // 19–20. Pediatrics / child / fertility
+    // 19â€“20. Pediatrics / child / fertility
     {
       id: "unicef",
       label: "UNICEF",
@@ -344,7 +344,7 @@
     },
     {
       id: "stanford_childrens",
-      label: "Stanford Children’s",
+      label: "Stanford Childrenâ€™s",
       category: "child",
       weight: 1.2,
       buildUrl(phrase) {
@@ -352,7 +352,7 @@
       }
     },
 
-    // 21–24. General high-quality hospital / info
+    // 21â€“24. General high-quality hospital / info
     {
       id: "hopkins",
       label: "Johns Hopkins Medicine",
@@ -511,7 +511,7 @@
         console.log(
           "[ExternalRefs] Backend resolver: no match for",
           `"${cleanOriginal}"`,
-          DISABLE_PROVIDER_FALLBACK ? "– providers disabled → NO external linking" : "– will fall back to providers"
+          DISABLE_PROVIDER_FALLBACK ? "â€“ providers disabled â†’ NO external linking" : "â€“ will fall back to providers"
         );
       }
     } catch (err) {
@@ -521,7 +521,7 @@
     // STEP 2: fallback providers (optional)
     if (!finalCandidates.length) {
       if (DISABLE_PROVIDER_FALLBACK) {
-        console.log("[ExternalRefs] No backend match → NO external linking (providers disabled)");
+        console.log("[ExternalRefs] No backend match â†’ NO external linking (providers disabled)");
         return [];
       }
 
@@ -561,3 +561,5 @@
     "providers"
   );
 })(window);
+
+

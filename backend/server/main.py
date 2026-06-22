@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 # backend/server/main.py
 
 
@@ -146,6 +146,11 @@ from backend.server.tms.routes import router as tms_router
 
 
 from backend.server.routes.workspace_autosave import router as workspace_autosave_router
+from backend.server.routes.external.runtime import router as external_runtime_router
+from backend.server.routes.external.manual import router as external_manual_router
+from backend.server.routes.external.auto import router as external_auto_router
+from backend.server.routes.external.owner_sources import router as external_owner_sources_router
+from backend.server.routes.external.resolver import router as resolver_runtime_router
 
 
 
@@ -436,7 +441,7 @@ def favicon():
 # =========================
 
 
-# DOCX â†’ HTML converter
+# DOCX Ã¢â€ â€™ HTML converter
 
 
 # =========================
@@ -517,7 +522,7 @@ async def convert_docx(file: UploadFile = File(...)):
 # ================================
 
 
-# Export simple HTML â†’ .docx
+# Export simple HTML Ã¢â€ â€™ .docx
 
 
 # ================================
@@ -916,6 +921,30 @@ if not _already_mounted("backend.server.tms.routes", "/api/tms"):
 
 
 
+if not _already_mounted("backend.server.routes.external.owner_sources", "/api/external/owner_sources_runtime"):
+    app.include_router(
+        external_owner_sources_router,
+        prefix="/api/external/owner_sources_runtime",
+        tags=["external-owner-sources"],
+    )
+if not _already_mounted("backend.server.routes.external.auto", "/api/external/auto_runtime"):
+    app.include_router(
+        external_auto_router,
+        prefix="/api/external/auto_runtime",
+        tags=["external-auto"],
+    )
+if not _already_mounted("backend.server.routes.external.manual", "/api/external/manual_runtime"):
+    app.include_router(
+        external_manual_router,
+        prefix="/api/external/manual_runtime",
+        tags=["external-manual"],
+    )
+if not _already_mounted("backend.server.routes.external.runtime", "/api/external/runtime"):
+    app.include_router(
+        external_runtime_router,
+        prefix="/api/external/runtime",
+        tags=["external-runtime"],
+    )
 if site_reader_router is not None:
 
 
@@ -923,6 +952,7 @@ if site_reader_router is not None:
 
 
         app.include_router(site_reader_router, prefix="/api/site", tags=["site-reader"])
+app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runtime")
 
 
 
@@ -965,4 +995,8 @@ def routes():
 
 
     return {"routes": out, "site_reader_mount_error": site_reader_mount_error}
+
+
+
+
 

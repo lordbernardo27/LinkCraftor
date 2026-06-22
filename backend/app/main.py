@@ -8,6 +8,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from backend.server.routes.external.resolver import router as resolver_runtime_router
 
 log = logging.getLogger("linkcraftor")
 logging.basicConfig(level=logging.INFO)
@@ -26,6 +27,7 @@ def _mount_router(module_path: str, attr: str, prefix: str, tag: str):
         mod = importlib.import_module(module_path)
         router = getattr(mod, attr)
         app.include_router(router, prefix=prefix, tags=[tag])
+app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runtime")
         log.info("Mounted %s at %s", module_path, prefix)
     except Exception as e:
         log.error("Failed to mount %s (%s): %s", module_path, attr, e, exc_info=True)

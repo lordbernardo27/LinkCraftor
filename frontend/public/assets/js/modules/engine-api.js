@@ -13,14 +13,14 @@ async function fetchJson(url, opts) {
   return res.json();
 }
 
-/** External references — uses the real external resolver at /api/external/resolve */
+/** External references — uses the real external resolver at /api/external/runtime/resolve */
 export async function getExternalLocal(anchor, { context = "", limit = 8 } = {}) {
   const params = new URLSearchParams({
     phrase: String(anchor || ""),
     lang: "en",
   });
 
-  const j = await fetchJson(`${BASE}/api/external/resolve?${params.toString()}`);
+  const j = await fetchJson(`${BASE}/api/external/runtime/resolve?${params.toString()}`);
   const items = Array.isArray(j) ? j : (Array.isArray(j?.items) ? j.items : []);
   return items.slice(0, Math.max(1, Number(limit || 8)));
 }
@@ -37,5 +37,7 @@ export async function runInternalEngine({ html = "", text = "" } = {}) {
 export async function health() {
   return await fetchJson(`${BASE}/health`);
 }
+
+
 
 

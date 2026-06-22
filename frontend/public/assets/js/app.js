@@ -2495,7 +2495,7 @@ const EXTERNAL_API_BASE = "";
 // If it's on another port/host, you can change to e.g. "http://localhost:8002"
 
 /**
- * Small helper: resolve a phrase via backend /api/external/resolve (GET).
+ * Small helper: resolve a phrase via backend /api/external/runtime/resolve (GET).
  * Backend returns an ARRAY of candidates (or []).
  * Returns { url, providerId, providerLabel, title } or null.
  */
@@ -8332,4 +8332,6 @@ window.LC_openWorkspaceFileInEditor = async function(workspaceId, sessionId){
     alert("Could not open workspace: " + (e.message || e));
   }
 };
+
+
 
