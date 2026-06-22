@@ -151,6 +151,7 @@ from backend.server.routes.external.manual import router as external_manual_rout
 from backend.server.routes.external.auto import router as external_auto_router
 from backend.server.routes.external.owner_sources import router as external_owner_sources_router
 from backend.server.routes.external.resolver import router as resolver_runtime_router
+from backend.server.routes.external.manual import router as manual_runtime_router
 
 
 
