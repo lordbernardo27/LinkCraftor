@@ -152,6 +152,7 @@ from backend.server.routes.external.auto import router as external_auto_router
 from backend.server.routes.external.owner_sources import router as external_owner_sources_router
 from backend.server.routes.external.resolver import router as resolver_runtime_router
 from backend.server.routes.external.manual import router as manual_runtime_router
+from backend.server.routes.external.sources import router as sources_runtime_router
 
 
 
@@ -1000,4 +1001,11 @@ def routes():
 
 
 
+
+
+if not _already_mounted("backend.server.routes.external.sources", "/api/external/sources_runtime"):
+    app.include_router(
+        sources_runtime_router,
+        prefix="/api/external/sources_runtime",
+    )
 
