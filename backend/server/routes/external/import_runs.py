@@ -1,19 +1,55 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from pathlib import Path
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Body, HTTPException
 
-from backend.app.routers.external import (
-    OwnerRollbackRequest,
+from pydantic import BaseModel
+
+from backend.server.routes.external.shared import (
     AUDIT_PATH,
     AUTO_PATH,
-    _snapshot_path,
-    _safe_read_list,
-    _atomic_write_json,
-    _audit,
+    SNAPSHOT_DIR,
 )
+
+
+class OwnerRollbackRequest(BaseModel):
+    import_run_id: str
+    preview: bool = True
+
+
+def _snapshot_path(run_id: str) -> Path:
+    safe = "".join(c for c in str(run_id or "") if c.isalnum() or c in ("_", "-"))
+    return SNAPSHOT_DIR / f"{safe}.json"
+
+
+def _safe_read_list(path: Path) -> list:
+    try:
+        if not path.exists():
+            return []
+        raw = path.read_text(encoding="utf-8", errors="replace").strip()
+        if not raw:
+            return []
+        data = json.loads(raw)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _audit(event: str, payload: Dict[str, Any]) -> None:
+    AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    rec = {"event": event, **(payload or {})}
+    with AUDIT_PATH.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 router = APIRouter(tags=["external-import-runs-runtime"])
 

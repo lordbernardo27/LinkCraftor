@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import importlib
 import logging
@@ -27,7 +27,7 @@ def _mount_router(module_path: str, attr: str, prefix: str, tag: str):
         mod = importlib.import_module(module_path)
         router = getattr(mod, attr)
         app.include_router(router, prefix=prefix, tags=[tag])
-app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runtime")
+        app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runtime")
         log.info("Mounted %s at %s", module_path, prefix)
     except Exception as e:
         log.error("Failed to mount %s (%s): %s", module_path, attr, e, exc_info=True)
@@ -36,7 +36,7 @@ app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runti
 # Remaining legacy routers only
 # DEPRECATED_REMOVED: legacy engine router removed; backend/server/routes owns /api/engine/*
 # DEPRECATED_REMOVED: legacy files router removed; backend/server/routes/files.py owns /api/files/*
-_mount_router("backend.app.routers.external", "router", "/api/external", "external")
+# RETIRED_EXTERNAL_ROUTER_PHASE_1_37: legacy external router retired; backend.server.routes.external owns external routes.
 # MIGRATED_TO_BACKEND_SERVER_MAIN: rb2_run router moved to backend/server/routes/rb2_run.py
 
 

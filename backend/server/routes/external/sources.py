@@ -4,13 +4,18 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from backend.app.routers.external import (
+from backend.server.routes.external.owner_sources import (
     OwnerSourceUpsert,
     OwnerSourceSetDefault,
     OwnerSourceDelete,
+    OwnerSourceDefaults,
     _load_owner_sources,
     _atomic_write_json,
     SOURCES_PATH,
+    _norm_label,
+    _norm_domain,
+    _clean_path_list,
+    _clean_ext_list,
 )
 
 router = APIRouter(tags=["external-sources-runtime"])

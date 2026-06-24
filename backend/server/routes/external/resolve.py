@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter
 
-from backend.app.routers.external import (
+from backend.server.routes.external.runtime import (
     ExternalCandidate,
     _make_key,
     _ensure_resolve_index_uptodate,

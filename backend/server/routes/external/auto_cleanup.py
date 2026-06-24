@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import APIRouter
 
-from backend.app.routers.external import (
+from backend.server.routes.external.runtime import (
     AUTO_PATH,
     _safe_read_list,
     _atomic_write_json,
+    _normalize_url_for_storage,
 )
 
 router = APIRouter(tags=["external-auto-cleanup-runtime"])
