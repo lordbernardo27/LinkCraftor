@@ -552,31 +552,6 @@ def apply_confidence_rules(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any
     return [apply_source_confidence(item) for item in evidence]
 
 
-
-
-def _logical_upload_doc_id(path_value: Any) -> str:
-    raw = str(path_value or "").replace("\\", "/")
-    name = raw.split("/")[-1]
-
-    # Strip common upload-pool prefixes.
-    name = re.sub(r"^upload_phrase_pool_", "", name)
-    name = re.sub(r"^upload_phrase_index_", "", name)
-    name = re.sub(r"^upload_entity_map_", "", name)
-    name = re.sub(r"^upload_entity_graph_", "", name)
-    name = re.sub(r"^upload_struct_", "", name)
-
-    # Remove extension.
-    name = re.sub(r"\.json$", "", name)
-
-    # Collapse timestamp snapshots.
-    name = re.sub(r"_20\d{6}_\d{6}", "", name)
-
-    # Collapse trailing UUID/hash-like run IDs.
-    name = re.sub(r"_[a-f0-9]{16,}$", "", name)
-
-    return _norm(name) or "unknown_upload_document"
-
-
 def build_concepts_from_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     concepts: Dict[str, Dict[str, Any]] = {}
 
@@ -669,18 +644,11 @@ def build_concepts_from_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[st
             concept["popularity"]["active_phrase_frequency"] += 1
 
             doc_file = str((item.get("evidence") or {}).get("file") or "")
-            logical_doc_id = _logical_upload_doc_id(doc_file)
-
-            if logical_doc_id:
-                existing_docs = concept["popularity"].setdefault("document_ids", [])
-                if logical_doc_id not in existing_docs:
-                    existing_docs.append(logical_doc_id)
-                    concept["popularity"]["document_count"] += 1
-
             if doc_file:
                 existing_files = concept["popularity"].setdefault("document_files", [])
                 if doc_file not in existing_files:
                     existing_files.append(doc_file)
+                    concept["popularity"]["document_count"] += 1
 
         elif relation_type == "synonym" and related and related != concept_key:
             if related not in concept["synonyms"]:
@@ -727,22 +695,9 @@ def build_concepts_from_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[st
         concept["entity_types"] = sorted(concept.get("entity_types") or [])
         concept["sources"] = sorted(concept.get("sources") or [])
 
-        document_ids = sorted(
-            concept["popularity"].get("document_ids") or []
+        concept["popularity"]["document_files"] = sorted(
+            concept["popularity"].get("document_files") or []
         )[:25]
-
-        concept["popularity"]["document_ids"] = document_ids
-
-        concept["popularity"]["documents"] = [
-            {
-                "document_id": doc_id,
-                "document_type": "uploaded_workspace",
-            }
-            for doc_id in document_ids
-        ]
-
-        # Remove implementation details from semantic memory.
-        concept["popularity"].pop("document_files", None)
 
         concept["popularity"]["score"] = round(
             min(

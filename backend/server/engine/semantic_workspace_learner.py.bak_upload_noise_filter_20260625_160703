@@ -287,115 +287,6 @@ def _walk_strings(obj: Any, limit: int = 2000) -> List[str]:
     return unique[:limit]
 
 
-
-
-_UPLOAD_NOISE_TERMS = {
-    "guard_pass",
-    "debug",
-    "test",
-    "tmp",
-    "none",
-    "null",
-    "true",
-    "false",
-    "unknown",
-    "resolved",
-    "unresolved",
-    "default",
-    "workspace",
-    "workspace_id",
-    "source",
-    "target",
-    "score",
-    "confidence",
-}
-
-
-def _looks_like_noise_phrase(value: Any) -> bool:
-    text = _norm(value)
-
-    if not text:
-        return True
-
-    if text in _UPLOAD_NOISE_TERMS:
-        return True
-
-    # paragraph/sentence IDs like p1_s2
-    if re.fullmatch(r"p\d+_s\d+", text):
-        return True
-
-    # hashes / ids
-    if re.fullmatch(r"[a-f0-9]{16,}", text):
-        return True
-
-    # uuid-like chunks
-    if re.fullmatch(r"[a-f0-9]{8,}[-_][a-f0-9]{4,}.*", text):
-        return True
-
-    # mostly punctuation / underscores / digits
-    letters = re.findall(r"[a-z]", text)
-    if len(letters) < 3:
-        return True
-
-    # single technical token with underscore
-    if " " not in text and "_" in text:
-        return True
-
-    # too URL/file-like
-    if any(x in text for x in [".json", ".py", ".html", ".docx", "\\", "/"]):
-        return True
-
-    return False
-
-
-
-
-def _uploaded_phrase_quality_score(value: Any) -> float:
-    text = _norm(value)
-    words = re.findall(r"[a-z0-9]+", text)
-
-    if not words:
-        return 0.0
-
-    score = 0.0
-
-    if len(words) >= 2:
-        score += 0.45
-
-    if len(words) >= 3:
-        score += 0.20
-
-    if 8 <= len(text) <= 80:
-        score += 0.20
-
-    if any(len(w) >= 7 for w in words):
-        score += 0.10
-
-    if len(words) == 1:
-        score -= 0.30
-
-    if text.endswith(("tion", "ity", "ment", "ness")) and len(words) == 1:
-        score -= 0.15
-
-    return round(max(0.0, min(1.0, score)), 4)
-
-
-def _passes_uploaded_quality_filter(value: Any) -> bool:
-    text = _norm(value)
-
-    if _looks_like_noise_phrase(text):
-        return False
-
-    words = re.findall(r"[a-z0-9]+", text)
-
-    if len(words) >= 2:
-        return _uploaded_phrase_quality_score(text) >= 0.45
-
-    # Keep single-token terms only if strong enough.
-    # Later entity/type support can promote more single-token concepts.
-    return _uploaded_phrase_quality_score(text) >= 0.65
-
-
 def load_uploaded_document_evidence(workspace_id: str) -> List[Dict[str, Any]]:
     evidence: List[Dict[str, Any]] = []
 
@@ -409,21 +300,18 @@ def load_uploaded_document_evidence(workspace_id: str) -> List[Dict[str, Any]]:
         phrases = _walk_strings(obj, limit=1500)
 
         for phrase in phrases:
-            if not phrase or not _passes_uploaded_quality_filter(phrase):
+            if not phrase:
                 continue
-
-            quality = _uploaded_phrase_quality_score(phrase)
 
             evidence.append({
                 "concept": phrase,
                 "related_phrase": phrase,
                 "relation_type": "uploaded_document_phrase",
                 "source": "uploaded_documents",
-                "confidence": round(0.70 + (quality * 0.10), 4),
+                "confidence": 0.80,
                 "evidence": {
                     "file": str(path),
                     "kind": path.name,
-                    "quality_score": quality,
                 }
             })
 
@@ -552,31 +440,6 @@ def apply_confidence_rules(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any
     return [apply_source_confidence(item) for item in evidence]
 
 
-
-
-def _logical_upload_doc_id(path_value: Any) -> str:
-    raw = str(path_value or "").replace("\\", "/")
-    name = raw.split("/")[-1]
-
-    # Strip common upload-pool prefixes.
-    name = re.sub(r"^upload_phrase_pool_", "", name)
-    name = re.sub(r"^upload_phrase_index_", "", name)
-    name = re.sub(r"^upload_entity_map_", "", name)
-    name = re.sub(r"^upload_entity_graph_", "", name)
-    name = re.sub(r"^upload_struct_", "", name)
-
-    # Remove extension.
-    name = re.sub(r"\.json$", "", name)
-
-    # Collapse timestamp snapshots.
-    name = re.sub(r"_20\d{6}_\d{6}", "", name)
-
-    # Collapse trailing UUID/hash-like run IDs.
-    name = re.sub(r"_[a-f0-9]{16,}$", "", name)
-
-    return _norm(name) or "unknown_upload_document"
-
-
 def build_concepts_from_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     concepts: Dict[str, Dict[str, Any]] = {}
 
@@ -665,24 +528,7 @@ def build_concepts_from_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[st
 
         concept["evidence"].append(evidence_record)
 
-        if relation_type == "uploaded_document_phrase":
-            concept["popularity"]["active_phrase_frequency"] += 1
-
-            doc_file = str((item.get("evidence") or {}).get("file") or "")
-            logical_doc_id = _logical_upload_doc_id(doc_file)
-
-            if logical_doc_id:
-                existing_docs = concept["popularity"].setdefault("document_ids", [])
-                if logical_doc_id not in existing_docs:
-                    existing_docs.append(logical_doc_id)
-                    concept["popularity"]["document_count"] += 1
-
-            if doc_file:
-                existing_files = concept["popularity"].setdefault("document_files", [])
-                if doc_file not in existing_files:
-                    existing_files.append(doc_file)
-
-        elif relation_type == "synonym" and related and related != concept_key:
+        if relation_type == "synonym" and related and related != concept_key:
             if related not in concept["synonyms"]:
                 concept["synonyms"].append(related)
 
@@ -726,23 +572,6 @@ def build_concepts_from_evidence(evidence: List[Dict[str, Any]]) -> List[Dict[st
         concept["section_topics"] = sorted(concept.get("section_topics") or [])
         concept["entity_types"] = sorted(concept.get("entity_types") or [])
         concept["sources"] = sorted(concept.get("sources") or [])
-
-        document_ids = sorted(
-            concept["popularity"].get("document_ids") or []
-        )[:25]
-
-        concept["popularity"]["document_ids"] = document_ids
-
-        concept["popularity"]["documents"] = [
-            {
-                "document_id": doc_id,
-                "document_type": "uploaded_workspace",
-            }
-            for doc_id in document_ids
-        ]
-
-        # Remove implementation details from semantic memory.
-        concept["popularity"].pop("document_files", None)
 
         concept["popularity"]["score"] = round(
             min(
