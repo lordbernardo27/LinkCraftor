@@ -1,11 +1,11 @@
-﻿# backend/server/routes/external/resolver.py
+# backend/server/routes/external/resolver.py
 from __future__ import annotations
 
 """
 Owner Resolver routes.
 
 Migrated gradually from:
-backend/app/routers/external.py
+retired legacy external router
 
 Routes to own:
 - GET  /owner/resolver/search

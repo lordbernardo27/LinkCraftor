@@ -1,8 +1,240 @@
 ﻿from __future__ import annotations
 
-def resolver_core_healthcheck():
+import math
+import re
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from backend.server.engine.resolver_decision_intelligence import decide_resolver_action_v1
+from backend.server.engine.resolver_entity_intelligence import analyze_entity_intelligence_v1
+
+try:
+    from backend.server.engine import semantic_source as _semantic
+except Exception:
+    _semantic = None
+
+
+CONFIG: Dict[str, Any] = {
+    "broad_single_anchor_terms": set(),
+    "confidence_midpoint": 110.0,
+    "confidence_slope": 42.0,
+    "auto_floor": 0.70,
+    "suggest_floor": 0.45,
+}
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").lower()).strip()
+
+
+def _tokens(value: Any) -> set:
+    return {
+        t for t in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(t) >= 3
+    }
+
+
+def normalize_confidence(raw_target_score: float) -> float:
+    mid = float(CONFIG["confidence_midpoint"])
+    slope = float(CONFIG["confidence_slope"])
+
+    try:
+        x = float(raw_target_score or 0.0)
+    except (TypeError, ValueError):
+        x = 0.0
+
+    return round(1.0 / (1.0 + math.exp(-(x - mid) / slope)), 4)
+
+
+def evaluate_strong(
+    phrase: str,
+    target: Dict[str, Any],
+    *,
+    scorer: Callable[[str, Dict[str, Any]], Dict[str, Any]],
+    competition_intelligence: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    intelligence = scorer(phrase, target) or {}
+
+    raw = intelligence.get("target_score")
+    if raw is None:
+        raw = intelligence.get("score", 0)
+
+    confidence = normalize_confidence(raw)
+    entity = analyze_entity_intelligence_v1(phrase, target)
+
+    title = str(target.get("title") or target.get("h1") or "")
+    url = str(target.get("url") or "")
+
+    literal_overlap = len(
+        _tokens(phrase) &
+        (_tokens(title) | _tokens(url.replace("-", " ")))
+    )
+
+    auto_evidence = (
+        confidence >= float(CONFIG["auto_floor"])
+        and literal_overlap >= 2
+    )
+
+    item: Dict[str, Any] = {
+        "phrase": phrase,
+        "url": url,
+        "title": title,
+        "target_score": float(raw or 0.0),
+        "resolver_confidence": confidence,
+        "runtime_normalized_score": confidence,
+        "auto_link_allowed": bool(auto_evidence),
+        "entity_intelligence": entity,
+        "competition_intelligence": competition_intelligence or {},
+        "source_type": intelligence.get("source_type", "live_domain"),
+        "semantic_route_score": intelligence.get("semantic_route_score", 0),
+        "authority_score": intelligence.get("authority_score", 0),
+        "lane": "strong",
+        "literal_overlap": literal_overlap,
+        "link_status": "linked" if auto_evidence else "draft_opportunity",
+    }
+
+    decision = decide_resolver_action_v1(item)
+
+    item["decision_intelligence"] = decision
+    item["resolver_decision"] = decision.get("decision")
+    item["auto_link_allowed"] = decision.get("decision") == "AUTO_LINK"
+    item["suggest_only"] = decision.get("decision") != "AUTO_LINK"
+    item["resolver_reason"] = "strong_literal:" + str(decision.get("decision_reason") or "")
+    item["link_bucket"] = "internal_strong"
+    item["link_status"] = "linked" if item["auto_link_allowed"] else "draft_opportunity"
+
+    return item
+
+
+def evaluate_semantic(
+    workspace_id: str,
+    phrase: str,
+    target: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    if _semantic is None:
+        return None
+
+    title = str(target.get("title") or target.get("h1") or "")
+    url = str(target.get("url") or "")
+
+    target_text = " ".join([
+        title,
+        str(target.get("h1") or ""),
+        str(target.get("meta_title") or ""),
+        str(target.get("meta_description") or ""),
+        url.replace("-", " ").replace("/", " "),
+    ])
+
+    match = _semantic.semantic_target_match(workspace_id, phrase, target_text)
+
+    if not match.get("matched"):
+        return None
+
+    conf = float(match.get("confidence") or 0.0)
+
+    return {
+        "phrase": phrase,
+        "url": url,
+        "title": title,
+        "target_score": 0.0,
+        "resolver_confidence": conf,
+        "runtime_normalized_score": conf,
+        "auto_link_allowed": False,
+        "suggest_only": True,
+        "resolver_decision": "SEMANTIC_LINK_DRAFT",
+        "resolver_reason": "semantic_synonym:" + str(match.get("via") or ""),
+        "semantic_match": match,
+        "source_type": "live_domain",
+        "lane": "semantic",
+        "link_bucket": "semantic_draft",
+        "link_status": "semantic_draft",
+        "requires_user_review": True,
+        "permanent_insert_allowed": False,
+    }
+
+
+def no_target_row(phrase: str) -> Dict[str, Any]:
+    return {
+        "phrase": phrase,
+        "url": "",
+        "title": "",
+        "target_score": 0.0,
+        "resolver_confidence": 0.0,
+        "runtime_normalized_score": 0.0,
+        "auto_link_allowed": False,
+        "suggest_only": True,
+        "resolver_decision": "NO_TARGET",
+        "resolver_reason": "no_target_found",
+        "source_type": "none",
+        "lane": "none",
+        "link_bucket": "unlinked_opportunity",
+        "link_status": "unlinked_opportunity",
+        "requires_user_review": False,
+        "permanent_insert_allowed": False,
+    }
+
+
+def resolve_phrase(
+    *,
+    workspace_id: str,
+    phrase: str,
+    targets: List[Dict[str, Any]],
+    scorer: Callable[[str, Dict[str, Any]], Dict[str, Any]],
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    phrase = _norm(phrase)
+
+    if not phrase:
+        return []
+
+    ptoks = _tokens(phrase)
+
+    if len(ptoks) <= 1 and next(iter(ptoks), "") in CONFIG["broad_single_anchor_terms"]:
+        return [no_target_row(phrase)]
+
+    strong_rows: List[Dict[str, Any]] = []
+    semantic_rows: List[Dict[str, Any]] = []
+
+    for target in targets or []:
+        if not isinstance(target, dict):
+            continue
+
+        strong = evaluate_strong(phrase, target, scorer=scorer)
+
+        if strong.get("resolver_decision") in ("AUTO_LINK", "SUGGEST_ONLY"):
+            strong_rows.append(strong)
+            continue
+
+        sem = evaluate_semantic(workspace_id, phrase, target)
+        if sem is not None:
+            semantic_rows.append(sem)
+
+    rows = strong_rows + semantic_rows
+
+    if not rows:
+        return [no_target_row(phrase)]
+
+    def sort_key(r: Dict[str, Any]) -> Tuple[int, float]:
+        if r.get("resolver_decision") == "AUTO_LINK":
+            rank = 3
+        elif r.get("resolver_decision") == "SEMANTIC_LINK_DRAFT":
+            rank = 2
+        elif r.get("lane") == "strong":
+            rank = 1
+        else:
+            rank = 0
+
+        return (rank, float(r.get("resolver_confidence") or 0.0))
+
+    rows.sort(key=sort_key, reverse=True)
+
+    return rows[: max(1, int(limit or 5))]
+
+
+def resolver_core_healthcheck() -> Dict[str, Any]:
     return {
         "ok": True,
         "engine": "resolver_core",
-        "version": "v1_placeholder"
+        "version": "v1_real_linkcraftor_semantic_draft",
+        "semantic_source_loaded": _semantic is not None,
     }
+

@@ -1,11 +1,11 @@
-﻿# backend/server/routes/external/owner_sources.py
+# backend/server/routes/external/owner_sources.py
 from __future__ import annotations
 
 """
 Owner Sources routes.
 
 Migrated gradually from:
-backend/app/routers/external.py
+retired legacy external router
 
 Routes to own:
 - GET  /owner/sources

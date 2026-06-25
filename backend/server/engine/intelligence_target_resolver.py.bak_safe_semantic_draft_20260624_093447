@@ -1,0 +1,1761 @@
+from __future__ import annotations
+
+import re
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+from backend.server.pools.target_pools.live_domain_target_intelligence import (
+    load_live_domain_targets,
+    score_live_domain_target,
+)
+
+from backend.server.pools.target_pools.imported_target_intelligence import (
+    load_imported_targets,
+    score_imported_target,
+)
+
+from backend.server.pools.target_pools.draft_target_intelligence import (
+    load_draft_targets,
+    score_draft_target,
+)
+
+from backend.server.pools.target_pools.document_registry_target_intelligence import (
+    load_document_registry_targets,
+    runtime_safe_payload as score_document_registry_target,
+)
+
+from backend.server.engine.concept_intelligence import concept_match_score
+from backend.server.engine.workspace_topic_cluster_store import find_topic_clusters_for_text
+from backend.server.engine.workspace_topic_cluster_feedback import get_cluster_feedback
+from backend.server.engine.resolver_competition_intelligence import analyze_resolver_competition_v1
+from backend.server.engine.resolver_decision_intelligence import decide_resolver_action_v1
+from backend.server.engine.resolver_core import resolve_phrase
+from backend.server.engine.resolver_topic_authority import analyze_topic_authority_v1
+from backend.server.engine.resolver_entity_intelligence import analyze_entity_intelligence_v1
+from backend.server.engine.resolver_explainability import build_explainability_v1
+from backend.server.engine.resolver_intent_intelligence import analyze_intent_v1
+from backend.server.engine.resolver_phrase_alias_intelligence import analyze_phrase_alias_intelligence_v1
+from backend.server.engine.resolver_topic_intent_graph import analyze_topic_intent_graph_v1
+from backend.server.engine.resolver_cross_target_competition import apply_cross_target_competition_v1
+from backend.server.engine.resolver_performance_intelligence import analyze_performance_v1
+from backend.server.engine.resolver_cross_site_intelligence import analyze_cross_site_intelligence_v1
+from backend.server.engine.resolver_score_calibration import calibrate_resolver_score_v1
+from backend.server.engine.resolver_debug_payload import build_resolver_debug_payload_v1
+from backend.server.engine.workspace_concept_bridge import bridge_workspace_phrase_to_targets
+
+
+# ---------------------------------------------------------
+# Tokenization
+# ---------------------------------------------------------
+
+def _norm_text(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").lower()).strip()
+
+
+def _stem_token(token: str) -> str:
+    token = str(token or "").lower().strip()
+
+    irregular = {
+        "tracking": "track",
+        "tracked": "track",
+        "tracks": "track",
+        "accurately": "accurate",
+        "calculating": "calculate",
+        "calculated": "calculate",
+        "calculates": "calculate",
+        "pregnancies": "pregnancy",
+        "fertility": "fertile",
+    }
+
+    if token in irregular:
+        return irregular[token]
+
+    if len(token) > 5 and token.endswith("ing"):
+        return token[:-3]
+
+    if len(token) > 4 and token.endswith("ed"):
+        return token[:-2]
+
+    if len(token) > 4 and token.endswith("s"):
+        return token[:-1]
+
+    return token
+
+
+def _tokens(value: Any) -> set[str]:
+    text = _norm_text(value)
+
+    return {
+        _stem_token(t)
+        for t in re.split(r"[^a-z0-9]+", text)
+        if len(t) >= 3
+    }
+
+
+# ---------------------------------------------------------
+# Weak Match Suppression
+# ---------------------------------------------------------
+
+def _is_weak_target_match(
+    phrase_tokens: set[str],
+    target_tokens: set[str],
+    score: float,
+) -> Tuple[bool, str]:
+
+    overlap = phrase_tokens & target_tokens
+
+    if not overlap:
+        return True, "no_token_overlap"
+
+    if len(overlap) == 1 and score < 120:
+        return True, "single_weak_overlap"
+
+    return False, ""
+
+
+
+def _token_set_v1(value: str) -> set[str]:
+    import re
+
+    stop = {
+        "the","a","an","and","or","to","of","in","on","for","with","by","from",
+        "after","before","right","left","early","late","best","new","old","how",
+        "what","why","when","where","can","does","do","is","are","was","were",
+        "this","that","these","those","your","you","i","we","it","as","at"
+    }
+
+    return {
+        t for t in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(t) >= 3 and t not in stop
+    }
+
+
+
+def _intent_terms_v1(value: str) -> set[str]:
+    base = _token_set_v1(value)
+
+    groups = {
+        "calculate": {"calculate", "calculator", "calculation", "estimate", "estimated", "estimator"},
+        "compare": {"compare", "comparison", "versus", "vs"},
+        "price": {"price", "pricing", "cost", "fee", "fees", "quote"},
+        "buy": {"buy", "purchase", "order", "shop"},
+        "review": {"review", "reviews", "rating", "ratings"},
+        "symptom": {"symptom", "symptoms", "sign", "signs"},
+        "treatment": {"treatment", "treat", "therapy", "medicine", "medication"},
+        "guide": {"guide", "tips", "advice", "help"},
+        "risk": {"risk", "risks", "chance", "chances"},
+        "test": {"test", "testing", "screening", "scan", "exam"},
+        "rule": {"rule", "rules", "policy", "policies", "requirement", "requirements"},
+    }
+
+    expanded = set(base)
+    for canonical, terms in groups.items():
+        if base.intersection(terms):
+            expanded.add(canonical)
+            expanded.update(terms)
+
+    return expanded
+
+
+def _topic_match_percent_v1(phrase: str, title: str, url: str) -> float:
+    phrase_terms = _token_set_v1(phrase)
+    if not phrase_terms:
+        return 0.0
+
+    target_terms = _token_set_v1(f"{title} {url}")
+    overlap = phrase_terms.intersection(target_terms)
+
+    return round((len(overlap) / max(1, len(phrase_terms))) * 100.0, 2)
+
+
+def _intent_match_percent_v1(phrase: str, title: str, url: str) -> float:
+    phrase_intent = _intent_terms_v1(phrase)
+    if not phrase_intent:
+        return 0.0
+
+    target_intent = _intent_terms_v1(f"{title} {url}")
+    overlap = phrase_intent.intersection(target_intent)
+
+    return round((len(overlap) / max(1, len(phrase_intent))) * 100.0, 2)
+
+
+
+def _universal_false_positive_gate_v1(
+    *,
+    phrase: str,
+    title: str,
+    url: str,
+    resolver_decision: str,
+    auto_link_allowed: bool,
+    suggest_only: bool,
+    runtime_normalized_score: float | None,
+    source_type: str = "",
+) -> dict:
+
+    phrase_terms = _token_set_v1(phrase)
+    target_terms = _token_set_v1(f"{title} {url}")
+
+    overlap = phrase_terms.intersection(target_terms)
+    overlap_count = len(overlap)
+
+    topic_match_percent = _topic_match_percent_v1(phrase, title, url)
+    intent_match_percent = _intent_match_percent_v1(phrase, title, url)
+
+    score = float(runtime_normalized_score or 0.0)
+    reasons = []
+
+    if not str(url or "").strip():
+        reasons.append("no_target_url")
+
+    if str(source_type or "") == "live_domain" and overlap_count < 1:
+        reasons.append("zero_topic_overlap")
+
+    if str(source_type or "") == "live_domain" and score and score < 0.75:
+        reasons.append("low_runtime_confidence")
+
+    # Universal intent gate:
+    # If the phrase has a clear action/intent token, target must share some intent evidence.
+    # This prevents "calculate X" linking to generic "X advice" pages unless other evidence is strong.
+    phrase_intent_terms = _intent_terms_v1(phrase)
+    target_intent_terms = _intent_terms_v1(f"{title} {url}")
+    intent_overlap_terms = phrase_intent_terms.intersection(target_intent_terms)
+
+    if str(source_type or "") == "live_domain":
+        strong_topic_match = topic_match_percent >= 66.0
+        if phrase_intent_terms and not intent_overlap_terms and not strong_topic_match:
+            reasons.append("intent_mismatch")
+
+    if reasons:
+        return {
+            "resolver_decision": "NO_TARGET" if "no_target_url" in reasons else "SUGGEST_ONLY",
+            "auto_link_allowed": False,
+            "suggest_only": True,
+            "false_positive_blocked": True,
+            "false_positive_reasons": reasons,
+            "topic_overlap_count": overlap_count,
+            "topic_overlap_terms": sorted(overlap),
+            "topic_match_percent": topic_match_percent,
+            "intent_match_percent": intent_match_percent,
+            "intent_overlap_terms": sorted(intent_overlap_terms) if "intent_overlap_terms" in locals() else [],
+        }
+
+    return {
+        "resolver_decision": resolver_decision,
+        "auto_link_allowed": bool(auto_link_allowed),
+        "suggest_only": bool(suggest_only),
+        "false_positive_blocked": False,
+        "false_positive_reasons": [],
+        "topic_overlap_count": overlap_count,
+        "topic_overlap_terms": sorted(overlap),
+        "topic_match_percent": topic_match_percent,
+        "intent_match_percent": intent_match_percent,
+        "intent_overlap_terms": sorted(intent_overlap_terms) if "intent_overlap_terms" in locals() else [],
+    }
+
+
+
+def _runtime_normalized_score(source_type: str, intelligence: Dict[str, Any], target_score: Any) -> float:
+    try:
+        raw = float(target_score or 0)
+    except Exception:
+        raw = 0.0
+
+    if source_type in {"draft", "document_registry"}:
+        return max(0.0, min(1.0, raw))
+
+    # Live-domain/imported legacy scores commonly use larger numeric scales.
+    if source_type in {"live_domain", "imported"}:
+        return max(0.0, min(1.0, raw / 300.0))
+
+    return max(0.0, min(1.0, raw))
+
+
+def _meaningful_tokens(text: str) -> set[str]:
+    stop = {
+        "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+        "how", "in", "into", "is", "it", "of", "on", "or", "the", "to",
+        "what", "when", "where", "why", "with", "your", "you"
+    }
+    tokens = re.findall(r"[a-z0-9]+", str(text or "").lower())
+    return {_stem_token(t) for t in tokens if len(t) >= 3 and t not in stop}
+
+
+
+# ---------------------------------------------------------
+# Universal Resolver Intelligence Layers
+# ---------------------------------------------------------
+
+_UNIVERSAL_INTENT_PATTERNS = {
+    "calculator": [
+        "calculator", "calculate", "calculation", "estimate", "estimator",
+        "convert", "converter", "score", "measurement"
+    ],
+    "guide": [
+        "guide", "how to", "steps", "tutorial", "walkthrough", "instructions",
+        "learn", "process", "method", "planning", "plan", "roadmap", "framework"
+    ],
+    "definition": [
+        "what is", "meaning", "definition", "explained", "overview", "basics"
+    ],
+    "comparison": [
+        "vs", "versus", "compare", "comparison", "difference", "better",
+        "alternative", "alternatives", "framework"
+    ],
+    "symptoms": [
+        "symptom", "sign", "warning", "indicator", "clue"
+    ],
+    "treatment": [
+        "treatment", "fix", "solution", "remedy", "manage", "management",
+        "prevent", "avoid", "reduce"
+    ],
+    "checklist": [
+        "checklist", "list", "things to do", "before", "after", "prepare"
+    ],
+    "review": [
+        "review", "rating", "best", "top", "pros", "cons"
+    ],
+    "pricing": [
+        "price", "pricing", "cost", "plan", "subscription", "fee"
+    ],
+    "troubleshooting": [
+        "problem", "issue", "error", "failed", "not working", "troubleshoot"
+    ],
+    "research": [
+        "study", "research", "evidence", "data", "report", "statistics"
+    ],
+}
+
+_UNIVERSAL_SYNONYM_GROUPS = [
+    {"start", "begin", "begins", "beginning", "commence", "commencement", "initiate"},
+    {"end", "finish", "complete", "completion", "stop", "stopping"},
+    {"resume", "return", "restart", "restore", "continue", "again"},
+    {"track", "tracked", "tracking", "monitor", "measure", "record", "follow"},
+    {"predict", "prediction", "predictable", "forecast", "estimate", "expected"},
+    {"pattern", "patterns", "trend", "rhythm", "sequence", "cycle"},
+    {"calculate", "calculation", "calculator", "compute", "estimate", "formula"},
+    {"method", "approach", "technique", "strategy", "process", "system"},
+    # Keep "window" narrow. Do not expand it into phase/stage/period.
+    # That caused "fertile window" to match unrelated "labor phases/stages" pages.
+    {"window", "range", "span"},
+    {"phase", "stage"},
+    {"period"},
+    {"personal", "custom", "customized", "individual", "specific"},
+    {"short", "shortest", "small", "minimum", "min"},
+    {"long", "longest", "large", "maximum", "max"},
+]
+
+
+def _expanded_meaningful_tokens(text: Any) -> set[str]:
+    base = _meaningful_tokens(str(text or ""))
+    expanded = set(base)
+
+    for group in _UNIVERSAL_SYNONYM_GROUPS:
+        stems = {_stem_token(x) for x in group}
+        if expanded & stems:
+            expanded |= stems
+
+    return expanded
+
+
+def _detect_intent(text: Any) -> str:
+    t = _norm_text(text)
+
+    for intent, patterns in _UNIVERSAL_INTENT_PATTERNS.items():
+        for pattern in patterns:
+            if pattern in t:
+                return intent
+
+    return "informational"
+
+
+def _intent_match_score(anchor_text: Any, target_text: Any, page_type: Any = "") -> float:
+    anchor_intent = _detect_intent(anchor_text)
+    target_intent = _detect_intent(" ".join([str(target_text or ""), str(page_type or "")]))
+
+    if anchor_intent == target_intent and anchor_intent != "informational":
+        return 1.0
+
+    if anchor_intent != "informational" and anchor_intent in _norm_text(target_text):
+        return 0.75
+
+    if anchor_intent == "informational" and target_intent in {"guide", "definition", "research"}:
+        return 0.45
+
+    return 0.0
+
+
+def _phrase_evidence_score(anchor_text: Any, target_text: Any, aliases: List[Any] | None = None) -> Dict[str, Any]:
+    anchor_norm = _norm_text(anchor_text)
+    target_norm = _norm_text(target_text)
+    alias_texts = [_norm_text(x) for x in (aliases or []) if str(x or "").strip()]
+
+    # Phrase evidence must be literal, not semantic.
+    # Semantic expansion belongs in concept alignment / alias / intent layers.
+    # This prevents "begins" matching unrelated "starting preschool" pages.
+    anchor_tokens = _meaningful_tokens(anchor_norm)
+    target_tokens = _meaningful_tokens(target_norm)
+
+    overlap = anchor_tokens & target_tokens
+    ratio = (len(overlap) / max(1, len(anchor_tokens))) if anchor_tokens else 0.0
+
+    exact = bool(anchor_norm and (anchor_norm in target_norm or anchor_norm in alias_texts))
+    partial = bool(overlap)
+    alias_match = any(anchor_norm and (anchor_norm in a or a in anchor_norm) for a in alias_texts)
+
+    return {
+        "phrase_overlap_count": len(overlap),
+        "phrase_overlap_ratio": round(ratio, 4),
+        "exact_phrase_match": exact,
+        "partial_phrase_match": partial,
+        "alias_match": alias_match,
+        "stem_match": bool(overlap),
+        "expanded_overlap_terms": sorted(overlap),
+        "phrase_evidence_score": round(min(1.0, (1.0 if exact else 0.0) + (0.25 if alias_match else 0.0) + ratio), 4),
+    }
+
+
+def _concept_alignment_score(anchor_text: Any, target_text: Any) -> Dict[str, Any]:
+    a = _expanded_meaningful_tokens(anchor_text)
+    t = _expanded_meaningful_tokens(target_text)
+    overlap = a & t
+    score = len(overlap) / max(1, len(a)) if a else 0.0
+
+    return {
+        "concept_alignment_score": round(score, 4),
+        "concept_overlap_terms": sorted(overlap),
+    }
+
+
+
+def _passes_phrase_title_overlap_guard(phrase: str, title: str, source_type: str) -> bool:
+    # Guard mainly protects draft/imported semantic drift.
+    if source_type not in {"draft", "imported"}:
+        return True
+
+    p = _meaningful_tokens(phrase)
+    t = _meaningful_tokens(title)
+    overlap = p & t
+
+    # Require at least two meaningful shared tokens for draft/imported auto-linking.
+    return len(overlap) >= 2
+
+
+
+def _is_non_linkable_asset_url(url: str) -> bool:
+    u = str(url or "").lower().strip()
+    if not u:
+        return True
+
+    return (
+        "images." in u
+        or "/images/" in u
+        or "/gcms/" in u
+        or "/wp-content/uploads/" in u
+        or u.endswith((
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".avif",
+            ".pdf", ".mp4", ".mov", ".mp3", ".wav", ".zip"
+        ))
+    )
+
+
+# ---------------------------------------------------------
+# Active Target Set runtime filter
+# ---------------------------------------------------------
+
+def _resolver_data_dir() -> Path:
+    here = Path(__file__).resolve()
+    return here.parents[1] / "data"
+
+
+def _active_target_set_path(workspace_id: str) -> Path:
+    ws = str(workspace_id or "default").strip() or "default"
+    return _resolver_data_dir() / "target_pools" / f"active_target_set_{ws}.json"
+
+
+def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
+    fp = _active_target_set_path(workspace_id)
+    if not fp.exists():
+        return {}
+    try:
+        obj = json.loads(fp.read_text(encoding="utf-8"))
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
+
+def _norm_url_for_active(value: Any) -> str:
+    return str(value or "").strip().rstrip("/").lower()
+
+
+def _active_values(active: Dict[str, Any], key: str) -> set[str]:
+    return {
+        _norm_url_for_active(x)
+        for x in (active.get(key) or [])
+        if str(x or "").strip()
+    }
+
+
+def _filter_targets_by_active_membership(
+    workspace_id: str,
+    source_type: str,
+    targets: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    active = _load_active_target_set(workspace_id)
+    if not active:
+        return targets
+
+    live_urls = _active_values(active, "active_live_domain_urls")
+    imported_urls = _active_values(active, "active_imported_urls")
+    draft_ids = _active_values(active, "active_draft_ids")
+    document_ids = _active_values(active, "active_document_ids")
+
+    # If the active file exists but all memberships are empty, do not wipe the resolver.
+    if not (live_urls or imported_urls or draft_ids or document_ids):
+        return targets
+
+    # If this source has no active membership list, it should not participate.
+    if source_type == "live_domain" and not live_urls:
+        return []
+    if source_type == "imported" and not imported_urls:
+        return []
+    if source_type == "draft" and not draft_ids:
+        return []
+    if source_type == "document_registry" and not document_ids:
+        return []
+
+    out: List[Dict[str, Any]] = []
+
+    for target in targets or []:
+        if not isinstance(target, dict):
+            continue
+
+        url = _norm_url_for_active(
+            target.get("url")
+            or target.get("planned_url")
+            or target.get("published_url")
+            or target.get("placeholder_url")
+        )
+
+        target_id = _norm_url_for_active(
+            target.get("id")
+            or target.get("topic_id")
+            or target.get("draft_id")
+            or target.get("doc_id")
+            or target.get("document_id")
+            or target.get("documentId")
+        )
+
+        keep = False
+
+        if source_type == "live_domain":
+            keep = bool(url and url in live_urls)
+
+        elif source_type == "imported":
+            keep = bool(url and url in imported_urls)
+
+        elif source_type == "draft":
+            keep = bool(
+                (target_id and target_id in draft_ids)
+                or (url and url in draft_ids)
+            )
+
+        elif source_type == "document_registry":
+            keep = bool(target_id and target_id in document_ids)
+
+        if keep:
+            out.append(target)
+
+    return out
+
+
+
+def _enrich_resolver_results_v2(
+    *,
+    workspace_id: str,
+    anchor_phrase: str,
+    results: List[Dict[str, Any]],
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    final_results = list(results or [])[: max(1, int(limit or 5))]
+
+    if not final_results:
+        return []
+
+    competition_intelligence = analyze_resolver_competition_v1(final_results)
+
+    for item in final_results:
+        item["competition_intelligence"] = {
+            "has_competition_analysis": competition_intelligence.get("has_competition_analysis"),
+            "has_runner_up": competition_intelligence.get("has_runner_up"),
+            "winner_score": competition_intelligence.get("winner_score"),
+            "runner_up_score": competition_intelligence.get("runner_up_score"),
+            "score_margin": competition_intelligence.get("score_margin"),
+            "close_call": competition_intelligence.get("close_call"),
+            "competition_confidence": competition_intelligence.get("competition_confidence"),
+            "competition_action": competition_intelligence.get("competition_action"),
+            "competition_reason": competition_intelligence.get("competition_reason"),
+        }
+
+        url = item.get("url") or item.get("target_url") or ""
+
+        item.setdefault(
+            "topic_authority_intelligence",
+            analyze_topic_authority_v1(item),
+        )
+
+        item.setdefault(
+            "entity_intelligence",
+            analyze_entity_intelligence_v1(anchor_phrase, item),
+        )
+
+        item.setdefault(
+            "performance_intelligence",
+            analyze_performance_v1(workspace_id=workspace_id, target_url=url),
+        )
+
+        item.setdefault(
+            "cross_site_intelligence",
+            analyze_cross_site_intelligence_v1(
+                workspace_id=workspace_id,
+                target_url=url,
+                related_workspace_signals=[],
+            ),
+        )
+
+        decision_intelligence = decide_resolver_action_v1(item)
+        item["decision_intelligence"] = decision_intelligence
+
+        item["explainability"] = build_explainability_v1(
+            phrase_evidence_value=float((item.get("phrase_evidence") or {}).get("phrase_overlap_ratio") or 0),
+            intent_score=float(item.get("intent_score") or 0),
+            concept_alignment_value=float((item.get("concept_alignment") or {}).get("concept_alignment_score") or 0),
+            entity_intelligence=item.get("entity_intelligence") or {},
+            topic_authority_intelligence=item.get("topic_authority_intelligence") or {},
+            competition_intelligence=item.get("competition_intelligence") or {},
+            decision_intelligence=decision_intelligence,
+        )
+
+        item["resolver_decision"] = decision_intelligence.get("decision")
+        item["auto_link_allowed"] = decision_intelligence.get("decision") == "AUTO_LINK"
+        item["resolver_debug"] = build_resolver_debug_payload_v1(item)
+
+    return final_results
+
+
+
+# ---------------------------------------------------------
+# Resolver
+# ---------------------------------------------------------
+
+
+def _resolver_alias_match_v1(alias_intelligence: Dict[str, Any], target_text: str) -> Dict[str, Any]:
+    aliases = alias_intelligence.get("aliases") or []
+    target_terms = set(_meaningful_tokens(target_text))
+
+    matched = []
+    best_score = 0.0
+
+    for item in aliases:
+        alias = str(item.get("alias") or "").strip()
+        if not alias:
+            continue
+
+        alias_terms = set(_meaningful_tokens(alias))
+        if not alias_terms:
+            continue
+
+        overlap = sorted(alias_terms & target_terms)
+        score = len(overlap) / max(1, len(alias_terms))
+
+        if overlap:
+            matched.append({
+                "alias": alias,
+                "confidence": item.get("confidence"),
+                "source": item.get("source"),
+                "matched_terms": overlap,
+                "match_score": round(score, 4),
+            })
+
+        best_score = max(best_score, score)
+
+    matched = sorted(matched, key=lambda x: float(x.get("match_score") or 0), reverse=True)
+
+    if best_score >= 0.80:
+        boost = 40.0
+    elif best_score >= 0.60:
+        boost = 25.0
+    elif best_score >= 0.40:
+        boost = 10.0
+    else:
+        boost = 0.0
+
+    return {
+        "has_alias_match": bool(matched),
+        "alias_match_score": round(best_score, 4),
+        "alias_boost": boost,
+        "matched_aliases": matched[:8],
+    }
+
+
+
+
+def _context_concept_dominance_v1(
+    *,
+    phrase_alias_intelligence: Dict[str, Any],
+    target_text: str,
+) -> Dict[str, Any]:
+
+    target_terms = set(_meaningful_tokens(target_text))
+
+    canonical = str(phrase_alias_intelligence.get("canonical_phrase") or "").strip()
+    canonical_terms = set(_meaningful_tokens(canonical))
+
+    context_concepts = phrase_alias_intelligence.get("context_concepts") or {}
+    primary_concept = str(context_concepts.get("primary_concept") or "unknown")
+
+    concept_terms = set()
+    for c in context_concepts.get("concepts") or []:
+        for t in c.get("matched_terms") or []:
+            concept_terms.add(str(t).lower())
+
+    natural_alias_terms = set()
+    for a in (phrase_alias_intelligence.get("natural_semantic_aliases") or {}).get("natural_aliases") or []:
+        natural_alias_terms |= set(_meaningful_tokens(str(a.get("alias") or "")))
+
+    expected_terms = canonical_terms | concept_terms | natural_alias_terms
+    overlap = sorted(expected_terms & target_terms)
+
+    expected_count = max(1, len(expected_terms))
+    dominance_score = len(overlap) / expected_count
+
+    canonical_overlap = sorted(canonical_terms & target_terms)
+    natural_overlap = sorted(natural_alias_terms & target_terms)
+
+    strong_context_concept_match = bool(
+        dominance_score >= 0.35
+        or len(canonical_overlap) >= 1
+        or len(natural_overlap) >= 2
+    )
+
+    weak_context_concept_match = bool(
+        expected_terms
+        and dominance_score < 0.15
+        and len(canonical_overlap) == 0
+        and len(natural_overlap) == 0
+    )
+
+    if strong_context_concept_match:
+        boost = 35.0
+        penalty = 0.0
+    elif weak_context_concept_match:
+        boost = 0.0
+        penalty = -45.0
+    else:
+        boost = 0.0
+        penalty = 0.0
+
+    return {
+        "has_context_concept_dominance": True,
+        "primary_concept": primary_concept,
+        "canonical_phrase": canonical,
+        "dominance_score": round(dominance_score, 4),
+        "expected_terms": sorted(expected_terms)[:30],
+        "matched_terms": overlap[:30],
+        "canonical_overlap": canonical_overlap,
+        "natural_alias_overlap": natural_overlap[:30],
+        "strong_context_concept_match": strong_context_concept_match,
+        "weak_context_concept_match": weak_context_concept_match,
+        "context_concept_boost": boost,
+        "context_concept_penalty": penalty,
+        "method": "context_concept_dominance_v1",
+    }
+
+
+
+def resolve_intelligent_targets(
+    workspace_id: str,
+    anchor_phrase: str,
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+
+    anchor_phrase = _norm_text(anchor_phrase)
+
+    if not anchor_phrase:
+        return []
+
+    phrase_tokens = _tokens(anchor_phrase)
+
+    broad_single_anchor_terms = {
+        "baby", "babies", "pregnancy", "pregnant", "health", "care",
+        "parent", "parents", "child", "children", "toddler", "toddlers",
+    }
+
+    if len(phrase_tokens) <= 1 and next(iter(phrase_tokens), "") in broad_single_anchor_terms:
+        return []
+
+
+    # Dedicated Topic Cluster Resolver first-pass override.
+    # If it finds strong cluster candidates, trust those before broad semantic target scoring.
+    from backend.server.engine.workspace_topic_cluster_resolver import resolve_topic_cluster_candidates as _cluster_first_pass_resolver
+
+    cluster_first_pass = _cluster_first_pass_resolver(
+        workspace_id,
+        anchor_phrase,
+        limit=limit,
+    )
+    if cluster_first_pass:
+        return _enrich_resolver_results_v2(
+            workspace_id=workspace_id,
+            anchor_phrase=anchor_phrase,
+            results=cluster_first_pass,
+            limit=limit,
+        )
+    live_domain_targets = load_live_domain_targets(workspace_id)
+    imported_targets = load_imported_targets(workspace_id)
+    draft_targets = load_draft_targets(workspace_id)
+    document_registry_targets = load_document_registry_targets(workspace_id)
+
+    live_domain_targets = _filter_targets_by_active_membership(
+        workspace_id,
+        "live_domain",
+        live_domain_targets,
+    )
+    imported_targets = _filter_targets_by_active_membership(
+        workspace_id,
+        "imported",
+        imported_targets,
+    )
+    draft_targets = _filter_targets_by_active_membership(
+        workspace_id,
+        "draft",
+        draft_targets,
+    )
+    document_registry_targets = _filter_targets_by_active_membership(
+        workspace_id,
+        "document_registry",
+        document_registry_targets,
+    )
+
+    resolved: List[Dict[str, Any]] = []
+
+    phrase_alias_intelligence = analyze_phrase_alias_intelligence_v1(
+        phrase=anchor_phrase,
+    )
+
+    resolver_aliases = [
+        str(a.get("alias") or "").strip()
+        for a in (phrase_alias_intelligence.get("aliases") or [])
+        if str(a.get("alias") or "").strip()
+    ]
+
+    canonical_phrase = str(phrase_alias_intelligence.get("canonical_phrase") or "").strip()
+    if canonical_phrase:
+        resolver_aliases.insert(0, canonical_phrase)
+
+    source_batches = [
+        ("live_domain", live_domain_targets, score_live_domain_target),
+        ("imported", imported_targets, score_imported_target),
+        ("draft", draft_targets, score_draft_target),
+        ("document_registry", document_registry_targets, score_document_registry_target),
+    ]
+
+    # Resolver Core semantic draft lane:
+    # Adds meaning-based draft links before the legacy resolver loop.
+    # These are review-required draft links, not permanent inserts.
+    try:
+        semantic_core_rows = resolve_phrase(
+            workspace_id=workspace_id,
+            phrase=anchor_phrase,
+            targets=live_domain_targets,
+            scorer=score_live_domain_target,
+            limit=limit,
+        )
+
+        for semantic_row in semantic_core_rows:
+            if semantic_row.get("resolver_decision") != "SEMANTIC_LINK_DRAFT":
+                continue
+
+            resolved.append({
+                "phrase": anchor_phrase,
+                "url": semantic_row.get("url") or "",
+                "title": semantic_row.get("title") or "",
+                "target_score": float(semantic_row.get("target_score") or 0),
+                "score_calibration": {},
+                "semantic_route_score": float(semantic_row.get("resolver_confidence") or 0) * 100,
+                "authority_score": 0,
+                "topic_graph_score": 0,
+                "rb2_weight_score": 0,
+                "path_score": None,
+                "matched_title_tokens": [],
+                "matched_url_tokens": [],
+                "runtime_normalized_score": float(semantic_row.get("resolver_confidence") or 0),
+                "resolver_confidence": float(semantic_row.get("resolver_confidence") or 0),
+                "resolver_reason": semantic_row.get("resolver_reason") or "resolver_core_semantic_draft",
+                "resolver_decision": "SEMANTIC_LINK_DRAFT",
+                "auto_link_allowed": True,
+                "suggest_only": False,
+                "requires_user_review": True,
+                "permanent_insert_allowed": False,
+                "source_type": "live_domain",
+                "lane": "semantic",
+                "link_bucket": "semantic_draft",
+                "link_status": "linked",
+                "semantic_match": semantic_row.get("semantic_match") or {},
+                "resolver_core_row": semantic_row,
+
+                "topic_authority_intelligence": {},
+                "entity_intelligence": {},
+                "intent_intelligence": {},
+                "phrase_alias_intelligence": phrase_alias_intelligence,
+                "alias_match_intelligence": {},
+                "canonical_phrase": phrase_alias_intelligence.get("canonical_phrase"),
+                "alias_match_score": 0,
+                "alias_boost": 0,
+                "strong_alias_evidence": False,
+                "topic_intent_graph": {},
+                "journey_boost": 0,
+                "context_concept_dominance": {},
+                "context_concept_boost": 0,
+                "context_concept_penalty": 0,
+                "strong_context_concept_evidence": False,
+                "weak_context_concept_evidence": False,
+                "performance_intelligence": {},
+                "cross_site_intelligence": {},
+
+                "clear_intent_mismatch": False,
+                "false_positive_gate": {},
+                "false_positive_blocked": False,
+                "false_positive_reasons": [],
+                "topic_overlap_count": 0,
+                "topic_overlap_terms": [],
+                "topic_match_percent": 0,
+                "intent_match_percent": 0,
+                "intent_overlap_terms": [],
+                "confidence_floor": 0.48,
+
+                "page_type_hint": None,
+                "priority_bucket": None,
+                "import_source": None,
+                "draft_id": None,
+                "planned_url": None,
+                "placeholder_url": None,
+                "published_url": None,
+                "semantic_intent_score": None,
+                "freshness_score": None,
+                "publish_transition_score": None,
+                "semantic_gate_multiplier": None,
+                "path": None,
+
+                "target_pool_matched_phrases": [],
+                "target_pool_aliases": [],
+                "target_pool_active_phrase_matches": 0,
+                "target_pool_phrase_exact_match": False,
+                "target_pool_phrase_contains_match": False,
+
+                "concept_score": 0,
+                "concept_matched_terms": [],
+                "concepts": [],
+                "concept_expansions": [],
+                "phrase_evidence": {},
+                "phrase_evidence_score": 0,
+                "intent_score": 0,
+                "phrase_intent": _detect_intent(anchor_phrase),
+                "target_intent": "semantic_draft",
+                "concept_alignment": {},
+                "concept_alignment_score": 0,
+
+                "cluster_score": 0,
+                "cluster_name": None,
+                "cluster_matched_terms": [],
+                "cluster_matches": [],
+                "cluster_purity_score": 0,
+                "cluster_runtime_trusted": False,
+                "cluster_boost_applied": False,
+                "cluster_feedback_total": 0,
+                "cluster_acceptance_rate": 0,
+                "cluster_rejection_rate": 0,
+
+                "weak_match_suppressed": False,
+            })
+    except Exception as exc:
+        try:
+            print("[RESOLVER_CORE_SEMANTIC_DRAFT_ERROR]", str(exc))
+        except Exception:
+            pass
+
+    for source_type, targets, scorer in source_batches:
+        for target in targets:
+            intelligence = scorer(
+                anchor_phrase,
+                target,
+            )
+
+            title = str(target.get("title") or target.get("h1") or "")
+            url = str(target.get("url") or "")
+
+            target_text_for_concepts = " ".join([
+                title,
+                str(target.get("h1") or ""),
+                str(target.get("label") or ""),
+                str(target.get("description") or ""),
+                str(target.get("path") or ""),
+                url.replace("-", " ").replace("/", " "),
+            ])
+
+            concept_signal = concept_match_score(anchor_phrase, target_text_for_concepts)
+            concept_score = float(concept_signal.get("score") or 0)
+
+            universal_aliases = []
+            try:
+                universal_aliases = list(target.get("aliases") or []) + list(target.get("matched_phrases") or [])
+            except Exception:
+                universal_aliases = []
+
+            # IMPORTANT:
+            # Phrase evidence must be computed from real target surface text only.
+            # Do NOT include target matched_phrases, aliases, or resolver-generated aliases here.
+            # Those can contaminate evidence and make unrelated URLs look like exact matches.
+            phrase_evidence = _phrase_evidence_score(
+                anchor_phrase,
+                target_text_for_concepts,
+                [],
+            )
+            phrase_evidence_value = float(phrase_evidence.get("phrase_evidence_score") or 0)
+
+            intent_score = _intent_match_score(
+                anchor_phrase,
+                target_text_for_concepts,
+                target.get("page_type_hint") or target.get("priority_bucket") or "",
+            )
+
+            intent_intelligence = analyze_intent_v1(
+                phrase=anchor_phrase,
+                title=title,
+                url=url,
+                path=str(target.get("path") or intelligence.get("path") or ""),
+                metadata={
+                    "page_type_hint": target.get("page_type_hint") or intelligence.get("page_type_hint"),
+                    "priority_bucket": target.get("priority_bucket") or intelligence.get("priority_bucket"),
+                    "source_type": source_type,
+                },
+            )
+
+            concept_alignment = _concept_alignment_score(anchor_phrase, target_text_for_concepts)
+            concept_alignment_value = float(concept_alignment.get("concept_alignment_score") or 0)
+
+            alias_match_intelligence = _resolver_alias_match_v1(
+                phrase_alias_intelligence,
+                target_text_for_concepts,
+            )
+            alias_match_score = float(alias_match_intelligence.get("alias_match_score") or 0)
+            alias_boost = float(alias_match_intelligence.get("alias_boost") or 0)
+
+            topic_intent_graph = analyze_topic_intent_graph_v1(
+                phrase=anchor_phrase,
+                title=title,
+                url=url,
+                aliases=resolver_aliases,
+                context_terms=phrase_alias_intelligence.get("context_terms") or [],
+                metadata={
+                    "source_type": source_type,
+                    "page_type_hint": target.get("page_type_hint") or intelligence.get("page_type_hint"),
+                },
+            )
+            journey_boost = float(topic_intent_graph.get("journey_boost") or 0)
+
+            context_concept_dominance = _context_concept_dominance_v1(
+                phrase_alias_intelligence=phrase_alias_intelligence,
+                target_text=target_text_for_concepts,
+            )
+            context_concept_boost = float(context_concept_dominance.get("context_concept_boost") or 0)
+            context_concept_penalty = float(context_concept_dominance.get("context_concept_penalty") or 0)
+
+            if _is_non_linkable_asset_url(url):
+                continue
+
+            target_tokens = (
+                _tokens(title)
+                |
+                _tokens(url.replace("-", " "))
+            )
+
+            # Phrase-aware fields from target pools can validate a match
+            # even when title/url token overlap is weak.
+            phrase_aware_matches_pre = target.get("matched_phrases") if isinstance(target.get("matched_phrases"), list) else []
+            phrase_aware_aliases_pre = target.get("aliases") if isinstance(target.get("aliases"), list) else []
+            phrase_aware_terms_pre = phrase_aware_matches_pre + phrase_aware_aliases_pre
+            anchor_norm_pre = _norm_text(anchor_phrase)
+
+            phrase_pool_exact_pre = any(_norm_text(x) == anchor_norm_pre for x in phrase_aware_terms_pre)
+            phrase_pool_contains_pre = any(
+                anchor_norm_pre and (
+                    anchor_norm_pre in _norm_text(x) or _norm_text(x) in anchor_norm_pre
+                )
+                for x in phrase_aware_terms_pre
+            )
+
+            early_cluster_matches = []
+            early_cluster_score = 0.0
+            early_cluster_terms = []
+
+            if source_type == "live_domain":
+                early_cluster_matches = find_topic_clusters_for_text(
+                    workspace_id,
+                    " ".join([
+                        str(anchor_phrase or ""),
+                        str(title or ""),
+                        str(url or ""),
+                        str(target.get("path") or ""),
+                    ]),
+                    limit=3,
+                )
+                early_top_cluster = early_cluster_matches[0] if early_cluster_matches else {}
+                early_cluster_score = float(early_top_cluster.get("score") or 0)
+                early_cluster_terms = early_top_cluster.get("matched_terms") or []
+
+            weak, reason = _is_weak_target_match(
+                phrase_tokens,
+                target_tokens,
+                intelligence.get("target_score", 0),
+            )
+
+            anchor_cluster_terms = sorted(list(_meaningful_tokens(anchor_phrase) & set(early_cluster_terms)))
+
+            cluster_candidate_pass = (
+                source_type == "live_domain"
+                and early_cluster_score >= 0.65
+                and len(anchor_cluster_terms) >= 2
+            )
+
+            live_domain_exact_surface_pass = (
+                source_type == "live_domain"
+                and len(phrase_tokens & target_tokens) >= 2
+            )
+
+            # Never allow weak single-word draft/imported matches to bypass safety.
+            # But live-domain phrase-aware, concept-aware, or cluster-aware target-pool matches are allowed through.
+            if weak and not (
+                source_type == "live_domain"
+                and (
+                    phrase_pool_exact_pre
+                    or phrase_pool_contains_pre
+                    or concept_score >= 0.25
+                    or phrase_evidence_value >= 0.45
+                    or intent_score >= 0.75
+                    or concept_alignment_value >= 0.45
+                    or cluster_candidate_pass
+                    or live_domain_exact_surface_pass
+                )
+            ):
+                continue
+
+            target_score = intelligence.get("target_score")
+            if target_score is None:
+                target_score = intelligence.get("score", 0)
+
+            target_score = float(target_score or 0) + alias_boost
+            target_score = float(target_score or 0) + journey_boost
+            target_score = float(target_score or 0) + context_concept_boost + context_concept_penalty
+
+            # Phrase-aware target-pool boost:
+            # live_domain_target_pool.py now stores matched_phrases, aliases,
+            # active_phrase_matches, semantic_route_score, and target_score.
+            # Use those fields as first-class resolver signals.
+            phrase_aware_matches = target.get("matched_phrases") if isinstance(target.get("matched_phrases"), list) else []
+            phrase_aware_aliases = target.get("aliases") if isinstance(target.get("aliases"), list) else []
+            phrase_aware_count = int(target.get("active_phrase_matches") or 0)
+
+            if phrase_aware_count:
+                try:
+                    print(
+                        "[RESOLVER_TARGET_POOL_DEBUG]",
+                        "phrase=", str(anchor_phrase or "")[:90],
+                        "title=", str(title or "")[:90],
+                        "active_phrase_matches=", phrase_aware_count,
+                        "matched_sample=", phrase_aware_matches[:5],
+                    )
+                except Exception:
+                    pass
+
+            anchor_norm = _norm_text(anchor_phrase)
+            phrase_pool_exact = any(_norm_text(x) == anchor_norm for x in phrase_aware_matches + phrase_aware_aliases)
+            phrase_pool_contains = any(
+                anchor_norm and (
+                    anchor_norm in _norm_text(x) or _norm_text(x) in anchor_norm
+                )
+                for x in phrase_aware_matches + phrase_aware_aliases
+            )
+
+            try:
+                pool_target_score = float(target.get("target_score") or 0)
+            except Exception:
+                pool_target_score = 0.0
+
+            if source_type == "live_domain" and phrase_aware_count:
+                boost = 0
+                if phrase_pool_exact:
+                    boost += 180
+                elif phrase_pool_contains:
+                    boost += 110
+                else:
+                    boost += min(80, phrase_aware_count * 12)
+
+                target_score = max(float(target_score or 0), pool_target_score) + boost
+
+            if source_type == "live_domain" and live_domain_exact_surface_pass:
+                target_score = max(float(target_score or 0), 170)
+
+            if source_type == "live_domain" and concept_score > 0:
+                concept_boost = concept_score * 160
+                target_score = float(target_score or 0) + concept_boost
+
+            if source_type == "live_domain":
+                universal_boost = (
+                    (phrase_evidence_value * 90)
+                    + (intent_score * 60)
+                    + (concept_alignment_value * 75)
+                )
+                target_score = float(target_score or 0) + universal_boost
+
+            entity_intelligence = analyze_entity_intelligence_v1(anchor_phrase, target)
+            target_score = float(target_score or 0) + float(
+                entity_intelligence.get("entity_boost") or 0
+            )
+
+            performance_intelligence = analyze_performance_v1(
+                workspace_id=workspace_id,
+                target_url=url,
+            )
+            target_score = float(target_score or 0) + float(
+                performance_intelligence.get("performance_boost") or 0
+            )
+
+            cross_site_intelligence = analyze_cross_site_intelligence_v1(
+                workspace_id=workspace_id,
+                target_url=url,
+                related_workspace_signals=[],
+            )
+            target_score = float(target_score or 0) + float(
+                cross_site_intelligence.get("cross_site_boost") or 0
+            )
+
+            diagnostics = intelligence.get("diagnostics") or {}
+
+            target_score = float(target_score or 0) + float(
+                intent_intelligence.get("intent_boost") or 0
+            )
+
+            semantic_route_score = intelligence.get("semantic_route_score")
+            if semantic_route_score is None:
+                semantic_route_score = diagnostics.get("semantic_route_score", 0)
+
+            if source_type == "live_domain":
+                try:
+                    semantic_route_score = max(
+                        float(semantic_route_score or 0),
+                        float(target.get("semantic_route_score") or 0),
+                    )
+                except Exception:
+                    pass
+
+            authority_score = intelligence.get("authority_score")
+            if authority_score is None:
+                authority_score = diagnostics.get("authority_score", 0)
+
+            topic_graph_score = intelligence.get("topic_graph_score")
+            if topic_graph_score is None:
+                topic_graph_score = diagnostics.get("topic_graph_score", 0)
+
+            rb2_weight_score = intelligence.get("rb2_weight_score")
+            if rb2_weight_score is None:
+                rb2_weight_score = diagnostics.get("rb2_weight_score", 0)
+
+            # Cluster matching must be phrase-first.
+            # Do NOT include target title/url/path here, or the target page can drag
+            # itself into a strong but unrelated cluster.
+            cluster_matches = find_topic_clusters_for_text(
+                workspace_id,
+                str(anchor_phrase or ""),
+                limit=3,
+            )
+
+            top_cluster = cluster_matches[0] if cluster_matches else {}
+            cluster_score = float(top_cluster.get("score") or 0)
+            cluster_name = top_cluster.get("cluster_name")
+            cluster_matched_terms = top_cluster.get("matched_terms") or []
+            cluster_purity_score = float(top_cluster.get("purity_score") or 0)
+
+            target_surface_terms = _meaningful_tokens(" ".join([
+                str(title or ""),
+                str(url or "").replace("-", " ").replace("/", " "),
+                str(intelligence.get("path") or ""),
+            ]))
+            anchor_surface_overlap = set(_meaningful_tokens(anchor_phrase)) & target_surface_terms
+
+            cluster_runtime_trusted = (
+                source_type == "live_domain"
+                and cluster_score >= 0.70
+                and cluster_purity_score >= 0.75
+                and len(set(_meaningful_tokens(anchor_phrase)) & set(cluster_matched_terms)) >= 2
+                and len(anchor_surface_overlap) >= 1
+            )
+
+            cluster_feedback = get_cluster_feedback(workspace_id, str(cluster_name or "")) if cluster_name else {}
+            cluster_acceptance_rate = float(cluster_feedback.get("acceptance_rate") or 0) if isinstance(cluster_feedback, dict) else 0.0
+            cluster_rejection_rate = float(cluster_feedback.get("rejection_rate") or 0) if isinstance(cluster_feedback, dict) else 0.0
+            cluster_feedback_total = int(cluster_feedback.get("total") or 0) if isinstance(cluster_feedback, dict) else 0
+
+            if cluster_runtime_trusted:
+                target_score = float(target_score or 0) + (cluster_score * 90)
+
+            if cluster_feedback_total >= 3 and cluster_acceptance_rate >= 0.75:
+                target_score = float(target_score or 0) + 25
+
+            if cluster_feedback_total >= 3 and cluster_rejection_rate >= 0.60:
+                target_score = float(target_score or 0) - 45
+
+            runtime_normalized_score = _runtime_normalized_score(
+                source_type,
+                intelligence,
+                target_score,
+            )
+
+            # Cluster Confidence Gating v1:
+            # Safe auto-linking requires either strong phrase-aware evidence,
+            # trusted same-cluster evidence, or high runtime confidence.
+            confidence_floor = 0.70
+
+            strong_phrase_evidence = bool(
+                phrase_pool_exact
+                or phrase_pool_contains
+                or (
+                    phrase_aware_count >= 2
+                    and (
+                        phrase_evidence_value >= 0.45
+                        or concept_alignment_value >= 0.45
+                        or intent_score >= 0.90
+                    )
+                )
+            )
+
+            strong_cluster_evidence = bool(cluster_runtime_trusted)
+
+            strong_alias_evidence = bool(
+                alias_match_score >= 0.65
+                and float(phrase_alias_intelligence.get("confidence") or 0) >= 0.70
+            )
+
+            strong_context_concept_evidence = bool(
+                context_concept_dominance.get("strong_context_concept_match")
+            )
+
+            weak_context_concept_evidence = bool(
+                context_concept_dominance.get("weak_context_concept_match")
+            )
+
+            universal_evidence_pass = bool(
+                (
+                    phrase_evidence_value >= 0.65
+                    and concept_alignment_value >= 0.45
+                )
+                or (
+                    intent_score >= 0.90
+                    and phrase_evidence_value >= 0.45
+                )
+                or (
+                    concept_score >= 0.45
+                    and phrase_evidence_value >= 0.45
+                )
+            )
+
+            clear_intent_mismatch = bool(
+                intent_intelligence.get("phrase_intent") not in (None, "", "unknown")
+                and intent_intelligence.get("target_intent") not in (None, "", "unknown")
+                and float(intent_intelligence.get("intent_match_score") or 0) < 0.50
+            )
+
+            semantic_drift_reject = bool(
+                clear_intent_mismatch
+                and phrase_evidence_value < 0.45
+                and concept_alignment_value < 0.45
+                and alias_match_score < 0.50
+                and not phrase_pool_exact
+                and not phrase_pool_contains
+                and not strong_cluster_evidence
+            )
+
+            if semantic_drift_reject:
+                continue
+
+            auto_link_allowed = bool(
+                runtime_normalized_score >= confidence_floor
+                and not clear_intent_mismatch
+                and not weak_context_concept_evidence
+                and (
+                    strong_phrase_evidence
+                    or strong_cluster_evidence
+                    or strong_alias_evidence
+                    or strong_context_concept_evidence
+                    or live_domain_exact_surface_pass
+                    or universal_evidence_pass
+                )
+            )
+
+            suggest_only = not auto_link_allowed
+
+            fp_gate = _universal_false_positive_gate_v1(
+                phrase=anchor_phrase,
+                title=title,
+                url=url,
+                resolver_decision=("AUTO_LINK" if auto_link_allowed else "SUGGEST_ONLY"),
+                auto_link_allowed=auto_link_allowed,
+                suggest_only=suggest_only,
+                runtime_normalized_score=runtime_normalized_score,
+                source_type=source_type,
+            )
+
+            auto_link_allowed = bool(fp_gate.get("auto_link_allowed"))
+            suggest_only = bool(fp_gate.get("suggest_only"))
+
+            resolver_reason = (
+                "topic_cluster_match"
+                if strong_cluster_evidence
+                else "phrase_aware_target_pool_match"
+                if strong_phrase_evidence
+                else "concept_intelligence_match"
+                if concept_score >= 0.45
+                else "semantic_authority_topic_match"
+            )
+
+            if "topic_authority_intelligence" not in locals():
+                topic_authority_intelligence = {
+                    "has_topic_authority_analysis": False,
+                    "topic_authority_score": 0.0,
+                    "topic_authority_level": "none",
+                    "topic_authority_boost": 0.0,
+                    "topic_authority_reasons": ["not_available"],
+                }
+
+            resolved.append(
+                {
+                    "phrase": anchor_phrase,
+                    "url": url,
+                    "title": title,
+                    "target_score": target_score,
+                    "score_calibration": calibrate_resolver_score_v1(
+                        target_score=target_score,
+                        resolver_confidence=(
+                            min(1.0, float(target_score or 0) / 300.0)
+                            if source_type != "document_registry"
+                            else float(target_score or 0)
+                        ),
+                    ),
+                    "semantic_route_score": semantic_route_score,
+                    "authority_score": authority_score,
+                    "topic_graph_score": topic_graph_score,
+                    "rb2_weight_score": rb2_weight_score,
+                    "path_score": intelligence.get("path_score"),
+                    "matched_title_tokens": intelligence.get("matched_title_tokens"),
+                    "matched_url_tokens": intelligence.get("matched_url_tokens"),
+                    "runtime_normalized_score": runtime_normalized_score,
+                    "topic_authority_intelligence": topic_authority_intelligence,
+                  "entity_intelligence": entity_intelligence,
+                    "intent_intelligence": intent_intelligence,
+                    "phrase_alias_intelligence": phrase_alias_intelligence,
+                    "alias_match_intelligence": alias_match_intelligence,
+                    "canonical_phrase": phrase_alias_intelligence.get("canonical_phrase"),
+                    "alias_match_score": alias_match_score,
+                    "alias_boost": alias_boost,
+                    "strong_alias_evidence": strong_alias_evidence,
+                    "topic_intent_graph": topic_intent_graph,
+                    "journey_boost": journey_boost,
+                    "context_concept_dominance": context_concept_dominance,
+                    "context_concept_boost": context_concept_boost,
+                    "context_concept_penalty": context_concept_penalty,
+                    "strong_context_concept_evidence": strong_context_concept_evidence,
+                    "weak_context_concept_evidence": weak_context_concept_evidence,
+                    "performance_intelligence": performance_intelligence,
+                  "cross_site_intelligence": cross_site_intelligence,
+                    "resolver_confidence": (
+                        min(1.0, float(target_score or 0) / 300.0)
+                        if source_type != "document_registry"
+                        else float(target_score or 0)
+                    ),
+                    "resolver_reason": resolver_reason,
+                    "auto_link_allowed": auto_link_allowed,
+                    "suggest_only": suggest_only,
+                    "clear_intent_mismatch": clear_intent_mismatch,
+                    "false_positive_gate": fp_gate,
+                    "false_positive_blocked": fp_gate.get("false_positive_blocked"),
+                    "false_positive_reasons": fp_gate.get("false_positive_reasons"),
+                    "topic_overlap_count": fp_gate.get("topic_overlap_count"),
+                    "topic_overlap_terms": fp_gate.get("topic_overlap_terms"),
+                    "topic_match_percent": fp_gate.get("topic_match_percent"),
+                    "intent_match_percent": fp_gate.get("intent_match_percent"),
+                    "intent_overlap_terms": fp_gate.get("intent_overlap_terms"),
+                    "confidence_floor": confidence_floor,
+                    "source_type": source_type,
+                    "page_type_hint": intelligence.get("page_type_hint"),
+                    "priority_bucket": intelligence.get("priority_bucket"),
+                    "import_source": intelligence.get("import_source"),
+
+                    # Draft intelligence diagnostics
+                    "draft_id": intelligence.get("draft_id"),
+                    "planned_url": intelligence.get("planned_url"),
+                    "placeholder_url": intelligence.get("placeholder_url"),
+                    "published_url": intelligence.get("published_url"),
+                    "semantic_intent_score": intelligence.get("semantic_intent_score"),
+                    "freshness_score": intelligence.get("freshness_score"),
+                    "publish_transition_score": intelligence.get("publish_transition_score"),
+                    "semantic_gate_multiplier": intelligence.get("semantic_gate_multiplier"),
+
+                    "path": intelligence.get("path"),
+
+                    # Phrase-aware target-pool diagnostics
+                    "target_pool_matched_phrases": phrase_aware_matches,
+                    "target_pool_aliases": phrase_aware_aliases,
+                    "target_pool_active_phrase_matches": phrase_aware_count,
+                    "target_pool_phrase_exact_match": phrase_pool_exact,
+                    "target_pool_phrase_contains_match": phrase_pool_contains,
+
+                    # Concept Intelligence diagnostics
+                    "concept_score": concept_score,
+                    "concept_matched_terms": concept_signal.get("matched_terms", []),
+                    "concepts": concept_signal.get("concepts", []),
+                    "concept_expansions": concept_signal.get("expansions", []),
+
+                    # Universal Resolver Intelligence diagnostics
+                    "phrase_evidence": phrase_evidence,
+                    "phrase_evidence_score": phrase_evidence_value,
+                    "intent_score": intent_score,
+                    "phrase_intent": _detect_intent(anchor_phrase),
+                    "target_intent": _detect_intent(target_text_for_concepts),
+                    "concept_alignment": concept_alignment,
+                    "concept_alignment_score": concept_alignment_value,
+
+                    # Topic Cluster Intelligence diagnostics
+                    "cluster_score": cluster_score,
+                    "cluster_name": cluster_name,
+                    "cluster_matched_terms": cluster_matched_terms,
+                    "cluster_matches": cluster_matches,
+                    "cluster_purity_score": cluster_purity_score,
+                    "cluster_runtime_trusted": cluster_runtime_trusted,
+                    "cluster_boost_applied": bool(cluster_runtime_trusted),
+                    "cluster_feedback_total": cluster_feedback_total,
+                    "cluster_acceptance_rate": cluster_acceptance_rate,
+                    "cluster_rejection_rate": cluster_rejection_rate,
+
+                    "weak_match_suppressed": False,
+                }
+            )
+
+    # Workspace Concept Bridge fallback:
+    # If normal resolver found nothing, try safe workspace-level concept bridging.
+    if not resolved:
+        bridge_hits = bridge_workspace_phrase_to_targets(workspace_id, anchor_phrase, limit=limit)
+        for hit in bridge_hits:
+            score = float(hit.get("bridge_score") or 0)
+            resolved.append({
+                "phrase": anchor_phrase,
+                "url": hit.get("url"),
+                "title": hit.get("title"),
+                "target_score": score * 300,
+                "semantic_route_score": score * 100,
+                "authority_score": 0,
+                "topic_graph_score": 0,
+                "rb2_weight_score": 0,
+                "path_score": None,
+                "matched_title_tokens": hit.get("bridge_overlap_tokens", []),
+                "matched_url_tokens": hit.get("bridge_overlap_tokens", []),
+                "runtime_normalized_score": score,
+                "resolver_confidence": score,
+                "resolver_reason": "workspace_concept_bridge_fallback",
+                "source_type": "live_domain",
+                "page_type_hint": None,
+                "priority_bucket": None,
+                "import_source": None,
+                "draft_id": None,
+                "planned_url": None,
+                "placeholder_url": None,
+                "published_url": None,
+                "semantic_intent_score": None,
+                "freshness_score": None,
+                "publish_transition_score": None,
+                "semantic_gate_multiplier": None,
+                "path": None,
+                "target_pool_matched_phrases": [],
+                "target_pool_aliases": [],
+                "target_pool_active_phrase_matches": 0,
+                "target_pool_phrase_exact_match": False,
+                "target_pool_phrase_contains_match": False,
+                "concept_score": score,
+                "concept_matched_terms": hit.get("bridge_overlap_tokens", []),
+                "concepts": [],
+                "concept_expansions": [],
+                "bridge_score": score,
+                "bridge_reason": hit.get("bridge_reason"),
+                "cluster_score": 0,
+                "cluster_name": None,
+                "cluster_matched_terms": [],
+                "cluster_matches": [],
+                "cluster_boost_applied": False,
+                "weak_match_suppressed": False,
+            })
+
+    resolved.sort(
+        key=lambda x: (
+            float(x.get("runtime_normalized_score", 0) or 0),
+            float(x.get("semantic_route_score", 0) or 0),
+            float(x.get("authority_score", 0) or 0),
+        ),
+        reverse=True,
+    )
+
+    # ---------------------------------------------------------
+    # Runtime auto-link protection
+    # Prevent weak semantic drift / forced nearest-neighbor links.
+    # Anything below this floor is not safe enough for automatic linking.
+    # ---------------------------------------------------------
+    SAFE_AUTO_LINK_FLOOR = 0.48
+
+    filtered: List[Dict[str, Any]] = []
+
+    for item in resolved:
+        confidence = float(item.get("runtime_normalized_score", 0) or 0)
+
+        if confidence < SAFE_AUTO_LINK_FLOOR:
+            item["resolver_rejected"] = True
+            item["resolver_rejection_reason"] = "domain_mismatch"
+            item["resolver_rejection_stage"] = "runtime_auto_link_floor"
+            continue
+
+        cluster_guard_pass = bool(item.get("cluster_runtime_trusted"))
+
+        phrase_aware_guard_pass = bool(
+            str(item.get("source_type") or "") == "live_domain"
+            and (
+                bool(item.get("target_pool_phrase_exact_match"))
+                or bool(item.get("target_pool_phrase_contains_match"))
+            )
+        )
+
+        semantic_draft_guard_pass = bool(
+            item.get("resolver_decision") == "SEMANTIC_LINK_DRAFT"
+            or item.get("lane") == "semantic"
+            or item.get("link_bucket") == "semantic_draft"
+        )
+
+        if (
+            not semantic_draft_guard_pass
+            and not cluster_guard_pass
+            and not phrase_aware_guard_pass
+            and not _passes_phrase_title_overlap_guard(
+                str(item.get("phrase") or item.get("anchor") or ""),
+                str(item.get("title") or ""),
+                str(item.get("source_type") or ""),
+            )
+        ):
+            item["resolver_rejected"] = True
+            item["resolver_rejection_reason"] = "weak_phrase_title_overlap"
+            item["resolver_rejection_stage"] = "phrase_title_overlap_guard"
+            continue
+
+        if cluster_guard_pass:
+            item["resolver_reason"] = "topic_cluster_match"
+            item["cluster_guard_pass"] = True
+        elif item.get("resolver_reason") == "topic_cluster_match":
+            item["resolver_reason"] = "semantic_authority_topic_match"
+            item["cluster_guard_pass"] = False
+
+        # Ensure all resolver outputs, including fallback/bridge outputs,
+        # carry auto-link gating fields.
+        if "confidence_floor" not in item:
+            item["confidence_floor"] = SAFE_AUTO_LINK_FLOOR
+
+        if "auto_link_allowed" not in item:
+            item["auto_link_allowed"] = bool(confidence >= float(item.get("confidence_floor") or SAFE_AUTO_LINK_FLOOR))
+
+        if "suggest_only" not in item:
+            item["suggest_only"] = not bool(item.get("auto_link_allowed"))
+
+        filtered.append(item)
+
+    pre_competition_results = filtered[: max(1, int(limit or 5))]
+
+    final_results = apply_cross_target_competition_v1(
+        candidates=pre_competition_results,
+    )
+
+    competition_intelligence = analyze_resolver_competition_v1(final_results)
+
+    for item in final_results:
+        item["competition_intelligence"] = {
+            "has_competition_analysis": competition_intelligence.get("has_competition_analysis"),
+            "has_runner_up": competition_intelligence.get("has_runner_up"),
+            "winner_score": competition_intelligence.get("winner_score"),
+            "runner_up_score": competition_intelligence.get("runner_up_score"),
+            "score_margin": competition_intelligence.get("score_margin"),
+            "close_call": competition_intelligence.get("close_call"),
+            "competition_confidence": competition_intelligence.get("competition_confidence"),
+            "competition_action": competition_intelligence.get("competition_action"),
+            "competition_reason": competition_intelligence.get("competition_reason"),
+        }
+
+    for item in final_results:
+        if item.get("resolver_decision") == "SEMANTIC_LINK_DRAFT":
+            item["decision_intelligence"] = {
+                "decision": "SEMANTIC_LINK_DRAFT",
+                "decision_reason": item.get("resolver_reason") or "resolver_core_semantic_draft",
+                "requires_user_review": True,
+                "permanent_insert_allowed": False,
+            }
+            item["auto_link_allowed"] = True
+            item["suggest_only"] = False
+            item["requires_user_review"] = True
+            item["permanent_insert_allowed"] = False
+            item["resolver_debug"] = build_resolver_debug_payload_v1(item)
+            continue
+
+        decision_intelligence = decide_resolver_action_v1(item)
+        item["decision_intelligence"] = decision_intelligence
+
+        item["explainability"] = build_explainability_v1(
+            phrase_evidence_value=float(item.get("phrase_evidence", {}).get("phrase_overlap_ratio") or 0),
+            intent_score=float(item.get("intent_score") or 0),
+            concept_alignment_value=float(item.get("concept_alignment", {}).get("concept_alignment_score") or 0),
+            entity_intelligence=item.get("entity_intelligence") or {},
+            topic_authority_intelligence=item.get("topic_authority_intelligence") or {},
+            competition_intelligence=item.get("competition_intelligence") or {},
+            decision_intelligence=decision_intelligence,
+        )
+
+        if item.get("lane") == "semantic" or item.get("link_bucket") == "semantic_draft":
+            item["resolver_decision"] = "SEMANTIC_LINK_DRAFT"
+            item["auto_link_allowed"] = True
+            item["suggest_only"] = False
+            item["requires_user_review"] = True
+            item["permanent_insert_allowed"] = False
+            item["decision_intelligence"] = {
+                "decision": "SEMANTIC_LINK_DRAFT",
+                "decision_reason": item.get("resolver_reason") or "resolver_core_semantic_draft",
+                "requires_user_review": True,
+                "permanent_insert_allowed": False,
+            }
+            item["resolver_debug"] = build_resolver_debug_payload_v1(item)
+            continue
+
+        item["resolver_decision"] = decision_intelligence.get("decision")
+        item["auto_link_allowed"] = decision_intelligence.get("decision") == "AUTO_LINK"
+        item["suggest_only"] = decision_intelligence.get("decision") != "AUTO_LINK"
+
+        if decision_intelligence.get("decision") != "AUTO_LINK":
+            item["resolver_reason"] = (
+                str(item.get("resolver_reason") or "resolved")
+                + " + "
+                + str(decision_intelligence.get("decision_reason") or "decision_layer_block")
+            )
+
+        item["resolver_debug"] = build_resolver_debug_payload_v1(item)
+
+    return final_results

@@ -1,0 +1,75 @@
+{
+  "phase": "3.3.3",
+  "status": "COMPLETE",
+  "legacy_file": "backend/app/main.py",
+  "runtime_file": "backend/server/main.py",
+  "records": [
+    {
+      "function": "owner_root",
+      "decorator": "@app.get(\"/owner\")",
+      "legacy_exists": true,
+      "runtime_has_same_function_name": false,
+      "runtime_has_same_decorator": false,
+      "legacy_start": 50,
+      "legacy_end": 52,
+      "migration_needed": true,
+      "legacy_code": "@app.get(\"/owner\")\ndef owner_root():\n    return RedirectResponse(url=\"/owner/\")"
+    },
+    {
+      "function": "owner_protect_middleware",
+      "decorator": "@app.middleware(\"http\")",
+      "legacy_exists": true,
+      "runtime_has_same_function_name": false,
+      "runtime_has_same_decorator": false,
+      "legacy_start": 70,
+      "legacy_end": 79,
+      "migration_needed": true,
+      "legacy_code": "@app.middleware(\"http\")\nasync def owner_protect_middleware(request: Request, call_next):\n    path = request.url.path\n    needs_owner = (\n        path.startswith(\"/api/external/manual\")\n        or path.startswith(\"/api/external/owner/\")\n    )\n    if needs_owner and not _authorized(request):\n        return JSONResponse({\"ok\": False, \"error\": \"owner_auth_required\"}, status_code=401)\n    return await call_next(request)"
+    },
+    {
+      "function": "owner_login",
+      "decorator": "@app.post(\"/owner-api/login\")",
+      "legacy_exists": true,
+      "runtime_has_same_function_name": false,
+      "runtime_has_same_decorator": false,
+      "legacy_start": 82,
+      "legacy_end": 100,
+      "migration_needed": true,
+      "legacy_code": "@app.post(\"/owner-api/login\")\nasync def owner_login(payload: dict):\n    key = str(payload.get(\"key\") or \"\").strip()\n    owner_key = _get_owner_key()\n    if not owner_key:\n        return JSONResponse({\"ok\": False, \"error\": \"owner_key_not_configured\"}, status_code=500)\n    if key != owner_key:\n        return JSONResponse({\"ok\": False, \"error\": \"invalid_key\"}, status_code=401)\n\n    resp = JSONResponse({\"ok\": True})\n    resp.set_cookie(\n        key=OWNER_COOKIE,\n        value=owner_key,\n        httponly=True,\n        secure=False,\n        samesite=\"lax\",\n        path=\"/\",\n    )\n    return resp"
+    },
+    {
+      "function": "owner_logout",
+      "decorator": "@app.post(\"/owner-api/logout\")",
+      "legacy_exists": true,
+      "runtime_has_same_function_name": false,
+      "runtime_has_same_decorator": false,
+      "legacy_start": 103,
+      "legacy_end": 107,
+      "migration_needed": true,
+      "legacy_code": "@app.post(\"/owner-api/logout\")\nasync def owner_logout():\n    resp = JSONResponse({\"ok\": True})\n    resp.delete_cookie(key=OWNER_COOKIE, path=\"/\")\n    return resp"
+    },
+    {
+      "function": "health",
+      "decorator": "@app.get(\"/health\")",
+      "legacy_exists": true,
+      "runtime_has_same_function_name": false,
+      "runtime_has_same_decorator": false,
+      "legacy_start": 110,
+      "legacy_end": 112,
+      "migration_needed": true,
+      "legacy_code": "@app.get(\"/health\")\ndef health():\n    return {\"ok\": True, \"app\": \"legacy\"}"
+    },
+    {
+      "function": "serve_index",
+      "decorator": "@app.get(\"/\", response_class=HTMLResponse)",
+      "legacy_exists": true,
+      "runtime_has_same_function_name": true,
+      "runtime_has_same_decorator": false,
+      "legacy_start": 127,
+      "legacy_end": 134,
+      "migration_needed": true,
+      "legacy_code": "@app.get(\"/\", response_class=HTMLResponse)\ndef serve_index():\n    if INDEX_HTML.exists():\n        return FileResponse(str(INDEX_HTML))\n    return HTMLResponse(\n        f\"<h1>Frontend not found</h1><p>Expected at: {INDEX_HTML}</p>\",\n        status_code=404,\n    )"
+    }
+  ],
+  "migration_needed_count": 6
+}

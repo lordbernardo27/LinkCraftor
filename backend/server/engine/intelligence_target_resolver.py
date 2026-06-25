@@ -30,6 +30,7 @@ from backend.server.engine.workspace_topic_cluster_store import find_topic_clust
 from backend.server.engine.workspace_topic_cluster_feedback import get_cluster_feedback
 from backend.server.engine.resolver_competition_intelligence import analyze_resolver_competition_v1
 from backend.server.engine.resolver_decision_intelligence import decide_resolver_action_v1
+from backend.server.engine.resolver_core import resolve_phrase
 from backend.server.engine.resolver_topic_authority import analyze_topic_authority_v1
 from backend.server.engine.resolver_entity_intelligence import analyze_entity_intelligence_v1
 from backend.server.engine.resolver_explainability import build_explainability_v1
@@ -859,6 +860,130 @@ def resolve_intelligent_targets(
         ("document_registry", document_registry_targets, score_document_registry_target),
     ]
 
+    # Resolver Core semantic draft lane:
+    # Adds meaning-based draft links before the legacy resolver loop.
+    # These are review-required draft links, not permanent inserts.
+    try:
+        semantic_core_rows = resolve_phrase(
+            workspace_id=workspace_id,
+            phrase=anchor_phrase,
+            targets=live_domain_targets,
+            scorer=score_live_domain_target,
+            limit=limit,
+        )
+
+        for semantic_row in semantic_core_rows:
+            if semantic_row.get("lane") != "semantic":
+                continue
+
+            resolved.append({
+                "phrase": anchor_phrase,
+                "url": semantic_row.get("url") or "",
+                "title": semantic_row.get("title") or "",
+                "target_score": float(semantic_row.get("target_score") or 0),
+                "score_calibration": {},
+                "semantic_route_score": float(semantic_row.get("resolver_confidence") or 0) * 100,
+                "authority_score": 0,
+                "topic_graph_score": 0,
+                "rb2_weight_score": 0,
+                "path_score": None,
+                "matched_title_tokens": [],
+                "matched_url_tokens": [],
+                "runtime_normalized_score": float(semantic_row.get("resolver_confidence") or 0),
+                "resolver_confidence": float(semantic_row.get("resolver_confidence") or 0),
+                "resolver_reason": semantic_row.get("resolver_reason") or "resolver_core_semantic_draft",
+                "resolver_decision": "SEMANTIC_LINK_DRAFT",
+                "auto_link_allowed": False,
+                "suggest_only": True,
+                "requires_user_review": True,
+                "permanent_insert_allowed": False,
+                "source_type": "live_domain",
+                "lane": "semantic",
+                "link_bucket": "semantic_draft",
+                "link_status": "linked",
+                "semantic_match": semantic_row.get("semantic_match") or {},
+                "resolver_core_row": semantic_row,
+
+                "topic_authority_intelligence": {},
+                "entity_intelligence": {},
+                "intent_intelligence": {},
+                "phrase_alias_intelligence": phrase_alias_intelligence,
+                "alias_match_intelligence": {},
+                "canonical_phrase": phrase_alias_intelligence.get("canonical_phrase"),
+                "alias_match_score": 0,
+                "alias_boost": 0,
+                "strong_alias_evidence": False,
+                "topic_intent_graph": {},
+                "journey_boost": 0,
+                "context_concept_dominance": {},
+                "context_concept_boost": 0,
+                "context_concept_penalty": 0,
+                "strong_context_concept_evidence": False,
+                "weak_context_concept_evidence": False,
+                "performance_intelligence": {},
+                "cross_site_intelligence": {},
+
+                "clear_intent_mismatch": False,
+                "false_positive_gate": {},
+                "false_positive_blocked": False,
+                "false_positive_reasons": [],
+                "topic_overlap_count": 0,
+                "topic_overlap_terms": [],
+                "topic_match_percent": 0,
+                "intent_match_percent": 0,
+                "intent_overlap_terms": [],
+                "confidence_floor": 0.48,
+
+                "page_type_hint": None,
+                "priority_bucket": None,
+                "import_source": None,
+                "draft_id": None,
+                "planned_url": None,
+                "placeholder_url": None,
+                "published_url": None,
+                "semantic_intent_score": None,
+                "freshness_score": None,
+                "publish_transition_score": None,
+                "semantic_gate_multiplier": None,
+                "path": None,
+
+                "target_pool_matched_phrases": [],
+                "target_pool_aliases": [],
+                "target_pool_active_phrase_matches": 0,
+                "target_pool_phrase_exact_match": False,
+                "target_pool_phrase_contains_match": False,
+
+                "concept_score": 0,
+                "concept_matched_terms": [],
+                "concepts": [],
+                "concept_expansions": [],
+                "phrase_evidence": {},
+                "phrase_evidence_score": 0,
+                "intent_score": 0,
+                "phrase_intent": _detect_intent(anchor_phrase),
+                "target_intent": "semantic_draft",
+                "concept_alignment": {},
+                "concept_alignment_score": 0,
+
+                "cluster_score": 0,
+                "cluster_name": None,
+                "cluster_matched_terms": [],
+                "cluster_matches": [],
+                "cluster_purity_score": 0,
+                "cluster_runtime_trusted": False,
+                "cluster_boost_applied": False,
+                "cluster_feedback_total": 0,
+                "cluster_acceptance_rate": 0,
+                "cluster_rejection_rate": 0,
+
+                "weak_match_suppressed": False,
+            })
+    except Exception as exc:
+        try:
+            print("[RESOLVER_CORE_SEMANTIC_DRAFT_ERROR]", str(exc))
+        except Exception:
+            pass
+
     for source_type, targets, scorer in source_batches:
         for target in targets:
             intelligence = scorer(
@@ -1515,8 +1640,15 @@ def resolve_intelligent_targets(
             )
         )
 
+        semantic_draft_guard_pass = bool(
+            item.get("resolver_decision") == "SEMANTIC_LINK_DRAFT"
+            or item.get("lane") == "semantic"
+            or item.get("link_bucket") == "semantic_draft"
+        )
+
         if (
-            not cluster_guard_pass
+            not semantic_draft_guard_pass
+            and not cluster_guard_pass
             and not phrase_aware_guard_pass
             and not _passes_phrase_title_overlap_guard(
                 str(item.get("phrase") or item.get("anchor") or ""),
@@ -1571,6 +1703,20 @@ def resolve_intelligent_targets(
         }
 
     for item in final_results:
+        if item.get("resolver_decision") == "SEMANTIC_LINK_DRAFT":
+            item["decision_intelligence"] = {
+                "decision": "SEMANTIC_LINK_DRAFT",
+                "decision_reason": item.get("resolver_reason") or "resolver_core_semantic_draft",
+                "requires_user_review": True,
+                "permanent_insert_allowed": False,
+            }
+            item["auto_link_allowed"] = False
+            item["suggest_only"] = True
+            item["requires_user_review"] = True
+            item["permanent_insert_allowed"] = False
+            item["resolver_debug"] = build_resolver_debug_payload_v1(item)
+            continue
+
         decision_intelligence = decide_resolver_action_v1(item)
         item["decision_intelligence"] = decision_intelligence
 
@@ -1583,6 +1729,21 @@ def resolve_intelligent_targets(
             competition_intelligence=item.get("competition_intelligence") or {},
             decision_intelligence=decision_intelligence,
         )
+
+        if item.get("lane") == "semantic" or item.get("link_bucket") == "semantic_draft":
+            item["resolver_decision"] = "SEMANTIC_LINK_DRAFT"
+            item["auto_link_allowed"] = False
+            item["suggest_only"] = True
+            item["requires_user_review"] = True
+            item["permanent_insert_allowed"] = False
+            item["decision_intelligence"] = {
+                "decision": "SEMANTIC_LINK_DRAFT",
+                "decision_reason": item.get("resolver_reason") or "resolver_core_semantic_draft",
+                "requires_user_review": True,
+                "permanent_insert_allowed": False,
+            }
+            item["resolver_debug"] = build_resolver_debug_payload_v1(item)
+            continue
 
         item["resolver_decision"] = decision_intelligence.get("decision")
         item["auto_link_allowed"] = decision_intelligence.get("decision") == "AUTO_LINK"
@@ -1598,3 +1759,4 @@ def resolve_intelligent_targets(
         item["resolver_debug"] = build_resolver_debug_payload_v1(item)
 
     return final_results
+

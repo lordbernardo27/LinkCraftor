@@ -1,4 +1,4 @@
-﻿# backend/server/routes/external/shared.py
+# backend/server/routes/external/shared.py
 from __future__ import annotations
 
 """
@@ -7,7 +7,7 @@ Shared utilities for the External Intelligence route package.
 Phase 1.16 only creates the package structure.
 Actual helpers/constants will be migrated gradually from:
 
-    backend/app/routers/external.py
+    retired legacy external router
 
 Do not delete the legacy external router yet.
 """

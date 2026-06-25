@@ -1068,3 +1068,35 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
         "stderr": stderr,
         "_debug": debug,
     }
+
+
+@router.post("/resolver-debug")
+async def rb2_resolver_debug(request: Request) -> Dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON request body.")
+
+    workspace_id = str(payload.get("workspace_id") or payload.get("workspaceId") or "default").strip()
+    phrase = str(payload.get("phrase") or payload.get("anchor_phrase") or "").strip()
+    limit = int(payload.get("limit") or 10)
+
+    if not phrase:
+        raise HTTPException(status_code=400, detail="Missing phrase.")
+
+    from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
+
+    rows = resolve_intelligent_targets(
+        workspace_id=workspace_id,
+        anchor_phrase=phrase,
+        limit=limit,
+    )
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "phrase": phrase,
+        "count": len(rows),
+        "rows": rows,
+    }
+
