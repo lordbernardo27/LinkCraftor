@@ -1,0 +1,385 @@
+﻿from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+
+try:
+    from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+except Exception:
+    extract_smart_phrases = None
+
+
+
+def _data_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "data"
+
+
+def _semantic_dir() -> Path:
+    path = _data_dir() / "semantic"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _article_body_index_path(workspace_id: str) -> Path:
+    ws = str(workspace_id or "default").strip() or "default"
+    return _semantic_dir() / f"article_body_index_{ws}.json"
+
+
+def _read_json(path: Path, fallback: Any = None) -> Any:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        pass
+    return fallback
+
+
+def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def load_article_body_index(workspace_id: str) -> Dict[str, Any]:
+    path = _article_body_index_path(workspace_id)
+    obj = _read_json(path, {})
+
+    if isinstance(obj, dict):
+        obj.setdefault("version", "article_body_index_v1")
+        obj.setdefault("workspace_id", workspace_id)
+        obj.setdefault("articles", [])
+        obj.setdefault("stats", {})
+        return obj
+
+    return {
+        "version": "article_body_index_v1",
+        "workspace_id": workspace_id,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "articles": [],
+        "stats": {},
+    }
+
+
+def calculate_article_stats(articles: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "article_count": len(articles),
+        "with_body_text": sum(bool(_norm(a.get("body_text"))) for a in articles),
+        "with_headings": sum(bool(a.get("headings")) for a in articles),
+        "with_entities": sum(bool(a.get("entities")) for a in articles),
+        "with_related_concepts": sum(bool(a.get("related_concepts")) for a in articles),
+    }
+
+
+def save_article_body_index(workspace_id: str, data: Dict[str, Any]) -> Path:
+    path = _article_body_index_path(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    data["stats"] = calculate_article_stats([
+        a for a in articles if isinstance(a, dict)
+    ])
+    data["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    _write_json(path, data)
+    return path
+
+
+
+
+_HTML_DROP_RE = re.compile(
+    r"<(script|style|noscript|svg|iframe|form|nav|footer|header|aside)[\s\S]*?</\1>",
+    re.IGNORECASE,
+)
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_TITLE_RE = re.compile(r"<title[^>]*>([\s\S]*?)</title>", re.IGNORECASE)
+_META_DESC_RE = re.compile(
+    r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_H1_RE = re.compile(r"<h1[^>]*>([\s\S]*?)</h1>", re.IGNORECASE)
+_HEADING_RE = re.compile(r"<h[2-3][^>]*>([\s\S]*?)</h[2-3]>", re.IGNORECASE)
+_P_RE = re.compile(r"<p[^>]*>([\s\S]*?)</p>", re.IGNORECASE)
+
+
+def _strip_tags(value: str) -> str:
+    value = re.sub(r"<br\s*/?>", " ", str(value or ""), flags=re.IGNORECASE)
+    value = _TAG_RE.sub(" ", value)
+    value = (
+        value.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+    )
+    return _norm(value)
+
+
+def _extract_first(pattern: re.Pattern, html: str) -> str:
+    m = pattern.search(html or "")
+    if not m:
+        return ""
+    return _strip_tags(m.group(1))
+
+
+def _extract_all(pattern: re.Pattern, html: str, limit: int = 100) -> List[str]:
+    out: List[str] = []
+    for m in pattern.finditer(html or ""):
+        value = _strip_tags(m.group(1))
+        if value and value not in out:
+            out.append(value)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _tokens(value: str) -> List[str]:
+    return [
+        t for t in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(t) >= 3
+    ]
+
+
+def _extract_key_phrases(text: str, limit: int = 80) -> List[str]:
+    words = _tokens(text)
+    phrases = []
+
+    for i in range(len(words) - 1):
+        phrases.append(words[i] + " " + words[i + 1])
+
+    for i in range(len(words) - 2):
+        phrases.append(words[i] + " " + words[i + 1] + " " + words[i + 2])
+
+    counts: Dict[str, int] = {}
+    for phrase in phrases:
+        counts[phrase] = counts.get(phrase, 0) + 1
+
+    ranked = sorted(
+        counts.items(),
+        key=lambda x: (x[1], len(x[0])),
+        reverse=True,
+    )
+
+    return [p for p, _ in ranked[:limit]]
+
+
+def _extract_entities(text: str, limit: int = 80) -> List[Dict[str, Any]]:
+    entities: List[Dict[str, Any]] = []
+    seen = set()
+
+    for m in re.finditer(r"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,4}\b", text or ""):
+        value = _norm(m.group(0))
+
+        if len(value) < 3:
+            continue
+
+        key = value.lower()
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        entities.append({
+            "text": value,
+            "type": "proper_noun_candidate",
+            "confidence": 0.55,
+        })
+
+        if len(entities) >= limit:
+            break
+
+    return entities
+
+
+def _build_related_concepts(key_phrases: List[str], limit: int = 80) -> List[Dict[str, Any]]:
+    related: List[Dict[str, Any]] = []
+
+    for phrase in key_phrases[:limit]:
+        related.append({
+            "concept": phrase,
+            "related": phrase,
+            "relation_type": "article_cooccurrence_candidate",
+            "confidence": 0.65,
+        })
+
+    return related
+
+
+def extract_article_from_html(url: str, html: str) -> Dict[str, Any]:
+    raw = str(html or "")
+    cleaned_html = _HTML_DROP_RE.sub(" ", raw)
+
+    title = _extract_first(_TITLE_RE, cleaned_html)
+    h1 = _extract_first(_H1_RE, cleaned_html)
+    description = _extract_first(_META_DESC_RE, cleaned_html)
+    headings = _extract_all(_HEADING_RE, cleaned_html, limit=80)
+
+    paragraphs = _extract_all(_P_RE, cleaned_html, limit=300)
+    body_text = _norm(" ".join(paragraphs))
+
+    smart_rows = []
+    if extract_smart_phrases is not None:
+        try:
+            smart_rows = extract_smart_phrases(
+                text=body_text,
+                html=cleaned_html,
+                title=title or h1,
+                doc_id=url,
+                max_candidates=150,
+                workspace_id="article_body",
+                vertical="general",
+            )
+        except Exception:
+            smart_rows = []
+
+    if smart_rows:
+        key_phrases = []
+        related_concepts = []
+
+        for row in smart_rows:
+            phrase = _norm(row.get("phrase") or "")
+            if not phrase:
+                continue
+
+            if phrase not in key_phrases:
+                key_phrases.append(phrase)
+
+            related_concepts.append({
+                "concept": phrase,
+                "related": phrase,
+                "relation_type": "smart_extractor_candidate",
+                "confidence": float((row.get("extractor_intelligence") or {}).get("score") or 0.75),
+                "source_type": row.get("source_type") or "",
+                "section_id": row.get("section_id") or "",
+            })
+
+        entities = _extract_entities(" ".join([title, h1, body_text]), limit=80)
+    else:
+        key_phrases = _extract_key_phrases(" ".join([title, h1, body_text]), limit=100)
+        entities = _extract_entities(" ".join([title, h1, body_text]), limit=80)
+        related_concepts = _build_related_concepts(key_phrases, limit=80)
+
+    return {
+        "url": url,
+        "title": title,
+        "h1": h1,
+        "description": description,
+        "headings": headings,
+        "body_text": body_text,
+        "key_phrases": key_phrases,
+        "entities": entities,
+        "related_concepts": related_concepts,
+        "status": "parsed" if body_text or title or h1 else "empty_parse",
+        "extracted_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+
+
+def fetch_url_html(url: str, timeout: int = 20) -> Dict[str, Any]:
+    target = str(url or "").strip()
+
+    if not target.startswith(("http://", "https://")):
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "invalid_url",
+            "error": "URL must start with http:// or https://",
+        }
+
+    try:
+        req = Request(
+            target,
+            headers={
+                "User-Agent": "LinkCraftorBot/1.0 (+https://linkcraftor.com)",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+
+        with urlopen(req, timeout=timeout) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            raw = resp.read(2_000_000)
+
+        html = raw.decode("utf-8", errors="replace")
+
+        return {
+            "ok": True,
+            "url": target,
+            "html": html,
+            "content_type": content_type,
+            "status": "fetched",
+            "bytes": len(raw),
+        }
+
+    except HTTPError as exc:
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "http_error",
+            "error": str(exc),
+            "code": getattr(exc, "code", None),
+        }
+
+    except URLError as exc:
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "url_error",
+            "error": str(exc),
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "fetch_error",
+            "error": str(exc),
+        }
+
+
+def fetch_and_extract_article(url: str, timeout: int = 20) -> Dict[str, Any]:
+    fetched = fetch_url_html(url, timeout=timeout)
+
+    if not fetched.get("ok"):
+        return {
+            "url": url,
+            "title": "",
+            "h1": "",
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "key_phrases": [],
+            "entities": [],
+            "related_concepts": [],
+            "status": fetched.get("status") or "fetch_failed",
+            "fetch_error": fetched.get("error") or "",
+            "extracted_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+    row = extract_article_from_html(url, fetched.get("html") or "")
+    row["fetch_status"] = fetched.get("status")
+    row["content_type"] = fetched.get("content_type")
+    row["bytes"] = fetched.get("bytes")
+    return row
+
+
+def article_body_extractor_healthcheck() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "engine": "article_body_extractor",
+        "version": "v1_shell",
+        "role": "fetch_extract_write_article_body_index",
+    }

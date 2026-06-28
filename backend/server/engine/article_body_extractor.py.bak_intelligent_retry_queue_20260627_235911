@@ -1,0 +1,822 @@
+﻿from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+from urllib.parse import urlparse
+from time import sleep
+
+try:
+    from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+except Exception:
+    extract_smart_phrases = None
+
+
+
+def _data_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "data"
+
+
+def _semantic_dir() -> Path:
+    path = _data_dir() / "semantic"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _article_body_index_path(workspace_id: str) -> Path:
+    ws = str(workspace_id or "default").strip() or "default"
+    return _semantic_dir() / f"article_body_index_{ws}.json"
+
+
+def _read_json(path: Path, fallback: Any = None) -> Any:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        pass
+    return fallback
+
+
+def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def load_article_body_index(workspace_id: str) -> Dict[str, Any]:
+    path = _article_body_index_path(workspace_id)
+    obj = _read_json(path, {})
+
+    if isinstance(obj, dict):
+        obj.setdefault("version", "article_body_index_v1")
+        obj.setdefault("workspace_id", workspace_id)
+        obj.setdefault("articles", [])
+        obj.setdefault("stats", {})
+        return obj
+
+    return {
+        "version": "article_body_index_v1",
+        "workspace_id": workspace_id,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "articles": [],
+        "stats": {},
+    }
+
+
+def calculate_article_stats(articles: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "article_count": len(articles),
+        "with_body_text": sum(bool(_norm(a.get("body_text"))) for a in articles),
+        "with_headings": sum(bool(a.get("headings")) for a in articles),
+        "with_entities": sum(bool(a.get("entities")) for a in articles),
+        "with_related_concepts": sum(bool(a.get("related_concepts")) for a in articles),
+    }
+
+
+def save_article_body_index(workspace_id: str, data: Dict[str, Any]) -> Path:
+    path = _article_body_index_path(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    data["stats"] = calculate_article_stats([
+        a for a in articles if isinstance(a, dict)
+    ])
+    data["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    _write_json(path, data)
+    return path
+
+
+
+
+_HTML_DROP_RE = re.compile(
+    r"<(script|style|noscript|svg|iframe|form|nav|footer|header|aside)[\s\S]*?</\1>",
+    re.IGNORECASE,
+)
+
+_TAG_RE = re.compile(r"<[^>]+>")
+_TITLE_RE = re.compile(r"<title[^>]*>([\s\S]*?)</title>", re.IGNORECASE)
+_META_DESC_RE = re.compile(
+    r'<meta[^>]+name=["\']description["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_H1_RE = re.compile(r"<h1[^>]*>([\s\S]*?)</h1>", re.IGNORECASE)
+_HEADING_RE = re.compile(r"<h[2-3][^>]*>([\s\S]*?)</h[2-3]>", re.IGNORECASE)
+_P_RE = re.compile(r"<p[^>]*>([\s\S]*?)</p>", re.IGNORECASE)
+
+
+def _strip_tags(value: str) -> str:
+    value = re.sub(r"<br\s*/?>", " ", str(value or ""), flags=re.IGNORECASE)
+    value = _TAG_RE.sub(" ", value)
+    value = (
+        value.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+    )
+    return _norm(value)
+
+
+def _extract_first(pattern: re.Pattern, html: str) -> str:
+    m = pattern.search(html or "")
+    if not m:
+        return ""
+    return _strip_tags(m.group(1))
+
+
+def _extract_all(pattern: re.Pattern, html: str, limit: int = 100) -> List[str]:
+    out: List[str] = []
+    for m in pattern.finditer(html or ""):
+        value = _strip_tags(m.group(1))
+        if value and value not in out:
+            out.append(value)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _tokens(value: str) -> List[str]:
+    return [
+        t for t in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(t) >= 3
+    ]
+
+
+def _extract_key_phrases(text: str, limit: int = 80) -> List[str]:
+    words = _tokens(text)
+    phrases = []
+
+    for i in range(len(words) - 1):
+        phrases.append(words[i] + " " + words[i + 1])
+
+    for i in range(len(words) - 2):
+        phrases.append(words[i] + " " + words[i + 1] + " " + words[i + 2])
+
+    counts: Dict[str, int] = {}
+    for phrase in phrases:
+        counts[phrase] = counts.get(phrase, 0) + 1
+
+    ranked = sorted(
+        counts.items(),
+        key=lambda x: (x[1], len(x[0])),
+        reverse=True,
+    )
+
+    return [p for p, _ in ranked[:limit]]
+
+
+def _extract_entities(text: str, limit: int = 80) -> List[Dict[str, Any]]:
+    entities: List[Dict[str, Any]] = []
+    seen = set()
+
+    for m in re.finditer(r"\b[A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+){0,4}\b", text or ""):
+        value = _norm(m.group(0))
+
+        if len(value) < 3:
+            continue
+
+        key = value.lower()
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        entities.append({
+            "text": value,
+            "type": "proper_noun_candidate",
+            "confidence": 0.55,
+        })
+
+        if len(entities) >= limit:
+            break
+
+    return entities
+
+
+def _build_related_concepts(key_phrases: List[str], limit: int = 80) -> List[Dict[str, Any]]:
+    related: List[Dict[str, Any]] = []
+
+    for phrase in key_phrases[:limit]:
+        related.append({
+            "concept": phrase,
+            "related": phrase,
+            "relation_type": "article_cooccurrence_candidate",
+            "confidence": 0.65,
+        })
+
+    return related
+
+
+def extract_article_from_html(url: str, html: str) -> Dict[str, Any]:
+    raw = str(html or "")
+    cleaned_html = _HTML_DROP_RE.sub(" ", raw)
+
+    title = _extract_first(_TITLE_RE, cleaned_html)
+    h1 = _extract_first(_H1_RE, cleaned_html)
+    description = _extract_first(_META_DESC_RE, cleaned_html)
+    headings = _extract_all(_HEADING_RE, cleaned_html, limit=80)
+
+    paragraphs = _extract_all(_P_RE, cleaned_html, limit=300)
+    body_text = _norm(" ".join(paragraphs))
+
+    smart_rows = []
+    if extract_smart_phrases is not None:
+        try:
+            smart_rows = extract_smart_phrases(
+                text=body_text,
+                html=cleaned_html,
+                title=title or h1,
+                doc_id=url,
+                max_candidates=150,
+                workspace_id="article_body",
+                vertical="general",
+            )
+        except Exception:
+            smart_rows = []
+
+    if smart_rows:
+        key_phrases = []
+        related_concepts = []
+
+        for row in smart_rows:
+            phrase = _norm(row.get("phrase") or "")
+            if not phrase:
+                continue
+
+            if phrase not in key_phrases:
+                key_phrases.append(phrase)
+
+            related_concepts.append({
+                "concept": phrase,
+                "related": phrase,
+                "relation_type": "smart_extractor_candidate",
+                "confidence": float((row.get("extractor_intelligence") or {}).get("score") or 0.75),
+                "source_type": row.get("source_type") or "",
+                "section_id": row.get("section_id") or "",
+            })
+
+        entities = _extract_entities(" ".join([title, h1, body_text]), limit=80)
+    else:
+        key_phrases = _extract_key_phrases(" ".join([title, h1, body_text]), limit=100)
+        entities = _extract_entities(" ".join([title, h1, body_text]), limit=80)
+        related_concepts = _build_related_concepts(key_phrases, limit=80)
+
+    return {
+        "url": url,
+        "title": title,
+        "h1": h1,
+        "description": description,
+        "headings": headings,
+        "body_text": body_text,
+        "key_phrases": key_phrases,
+        "entities": entities,
+        "related_concepts": related_concepts,
+        "status": "parsed" if body_text or title or h1 else "empty_parse",
+        "extracted_at_utc": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+
+
+def fetch_url_html(url: str, timeout: int = 20) -> Dict[str, Any]:
+    target = str(url or "").strip()
+
+    if not target.startswith(("http://", "https://")):
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "invalid_url",
+            "error": "URL must start with http:// or https://",
+        }
+
+    try:
+        req = Request(
+            target,
+            headers={
+                "User-Agent": "LinkCraftorBot/1.0 (+https://linkcraftor.com)",
+                "Accept": "text/html,application/xhtml+xml",
+            },
+        )
+
+        with urlopen(req, timeout=timeout) as resp:
+            content_type = resp.headers.get("Content-Type", "")
+            raw = resp.read(2_000_000)
+
+        html = raw.decode("utf-8", errors="replace")
+
+        return {
+            "ok": True,
+            "url": target,
+            "html": html,
+            "content_type": content_type,
+            "status": "fetched",
+            "bytes": len(raw),
+        }
+
+    except HTTPError as exc:
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "http_error",
+            "error": str(exc),
+            "code": getattr(exc, "code", None),
+        }
+
+    except URLError as exc:
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "url_error",
+            "error": str(exc),
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "url": target,
+            "html": "",
+            "status": "fetch_error",
+            "error": str(exc),
+        }
+
+
+def fetch_and_extract_article(url: str, timeout: int = 20) -> Dict[str, Any]:
+    fetched = fetch_url_html(url, timeout=timeout)
+
+    if not fetched.get("ok"):
+        return {
+            "url": url,
+            "title": "",
+            "h1": "",
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "key_phrases": [],
+            "entities": [],
+            "related_concepts": [],
+            "status": fetched.get("status") or "fetch_failed",
+            "fetch_error": fetched.get("error") or "",
+            "extracted_at_utc": datetime.now(timezone.utc).isoformat(),
+        }
+
+    row = extract_article_from_html(url, fetched.get("html") or "")
+    row["fetch_status"] = fetched.get("status")
+    row["content_type"] = fetched.get("content_type")
+    row["bytes"] = fetched.get("bytes")
+    return row
+
+
+
+
+def update_single_article_body(
+    workspace_id: str,
+    url: str,
+    timeout: int = 20,
+) -> Dict[str, Any]:
+    data = load_article_body_index(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    target_url = str(url or "").strip()
+    if not target_url:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "url": target_url,
+            "status": "missing_url",
+        }
+
+    row = fetch_and_extract_article(target_url, timeout=timeout)
+
+    existing_index = None
+    for idx, article in enumerate(articles):
+        if isinstance(article, dict) and str(article.get("url") or "").strip() == target_url:
+            existing_index = idx
+            break
+
+    merged = {
+        "url": target_url,
+        "title": row.get("title") or "",
+        "h1": row.get("h1") or "",
+        "description": row.get("description") or "",
+        "headings": row.get("headings") or [],
+        "body_text": row.get("body_text") or "",
+        "key_phrases": row.get("key_phrases") or [],
+        "entities": row.get("entities") or [],
+        "related_concepts": row.get("related_concepts") or [],
+        "source": "article_body_fetcher",
+        "source_type": "fetched_html",
+        "status": row.get("status") or "",
+        "fetch_status": row.get("fetch_status") or "",
+        "content_type": row.get("content_type") or "",
+        "bytes": row.get("bytes") or 0,
+        "fetch_error": row.get("fetch_error") or "",
+        "extracted_at_utc": row.get("extracted_at_utc") or datetime.now(timezone.utc).isoformat(),
+    }
+
+    if existing_index is None:
+        articles.append(merged)
+        action = "added"
+    else:
+        previous = articles[existing_index] if isinstance(articles[existing_index], dict) else {}
+        previous.update(merged)
+        articles[existing_index] = previous
+        action = "updated"
+
+    data["articles"] = articles
+    out = save_article_body_index(workspace_id, data)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "url": target_url,
+        "action": action,
+        "status": merged.get("status"),
+        "body_len": len(merged.get("body_text") or ""),
+        "key_phrase_count": len(merged.get("key_phrases") or []),
+        "entity_count": len(merged.get("entities") or []),
+        "related_concept_count": len(merged.get("related_concepts") or []),
+        "output_path": str(out),
+    }
+
+
+
+
+def update_article_body_batch(
+    workspace_id: str,
+    limit: int = 5,
+    timeout: int = 20,
+    only_missing_body: bool = True,
+) -> Dict[str, Any]:
+    data = load_article_body_index(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    selected: List[str] = []
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        url = str(article.get("url") or "").strip()
+        if not url:
+            continue
+
+        if only_missing_body and str(article.get("body_text") or "").strip():
+            continue
+
+        selected.append(url)
+
+        if len(selected) >= max(1, int(limit or 1)):
+            break
+
+    results: List[Dict[str, Any]] = []
+
+    for url in selected:
+        results.append(update_single_article_body(
+            workspace_id=workspace_id,
+            url=url,
+            timeout=timeout,
+        ))
+
+    refreshed = load_article_body_index(workspace_id)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "requested_limit": limit,
+        "selected": len(selected),
+        "updated": sum(1 for r in results if r.get("ok")),
+        "parsed": sum(1 for r in results if r.get("status") == "parsed"),
+        "failed": sum(1 for r in results if r.get("status") != "parsed"),
+        "results": results,
+        "stats": refreshed.get("stats") or {},
+    }
+
+
+
+
+def _same_domain_allowed(url: str, allowed_domain: str = "") -> bool:
+    if not allowed_domain:
+        return True
+
+    try:
+        host = urlparse(str(url or "")).netloc.lower()
+        domain = str(allowed_domain or "").lower().replace("https://", "").replace("http://", "").strip("/")
+        return host == domain or host.endswith("." + domain)
+    except Exception:
+        return False
+
+
+def safe_update_article_body_batch(
+    workspace_id: str,
+    limit: int = 5,
+    timeout: int = 20,
+    only_missing_body: bool = True,
+    allowed_domain: str = "",
+    delay_seconds: float = 1.0,
+    max_limit: int = 25,
+) -> Dict[str, Any]:
+    safe_limit = max(1, min(int(limit or 1), int(max_limit or 25)))
+    safe_delay = max(0.0, float(delay_seconds or 0.0))
+
+    data = load_article_body_index(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    selected: List[str] = []
+    skipped_domain = 0
+    skipped_existing_body = 0
+    skipped_missing_url = 0
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        url = str(article.get("url") or "").strip()
+
+        if not url:
+            skipped_missing_url += 1
+            continue
+
+        if allowed_domain and not _same_domain_allowed(url, allowed_domain):
+            skipped_domain += 1
+            continue
+
+        if only_missing_body and str(article.get("body_text") or "").strip():
+            skipped_existing_body += 1
+            continue
+
+        selected.append(url)
+
+        if len(selected) >= safe_limit:
+            break
+
+    results: List[Dict[str, Any]] = []
+
+    for idx, url in enumerate(selected):
+        if idx > 0 and safe_delay > 0:
+            sleep(safe_delay)
+
+        results.append(update_single_article_body(
+            workspace_id=workspace_id,
+            url=url,
+            timeout=timeout,
+        ))
+
+    refreshed = load_article_body_index(workspace_id)
+
+    parsed = sum(1 for r in results if r.get("status") == "parsed")
+    failed = sum(1 for r in results if r.get("status") != "parsed")
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "requested_limit": limit,
+        "safe_limit": safe_limit,
+        "selected": len(selected),
+        "updated": sum(1 for r in results if r.get("ok")),
+        "parsed": parsed,
+        "failed": failed,
+        "skipped": {
+            "existing_body": skipped_existing_body,
+            "domain_blocked": skipped_domain,
+            "missing_url": skipped_missing_url,
+        },
+        "safety": {
+            "allowed_domain": allowed_domain,
+            "delay_seconds": safe_delay,
+            "max_limit": max_limit,
+            "only_missing_body": only_missing_body,
+        },
+        "results": results,
+        "stats": refreshed.get("stats") or {},
+    }
+
+
+
+
+def classify_article_crawl_status(article: Dict[str, Any]) -> str:
+    status = str(article.get("status") or "").strip()
+    body = _norm(article.get("body_text") or "")
+    fetch_error = _norm(article.get("fetch_error") or "")
+
+    if status == "seeded" and not body:
+        return "seeded_not_fetched"
+
+    if fetch_error or status in {"http_error", "url_error", "fetch_error", "invalid_url"}:
+        return "fetch_failed"
+
+    if status == "empty_parse":
+        return "empty_parse"
+
+    if status == "parsed" and not body:
+        return "empty_parse"
+
+    if status == "parsed" and len(body) < 1500:
+        return "short_parse"
+
+    if status == "parsed":
+        return "parsed"
+
+    if not status and not body:
+        return "unknown_not_fetched"
+
+    return status or "unknown"
+
+
+def crawl_status_report(workspace_id: str) -> Dict[str, Any]:
+    data = load_article_body_index(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    counts: Dict[str, int] = {}
+    samples: Dict[str, List[Dict[str, Any]]] = {}
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        crawl_status = classify_article_crawl_status(article)
+        article["crawl_status"] = crawl_status
+
+        counts[crawl_status] = counts.get(crawl_status, 0) + 1
+
+        if len(samples.get(crawl_status, [])) < 3:
+            samples.setdefault(crawl_status, []).append({
+                "url": article.get("url"),
+                "title": article.get("title"),
+                "status": article.get("status"),
+                "body_chars": len(str(article.get("body_text") or "")),
+                "fetch_error": article.get("fetch_error") or "",
+            })
+
+    data["articles"] = articles
+    data["crawl_status_summary"] = counts
+    out = save_article_body_index(workspace_id, data)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "output_path": str(out),
+        "counts": counts,
+        "samples": samples,
+    }
+
+
+
+
+def _crawl_state_path(workspace_id: str) -> Path:
+    ws = str(workspace_id or "default").strip() or "default"
+    return _semantic_dir() / f"crawl_state_{ws}.json"
+
+
+def load_crawl_state(workspace_id: str) -> Dict[str, Any]:
+    path = _crawl_state_path(workspace_id)
+    obj = _read_json(path, {})
+
+    if isinstance(obj, dict):
+        obj.setdefault("workspace_id", workspace_id)
+        obj.setdefault("status", "idle")
+        obj.setdefault("completed", 0)
+        obj.setdefault("failed", 0)
+        obj.setdefault("last_success_url", "")
+        obj.setdefault("current_url", "")
+        obj.setdefault("history", [])
+        return obj
+
+    return {
+        "workspace_id": workspace_id,
+        "status": "idle",
+        "completed": 0,
+        "failed": 0,
+        "last_success_url": "",
+        "current_url": "",
+        "history": [],
+    }
+
+
+def save_crawl_state(workspace_id: str, state: Dict[str, Any]) -> Path:
+    path = _crawl_state_path(workspace_id)
+    state["workspace_id"] = workspace_id
+    state["last_updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def resumeable_article_body_crawl(
+    workspace_id: str,
+    batch_size: int = 25,
+    timeout: int = 20,
+    allowed_domain: str = "",
+    delay_seconds: float = 1.0,
+    max_batch_size: int = 50,
+) -> Dict[str, Any]:
+    safe_batch_size = max(1, min(int(batch_size or 1), int(max_batch_size or 50)))
+    safe_delay = max(0.0, float(delay_seconds or 0.0))
+
+    state = load_crawl_state(workspace_id)
+    state["status"] = "running"
+    state.setdefault("started_at_utc", datetime.now(timezone.utc).isoformat())
+    save_crawl_state(workspace_id, state)
+
+    data = load_article_body_index(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    selected: List[str] = []
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        url = str(article.get("url") or "").strip()
+        if not url:
+            continue
+
+        crawl_status = classify_article_crawl_status(article)
+
+        if crawl_status == "parsed":
+            continue
+
+        if allowed_domain and not _same_domain_allowed(url, allowed_domain):
+            continue
+
+        selected.append(url)
+
+        if len(selected) >= safe_batch_size:
+            break
+
+    results: List[Dict[str, Any]] = []
+
+    for idx, url in enumerate(selected):
+        if idx > 0 and safe_delay > 0:
+            sleep(safe_delay)
+
+        state["current_url"] = url
+        state["status"] = "running"
+        save_crawl_state(workspace_id, state)
+
+        result = update_single_article_body(
+            workspace_id=workspace_id,
+            url=url,
+            timeout=timeout,
+        )
+
+        results.append(result)
+
+        if result.get("status") == "parsed":
+            state["completed"] = int(state.get("completed") or 0) + 1
+            state["last_success_url"] = url
+        else:
+            state["failed"] = int(state.get("failed") or 0) + 1
+
+        history = state.setdefault("history", [])
+        history.append({
+            "url": url,
+            "status": result.get("status"),
+            "ok": bool(result.get("ok")),
+            "body_len": result.get("body_len"),
+            "processed_at_utc": datetime.now(timezone.utc).isoformat(),
+        })
+
+        state["history"] = history[-100:]
+        save_crawl_state(workspace_id, state)
+
+    report = crawl_status_report(workspace_id)
+    counts = report.get("counts") or {}
+
+    remaining = int(counts.get("seeded_not_fetched") or 0) + int(counts.get("unknown_not_fetched") or 0)
+
+    state["current_url"] = ""
+    state["remaining"] = remaining
+    state["status"] = "complete" if remaining == 0 else "paused"
+    save_crawl_state(workspace_id, state)
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "selected": len(selected),
+        "parsed": sum(1 for r in results if r.get("status") == "parsed"),
+        "failed": sum(1 for r in results if r.get("status") != "parsed"),
+        "remaining": remaining,
+        "counts": counts,
+        "state": state,
+        "results": results,
+    }
+
+
+def article_body_extractor_healthcheck() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "engine": "article_body_extractor",
+        "version": "v1_shell",
+        "role": "fetch_extract_write_article_body_index",
+    }

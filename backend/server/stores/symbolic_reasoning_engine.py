@@ -2155,3 +2155,219 @@ def explain_entity_graph_builder_v1() -> Dict[str, Any]:
         },
     }
 
+
+def build_relationship_graph_engine_v1(
+    entity_graph_result: Dict[str, Any] | None = None,
+    symbol_relationship_result: Dict[str, Any] | None = None,
+    entity_relationship_result: Dict[str, Any] | None = None,
+    semantic_relationship_result: Dict[str, Any] | None = None,
+    grown_relationship_result: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    2.6.3.2 Relationship Graph Engine.
+
+    Shadow-runtime only.
+    Normalizes and summarizes relationship edges from entity graph,
+    symbolic relationships, entity relationships, semantic relationships,
+    and grown graph relationships.
+    """
+    entity_graph_result = entity_graph_result or {}
+    symbol_relationship_result = symbol_relationship_result or {}
+    entity_relationship_result = entity_relationship_result or {}
+    semantic_relationship_result = semantic_relationship_result or {}
+    grown_relationship_result = grown_relationship_result or {}
+
+    relationship_edges = []
+
+    def _edge_score(edge: Dict[str, Any]) -> float:
+        return _safe_signal_float(
+            edge.get("score")
+            or edge.get("relationship_score")
+            or edge.get("semantic_relationship_score")
+            or edge.get("relationship_strength")
+            or edge.get("confidence")
+            or edge.get("weight")
+        )
+
+    def _strength(score: float) -> str:
+        if score >= 0.75:
+            return "strong"
+        if score >= 0.50:
+            return "moderate"
+        if score > 0:
+            return "weak"
+        return "none"
+
+    def _normalize_edges(raw_edges: Any, source_layer: str) -> None:
+        if not isinstance(raw_edges, list):
+            return
+
+        for edge in raw_edges:
+            if not isinstance(edge, dict):
+                continue
+
+            source = str(
+                edge.get("source")
+                or edge.get("from")
+                or edge.get("subject")
+                or edge.get("source_entity")
+                or ""
+            ).strip().lower()
+
+            target = str(
+                edge.get("target")
+                or edge.get("to")
+                or edge.get("object")
+                or edge.get("target_entity")
+                or ""
+            ).strip().lower()
+
+            if not source or not target or source == target:
+                continue
+
+            score = _edge_score(edge)
+
+            relationship_edges.append({
+                "source": source,
+                "target": target,
+                "relationship_type": str(
+                    edge.get("relationship")
+                    or edge.get("type")
+                    or edge.get("edge_type")
+                    or "related_to"
+                ),
+                "score": score,
+                "strength": _strength(score),
+                "source_layer": source_layer,
+                "metadata": edge,
+            })
+
+    _normalize_edges(entity_graph_result.get("entity_edges"), "entity_graph")
+    _normalize_edges(symbol_relationship_result.get("relationships"), "symbol_relationship")
+    _normalize_edges(symbol_relationship_result.get("edges"), "symbol_relationship")
+    _normalize_edges(entity_relationship_result.get("relationships"), "entity_relationship")
+    _normalize_edges(entity_relationship_result.get("edges"), "entity_relationship")
+    _normalize_edges(semantic_relationship_result.get("relationships"), "semantic_relationship")
+    _normalize_edges(semantic_relationship_result.get("edges"), "semantic_relationship")
+    _normalize_edges(semantic_relationship_result.get("items"), "semantic_relationship")
+    _normalize_edges(grown_relationship_result.get("relationships"), "grown_relationship")
+    _normalize_edges(grown_relationship_result.get("accepted"), "grown_relationship")
+    _normalize_edges(grown_relationship_result.get("edges"), "grown_relationship")
+
+    deduped = {}
+    for edge in relationship_edges:
+        key = (
+            edge["source"],
+            edge["target"],
+            edge["relationship_type"],
+            edge["source_layer"],
+        )
+        current = deduped.get(key)
+        if current is None or edge["score"] > current["score"]:
+            deduped[key] = edge
+
+    relationship_edges = list(deduped.values())
+
+    relationship_count = len(relationship_edges)
+    total_score = sum(float(edge.get("score", 0.0) or 0.0) for edge in relationship_edges)
+    average_relationship_score = round(total_score / max(1, relationship_count), 4)
+
+    strength_distribution = {
+        "strong": 0,
+        "moderate": 0,
+        "weak": 0,
+        "none": 0,
+    }
+
+    source_layer_distribution = {}
+
+    for edge in relationship_edges:
+        strength_distribution[edge["strength"]] = strength_distribution.get(edge["strength"], 0) + 1
+        layer = edge.get("source_layer") or "unknown"
+        source_layer_distribution[layer] = source_layer_distribution.get(layer, 0) + 1
+
+    if average_relationship_score >= 0.75 and relationship_count >= 3:
+        relationship_graph_strength = "strong"
+        relationship_decision = "relationship_graph_strong"
+    elif average_relationship_score >= 0.50 and relationship_count >= 2:
+        relationship_graph_strength = "moderate"
+        relationship_decision = "relationship_graph_moderate"
+    elif relationship_count > 0:
+        relationship_graph_strength = "weak"
+        relationship_decision = "relationship_graph_weak"
+    else:
+        relationship_graph_strength = "none"
+        relationship_decision = "relationship_graph_not_found"
+
+    return {
+        "version": "2.6.3.2",
+        "layer": "relationship_graph_engine",
+        "shadow_runtime_only": True,
+        "can_influence_runtime": False,
+        "runtime_mutation_permissions": [],
+        "relationship_edges": relationship_edges,
+        "relationship_count": relationship_count,
+        "average_relationship_score": average_relationship_score,
+        "relationship_graph_strength": relationship_graph_strength,
+        "relationship_decision": relationship_decision,
+        "strength_distribution": strength_distribution,
+        "source_layer_distribution": source_layer_distribution,
+        "relationship_graph_ready": relationship_count > 0,
+        "diagnostics": {
+            "entity_graph_edge_count": len(entity_graph_result.get("entity_edges") or []),
+            "symbol_relationship_count": len(symbol_relationship_result.get("relationships") or symbol_relationship_result.get("edges") or []),
+            "entity_relationship_count": len(entity_relationship_result.get("relationships") or entity_relationship_result.get("edges") or []),
+            "semantic_relationship_count": len(
+                semantic_relationship_result.get("relationships")
+                or semantic_relationship_result.get("edges")
+                or semantic_relationship_result.get("items")
+                or []
+            ),
+            "grown_relationship_count": len(
+                grown_relationship_result.get("relationships")
+                or grown_relationship_result.get("accepted")
+                or grown_relationship_result.get("edges")
+                or []
+            ),
+            "safe_shadow_diagnostic_only": True,
+        },
+    }
+
+
+def explain_relationship_graph_engine_v1() -> Dict[str, Any]:
+    """
+    Explain the 2.6.3.2 Relationship Graph Engine capability.
+    """
+    return {
+        "version": "2.6.3.2",
+        "layer": "relationship_graph_engine",
+        "purpose": "Normalize and summarize relationship edges across existing symbolic, entity, semantic, and grown graph relationship systems.",
+        "shadow_runtime_only": True,
+        "can_influence_runtime": False,
+        "runtime_mutation_permissions": [],
+        "inputs": [
+            "entity_graph_result",
+            "symbol_relationship_result",
+            "entity_relationship_result",
+            "semantic_relationship_result",
+            "grown_relationship_result",
+        ],
+        "outputs": [
+            "relationship_edges",
+            "relationship_count",
+            "average_relationship_score",
+            "relationship_graph_strength",
+            "relationship_decision",
+            "strength_distribution",
+            "source_layer_distribution",
+            "relationship_graph_ready",
+        ],
+        "safety": {
+            "does_not_rank_targets": True,
+            "does_not_select_links": True,
+            "does_not_apply_links": True,
+            "does_not_mutate_runtime": True,
+            "does_not_write_persistence": True,
+        },
+    }
+

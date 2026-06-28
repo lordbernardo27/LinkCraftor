@@ -430,11 +430,210 @@ def load_uploaded_document_evidence(workspace_id: str) -> List[Dict[str, Any]]:
     return evidence
 
 
+
+
+def _article_body_index_path(workspace_id: str) -> Path:
+    ws = str(workspace_id or "default").strip() or "default"
+    return _semantic_dir() / f"article_body_index_{ws}.json"
+
+
+
+
+_SITEWIDE_ARTICLE_NOISE = {
+    "whattoexpect com",
+    "what to expect",
+    "expect digital",
+    "amazon prime day",
+    "app amazon prime day",
+    "registry product",
+    "family baby names registry product",
+    "topics top baby names",
+    "baby names topics",
+    "top baby names",
+    "pregnant topics",
+    "community groups",
+    "expect community",
+    "advertising policy",
+    "editorial policy",
+}
+
+
+def _is_sitewide_article_noise(value: Any) -> bool:
+    text = _norm(value)
+
+    if not text:
+        return True
+
+    if text in _SITEWIDE_ARTICLE_NOISE:
+        return True
+
+    html_residue_terms = {
+        "nbsp", "amp", "copy", "raquo", "laquo", "quot",
+        "mdash", "ndash", "rsquo", "lsquo", "rdquo", "ldquo",
+    }
+
+    parts = set(text.split())
+
+    if parts & html_residue_terms:
+        return True
+
+    if "whattoexpect com" in text:
+        return True
+
+    if "amazon prime day" in text:
+        return True
+
+    if "registry product" in text:
+        return True
+
+    if text.endswith("topics") and "baby names" in text:
+        return True
+
+    if text.startswith("topics ") and "baby names" in text:
+        return True
+
+    if text in {"about what to expect", "about heidi murkoff"}:
+        return True
+
+    return False
+
+
+def load_article_body_evidence(workspace_id: str) -> List[Dict[str, Any]]:
+    obj = _read_json(_article_body_index_path(workspace_id), {})
+    articles = obj.get("articles") if isinstance(obj, dict) else []
+
+    evidence: List[Dict[str, Any]] = []
+
+    if not isinstance(articles, list):
+        return evidence
+
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+
+        status = str(article.get("status") or "").strip()
+
+        if status != "parsed":
+            continue
+
+        url = article.get("url") or ""
+        title = _norm(article.get("title") or article.get("h1") or "")
+        headings = article.get("headings") if isinstance(article.get("headings"), list) else []
+        key_phrases = article.get("key_phrases") if isinstance(article.get("key_phrases"), list) else []
+        entities = article.get("entities") if isinstance(article.get("entities"), list) else []
+        related_concepts = article.get("related_concepts") if isinstance(article.get("related_concepts"), list) else []
+
+        if title and not _is_sitewide_article_noise(title):
+            evidence.append({
+                "concept": title,
+                "related_phrase": title,
+                "relation_type": "article_topic",
+                "source": "article_body",
+                "confidence": 0.75,
+                "evidence": {
+                    "url": url,
+                    "title": article.get("title") or article.get("h1") or "",
+                }
+            })
+
+        for phrase in key_phrases[:150]:
+            phrase = _norm(phrase)
+            if not phrase or _looks_like_noise_phrase(phrase) or _is_sitewide_article_noise(phrase):
+                continue
+
+            evidence.append({
+                "concept": phrase,
+                "related_phrase": phrase,
+                "relation_type": "article_key_phrase",
+                "source": "article_body",
+                "confidence": 0.75,
+                "evidence": {
+                    "url": url,
+                    "title": article.get("title") or "",
+                }
+            })
+
+        for heading in headings[:50]:
+            heading = _norm(heading)
+            if not heading or _looks_like_noise_phrase(heading):
+                continue
+
+            evidence.append({
+                "concept": heading,
+                "related_phrase": heading,
+                "relation_type": "article_heading",
+                "source": "article_body",
+                "confidence": 0.78,
+                "evidence": {
+                    "url": url,
+                    "title": article.get("title") or "",
+                }
+            })
+
+        for entity in entities[:100]:
+            if isinstance(entity, dict):
+                phrase = _norm(entity.get("text") or entity.get("name") or entity.get("label") or "")
+                entity_type = _norm(entity.get("type") or entity.get("entity_type") or "")
+            else:
+                phrase = _norm(entity)
+                entity_type = ""
+
+            if not phrase or _looks_like_noise_phrase(phrase) or _is_sitewide_article_noise(phrase):
+                continue
+
+            evidence.append({
+                "concept": phrase,
+                "related_phrase": phrase,
+                "relation_type": "article_entity",
+                "source": "article_body",
+                "confidence": 0.78,
+                "evidence": {
+                    "url": url,
+                    "title": article.get("title") or "",
+                    "entity_type": entity_type,
+                }
+            })
+
+        for item in related_concepts[:150]:
+            if isinstance(item, dict):
+                concept = _norm(item.get("concept") or item.get("source") or "")
+                related = _norm(item.get("related") or item.get("target") or item.get("related_phrase") or "")
+            else:
+                concept = title
+                related = _norm(item)
+
+            if not concept or not related:
+                continue
+
+            if (
+                _looks_like_noise_phrase(concept)
+                or _looks_like_noise_phrase(related)
+                or _is_sitewide_article_noise(concept)
+                or _is_sitewide_article_noise(related)
+            ):
+                continue
+
+            evidence.append({
+                "concept": concept,
+                "related_phrase": related,
+                "relation_type": "article_related_concept",
+                "source": "article_body",
+                "confidence": 0.72,
+                "evidence": {
+                    "url": url,
+                    "title": article.get("title") or "",
+                }
+            })
+
+    return evidence
+
+
 SOURCE_LOADERS = {
     "core_knowledge": load_core_knowledge_evidence,
     "workspace_synonyms": load_workspace_synonym_evidence,
     "page_index": load_page_index_evidence,
     "uploaded_documents": load_uploaded_document_evidence,
+    "article_body": load_article_body_evidence,
 }
 
 
@@ -990,6 +1189,100 @@ def build_concept_graph(workspace_id: str) -> Dict[str, Any]:
         "evidence_count": len(evidence),
         "sources": SEMANTIC_SOURCES,
         "status": "graph_writer_completed"
+    }
+
+
+
+
+def seed_article_body_index(workspace_id: str) -> Dict[str, Any]:
+    article_path = _article_body_index_path(workspace_id)
+    article_obj = _read_json(article_path, {})
+
+    if not isinstance(article_obj, dict):
+        article_obj = {}
+
+    article_obj.setdefault("version", "article_body_index_v1")
+    article_obj.setdefault("workspace_id", workspace_id)
+    article_obj.setdefault("articles", [])
+    article_obj.setdefault("stats", {})
+
+    existing = {}
+
+    for item in article_obj.get("articles", []):
+        if isinstance(item, dict):
+            url = str(item.get("url") or "").strip()
+            if url:
+                existing[url] = item
+
+    site_pages_path = _data_dir() / f"site_pages_{workspace_id}.json"
+    site_obj = _read_json(site_pages_path, {})
+
+    pages = site_obj.get("pages") if isinstance(site_obj, dict) else {}
+
+    if isinstance(pages, dict):
+        pages = list(pages.values())
+
+    if not isinstance(pages, list):
+        pages = []
+
+    added = 0
+
+    for page in pages:
+        if not isinstance(page, dict):
+            continue
+
+        url = str(page.get("url") or "").strip()
+
+        if not url:
+            continue
+
+        if url in existing:
+            continue
+
+        existing[url] = {
+            "url": url,
+            "title": page.get("title") or "",
+            "h1": page.get("h1") or "",
+            "description": page.get("description") or "",
+            "headings": [],
+            "body_text": "",
+            "key_phrases": [],
+            "entities": [],
+            "related_concepts": [],
+            "source": page.get("source") or "",
+            "source_type": page.get("source_type") or "",
+            "status": "seeded",
+        }
+
+        added += 1
+
+    articles = sorted(
+        existing.values(),
+        key=lambda x: str(x.get("url") or "")
+    )
+
+    stats = {
+        "article_count": len(articles),
+        "with_body_text": sum(bool(a.get("body_text")) for a in articles),
+        "with_headings": sum(bool(a.get("headings")) for a in articles),
+        "with_entities": sum(bool(a.get("entities")) for a in articles),
+        "with_related_concepts": sum(bool(a.get("related_concepts")) for a in articles),
+    }
+
+    article_obj["articles"] = articles
+    article_obj["stats"] = stats
+    article_obj["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    article_path.write_text(
+        json.dumps(article_obj, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    return {
+        "ok": True,
+        "added": added,
+        "total_articles": len(articles),
+        "path": str(article_path),
     }
 
 

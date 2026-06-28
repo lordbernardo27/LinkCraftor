@@ -1,0 +1,108 @@
+﻿from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+def _data_dir() -> Path:
+    return Path(__file__).resolve().parents[1] / "data"
+
+
+def _semantic_dir() -> Path:
+    path = _data_dir() / "semantic"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _article_body_index_path(workspace_id: str) -> Path:
+    ws = str(workspace_id or "default").strip() or "default"
+    return _semantic_dir() / f"article_body_index_{ws}.json"
+
+
+def _read_json(path: Path, fallback: Any = None) -> Any:
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8-sig"))
+    except Exception:
+        pass
+    return fallback
+
+
+def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "")).strip()
+
+
+def load_article_body_index(workspace_id: str) -> Dict[str, Any]:
+    path = _article_body_index_path(workspace_id)
+    obj = _read_json(path, {})
+
+    if isinstance(obj, dict):
+        obj.setdefault("version", "article_body_index_v1")
+        obj.setdefault("workspace_id", workspace_id)
+        obj.setdefault("articles", [])
+        obj.setdefault("stats", {})
+        return obj
+
+    return {
+        "version": "article_body_index_v1",
+        "workspace_id": workspace_id,
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
+        "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "articles": [],
+        "stats": {},
+    }
+
+
+def calculate_article_stats(articles: List[Dict[str, Any]]) -> Dict[str, int]:
+    return {
+        "article_count": len(articles),
+        "with_body_text": sum(bool(_norm(a.get("body_text"))) for a in articles),
+        "with_headings": sum(bool(a.get("headings")) for a in articles),
+        "with_entities": sum(bool(a.get("entities")) for a in articles),
+        "with_related_concepts": sum(bool(a.get("related_concepts")) for a in articles),
+    }
+
+
+def save_article_body_index(workspace_id: str, data: Dict[str, Any]) -> Path:
+    path = _article_body_index_path(workspace_id)
+    articles = data.get("articles") if isinstance(data.get("articles"), list) else []
+
+    data["stats"] = calculate_article_stats([
+        a for a in articles if isinstance(a, dict)
+    ])
+    data["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+
+    _write_json(path, data)
+    return path
+
+
+def extract_article_from_html(url: str, html: str) -> Dict[str, Any]:
+    # Shell only. Later phase will add real HTML parsing.
+    return {
+        "url": url,
+        "title": "",
+        "h1": "",
+        "description": "",
+        "headings": [],
+        "body_text": "",
+        "key_phrases": [],
+        "entities": [],
+        "related_concepts": [],
+        "status": "extractor_shell",
+    }
+
+
+def article_body_extractor_healthcheck() -> Dict[str, Any]:
+    return {
+        "ok": True,
+        "engine": "article_body_extractor",
+        "version": "v1_shell",
+        "role": "fetch_extract_write_article_body_index",
+    }
