@@ -1,0 +1,944 @@
+﻿from __future__ import annotations
+from pathlib import Path
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Body
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any, Tuple
+import os
+import json
+import copy
+import traceback
+import glob
+import re
+
+from backend.server.engine.rb2_adapter import build_rb2_phrase_contexts
+from backend.server.stores.highlight_selection_engine import select_highlight_candidates
+from backend.server.stores.highlight_density_engine import apply_highlight_density
+from backend.server.engine.scoring import classify_highlight_buckets
+from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
+
+PHASE_DEFAULT = "prepublish"
+# FIX: bump build/label to reflect the v2 highlight engines this router runs.
+ENGINE_RUN_BUILD = "2026-06-29-RB2-C5-DOC-SPECIFIC-POOL-V2"
+
+router = APIRouter(prefix="/api/engine", tags=["engine-run"])
+
+
+class EngineRunRequest(BaseModel):
+    workspaceId: Optional[str] = None
+    workspace_id: Optional[str] = None
+    docId: Optional[str] = None
+    doc_id: Optional[str] = None
+    html: Optional[str] = None
+    text: Optional[str] = None
+    phase: Optional[str] = PHASE_DEFAULT
+    limit: int = 2500
+
+    class Config:
+        extra = "allow"
+        allow_population_by_field_name = True
+
+
+def _priority_phrase_set_path(workspace_id: str) -> Path:
+    safe_ws = str(workspace_id or "default").strip() or "default"
+    return Path("backend/server/data/phrase_pools/priority") / f"priority_phrase_set_{safe_ws}.json"
+
+
+def _save_priority_phrase_set(
+    *,
+    workspace_id: str,
+    doc_id: str,
+    final_highlights: list,
+    selection_stats: dict | None = None,
+    density_stats: dict | None = None,
+) -> dict:
+    """
+    Persist RB2 final highlights as the priority phrase set for phrase-aware target promotion.
+
+    This does not change RB2 phrase selection.
+    It only gives downstream target builders a first-pass list of editor-selected phrases.
+
+    NOTE: each highlight here is a v2 selection/density candidate, so the fields
+    persisted below MUST match what those engines emit (selection_score,
+    extractor_score, link_status, â€¦). Reading legacy names like quality_score
+    would silently persist nulls.
+    """
+    path = _priority_phrase_set_path(workspace_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    phrases = []
+    seen = set()
+
+    for item in final_highlights or []:
+        if not isinstance(item, dict):
+            continue
+
+        phrase = str(item.get("phrase") or item.get("text") or "").strip()
+        if not phrase:
+            continue
+
+        key = phrase.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        # FIX: map to fields the v2 engines actually emit (previously read
+        # canonical/score/quality_score/source_type/section_id which the v2
+        # selection engine never produces, persisting all-null records).
+        phrases.append({
+            "phrase": phrase,
+            "phrase_key": item.get("phrase_key"),
+            "selection_score": item.get("selection_score"),
+            "extractor_score": item.get("extractor_score"),
+            "article_relevance_score": item.get("article_relevance_score"),
+            "resolver_relevance_score": item.get("resolver_relevance_score"),
+            "occurrence_count": item.get("occurrence_count"),
+            "link_status": item.get("link_status"),
+            "target_url": item.get("target_url"),
+            "target_title": item.get("target_title"),
+            "family_root": item.get("family_root"),
+            "display_status": item.get("display_status"),
+            "doc_id": doc_id,
+            "priority_source": "rb2_final_highlights",
+            "raw": item,
+        })
+
+    obj = {
+        "workspace_id": workspace_id,
+        "doc_id": doc_id,
+        "type": "priority_phrase_set",
+        "source": "rb2_final_highlights",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "priority_phrase_count": len(phrases),
+        "selection_stats": selection_stats or {},
+        "density_stats": density_stats or {},
+        "phrases": phrases,
+    }
+
+    path.write_text(json.dumps(obj, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "saved": True,
+        "path": str(path),
+        "priority_phrase_count": len(phrases),
+    }
+
+
+def _ws_safe(ws: str) -> str:
+    ws = (ws or "default").strip().lower()
+    ws = re.sub(r"[^a-z0-9_\-]", "_", ws)[:80] or "default"
+    if ws.startswith("ws_ws_"):
+        ws = ws[3:]
+    return ws
+
+
+def _doc_safe(doc_id: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_\-]", "_", str(doc_id or "").strip())
+
+
+def _data_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
+
+
+def _active_phrase_pool_path(ws: str) -> str:
+    return os.path.join(
+        _data_dir(),
+        "phrase_pools",
+        "active",
+        f"active_phrase_pool_{_ws_safe(ws)}.json",
+    )
+
+
+def _upload_phrase_pool_path(ws: str) -> str:
+    return os.path.join(
+        _data_dir(),
+        "phrase_pools",
+        "upload",
+        f"upload_phrase_pool_{_ws_safe(ws)}.json",
+    )
+
+
+def _upload_phrase_pool_doc_path(ws: str, doc_id: str) -> str:
+    return os.path.join(
+        _data_dir(),
+        "phrase_pools",
+        "upload",
+        f"upload_phrase_pool_{_ws_safe(ws)}_{_doc_safe(doc_id)}.json",
+    )
+
+
+def _resolve_pool_path(ws: str, doc_id: str) -> Tuple[str, str]:
+    doc_pool_path = _upload_phrase_pool_doc_path(ws, doc_id)
+    if os.path.exists(doc_pool_path):
+        return doc_pool_path, "document_specific"
+
+    # Support timestamped document-specific pool filenames like:
+    # upload_phrase_pool_<ws>_20260606_003745_<doc_id>.json
+    safe_ws = _ws_safe(ws)
+    safe_doc = _doc_safe(doc_id)
+    upload_dir = os.path.join(_data_dir(), "phrase_pools", "upload")
+    pattern = os.path.join(upload_dir, f"upload_phrase_pool_{safe_ws}_*{safe_doc}*.json")
+
+    matches = [
+        p for p in glob.glob(pattern)
+        if os.path.isfile(p)
+    ]
+
+    if matches:
+        matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+        return matches[0], "document_specific_glob_match"
+
+    active_pool_path = _active_phrase_pool_path(ws)
+    if os.path.exists(active_pool_path):
+        return active_pool_path, "active_phrase_pool"
+
+    fallback_pool_path = _upload_phrase_pool_path(ws)
+    return fallback_pool_path, "workspace_upload_fallback"
+
+
+def _safe_read_json(path: str) -> Any:
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+
+def _load_workspace_upload_pool_fallback(ws: str) -> Dict[str, Any]:
+    safe_ws = _ws_safe(ws)
+    folder = os.path.join(_data_dir(), "phrase_pools", "upload")
+    pattern = os.path.join(folder, f"upload_phrase_pool_{safe_ws}_*.json")
+
+    merged_phrases = []
+    seen = set()
+    files_loaded = 0
+
+    for file_path in sorted(glob.glob(pattern)):
+        data = _safe_read_json(file_path)
+        if not isinstance(data, dict):
+            continue
+
+        phrases = data.get("phrases", {})
+
+        if isinstance(phrases, dict):
+            phrases = list(phrases.values())
+
+        if not isinstance(phrases, list):
+            continue
+
+        files_loaded += 1
+
+        for item in phrases:
+            if isinstance(item, dict):
+                phrase_text = str(
+                    item.get("phrase")
+                    or item.get("text")
+                    or item.get("label")
+                    or item.get("title")
+                    or ""
+                ).strip()
+            else:
+                phrase_text = str(item or "").strip()
+
+            key = phrase_text.lower()
+            if not key or key in seen:
+                continue
+
+            seen.add(key)
+            merged_phrases.append(item)
+
+    if not merged_phrases:
+        return {}
+
+    return {
+        "workspace_id": ws,
+        "document_specific_fallback": True,
+        "fallback_files_loaded": files_loaded,
+        "phrase_count": len(merged_phrases),
+        "phrases": merged_phrases,
+    }
+
+
+def _normalize_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "")).strip()
+
+
+def _resolve_workspace(payload: EngineRunRequest) -> str:
+    raw_ws = (
+        getattr(payload, "workspaceId", None)
+        or getattr(payload, "workspace_id", None)
+        or "default"
+    )
+    return _ws_safe(raw_ws)
+
+
+def _resolve_doc_id(payload: EngineRunRequest) -> str:
+    return str(
+        getattr(payload, "docId", None)
+        or getattr(payload, "doc_id", None)
+        or "doc_runtime"
+    )
+
+
+def _best_title_from_candidate(candidate: Dict[str, Any]) -> str:
+    phrase = str(
+        candidate.get("phrase")
+        or candidate.get("phrase_text")
+        or candidate.get("text")
+        or ""
+    ).strip()
+
+    examples = candidate.get("examples")
+    if isinstance(examples, list):
+        for ex in examples:
+            if isinstance(ex, dict):
+                snippet = _normalize_spaces(str(ex.get("snippet") or ""))
+                if snippet:
+                    return snippet
+
+    snippets = candidate.get("snippets")
+    if isinstance(snippets, list):
+        for s in snippets:
+            snippet = _normalize_spaces(str(s or ""))
+            if snippet:
+                return snippet
+
+    return phrase.title()
+
+
+def _source_from_candidate(candidate: Dict[str, Any]) -> str:
+    source_type = str(candidate.get("source_type") or "").strip()
+    if source_type:
+        return f"upload_phrase_pool:{source_type}"
+    return "upload_phrase_pool"
+
+
+
+def _best_runtime_url(target: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(target, dict):
+        return ""
+
+    return str(
+        target.get("published_url")
+        or target.get("url")
+        or target.get("planned_url")
+        or target.get("placeholder_url")
+        or ""
+    ).strip()
+
+
+def _normalized_runtime_target_score(target: Dict[str, Any]) -> float:
+    try:
+        raw = float(target.get("target_score") or 0)
+    except Exception:
+        raw = 0.0
+
+    source_type = str(target.get("source_type") or "")
+
+    # Draft scores are already 0-1.
+    if source_type == "draft":
+        return max(0.0, min(1.0, raw))
+
+    # Legacy live/imported scores may be 0-300+.
+    if raw > 1:
+        return max(0.0, min(1.0, raw / 300.0))
+
+    return max(0.0, min(1.0, raw))
+
+
+def _runtime_source_balance(target: Dict[str, Any]) -> float:
+    source_type = str(target.get("source_type") or "")
+
+    weights = {
+        "live_domain": 1.00,
+        "imported": 0.92,
+        "draft": 0.86,
+    }
+
+    return weights.get(source_type, 0.75)
+
+
+def _runtime_semantic_dominance_ok(target: Dict[str, Any]) -> bool:
+    try:
+        route = float(target.get("semantic_route_score") or 0)
+    except Exception:
+        route = 0.0
+
+    source_type = str(target.get("source_type") or "")
+
+    # If the resolver already approved the target for auto-linking,
+    # do not let the older semantic-route gate remove it.
+    if bool(target.get("auto_link_allowed")):
+        return True
+
+    # Resolver-approved phrase-aware live-domain candidates should survive
+    # even when legacy semantic_route_score is low.
+    if source_type == "live_domain" and (
+        bool(target.get("target_pool_phrase_exact_match"))
+        or bool(target.get("target_pool_phrase_contains_match"))
+    ):
+        return True
+
+    # Legacy live/imported route scores may be larger than 1.
+    if source_type in {"live_domain", "imported"} and route >= 12:
+        return True
+
+    # Draft route scores are normalized.
+    if source_type == "draft" and route >= 0.30:
+        return True
+
+    return False
+
+
+def _filter_and_balance_runtime_targets(
+    targets: List[Dict[str, Any]],
+    limit: int = 5,
+) -> List[Dict[str, Any]]:
+    seen_urls: set[str] = set()
+    seen_titles: set[str] = set()
+    filtered: List[Dict[str, Any]] = []
+
+    for target in targets or []:
+        if not isinstance(target, dict):
+            continue
+
+        url = _best_runtime_url(target)
+        title = str(target.get("title") or "").strip()
+        title_key = title.lower()
+        url_key = url.lower()
+
+        if not url and not title:
+            continue
+
+        if url_key and url_key in seen_urls:
+            continue
+
+        if title_key and title_key in seen_titles:
+            continue
+
+        ok = _runtime_semantic_dominance_ok(target)
+
+        print(
+            "[FILTER_DEBUG]",
+            "phrase=", repr(target.get("phrase") or ""),
+            "url=", repr(_best_runtime_url(target)),
+            "title=", repr(target.get("title") or ""),
+            "reason=", repr(target.get("resolver_reason") or ""),
+            "auto=", repr(target.get("auto_link_allowed")),
+            "suggest=", repr(target.get("suggest_only")),
+            "route=", repr(target.get("semantic_route_score")),
+            "exact=", repr(target.get("target_pool_phrase_exact_match")),
+            "contains=", repr(target.get("target_pool_phrase_contains_match")),
+            "matches=", repr(target.get("target_pool_active_phrase_matches")),
+            "ok=", ok,
+        )
+
+        if not ok:
+            print("[FILTER_REJECTED]", repr(target.get("phrase") or ""), repr(_best_runtime_url(target)))
+            continue
+
+        normalized_score = _normalized_runtime_target_score(target)
+        source_balance = _runtime_source_balance(target)
+
+        runtime_score = round(normalized_score * source_balance, 4)
+
+        enriched = dict(target)
+        enriched["runtime_url"] = url
+        enriched["runtime_normalized_score"] = normalized_score
+        enriched["runtime_source_balance"] = source_balance
+        enriched["runtime_balanced_score"] = runtime_score
+        enriched["runtime_semantic_dominance_ok"] = True
+
+        if url_key:
+            seen_urls.add(url_key)
+
+        if title_key:
+            seen_titles.add(title_key)
+
+        filtered.append(enriched)
+
+    filtered.sort(
+        key=lambda x: (
+            float(x.get("runtime_balanced_score") or 0),
+            float(x.get("semantic_route_score") or 0),
+            float(x.get("authority_score") or 0),
+        ),
+        reverse=True,
+    )
+
+    return filtered[: max(1, int(limit or 5))]
+
+
+def _norm_runtime_url(url: Any) -> str:
+    raw = str(url or "").strip().lower()
+    if not raw:
+        return ""
+    raw = raw.split("#", 1)[0]
+    raw = raw.rstrip("/")
+    return raw
+
+
+def _apply_article_duplicate_url_guard(
+    hits: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Article-level duplicate URL guard.
+
+    For a URL claimed by multiple phrases in the same article, keeps the
+    strongest phrase and MARKS the weaker ones as suppressed. It does NOT erase
+    their resolver evidence: best_target_url / resolved_targets are deliberately
+    left intact so the editor still sees what resolved, and the frontend is
+    responsible for honoring `duplicate_url_suppressed` when rendering links.
+    (Marking, not blanking â€” see inline note below.)
+    """
+    by_url: Dict[str, List[Dict[str, Any]]] = {}
+
+    for hit in hits or []:
+        url = _norm_runtime_url(hit.get("best_target_url"))
+        if not url:
+            continue
+        by_url.setdefault(url, []).append(hit)
+
+    suppressed = []
+
+    for url, group in by_url.items():
+        if len(group) <= 1:
+            continue
+
+        group.sort(
+            key=lambda h: (
+                float(h.get("best_target_runtime_score") or 0),
+                float(h.get("score") or 0),
+            ),
+            reverse=True,
+        )
+
+        keep = group[0]
+        keep_phrase = str(keep.get("phrase") or "")
+
+        for dup in group[1:]:
+            suppressed.append({
+                "url": url,
+                "kept_phrase": keep_phrase,
+                "suppressed_phrase": str(dup.get("phrase") or ""),
+                "reason": "duplicate_url_same_article",
+            })
+
+            dup["duplicate_url_suppressed"] = True
+            dup["duplicate_url_rejection_reason"] = "duplicate_url_same_article"
+            dup["duplicate_url_kept_phrase"] = keep_phrase
+
+            # Keep resolver URL metadata for diagnostics/editor visibility.
+            # Duplicate URL policy marks suppression, it does not erase evidence.
+            ri = dup.get("runtime_intelligence")
+            if isinstance(ri, dict):
+                ri["duplicate_url_suppressed"] = True
+                ri["duplicate_url_rejection_reason"] = "duplicate_url_same_article"
+                ri["duplicate_url_kept_phrase"] = keep_phrase
+
+    return {
+        "suppressed_count": len(suppressed),
+        "suppressed": suppressed,
+    }
+
+
+def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", workspace_id: str = "") -> Dict[str, Any]:
+    phrase = str(
+        candidate.get("phrase")
+        or candidate.get("phrase_text")
+        or candidate.get("text")
+        or ""
+    ).strip()
+
+    selection_score = candidate.get("selection_score", 0)
+    try:
+        # selection_score is a 0-100 weighted sum from the v2 selection engine.
+        normalized_score = float(selection_score) / 100.0
+    except Exception:
+        normalized_score = 0.0
+
+    normalized_score = max(0.0, min(1.0, normalized_score))
+
+    resolved_targets: List[Dict[str, Any]] = []
+    best_target: Optional[Dict[str, Any]] = None
+
+    if workspace_id and phrase:
+        try:
+            raw_resolved_targets = resolve_intelligent_targets(
+                workspace_id,
+                phrase,
+                limit=10,
+            )
+
+            print(
+                "[RB2_RESOLVER_DEBUG]",
+                "phrase=", repr(phrase),
+                "raw=", len(raw_resolved_targets or []),
+            )
+
+            resolved_targets = _filter_and_balance_runtime_targets(
+                raw_resolved_targets,
+                limit=5,
+            )
+
+            # Preserve resolver decision metadata for frontend painter + bulk apply.
+            # The frontend reads resolved_targets[0], so every target must carry
+            # resolver_decision, auto_link_allowed, suggest_only, and debug fields.
+            enriched_resolved_targets = []
+            for _target in resolved_targets or []:
+                if not isinstance(_target, dict):
+                    continue
+
+                _t = dict(_target)
+
+                _decision = str(
+                    _t.get("resolver_decision")
+                    or (_t.get("decision_intelligence") or {}).get("decision")
+                    or ""
+                ).upper()
+
+                _auto_allowed = bool(_t.get("auto_link_allowed")) and _decision == "AUTO_LINK"
+                _suggest_only = (
+                    bool(_t.get("suggest_only"))
+                    or _decision in {"SUGGEST_ONLY", "REJECT"}
+                    or not _auto_allowed
+                )
+
+                _t["resolver_decision"] = _decision
+                _t["auto_link_allowed"] = _auto_allowed
+                _t["suggest_only"] = _suggest_only
+                _t["confidence_reason"] = (
+                    _t.get("confidence_reason")
+                    or (_t.get("decision_intelligence") or {}).get("decision_reason")
+                    or (_t.get("resolver_debug") or {}).get("decision", {}).get("decision_reason")
+                    or ""
+                )
+
+                enriched_resolved_targets.append(_t)
+
+            resolved_targets = enriched_resolved_targets
+
+            print(
+                "[RB2_RESOLVER_DEBUG]",
+                "phrase=", repr(phrase),
+                "filtered=", len(resolved_targets or []),
+                "best=", _best_runtime_url(resolved_targets[0]) if resolved_targets else "",
+            )
+
+            best_target = resolved_targets[0] if resolved_targets else None
+
+        except Exception:
+            resolved_targets = []
+            best_target = None
+
+    first_position = candidate.get("first_position")
+    all_positions = candidate.get("all_positions") or []
+
+    try:
+        start_pos = int(first_position) if first_position is not None else None
+    except Exception:
+        start_pos = None
+
+    end_pos = start_pos + len(phrase) if start_pos is not None and phrase else None
+
+    return {
+        "phrase": phrase,
+        "phrase_text": phrase,
+        "text": phrase,
+        "label": phrase,
+
+        # Highlight render position contract
+        "first_position": first_position,
+        "all_positions": all_positions,
+        "start": start_pos,
+        "end": end_pos,
+        "position": start_pos,
+        "offset": start_pos,
+        "title": _best_title_from_candidate(candidate),
+        "score": round(normalized_score, 4),
+        "overlap": int(candidate.get("occurrence_count") or 1),
+        "bucket": bucket,
+        "source": _source_from_candidate(candidate),
+        "source_type": str(candidate.get("source_type") or ""),
+        "resolved_targets": resolved_targets,
+        "best_target": best_target,
+        "best_target_url": _best_runtime_url(best_target),
+        "best_target_title": best_target.get("title") if isinstance(best_target, dict) else "",
+        "best_target_source_type": best_target.get("source_type") if isinstance(best_target, dict) else "",
+        "best_target_runtime_score": (
+            best_target.get("runtime_normalized_score")
+            if isinstance(best_target, dict)
+            else 0
+        ),
+        "vertical": str(candidate.get("vertical") or ""),
+        "snippet": _best_title_from_candidate(candidate),
+        # FIX: runtime_intelligence now reads the fields the v2 selection engine
+        # actually emits. Removed phantom reads (anchor_quality_score,
+        # link_opportunity_score, selection_reason, document_specific_pool,
+        # document_id) that were always None.
+        "runtime_intelligence": {
+            "runtime_score": round(normalized_score, 4),
+            "selection_score": candidate.get("selection_score"),
+            "extractor_score": candidate.get("extractor_score"),
+            "article_relevance_score": candidate.get("article_relevance_score"),
+            "resolver_relevance_score": candidate.get("resolver_relevance_score"),
+            "occurrence_count": candidate.get("occurrence_count"),
+            "selection_status": candidate.get("selection_status"),
+            "link_status": candidate.get("link_status"),
+            "family_root": candidate.get("family_root"),
+            "display_status": candidate.get("display_status"),
+            "runtime_zone": candidate.get("runtime_zone"),
+            "resolver_target_count": len(resolved_targets),
+            "best_target_url": _best_runtime_url(best_target),
+            "best_target_source_type": best_target.get("source_type") if isinstance(best_target, dict) else "",
+            "runtime_target_filtering": {
+                "enabled": True,
+                "duplicate_suppression": True,
+                "source_balancing": True,
+                "score_normalization_bridge": True,
+                "semantic_dominance_protection": True,
+                "placeholder_published_url_fallback": True,
+            },
+            # FIX: v1 -> v2 layer labels.
+            "layers": [
+                "highlight_selection_engine_v2",
+                "highlight_density_engine_v2",
+                "document_specific_upload_pool",
+                "rb2_runtime_bridge",
+                "intelligence_target_resolver",
+                "runtime_target_filtering",
+                "cross_pool_source_balancing",
+                "runtime_score_normalization_bridge",
+                "semantic_dominance_protection",
+            ],
+        },
+    }
+
+
+@router.post("/run")
+def engine_run(payload: EngineRunRequest = Body(...)):
+    html = (payload.html or "").strip()
+    text = (payload.text or "").strip()
+
+    if not html and not text:
+        return {"ok": False, "error": "Provide 'html' or 'text' in request body."}
+
+    ws = _resolve_workspace(payload)
+    doc_id = _resolve_doc_id(payload)
+
+    phase = (payload.phase or PHASE_DEFAULT).strip().lower()
+    if not phase:
+        phase = PHASE_DEFAULT
+
+    rb2_doc = build_rb2_phrase_contexts(
+        doc_id,
+        html=html if html else None,
+        text=text if text else None,
+    )
+
+    joined_text = text if text else str(rb2_doc.get("joinedText") or "")
+
+    pool_path, pool_resolution = _resolve_pool_path(ws, doc_id)
+    pool_obj = _safe_read_json(pool_path) if os.path.exists(pool_path) else None
+
+    if not isinstance(pool_obj, dict):
+        fallback_pool = _load_workspace_upload_pool_fallback(ws)
+        if isinstance(fallback_pool, dict) and fallback_pool.get("phrases"):
+            pool_obj = fallback_pool
+            pool_resolution = "document_specific_workspace_merge_fallback"
+
+    if not isinstance(pool_obj, dict):
+        return {
+            "ok": True,
+            "engine": "RB2",
+            "mode": "highlight_only",
+            "workspaceId": ws,
+            "docId": doc_id,
+            "internal_strong": [],
+            "semantic_optional": [],
+            "meta": {
+                "build": ENGINE_RUN_BUILD,
+                "resolved_workspace": ws,
+                "phase": phase,
+                "pool_path": pool_path,
+                "pool_resolution": pool_resolution,
+                "pool_loaded": False,
+                "error": "upload_phrase_pool_not_found_or_invalid",
+                "internal_found": 0,
+                "internal_strong_count": 0,
+                "semantic_optional_count": 0,
+                "rb2_extract": {
+                    "version": rb2_doc.get("version"),
+                    "paragraphs": len(rb2_doc.get("paragraphs") or []),
+                    "joined_text_len": len(joined_text),
+                    "payload_text_len": len(text),
+                    "adapter_joined_text_len": len(str(rb2_doc.get("joinedText") or "")),
+                },
+            },
+        }
+
+    selection_result = select_highlight_candidates(
+        workspace_id=ws,
+        doc_id=doc_id,
+        article_text=joined_text,
+        active_phrase_pool=pool_obj,
+    )
+
+    # FIX: snapshot the selection output BEFORE density runs. The density engine
+    # mutates candidate dicts in place (and the selection engine aliases
+    # `selected`/`candidates` to those same objects), so without this deep copy
+    # the "before" debug field would already show display_status/runtime_zone.
+    selected_before_density = copy.deepcopy(selection_result.get("selected", []))
+
+    density_result = apply_highlight_density(
+        article_text=joined_text,
+        selected_candidates=selection_result.get("selected", []),
+    )
+
+    final_highlights = density_result.get("final_highlights", []) or []
+
+    try:
+        from pathlib import Path as _Path
+        import json as _json
+        _sel_fp = _Path("backend/server/data/debug_highlight_selection_last.json")
+        _sel_fp.parent.mkdir(parents=True, exist_ok=True)
+        _sel_fp.write_text(
+            _json.dumps({
+                "workspace_id": ws,
+                "doc_id": doc_id,
+                "selection_stats": selection_result.get("stats", {}),
+                "density_stats": density_result.get("stats", {}),
+                "selected_before_density": selected_before_density,   # true pre-density snapshot
+                "final_after_density": final_highlights,
+            }, indent=2, ensure_ascii=False),
+            encoding="utf-8"
+        )
+    except Exception as _sel_debug_err:
+        print("[HIGHLIGHT_SELECTION_DEBUG_WRITE_FAILED]", repr(_sel_debug_err))
+
+    try:
+        priority_phrase_set_result = _save_priority_phrase_set(
+            workspace_id=ws,
+            doc_id=doc_id,
+            final_highlights=final_highlights,
+            selection_stats=selection_result.get("stats", {}),
+            density_stats=density_result.get("stats", {}),
+        )
+    except Exception as e:
+        priority_phrase_set_result = {
+            "saved": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+    bucket_result = classify_highlight_buckets(final_highlights)
+
+    internal_strong: List[Dict[str, Any]] = [
+        _build_rb2_hit(candidate, bucket="internal_strong", workspace_id=ws)
+        for candidate in bucket_result.get("internal_strong", [])
+        if isinstance(candidate, dict)
+        and str(candidate.get("phrase") or "").strip()
+    ]
+
+    semantic_optional: List[Dict[str, Any]] = [
+        _build_rb2_hit(candidate, bucket="semantic_optional", workspace_id=ws)
+        for candidate in bucket_result.get("semantic_optional", [])
+        if isinstance(candidate, dict)
+        and str(candidate.get("phrase") or "").strip()
+    ]
+
+    # RB2 target quality gate is advisory only: quality phrases stay visible even
+    # when no target URL is found. (The old _rb2_target_quality_gate /
+    # _apply_rb2_target_quality_gate_to_hits helpers were removed as dead code â€”
+    # they were no longer called once the gate became advisory.)
+
+    all_runtime_hits = internal_strong + semantic_optional
+
+    duplicate_url_guard = _apply_article_duplicate_url_guard(all_runtime_hits)
+
+    resolved_target_count = 0
+    resolved_source_distribution: Dict[str, int] = {}
+    best_target_source_distribution: Dict[str, int] = {}
+    draft_target_count = 0
+
+    for hit in all_runtime_hits:
+        targets = hit.get("resolved_targets") or []
+        if isinstance(targets, list):
+            resolved_target_count += len(targets)
+
+            for target in targets:
+                if not isinstance(target, dict):
+                    continue
+
+                source_type = str(target.get("source_type") or "unknown")
+                resolved_source_distribution[source_type] = (
+                    resolved_source_distribution.get(source_type, 0) + 1
+                )
+
+                if source_type == "draft":
+                    draft_target_count += 1
+
+        best_target = hit.get("best_target")
+        if isinstance(best_target, dict):
+            best_source = str(best_target.get("source_type") or "unknown")
+            best_target_source_distribution[best_source] = (
+                best_target_source_distribution.get(best_source, 0) + 1
+            )
+
+    return {
+        "ok": True,
+        "engine": "RB2",
+        "mode": "highlight_only",
+        "workspaceId": ws,
+        "docId": doc_id,
+        "internal_strong": internal_strong,
+        "semantic_optional": semantic_optional,
+        "meta": {
+            "build": ENGINE_RUN_BUILD,
+            "resolved_workspace": ws,
+            "phase": phase,
+            "pool_path": pool_path,
+            "pool_resolution": pool_resolution,
+            "pool_loaded": True,
+            "document_specific_pool": bool(pool_obj.get("document_specific_pool")),
+            "document_id_from_pool": pool_obj.get("document_id"),
+            "phrase_pool_count": int(pool_obj.get("phrase_count") or 0),
+            "source_phrase_count": int(pool_obj.get("source_phrase_count") or 0),
+            "quality_filtered_source_count": int(pool_obj.get("quality_filtered_source_count") or 0),
+            "active_phrase_set_used": bool(pool_obj.get("active_phrase_set_used")),
+            "active_filter_reason": pool_obj.get("active_filter_reason"),
+            "selection_stats": selection_result.get("stats", {}),
+            "density_stats": density_result.get("stats", {}),
+            "selection_rejected_sample": selection_result.get("rejected", [])[:10],
+            "final_highlight_count": len(final_highlights),
+            "priority_phrase_set": priority_phrase_set_result,
+            "internal_found": len(internal_strong) + len(semantic_optional),
+            "internal_strong_count": len(internal_strong),
+            "semantic_optional_count": len(semantic_optional),
+
+            "resolver_enabled": True,
+            "duplicate_url_guard": duplicate_url_guard,
+            "resolved_target_count": resolved_target_count,
+            "resolved_source_distribution": resolved_source_distribution,
+            "best_target_source_distribution": best_target_source_distribution,
+            "draft_target_count": draft_target_count,
+
+            "unique_phrases": len({x.get("phrase") for x in internal_strong if x.get("phrase")}),
+            # FIX: v1 -> v2 layer labels.
+            "runtime_intelligence_layers": [
+                "highlight_selection_engine_v2",
+                "highlight_density_engine_v2",
+                "document_specific_upload_pool",
+                "rb2_runtime_bridge",
+            ],
+            "rb2_extract": {
+                "version": rb2_doc.get("version"),
+                "paragraphs": len(rb2_doc.get("paragraphs") or []),
+                "joined_text_len": len(joined_text),
+                "payload_text_len": len(text),
+                "adapter_joined_text_len": len(str(rb2_doc.get("joinedText") or "")),
+            },
+        },
+    }

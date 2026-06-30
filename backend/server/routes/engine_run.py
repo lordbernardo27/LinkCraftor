@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any, Tuple
 import os
 import json
+import copy
 import traceback
 import glob
 import re
@@ -18,7 +19,8 @@ from backend.server.engine.scoring import classify_highlight_buckets
 from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
 
 PHASE_DEFAULT = "prepublish"
-ENGINE_RUN_BUILD = "2026-05-12-RB2-C5-DOC-SPECIFIC-POOL"
+# FIX: bump build/label to reflect the v2 highlight engines this router runs.
+ENGINE_RUN_BUILD = "2026-06-29-RB2-C5-DOC-SPECIFIC-POOL-V2"
 
 router = APIRouter(prefix="/api/engine", tags=["engine-run"])
 
@@ -56,6 +58,11 @@ def _save_priority_phrase_set(
 
     This does not change RB2 phrase selection.
     It only gives downstream target builders a first-pass list of editor-selected phrases.
+
+    NOTE: each highlight here is a v2 selection/density candidate, so the fields
+    persisted below MUST match what those engines emit (selection_score,
+    extractor_score, link_status, â€¦). Reading legacy names like quality_score
+    would silently persist nulls.
     """
     path = _priority_phrase_set_path(workspace_id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -67,7 +74,7 @@ def _save_priority_phrase_set(
         if not isinstance(item, dict):
             continue
 
-        phrase = str(item.get("phrase") or item.get("text") or item.get("canonical") or "").strip()
+        phrase = str(item.get("phrase") or item.get("text") or "").strip()
         if not phrase:
             continue
 
@@ -76,15 +83,23 @@ def _save_priority_phrase_set(
             continue
         seen.add(key)
 
+        # FIX: map to fields the v2 engines actually emit (previously read
+        # canonical/score/quality_score/source_type/section_id which the v2
+        # selection engine never produces, persisting all-null records).
         phrases.append({
             "phrase": phrase,
-            "canonical": str(item.get("canonical") or phrase).strip(),
-            "bucket": str(item.get("bucket") or item.get("kind") or ""),
-            "score": item.get("score"),
-            "quality_score": item.get("quality_score"),
-            "source_type": item.get("source_type"),
+            "phrase_key": item.get("phrase_key"),
+            "selection_score": item.get("selection_score"),
+            "extractor_score": item.get("extractor_score"),
+            "article_relevance_score": item.get("article_relevance_score"),
+            "resolver_relevance_score": item.get("resolver_relevance_score"),
+            "occurrence_count": item.get("occurrence_count"),
+            "link_status": item.get("link_status"),
+            "target_url": item.get("target_url"),
+            "target_title": item.get("target_title"),
+            "family_root": item.get("family_root"),
+            "display_status": item.get("display_status"),
             "doc_id": doc_id,
-            "section_id": item.get("section_id"),
             "priority_source": "rb2_final_highlights",
             "raw": item,
         })
@@ -470,7 +485,13 @@ def _apply_article_duplicate_url_guard(
 ) -> Dict[str, Any]:
     """
     Article-level duplicate URL guard.
-    Keeps the strongest phrase for a URL and blanks weaker duplicates.
+
+    For a URL claimed by multiple phrases in the same article, keeps the
+    strongest phrase and MARKS the weaker ones as suppressed. It does NOT erase
+    their resolver evidence: best_target_url / resolved_targets are deliberately
+    left intact so the editor still sees what resolved, and the frontend is
+    responsible for honoring `duplicate_url_suppressed` when rendering links.
+    (Marking, not blanking â€” see inline note below.)
     """
     by_url: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -510,11 +531,9 @@ def _apply_article_duplicate_url_guard(
             dup["duplicate_url_kept_phrase"] = keep_phrase
 
             # Keep resolver URL metadata for diagnostics/editor visibility.
-            # Duplicate URL policy should mark suppression, not erase resolver evidence.
-
+            # Duplicate URL policy marks suppression, it does not erase evidence.
             ri = dup.get("runtime_intelligence")
             if isinstance(ri, dict):
-                # Preserve runtime resolver metadata for diagnostics/editor visibility.
                 ri["duplicate_url_suppressed"] = True
                 ri["duplicate_url_rejection_reason"] = "duplicate_url_same_article"
                 ri["duplicate_url_kept_phrase"] = keep_phrase
@@ -523,115 +542,6 @@ def _apply_article_duplicate_url_guard(
         "suppressed_count": len(suppressed),
         "suppressed": suppressed,
     }
-
-
-
-
-def _rb2_target_quality_gate(hit: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    RB2 post-resolver quality gate.
-    Keeps editor highlights only when resolver found usable target evidence.
-    """
-    if not isinstance(hit, dict):
-        return {"allowed": False, "reason": "invalid_hit"}
-
-    targets = hit.get("resolved_targets") or []
-    best = hit.get("best_target") or {}
-
-    if not targets or not isinstance(best, dict):
-        hit["rb2_target_gate_mode"] = "unlinked_opportunity"
-        hit["resolved_targets"] = []
-        hit["best_target"] = None
-        hit["best_target_url"] = ""
-        return {
-            "allowed": True,
-            "reason": "kept_quality_phrase_without_resolved_target",
-            "mode": "unlinked_opportunity",
-        }
-
-    decision = str(best.get("resolver_decision") or "").upper()
-    if decision == "REJECT":
-        return {"allowed": False, "reason": "rejected_by_resolver_decision"}
-
-    try:
-        runtime_score = float(
-            best.get("runtime_normalized_score")
-            or hit.get("best_target_runtime_score")
-            or 0
-        )
-    except Exception:
-        runtime_score = 0.0
-
-    has_url = bool(
-        hit.get("best_target_url")
-        or best.get("url")
-        or best.get("target_url")
-    )
-
-    has_structure = bool(
-        best.get("cluster_names")
-        or best.get("cluster_keywords")
-        or best.get("section_names")
-        or best.get("section_keywords")
-    )
-
-    auto_allowed = bool(best.get("auto_link_allowed"))
-    suggest_only = bool(best.get("suggest_only"))
-
-    if not has_url:
-        hit["rb2_target_gate_mode"] = "unlinked_opportunity"
-        return {
-            "allowed": True,
-            "reason": "kept_quality_phrase_target_missing_url",
-            "mode": "unlinked_opportunity",
-        }
-
-    if runtime_score < 0.35 and not has_structure:
-        return {"allowed": False, "reason": "rejected_weak_target_score_no_structure"}
-
-    if decision == "SUGGEST_ONLY" or suggest_only:
-        hit["rb2_target_gate_mode"] = "suggest_only"
-
-    if decision == "AUTO_LINK" and auto_allowed:
-        hit["rb2_target_gate_mode"] = "auto_link"
-
-    return {
-        "allowed": True,
-        "reason": "passed_rb2_target_quality_gate",
-        "runtime_score": runtime_score,
-        "has_structure": has_structure,
-        "decision": decision,
-    }
-
-
-def _apply_rb2_target_quality_gate_to_hits(hits: List[Dict[str, Any]]) -> Dict[str, Any]:
-    kept = []
-    rejected = []
-
-    for hit in hits or []:
-        gate = _rb2_target_quality_gate(hit)
-
-        if gate.get("allowed"):
-            hit["rb2_target_quality_gate"] = gate
-            kept.append(hit)
-        else:
-            rejected.append({
-                "phrase": hit.get("phrase") or hit.get("text") or "",
-                "reason": gate.get("reason"),
-                "best_target_url": hit.get("best_target_url"),
-                "hit": hit,
-            })
-
-    return {
-        "kept": kept,
-        "rejected": rejected,
-        "stats": {
-            "input_count": len(hits or []),
-            "kept_count": len(kept),
-            "rejected_count": len(rejected),
-        },
-    }
-
 
 
 def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", workspace_id: str = "") -> Dict[str, Any]:
@@ -644,6 +554,7 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
 
     selection_score = candidate.get("selection_score", 0)
     try:
+        # selection_score is a 0-100 weighted sum from the v2 selection engine.
         normalized_score = float(selection_score) / 100.0
     except Exception:
         normalized_score = 0.0
@@ -653,7 +564,9 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
     resolved_targets: List[Dict[str, Any]] = []
     best_target: Optional[Dict[str, Any]] = None
 
-    if workspace_id and phrase:
+    # Highlight painting must never wait on target resolution.
+    # Resolver can run later for accept/apply; here we return visible suggestions fast.
+    if False and workspace_id and phrase:
         try:
             raw_resolved_targets = resolve_intelligent_targets(
                 workspace_id,
@@ -722,11 +635,29 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
             resolved_targets = []
             best_target = None
 
+    first_position = candidate.get("first_position")
+    all_positions = candidate.get("all_positions") or []
+
+    try:
+        start_pos = int(first_position) if first_position is not None else None
+    except Exception:
+        start_pos = None
+
+    end_pos = start_pos + len(phrase) if start_pos is not None and phrase else None
+
     return {
         "phrase": phrase,
         "phrase_text": phrase,
         "text": phrase,
         "label": phrase,
+
+        # Highlight render position contract
+        "first_position": first_position,
+        "all_positions": all_positions,
+        "start": start_pos,
+        "end": end_pos,
+        "position": start_pos,
+        "offset": start_pos,
         "title": _best_title_from_candidate(candidate),
         "score": round(normalized_score, 4),
         "overlap": int(candidate.get("occurrence_count") or 1),
@@ -745,17 +676,22 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
         ),
         "vertical": str(candidate.get("vertical") or ""),
         "snippet": _best_title_from_candidate(candidate),
+        # FIX: runtime_intelligence now reads the fields the v2 selection engine
+        # actually emits. Removed phantom reads (anchor_quality_score,
+        # link_opportunity_score, selection_reason, document_specific_pool,
+        # document_id) that were always None.
         "runtime_intelligence": {
             "runtime_score": round(normalized_score, 4),
             "selection_score": candidate.get("selection_score"),
-            "anchor_quality_score": candidate.get("anchor_quality_score"),
+            "extractor_score": candidate.get("extractor_score"),
             "article_relevance_score": candidate.get("article_relevance_score"),
-            "link_opportunity_score": candidate.get("link_opportunity_score"),
+            "resolver_relevance_score": candidate.get("resolver_relevance_score"),
             "occurrence_count": candidate.get("occurrence_count"),
             "selection_status": candidate.get("selection_status"),
-            "selection_reason": candidate.get("selection_reason"),
-            "document_specific_pool": candidate.get("document_specific_pool"),
-            "document_id": candidate.get("document_id"),
+            "link_status": candidate.get("link_status"),
+            "family_root": candidate.get("family_root"),
+            "display_status": candidate.get("display_status"),
+            "runtime_zone": candidate.get("runtime_zone"),
             "resolver_target_count": len(resolved_targets),
             "best_target_url": _best_runtime_url(best_target),
             "best_target_source_type": best_target.get("source_type") if isinstance(best_target, dict) else "",
@@ -767,9 +703,10 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
                 "semantic_dominance_protection": True,
                 "placeholder_published_url_fallback": True,
             },
+            # FIX: v1 -> v2 layer labels.
             "layers": [
-                "highlight_selection_engine_v1",
-                "highlight_density_engine_v1",
+                "highlight_selection_engine_v2",
+                "highlight_density_engine_v2",
                 "document_specific_upload_pool",
                 "rb2_runtime_bridge",
                 "intelligence_target_resolver",
@@ -780,78 +717,6 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
             ],
         },
     }
-
-
-def _fallback_live_domain_targets(ws: str, phrase: str, limit: int = 5) -> List[Dict[str, Any]]:
-    import json
-    import re
-    from pathlib import Path
-
-    safe_ws = re.sub(r"[^a-zA-Z0-9_]+", "_", str(ws or "default")).strip("_") or "default"
-    data_dir = Path(__file__).resolve().parents[1] / "data"
-    fp = data_dir / f"site_pages_{safe_ws}.json"
-
-    if not fp.exists():
-        return []
-
-    try:
-        data = json.loads(fp.read_text(encoding="utf-8"))
-    except Exception:
-        return []
-
-    pages = []
-    if isinstance(data, dict) and isinstance(data.get("pages"), dict):
-        for url, page in data["pages"].items():
-            if isinstance(page, dict):
-                row = dict(page)
-                row.setdefault("url", url)
-                pages.append(row)
-    elif isinstance(data, dict) and isinstance(data.get("pages"), list):
-        pages = [x for x in data["pages"] if isinstance(x, dict)]
-    elif isinstance(data, list):
-        pages = [x for x in data if isinstance(x, dict)]
-
-    phrase_text = str(phrase or "").strip().lower()
-    phrase_tokens = set(re.findall(r"[a-z0-9]{3,}", phrase_text))
-    if not phrase_tokens:
-        return []
-
-    scored = []
-    for page in pages:
-        url = str(page.get("url") or page.get("loc") or "").strip()
-        title = str(page.get("title") or page.get("h1") or page.get("heading") or "").strip()
-        if not url:
-            continue
-
-        haystack = " ".join([
-            title,
-            url,
-            str(page.get("description") or ""),
-            str(page.get("slug") or ""),
-        ]).lower()
-
-        hay_tokens = set(re.findall(r"[a-z0-9]{3,}", haystack))
-        if not hay_tokens:
-            continue
-
-        overlap = len(phrase_tokens & hay_tokens)
-        score = overlap / max(1, len(phrase_tokens))
-
-        if phrase_text and phrase_text in haystack:
-            score += 0.4
-
-        if score >= 0.34:
-            scored.append({
-                "url": url,
-                "runtime_url": url,
-                "title": title or url,
-                "source_type": "live_domain",
-                "runtime_normalized_score": round(score, 4),
-                "via": "engine_run_live_domain_fallback",
-            })
-
-    scored.sort(key=lambda x: x.get("runtime_normalized_score", 0), reverse=True)
-    return scored[:limit]
 
 
 @router.post("/run")
@@ -923,6 +788,12 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         active_phrase_pool=pool_obj,
     )
 
+    # FIX: snapshot the selection output BEFORE density runs. The density engine
+    # mutates candidate dicts in place (and the selection engine aliases
+    # `selected`/`candidates` to those same objects), so without this deep copy
+    # the "before" debug field would already show display_status/runtime_zone.
+    selected_before_density = copy.deepcopy(selection_result.get("selected", []))
+
     density_result = apply_highlight_density(
         article_text=joined_text,
         selected_candidates=selection_result.get("selected", []),
@@ -941,7 +812,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
                 "doc_id": doc_id,
                 "selection_stats": selection_result.get("stats", {}),
                 "density_stats": density_result.get("stats", {}),
-                "selected_before_density": selection_result.get("selected", []),
+                "selected_before_density": selected_before_density,   # true pre-density snapshot
                 "final_after_density": final_highlights,
             }, indent=2, ensure_ascii=False),
             encoding="utf-8"
@@ -980,18 +851,10 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         and str(candidate.get("phrase") or "").strip()
     ]
 
-    # RB2 target quality gate is now advisory only.
-    # Quality phrases must remain visible even when no target URL is found.
-    rb2_gate_result = {
-        "kept": internal_strong + semantic_optional,
-        "rejected": [],
-        "stats": {
-            "input_count": len(internal_strong + semantic_optional),
-            "kept_count": len(internal_strong + semantic_optional),
-            "rejected_count": 0,
-            "mode": "advisory_only_keep_unlinked_opportunities",
-        },
-    }
+    # RB2 target quality gate is advisory only: quality phrases stay visible even
+    # when no target URL is found. (The old _rb2_target_quality_gate /
+    # _apply_rb2_target_quality_gate_to_hits helpers were removed as dead code â€”
+    # they were no longer called once the gate became advisory.)
 
     all_runtime_hits = internal_strong + semantic_optional
 
@@ -1065,9 +928,10 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "draft_target_count": draft_target_count,
 
             "unique_phrases": len({x.get("phrase") for x in internal_strong if x.get("phrase")}),
+            # FIX: v1 -> v2 layer labels.
             "runtime_intelligence_layers": [
-                "highlight_selection_engine_v1",
-                "highlight_density_engine_v1",
+                "highlight_selection_engine_v2",
+                "highlight_density_engine_v2",
                 "document_specific_upload_pool",
                 "rb2_runtime_bridge",
             ],

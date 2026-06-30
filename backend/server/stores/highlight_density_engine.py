@@ -24,6 +24,20 @@ What v2 deliberately REMOVED:
 Output:
     final_highlights -> the painted set (links + opportunities chosen to show)
     all_candidates   -> every candidate with display_status painted|deferred
+
+COORDINATE SPACE (IMPORTANT):
+    Candidate first_position values come from the selection engine and are
+    offsets into the NORMALIZED article (lowercased, whitespace-collapsed).
+    Zone math therefore divides by the NORMALIZED length, computed the same way
+    (see _normalized_len). The 180-char spacing distance is likewise in
+    normalized space, matching the positions.
+
+MUTATION CONTRACT (IMPORTANT):
+    This function annotates each candidate dict IN PLACE (display_status,
+    runtime_zone, dis_density_* flags, etc.). The candidate dicts are the same
+    objects the selection engine emitted (it aliases them across "selected" and
+    "candidates"), so those views observe these annotations too. Deep-copy the
+    input if the caller needs an unmutated snapshot.
 """
 
 from __future__ import annotations
@@ -41,10 +55,19 @@ except Exception:  # pragma: no cover
 
 
 _WORD_RE = re.compile(r"\b\w+\b")
+_WS_RE = re.compile(r"\s+")
 
 
 def count_article_words(article_text: str) -> int:
     return len(_WORD_RE.findall(article_text)) if article_text else 0
+
+
+def _normalized_len(article_text: str) -> int:
+    """Length of the article in the SAME normalized space the selection engine
+    measured positions against (lowercased + whitespace-collapsed). Using this
+    for zone math keeps numerator (position) and denominator (length) in one
+    coordinate system."""
+    return len(_WS_RE.sub(" ", str(article_text or "").lower()))
 
 
 def classify_article_length(word_count: int) -> str:
@@ -75,8 +98,15 @@ def calculate_adaptive_density_limit(candidates: List[Dict[str, Any]], base_max:
         return {"adaptive_max": base_min, "density_multiplier": 1.0,
                 "average_selection_score": 0.0}
 
-    scores = [float(c.get("selection_score") or 0.0) for c in candidates]
-    avg = sum(scores) / max(len(scores), 1)
+    # FIX (adaptive): average only the TOP base_max scores — the items actually
+    # contending to be painted — instead of the whole pool. The selection engine
+    # emits every article-present opportunity, so a long low-score tail would
+    # otherwise drag the mean down and shrink density on opportunity-rich
+    # articles. Candidates arrive rank-sorted, but sort defensively anyway.
+    scores = sorted((float(c.get("selection_score") or 0.0) for c in candidates),
+                    reverse=True)
+    head = scores[:max(1, base_max)]
+    avg = sum(head) / len(head)
 
     # Nudge within a narrow band so density never collapses or explodes.
     if avg >= 70:
@@ -154,7 +184,8 @@ def _paint(
 ) -> None:
     """Mutates each candidate's display_status to painted|deferred in rank order,
     honoring spacing/zone/family/short/high-freq budgets. A relaxation pass then
-    fills up to min_target from the best deferred items so we never undershoot."""
+    fills up to min_target from the best deferred items so we honor min_target
+    whenever enough candidates exist (see the two-stage fill below)."""
     max_short = max(1, int(max_allowed * max_short_ratio))
     max_high_freq = max(1, int(max_allowed * max_high_freq_ratio))
     max_per_zone = max(2, int(max_allowed * 0.40))
@@ -214,21 +245,39 @@ def _paint(
             high_freq_painted += 1
 
     # ---- relaxation pass: reach min_target without breaking the hard cap ----
+    # Relax spacing/zone/short/freq but still respect the family cap first, so a
+    # single phrase family can't carpet the article under normal conditions.
     if painted < min_target:
         for c in candidates:
             if painted >= min_target or painted >= max_allowed:
                 break
             if c.get("display_status") == "painted":
                 continue
-            # relax spacing/zone/short/freq, but still respect the family cap so
-            # one phrase family can't carpet the article.
             fam = str(c.get("family_root") or c.get("phrase_key") or "")
             if family_counts.get(fam, 0) >= max_family:
                 continue
             c["display_status"] = "painted"
+            c["runtime_zone"] = _zone(first_pos(c), article_len)  # FIX: set zone on promoted
             c["promoted_to_meet_min"] = True
             painted += 1
             family_counts[fam] = family_counts.get(fam, 0) + 1
+
+    # ---- final fallback: min_target outranks the family cap (last resort) ----
+    # FIX (min guarantee): if min_target is still unmet only because candidates
+    # are concentrated in a few families, ignore the family cap to honor the
+    # documented "never undershoot recommended_min" contract. Still bounded by
+    # max_allowed. Flagged so this carpeting is auditable downstream.
+    if painted < min_target:
+        for c in candidates:
+            if painted >= min_target or painted >= max_allowed:
+                break
+            if c.get("display_status") == "painted":
+                continue
+            c["display_status"] = "painted"
+            c["runtime_zone"] = _zone(first_pos(c), article_len)
+            c["promoted_to_meet_min"] = True
+            c["promoted_ignoring_family_cap"] = True
+            painted += 1
 
 
 def apply_highlight_density(
@@ -244,7 +293,9 @@ def apply_highlight_density(
     base_min, base_max = density_range["min"], density_range["max"]
 
     candidates = list(selected_candidates or [])
-    article_len = len(article_text or "")
+    # FIX (zone coordinate bug): length in the SAME normalized space that
+    # first_position was measured against, not the raw len(article_text).
+    article_len = _normalized_len(article_text)
 
     rc2_knowledge = get_rejection_pattern_knowledge(workspace_id, vertical)
     rc2_patterns = rc2_knowledge.get("patterns", []) if isinstance(rc2_knowledge, dict) else []
@@ -297,6 +348,7 @@ def apply_highlight_density(
             "deferred_count": len(deferred),
             "painted_linked": sum(1 for c in painted if c.get("link_status") == "linked"),
             "painted_unlinked_opportunity": sum(1 for c in painted if c.get("link_status") == "unlinked_opportunity"),
+            "promoted_ignoring_family_cap": sum(1 for c in painted if c.get("promoted_ignoring_family_cap")),
             "adaptive_density": adaptive,
             "rc2_patterns_loaded": len(rc2_patterns),
             "rc2_density_advisory_signals": len(rc2_advisory),

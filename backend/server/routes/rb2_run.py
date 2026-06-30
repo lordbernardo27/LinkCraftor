@@ -7,28 +7,47 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+from fastapi import APIRouter, HTTPException, Request, Query
+
 from backend.server.pools.target_pools.live_domain_target_intelligence import load_live_domain_targets
 from backend.server.pools.target_pools.live_domain_target_intelligence import score_live_domain_target
 from backend.server.pools.target_pools.imported_target_intelligence import score_imported_target
 from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
-
-from fastapi import APIRouter, HTTPException, Request
-
 from backend.server.engine.rb2_adapter import build_rb2_phrase_contexts
 
 router = APIRouter(tags=["rb2"])
 
 
-import json
-from pathlib import Path
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Query
+# ------------------------------------------------------------
+# Path anchors (avoid cwd issues)
+# rb2_run.py is: backend/app/routers/rb2_run.py
+# parents[0]=routers, [1]=app, [2]=backend, [3]=project root
+# FIX: DATA_DIR and the stdlib/fastapi imports above were previously declared
+# twice in this module. Consolidated to a single definition here.
+# ------------------------------------------------------------
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+DATA_DIR = PROJECT_ROOT / "backend" / "server" / "data"
+UPLOADS_DIR = PROJECT_ROOT / "backend" / "server" / "uploads"
+RB2_RUNNER = PROJECT_ROOT / "backend" / "server" / "engine_js" / "rb2" / "run_rb2.mjs"
 
-# If you already have router defined above, DO NOT redefine it.
-# This code assumes `router` already exists in this file.
+WORD_RE = re.compile(r"[a-z0-9]{3,}")
+WS_RE = re.compile(r"^[a-z0-9_]{3,80}$", re.IGNORECASE)
 
 
-DATA_DIR = Path(__file__).resolve().parents[2] / "server" / "data"   # backend/server/data
+def _node_exe() -> str:
+    return os.environ.get("NODE_EXE", "node")
+
+
+def _ws_safe(ws: str) -> str:
+    ws = str(ws or "").strip()
+    if not ws:
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "missing_workspace_id"})
+    if not ws.startswith("ws_"):
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "workspace_id_must_start_with_ws_"})
+    if not WS_RE.match(ws):
+        raise HTTPException(status_code=400, detail={"ok": False, "error": "invalid_workspace_id_chars"})
+    return ws
 
 
 def _safe_load_json(p: Path) -> Any:
@@ -36,6 +55,14 @@ def _safe_load_json(p: Path) -> Any:
         if not p.exists():
             return None
         return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _safe_read_json(path: Path) -> Any:
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception:
         return None
 
@@ -57,7 +84,6 @@ def _count(obj: Any) -> int:
     return 0
 
 
-
 def _pool(name: str, data_path: Path, meta_path: Optional[Path] = None) -> Dict[str, Any]:
     data = _safe_load_json(data_path)
     meta = _safe_load_json(meta_path) if meta_path else None
@@ -76,11 +102,21 @@ def _pool(name: str, data_path: Path, meta_path: Optional[Path] = None) -> Dict[
 
 @router.get("/preflight")
 def rb2_preflight(workspace_id: str = Query(..., description="Workspace scope, e.g. ws_prettiereveryday_com")):
-    ws = (workspace_id or "").strip()
-    if not ws:
+    raw_ws = (workspace_id or "").strip()
+    if not raw_ws:
         return {"ok": False, "error": "missing_workspace_id"}
 
-    # --- Pool file conventions (these match what weve been using) ---
+    # FIX: run the workspace id through the SAME sanitizer the other endpoints
+    # use, so a value with path separators / traversal can't be interpolated
+    # into the file paths below. Return a soft error (this endpoint's contract)
+    # rather than raising, to preserve the existing response shape.
+    try:
+        ws = _ws_safe(raw_ws)
+    except HTTPException as exc:
+        detail = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        return {"ok": False, **detail}
+
+    # --- Pool file conventions (these match what we've been using) ---
     # Live-domain (site reader)
     site_sources = DATA_DIR / f"site_sources_{ws}.json"
     site_pages = DATA_DIR / f"site_pages_{ws}.json"
@@ -116,50 +152,11 @@ def rb2_preflight(workspace_id: str = Query(..., description="Workspace scope, e
     total = sum(int(p.get("count", 0) or 0) for p in pools)
     any_exists = any(bool(p.get("exists")) for p in pools)
 
-    # Hard guard: if workspace has no pool files at all, dont let RB2 run empty
+    # Hard guard: if workspace has no pool files at all, don't let RB2 run empty
     if not any_exists:
         return {"ok": False, "workspace_id": ws, "error": "workspace_not_initialized", "pools": pools}
 
     return {"ok": True, "workspace_id": ws, "total_items_across_pools": total, "pools": pools}
-
-
-
-# ------------------------------------------------------------
-# Path anchors (avoid cwd issues)
-# rb2_run.py is: backend/app/routers/rb2_run.py
-# parents[0]=routers, [1]=app, [2]=backend, [3]=project root
-# ------------------------------------------------------------
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-DATA_DIR = PROJECT_ROOT / "backend" / "server" / "data"
-UPLOADS_DIR = PROJECT_ROOT / "backend" / "server" / "uploads"
-RB2_RUNNER = PROJECT_ROOT / "backend" / "server" / "engine_js" / "rb2" / "run_rb2.mjs"
-
-WORD_RE = re.compile(r"[a-z0-9]{3,}")
-
-
-def _node_exe() -> str:
-    return os.environ.get("NODE_EXE", "node")
-
-
-WS_RE = re.compile(r"^[a-z0-9_]{3,80}$", re.IGNORECASE)
-
-def _ws_safe(ws: str) -> str:
-    ws = str(ws or "").strip()
-    if not ws:
-        raise HTTPException(status_code=400, detail={"ok": False, "error": "missing_workspace_id"})
-    if not ws.startswith("ws_"):
-        raise HTTPException(status_code=400, detail={"ok": False, "error": "workspace_id_must_start_with_ws_"})
-    if not WS_RE.match(ws):
-        raise HTTPException(status_code=400, detail={"ok": False, "error": "invalid_workspace_id_chars"})
-    return ws
-
-
-def _safe_read_json(path: Path) -> Any:
-    try:
-        with path.open("r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return None
 
 
 def _tokenize(s: str) -> List[str]:
@@ -223,9 +220,8 @@ def _load_site_phrase_index(workspace_id: str) -> List[Dict[str, Any]]:
     except Exception:
         return []
 
-def _draft_title_phrase_aliases(title: str) -> list[str]:
-    import re
 
+def _draft_title_phrase_aliases(title: str) -> list[str]:
     s = str(title or "").strip()
     if not s:
         return []
@@ -242,10 +238,10 @@ def _draft_title_phrase_aliases(title: str) -> list[str]:
         return []
 
     STOPWORDS = {
-    "and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with",
-    "by", "at", "from", "as", "is", "are", "was", "were", "be", "can",
-    "during"
-}
+        "and", "or", "the", "a", "an", "of", "to", "in", "on", "for", "with",
+        "by", "at", "from", "as", "is", "are", "was", "were", "be", "can",
+        "during"
+    }
 
     def is_valid_phrase(parts: list[str]) -> bool:
         if len(parts) < 2 or len(parts) > 8:
@@ -337,6 +333,8 @@ def _build_candidate_pool(workspace_id: str, limit: int = 50000) -> List[Dict[st
     IMPORTANT:
       - Targets are PAGES.
       - Phrase index is NOT added as standalone targets.
+      - Imported URLs are tagged origin="imported" (the scoring dispatch in
+        rb2_run matches on that exact value).
     """
     ws = _ws_safe(workspace_id)
 
@@ -403,7 +401,7 @@ def _build_candidate_pool(workspace_id: str, limit: int = 50000) -> List[Dict[st
                 origin="imported",
             )
 
-       # 2) Draft topics -> PAGE targets (planned_url)
+    # 2) Draft topics -> PAGE targets (planned_url)
     raw_drafts = _safe_read_json(draft_path)
     if isinstance(raw_drafts, list):
         for r in raw_drafts[:limit]:
@@ -645,7 +643,6 @@ def _filter_candidate_pool_by_active_membership(
     return out
 
 
-
 @router.post("/run")
 async def rb2_run(request: Request) -> Dict[str, Any]:
     if not RB2_RUNNER.exists():
@@ -656,7 +653,10 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON request body.")
 
-    workspace_id = str(payload.get("workspace_id") or payload.get("workspaceId") or "default").strip()
+    # FIX: removed the misleading `or "default"` fallback. _ws_safe requires a
+    # ws_-prefixed id and raises otherwise, so "default" could never have
+    # survived validation — the fallback was dead and hid the real contract.
+    workspace_id = str(payload.get("workspace_id") or payload.get("workspaceId") or "").strip()
     ws = _ws_safe(workspace_id)
 
     #  Attach rb2.extract.v1 contract
@@ -689,8 +689,7 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
             "has_site_phrase_index": (DATA_DIR / f"site_phrase_index_{ws}.json").exists(),
         }
 
-
-                 #  HARD FAIL: prevent silent success when RB2 has nothing to work with
+        #  HARD FAIL: prevent silent success when RB2 has nothing to work with
         if not isinstance(pool, list) or len(pool) == 0:
             raise HTTPException(
                 status_code=400,
@@ -708,8 +707,6 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
                     },
                 },
             )
-
-
 
         #  Node runner expects input.targets (we feed PAGE targets + aliases)
         targets: List[Dict[str, Any]] = []
@@ -758,7 +755,11 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
                 lc_meta["resolver_matches"] = resolver_matches
                 lc_meta["resolver_enabled"] = True
 
-            elif it.get("origin") == "imported_target_pool":
+            # FIX: was `== "imported_target_pool"`, a value nothing ever sets, so
+            # imported targets were never scored or resolver-matched. The pool
+            # builder tags imported URLs origin="imported" (and the active-
+            # membership filter already matches that), so dispatch on it here.
+            elif it.get("origin") == "imported":
                 # Use title + aliases as the scoring phrase context.
                 phrase_context = " ".join([title] + clean_aliases).strip()
 
@@ -837,7 +838,6 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RB2 pool build failed: {e}")
-
 
     #  Serialize once (ensure we are really sending JSON)
     stdin_str = json.dumps(payload, ensure_ascii=False)
@@ -1000,6 +1000,10 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
         scored.sort(key=lambda x: x.get("runtime_score", 0), reverse=True)
         return scored[:limit]
 
+    # NOTE: fallback matching runs against the locally built `targets`. If a
+    # caller supplied their own payload["targets"], those are sent to Node but
+    # this fallback still uses the backend-built rows for anchor matching.
+    fallback_target_rows = targets
 
     def _enrich_bucket(items):
         out = []
@@ -1015,7 +1019,7 @@ async def rb2_run(request: Request) -> Dict[str, Any]:
             # match the selected phrase directly against backend live-domain targets.
             if not matches and key:
                 try:
-                    matches = _fallback_targets_for_anchor(key, targets, limit=3)
+                    matches = _fallback_targets_for_anchor(key, fallback_target_rows, limit=3)
                 except Exception:
                     matches = []
 
@@ -1084,8 +1088,6 @@ async def rb2_resolver_debug(request: Request) -> Dict[str, Any]:
     if not phrase:
         raise HTTPException(status_code=400, detail="Missing phrase.")
 
-    from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
-
     rows = resolve_intelligent_targets(
         workspace_id=workspace_id,
         anchor_phrase=phrase,
@@ -1099,4 +1101,3 @@ async def rb2_resolver_debug(request: Request) -> Dict[str, Any]:
         "count": len(rows),
         "rows": rows,
     }
-

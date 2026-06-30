@@ -29,6 +29,12 @@ Output contract:
                      each carrying link_status and a family_root for the density
                      engine. Nothing here is dropped for "quality".
     rejected[]    -> only: empty phrase, exact duplicate, or not-present-in-article.
+
+COORDINATE SPACE (IMPORTANT — read before consuming positions):
+    first_position / all_positions are offsets into the NORMALIZED article
+    (lowercased, whitespace-collapsed via _normalized_article), NOT the raw
+    article text. Any consumer that divides or indexes by article length MUST
+    normalize the length the same way. The density engine relies on this.
 """
 
 from __future__ import annotations
@@ -64,6 +70,12 @@ def normalize_phrase_key(text: Any) -> str:
 
 # back-compat alias (some callers imported this name)
 normalize_phrase = normalize_phrase_key
+
+
+def _display_text(item: Dict[str, Any]) -> str:
+    """Extractor's exact display text, tried across the known field names."""
+    return (item.get("phrase") or item.get("text")
+            or item.get("phrase_text") or item.get("label") or "")
 
 
 def extract_phrase_candidates(active_phrase_pool: Any) -> List[Dict[str, Any]]:
@@ -149,8 +161,11 @@ def _occurrence_relevance_0_100(count: int) -> float:
 def _resolver_relevance_0_100(sig: Dict[str, Any]) -> float:
     if not sig or not sig.get("resolver_found_target"):
         return 0.0
+
     def pct(x: float) -> float:
-        return x * 100.0 if x is not None and x <= 1.0 else (x or 0.0)
+        # _safe_float never returns None, so x is always a float here.
+        return x * 100.0 if x <= 1.0 else x
+
     return max(0.0, min(100.0, max(
         pct(_safe_float(sig.get("resolver_confidence"))),
         pct(_safe_float(sig.get("target_score"))),
@@ -281,20 +296,33 @@ def select_highlight_candidates(
 
     candidates: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []
-    seen: set = set()
 
+    # FIX (dedupe): de-duplicate by normalized key, KEEPING the item with the
+    # stronger extractor score instead of blind first-wins. Duplicates share a
+    # key, so they share the same resolver signal anyway; extractor score is the
+    # only meaningful discriminator. The loser is demoted to rejected[].
+    best_by_key: Dict[str, Dict[str, Any]] = {}
     for item in raw_candidates:
-        original = (item.get("phrase") or item.get("text")
-                    or item.get("phrase_text") or item.get("label") or "")
+        original = _display_text(item)
         key = normalize_phrase_key(original)
 
         if not key:
             rejected.append({"phrase": str(original or ""), "reason": "rejected_empty_phrase"})
             continue
-        if key in seen:
-            rejected.append({"phrase": original, "reason": "rejected_duplicate"})
+
+        incumbent = best_by_key.get(key)
+        if incumbent is None:
+            best_by_key[key] = item
             continue
-        seen.add(key)
+
+        if _extractor_score_0_100(item) > _extractor_score_0_100(incumbent):
+            rejected.append({"phrase": _display_text(incumbent), "reason": "rejected_duplicate"})
+            best_by_key[key] = item
+        else:
+            rejected.append({"phrase": original, "reason": "rejected_duplicate"})
+
+    for key, item in best_by_key.items():
+        original = _display_text(item)
 
         positions = _finditer_positions(key, norm_article)
         if not positions:
@@ -306,7 +334,7 @@ def select_highlight_candidates(
         rec["phrase"] = original          # display text, UNMUTATED
         rec["phrase_key"] = key           # matching/dedupe key
         rec["occurrence_count"] = len(positions)
-        rec["all_positions"] = positions
+        rec["all_positions"] = positions  # NOTE: offsets in NORMALIZED article space
         rec["first_position"] = positions[0]
         rec["family_root"] = _family_root(key)
 
@@ -343,11 +371,13 @@ def select_highlight_candidates(
 
     # Highest opportunity first. Linked outranks unlinked at equal score so the
     # density engine paints real links before bare opportunities.
+    # FIX (tie-break): at equal score and link_status, prefer the LONGER (more
+    # specific) anchor — len(phrase_key), not -len(phrase_key).
     candidates.sort(
         key=lambda x: (
             x.get("selection_score", 0.0),
             1 if x.get("link_status") == "linked" else 0,
-            -len(x.get("phrase_key", "")),
+            len(x.get("phrase_key", "")),
         ),
         reverse=True,
     )
@@ -356,6 +386,10 @@ def select_highlight_candidates(
         "ok": True,
         "workspace_id": workspace_id,
         "doc_id": doc_id,
+        # NOTE: "selected" and "candidates" intentionally alias the SAME list of
+        # the SAME dicts. Downstream stages (e.g. the density engine) annotate
+        # these records in place for frontend metadata; both views reflect that.
+        # Deep-copy here if a caller needs an isolated snapshot.
         "selected": candidates,          # every valid opportunity, ranked
         "candidates": candidates,        # alias for clarity
         "rejected": rejected,            # only empty / duplicate / not-in-article

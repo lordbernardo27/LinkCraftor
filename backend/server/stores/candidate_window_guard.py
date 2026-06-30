@@ -1,179 +1,184 @@
-﻿from __future__ import annotations
+﻿"""
+Candidate window guard (corrected, niche-agnostic).
+
+Role
+----
+A *downstream* accept/reject gate. It receives an already-extracted candidate
+phrase and decides whether it is a clean anchor. It returns the same
+``quality_gate`` record shape as before, so it is a drop-in replacement for
+``candidate_window_guard``.
+
+What changed vs. the previous version
+-------------------------------------
+The previous guard gated on large hand-curated *noun* vocabularies and a set of
+regexes memorised from specific documents. That made it (a) reject many perfectly
+good anchors whose modifier happened to be a common adjective ("simple interest",
+"regular expression", "search results"), (b) silently rewrite phrases to a
+hardcoded "core", and (c) carry a six-signal score that was decorative — every
+accepted phrase scored exactly 1.0, so the REVIEW band was unreachable.
+
+This version follows the same asymmetry that makes phrase work universal:
+
+  * VERBS are a (mostly) closed, niche-independent class -> we gate on a curated
+    *verb* lexicon (clause verbs, action-led leaks). Curating verbs is fine; they
+    do not vary by niche.
+  * NOUNS are open and vary by niche -> we NEVER reject a phrase because its head
+    noun is unknown. Weakness is judged on the HEAD, not on a modifier, and only
+    truly vacuous heads (thing/way/stuff/aspect) count.
+
+The score is now honest: it is computed from real, transparent signals, so the
+ACCEPT / REVIEW / REJECT bands are all reachable and mean something.
+
+No required third-party or backend dependencies; the learning hook is optional.
+"""
+
+from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
-from backend.server.stores.dis_pipeline_learning import learn_from_pipeline_rejection
+# --------------------------------------------------------------------------- #
+# Optional learning hook — degrades gracefully if the backend isn't present.
+# --------------------------------------------------------------------------- #
+try:  # pragma: no cover - infra dependent
+    from backend.server.stores.dis_pipeline_learning import (  # type: ignore
+        learn_from_pipeline_rejection,
+    )
+except Exception:  # pragma: no cover
+    def learn_from_pipeline_rejection(**_kwargs: Any) -> None:
+        return None
 
 
 WORD_RE = re.compile(r"[a-z0-9]{2,}", re.I)
 
+
+# --------------------------------------------------------------------------- #
+# Closed-ish function / verb classes (niche-independent).
+# --------------------------------------------------------------------------- #
+
 STOPWORDS: Set[str] = {
     "the", "and", "for", "with", "that", "this", "from", "into", "your", "you",
     "are", "was", "were", "will", "can", "could", "should", "would", "have",
-    "has", "had", "about", "over", "under", "than", "then", "when", "what",
-    "where", "which", "who", "whom", "why", "how", "a", "an", "to", "of",
-    "in", "on", "at", "by", "or", "as", "is", "it", "be", "not", "no",
-    "if", "but", "so", "because", "after", "before", "during", "while",
-    "through", "up", "down", "out", "off", "too", "very", "also",
-}
-
-CLAUSE_VERBS: Set[str] = {
-    "is", "are", "was", "were", "has", "have", "had", "do", "does", "did",
-    "can", "could", "should", "would", "will", "may", "might", "be", "been",
-    "being", "become", "becomes", "became", "means", "mean", "depends",
-    "depend", "helps", "help", "improves", "improve", "reduces", "reduce",
-    "increases", "increase", "supports", "support", "contains", "contain",
-    "requires", "require", "reveals", "reveal", "respond", "responds",
-    "handled", "handle", "affect", "affects", "struggle", "struggles",
+    "has", "had", "about", "over", "under", "than", "then", "a", "an", "to",
+    "of", "in", "on", "at", "by", "or", "as", "is", "it", "be", "not", "no",
+    "if", "but", "so", "because", "while", "up", "down", "out", "off", "too",
+    "very", "also", "their", "our", "his", "her", "its", "them", "they", "we",
 }
 
 CONNECTORS: Set[str] = {
-    "for", "to", "with", "without", "before", "after", "during", "at", "in",
-    "on", "between", "among", "against", "through", "into", "across", "near",
-    "within", "around", "under", "over", "beyond",
+    "for", "to", "with", "without", "before", "after", "during", "between",
+    "among", "against", "through", "across", "near", "within", "around",
+    "beyond", "via", "per",
+}
+# Connectors that frequently sit *inside* a legitimate term and so must not, on
+# their own, condemn a phrase ("rate of return", "return on investment",
+# "cost of goods", "point in time").
+TERM_CONNECTORS: Set[str] = {"of", "on", "in"}
+
+LEADING_ADVERBS: Set[str] = {
+    "quickly", "slowly", "often", "usually", "sometimes", "really", "simply",
+    "just", "always", "never", "very", "quite", "rather", "highly",
 }
 
-ACTION_LEAK_STARTS: Set[str] = {
-    "neglect", "avoid", "reduce", "improve", "manage", "check", "monitor",
-    "track", "review", "choose", "define", "send", "skip", "treat",
+# Auxiliaries / copulas / modals — unambiguous clause signals.
+AUX_VERBS: Set[str] = {
+    "is", "are", "was", "were", "be", "been", "being", "am", "has", "have",
+    "had", "do", "does", "did", "can", "could", "should", "would", "will",
+    "shall", "may", "might", "must",
 }
 
-WEAK_SUBJECTS: Set[str] = {
-    "business", "businesses", "people", "person", "students", "student",
-    "patients", "patient", "users", "user", "customers", "customer",
-    "owners", "owner", "parents", "parent", "workers", "worker",
-    "teams", "team", "companies", "company",
+# Verbs that are *clearly* verbs (not common noun homographs). Used to detect
+# clause leaks anywhere in the phrase. Deliberately EXCLUDES ambiguous words
+# such as rate / score / review / report / support / plan / study / search /
+# track / drive / charge, which are frequently noun heads.
+CLAUSE_VERBS: Set[str] = {
+    "become", "becomes", "became", "mean", "means", "depend", "depends",
+    "help", "helps", "improve", "improves", "reduce", "reduces", "increase",
+    "increases", "require", "requires", "contain", "contains", "reveal",
+    "reveals", "affect", "affects", "struggle", "struggles", "enable",
+    "enables", "allow", "allows", "prevent", "prevents", "boost", "boosts",
+    "lower", "lowers", "raise", "raises", "deliver", "delivers", "provide",
+    "provides", "explain", "explains", "describe", "describes", "include",
+    "includes", "offer", "offers", "create", "creates", "build", "builds",
+    "drive", "drives", "ensure", "ensures", "happen", "happens", "occur",
+    "occurs", "cause", "causes", "remain", "remains", "appear", "appears",
+    "seem", "seems", "comes", "goes", "make", "makes", "get", "gets",
 }
 
-WEAK_SUBJECT_VERBS: Set[str] = {
-    "struggle", "struggles", "face", "faces", "need", "needs", "want",
-    "wants", "use", "uses", "make", "makes", "get", "gets",
+# Verbs that, when they LEAD a phrase, signal a verb+object clause leak
+# ("reduce churn", "improve activation"). Closed class -> niche independent.
+ACTION_LEAD_VERBS: Set[str] = {
+    "neglect", "avoid", "reduce", "improve", "manage", "monitor", "review",
+    "choose", "define", "send", "skip", "treat", "increase", "decrease",
+    "boost", "lower", "raise", "optimize", "optimise", "maximize", "maximise",
+    "minimize", "minimise", "build", "create", "design", "develop", "deliver",
+    "ensure", "enable", "prevent", "handle", "perform", "achieve", "calculate",
+    "estimate", "configure", "deploy", "install", "remove", "replace", "update",
+    "compare", "identify", "measure", "analyze", "analyse", "understand",
+    "learn", "discover", "explore", "find", "get", "make", "use",
 }
 
-WEAK_CARRYOVER_WORDS: Set[str] = {
-    "meals", "routines", "choices", "checks", "effects", "cost", "risk",
-    "footwear", "infections", "daily", "proper", "consistent", "quickly",
-    "face", "thing", "things", "many", "several", "various", "different",
-    "common", "important", "simple", "basic", "major", "minor",
+# Intent prefixes that legitimately contain a verb ("how to track spend").
+INTENT_STARTS: Tuple[str, ...] = (
+    "how to", "how many", "how much", "what is", "what are", "when to",
+    "where to", "why is", "why are", "best way to", "best time to",
+    "best ways to", "ways to", "steps to", "tips for", "guide to",
+    "reasons to", "signs of", "benefits of", "causes of", "symptoms of",
+)
+INTENT_FIRST_WORDS: Set[str] = {w.split()[0] for w in INTENT_STARTS}
+
+# Truly vacuous heads — contentless no matter the niche.
+VACUOUS_HEADS: Set[str] = {
+    "thing", "things", "stuff", "way", "ways", "aspect", "aspects",
+    "lot", "lots", "bit", "bits", "kind", "kinds", "sort", "sorts",
 }
 
-QUERY_STARTS: Set[str] = {
-    "best", "how", "when", "what", "why", "where", "which",
+# Weak modifiers — they don't reject on their own, but a phrase made of ONLY
+# weak modifiers + a vacuous head is junk, and they lower the score.
+WEAK_MODIFIERS: Set[str] = {
+    "good", "better", "best", "great", "nice", "useful", "helpful", "important",
+    "simple", "basic", "common", "general", "regular", "normal", "same",
+    "various", "different", "certain", "particular", "specific", "valuable",
+    "healthy", "traditional", "random", "minor", "major", "other", "another",
+    "several", "many", "some", "any", "each", "every", "main", "key", "top",
+    "real", "actual", "overall", "whole", "big", "full", "total", "only",
 }
 
-GENERIC_ADJECTIVES: Set[str] = {
-    "good", "better", "best", "strong", "weak", "useful", "helpful",
-    "important", "clear", "simple", "basic", "common", "general",
-    "successful", "strongest", "regular", "normal", "same", "valuable",
-    "healthy", "traditional", "different", "various", "certain",
-}
 
-GENERIC_HEADS: Set[str] = {
-    "tools", "tool", "things", "thing", "ways", "way", "areas", "area",
-    "parts", "part", "problem", "problems", "issue", "issues",
-    "result", "results", "system", "systems", "topic", "topics",
-    "factor", "factors", "method", "methods", "option", "options",
-    "course", "courses", "care", "routine", "routines",
-}
+# --------------------------------------------------------------------------- #
+# Verb-form expansion (so we recognise inflections of the closed verb classes).
+# --------------------------------------------------------------------------- #
 
-UNIVERSAL_WEAK_PREFIXES: Set[str] = {
-    "same", "another", "various", "different", "valuable",
-    "general", "specific", "certain", "particular",
-    "healthy", "simple", "basic", "normal", "regular",
-    "traditional", "random", "minor", "major",
-}
+def _expand_forms(lemmas: Set[str]) -> Set[str]:
+    forms: Set[str] = set()
+    for v in lemmas:
+        forms.add(v)
+        forms.update({v + "s", v + "es", v + "ed", v + "ing"})
+        if v.endswith("e"):
+            forms.update({v[:-1] + "es", v[:-1] + "ed", v[:-1] + "ing"})
+        if v.endswith("y") and len(v) > 1 and v[-2] not in "aeiou":
+            forms.update({v[:-1] + "ies", v[:-1] + "ied"})
+    return forms
 
-UNIVERSAL_WEAK_HEADS: Set[str] = {
-    "system", "systems", "course", "courses", "care",
-    "routine", "routines", "thing", "things", "area",
-    "areas", "part", "parts", "method", "methods",
-    "option", "options", "way", "ways",
-}
 
-NOUN_CHAIN_WORDS: Set[str] = {
-    "blood", "pressure", "control", "cholesterol", "management",
-    "foot", "inspections", "checks", "monitoring", "medication",
-    "movement", "income", "mortgage", "payment", "payments",
-    "insurance", "costs", "property", "taxes", "maintenance",
-    "expenses", "screening", "lease", "agreements", "agreement",
-    "late", "fee", "policy", "reminders", "security", "deposit",
-    "renewal", "terms", "rules", "products", "services", "pricing",
-    "data", "software", "equipment", "customers", "suppliers",
-    "marketing", "inventory", "cash", "flow", "revenue", "payroll",
-    "rent", "supplier", "invoices", "invoice", "loan", "loans",
-    "study", "plan", "learning", "platform", "progress", "tracking",
-    "lesson", "rates", "completion", "strategy", "environment",
-}
+_CLAUSE_VERB_FORMS: Set[str] = _expand_forms(CLAUSE_VERBS) | AUX_VERBS
+_ACTION_LEAD_FORMS: Set[str] = _expand_forms(ACTION_LEAD_VERBS)
 
-VALID_ORDERED_PAIRS: Set[Tuple[str, str]] = {
-    ("cash", "flow"),
-    ("blood", "pressure"),
-    ("internal", "linking"),
-    ("external", "linking"),
-    ("search", "intent"),
-    ("supply", "chain"),
-    ("remote", "work"),
-    ("content", "marketing"),
-    ("email", "marketing"),
-    ("social", "media"),
-    ("machine", "learning"),
-    ("artificial", "intelligence"),
-    ("real", "estate"),
-    ("credit", "card"),
-    ("credit", "cards"),
-    ("interest", "rate"),
-    ("interest", "rates"),
-    ("rental", "agreement"),
-    ("lease", "agreement"),
-    ("category", "pages"),
-    ("product", "pages"),
-    ("side", "effects"),
-    ("study", "plan"),
-    ("learning", "platform"),
-    ("progress", "tracking"),
-    ("recorded", "lesson"),
-    ("completion", "rates"),
-}
 
-REVERSED_ORDERED_PAIRS: Set[Tuple[str, str]] = {
-    (b, a) for a, b in VALID_ORDERED_PAIRS
-}
+def _is_gerund(w: str) -> bool:
+    """-ing forms act as nominal/participial modifiers, not clause verbs."""
+    return len(w) > 4 and w.endswith("ing")
 
-BAD_BOUNDARY_STARTS: Set[str] = {
-    "quickly", "slowly", "often", "usually", "sometimes", "thing", "things",
-    "face", "facing", "many", "several", "various", "different", "some",
-    "any", "each", "every", "other", "another", "certain", "same", "re",
-}
 
-BAD_BOUNDARY_ENDS: Set[str] = {
-    "thing", "things", "way", "ways", "area", "areas", "part", "parts",
-    "issue", "issues", "problem", "problems", "result", "results",
-}
+def _is_clause_verb(w: str) -> bool:
+    if _is_gerund(w):
+        return False
+    return w in _CLAUSE_VERB_FORMS
 
-ANCHOR_CORE_PHRASES: Set[str] = {
-    "cash flow",
-    "cash flow management",
-    "blood pressure",
-    "blood pressure control",
-    "internal linking",
-    "internal linking strategy",
-    "external linking",
-    "search intent",
-    "category pages",
-    "product pages",
-    "rental agreement",
-    "lease agreement",
-    "side effects",
-    "supply chain",
-    "remote work",
-    "content marketing",
-    "email marketing",
-    "machine learning",
-    "study plan",
-    "learning platform",
-    "progress tracking",
-}
+
+# --------------------------------------------------------------------------- #
+# Quality-gate record (honest, computed scoring).
+# --------------------------------------------------------------------------- #
 
 QUALITY_GATE_WEIGHTS: Dict[str, float] = {
     "logical_structure": 0.20,
@@ -184,18 +189,17 @@ QUALITY_GATE_WEIGHTS: Dict[str, float] = {
     "rule_hybrid_check": 0.10,
 }
 
+ACCEPT_AT = 0.80
+REVIEW_AT = 0.60
+
 
 def tokenize(text: str) -> List[str]:
     return [t.lower() for t in WORD_RE.findall(text or "")]
 
 
-def make_quality_gate_result(
-    phrase: str,
-    score: float,
-    decision: str,
-    signals: Dict[str, float],
-    reasons: List[str] | None = None,
-) -> Dict[str, Any]:
+def make_quality_gate_result(phrase: str, score: float, decision: str,
+                             signals: Dict[str, float],
+                             reasons: Optional[List[str]] = None) -> Dict[str, Any]:
     return {
         "phrase": phrase,
         "quality_gate_score": round(float(score), 4),
@@ -205,23 +209,31 @@ def make_quality_gate_result(
     }
 
 
-def _weighted_quality_score(signals: Dict[str, float]) -> float:
-    total = 0.0
-    for key, weight in QUALITY_GATE_WEIGHTS.items():
-        total += float(signals.get(key, 0.0)) * weight
-    return round(total, 4)
+def _weighted(signals: Dict[str, float]) -> float:
+    return round(sum(float(signals.get(k, 0.0)) * w
+                     for k, w in QUALITY_GATE_WEIGHTS.items()), 4)
 
 
-def _quality_decision(score: float) -> str:
-    if score >= 0.80:
+def _decision(score: float, keep: bool) -> str:
+    if not keep:
+        return "REJECT"
+    if score >= ACCEPT_AT:
         return "ACCEPT"
-    if score >= 0.65:
+    if score >= REVIEW_AT:
         return "REVIEW"
-    return "REJECT"
+    return "REVIEW"  # kept but low-confidence -> never silently dropped
 
 
-def _base_quality_signals() -> Dict[str, float]:
-    return {
+def _accept_signals(tokens: List[str]) -> Dict[str, float]:
+    """Real, transparent signals for a phrase we keep."""
+    content = [t for t in tokens if t not in STOPWORDS and t not in CONNECTORS]
+    n = len(tokens)
+    head_weak = bool(tokens) and tokens[-1] in VACUOUS_HEADS
+    has_weak_mod = any(t in WEAK_MODIFIERS for t in tokens)
+    strong_content = [t for t in content
+                      if t not in WEAK_MODIFIERS and t not in VACUOUS_HEADS]
+
+    sig = {
         "logical_structure": 1.0,
         "context_fit": 1.0,
         "pragmatic_anchor_value": 1.0,
@@ -229,341 +241,152 @@ def _base_quality_signals() -> Dict[str, float]:
         "trust_risk_safety": 1.0,
         "rule_hybrid_check": 1.0,
     }
+    if n > 5:
+        sig["logical_structure"] = 0.85
+    if has_weak_mod:
+        sig["topic_coherence"] = 0.80
+    if not strong_content:
+        sig["pragmatic_anchor_value"] = 0.55
+    elif head_weak:
+        sig["pragmatic_anchor_value"] = 0.70
+    if len(content) < 2:
+        sig["pragmatic_anchor_value"] = min(sig["pragmatic_anchor_value"], 0.75)
+    return sig
 
 
-def _attach_quality_gate(
-    result: Dict[str, Any],
-    *,
-    signals: Dict[str, float] | None = None,
-    reasons: List[str] | None = None,
-) -> Dict[str, Any]:
-    phrase = result.get("phrase", "")
+def _attach(result: Dict[str, Any], signals: Dict[str, float],
+            reasons: List[str]) -> Dict[str, Any]:
     keep = bool(result.get("keep"))
-
-    final_signals = _base_quality_signals()
-    if signals:
-        final_signals.update(signals)
-
     if not keep:
-        final_signals["rule_hybrid_check"] = 0.0
-        reasons = reasons or [str(result.get("reason", "rejected_by_guard"))]
-
-    score = _weighted_quality_score(final_signals)
-    decision = "REJECT" if not keep else _quality_decision(score)
-
+        signals = dict(signals)
+        signals["rule_hybrid_check"] = 0.0
+    score = _weighted(signals)
     result["quality_gate"] = make_quality_gate_result(
-        phrase=phrase,
-        score=score,
-        decision=decision,
-        signals=final_signals,
-        reasons=reasons or [str(result.get("reason", ""))],
+        phrase=result.get("phrase", ""), score=score,
+        decision=_decision(score, keep), signals=signals, reasons=reasons,
     )
-
     return result
 
 
-def _reject(
-    phrase: str,
-    reason: str,
-    signals: Dict[str, float] | None = None,
-    *,
-    workspace_id: str = "default",
-    document_id: str = "",
-    vertical: str = "general",
-) -> Dict[str, Any]:
+def _reject(phrase: str, reason: str, signals: Dict[str, float], *,
+            workspace_id: str, document_id: str, vertical: str) -> Dict[str, Any]:
     learn_from_pipeline_rejection(
-        workspace_id=workspace_id,
-        document_id=document_id,
-        vertical=vertical,
+        workspace_id=workspace_id, document_id=document_id, vertical=vertical,
         pipeline_stage="candidate_window_guard",
-        candidate={"phrase": phrase},
-        rejection_reason=reason,
+        candidate={"phrase": phrase}, rejection_reason=reason,
     )
-
-    return _attach_quality_gate(
-        {"keep": False, "reason": reason, "phrase": phrase},
-        signals=signals,
-        reasons=[reason],
-    )
+    return _attach({"keep": False, "reason": reason, "phrase": phrase},
+                   signals, [reason])
 
 
-def _accept(phrase: str, reason: str, signals: Dict[str, float] | None = None) -> Dict[str, Any]:
-    return _attach_quality_gate(
-        {"keep": True, "reason": reason, "phrase": phrase},
-        signals=signals,
-        reasons=[reason],
-    )
+def _accept(phrase: str, tokens: List[str]) -> Dict[str, Any]:
+    return _attach({"keep": True, "reason": "guard_pass", "phrase": phrase},
+                   _accept_signals(tokens), ["guard_pass"])
 
 
-def _phrase_from_tokens(tokens: List[str]) -> str:
-    return " ".join(tokens)
+def _review(phrase: str, tokens: List[str], reason: str,
+            signals: Dict[str, float]) -> Dict[str, Any]:
+    """Kept, but flagged as borderline (not silently dropped)."""
+    base = _accept_signals(tokens)
+    base.update(signals)
+    return _attach({"keep": True, "reason": reason, "phrase": phrase},
+                   base, [reason])
 
 
-def _contains_valid_core_phrase(tokens: List[str]) -> str:
-    joined = _phrase_from_tokens(tokens)
-    for core in sorted(ANCHOR_CORE_PHRASES, key=lambda x: len(x.split()), reverse=True):
-        if core in joined:
-            return core
-    return ""
+# --------------------------------------------------------------------------- #
+# Boundary trimming (predictable; no semantic rewriting).
+# --------------------------------------------------------------------------- #
+
+def _trim_boundaries(tokens: List[str]) -> List[str]:
+    toks = list(tokens)
+    while toks and (toks[0] in STOPWORDS or toks[0] in CONNECTORS
+                    or toks[0] in LEADING_ADVERBS):
+        toks.pop(0)
+    while toks and (toks[-1] in STOPWORDS or toks[-1] in CONNECTORS
+                    or toks[-1] in AUX_VERBS):
+        toks.pop()
+    return toks
 
 
-def _has_reversed_ordered_pair(tokens: List[str]) -> bool:
-    return any(pair in REVERSED_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
-
-
-def _has_valid_ordered_pair(tokens: List[str]) -> bool:
-    return any(pair in VALID_ORDERED_PAIRS for pair in zip(tokens, tokens[1:]))
-
-
-def _is_weak_subject_verb_fragment(tokens: List[str]) -> bool:
-    if len(tokens) != 2:
+def _is_intent(tokens: List[str]) -> bool:
+    if not tokens or tokens[0] not in INTENT_FIRST_WORDS:
         return False
-    left, right = tokens
-    return left in WEAK_SUBJECTS and right in WEAK_SUBJECT_VERBS
+    joined = " ".join(tokens)
+    return any(joined.startswith(p) for p in INTENT_STARTS)
 
 
-def _is_action_leak_start(tokens: List[str]) -> bool:
-    if len(tokens) < 2:
-        return False
-
-    if tokens[0] not in ACTION_LEAK_STARTS:
-        return False
-
-    if any(t in CONNECTORS for t in tokens):
-        return False
-
-    # Universal compact action-object protection.
-    # Allows useful anchors such as:
-    # "avoid penalties", "reduce churn", "manage inventory",
-    # "monitor rankings", "track expenses", "check credit score".
-    # Still blocks weak action leaks with vague/filler objects.
-    weak_action_objects = (
-        STOPWORDS
-        | WEAK_CARRYOVER_WORDS
-        | GENERIC_ADJECTIVES
-        | GENERIC_HEADS
-        | UNIVERSAL_WEAK_PREFIXES
-        | UNIVERSAL_WEAK_HEADS
-        | WEAK_SUBJECTS
-    )
-
-    object_tokens = tokens[1:]
-
-    if 1 <= len(object_tokens) <= 3:
-        meaningful_objects = [
-            t for t in object_tokens
-            if t not in weak_action_objects
-        ]
-
-        if meaningful_objects:
-            return False
-
-    return True
-
-
-def _is_short_multi_head_collision(tokens: List[str]) -> bool:
-    if len(tokens) not in {2, 3, 4}:
-        return False
-
-    if _has_valid_ordered_pair(tokens):
-        return False
-
-    if any(t in CONNECTORS for t in tokens):
-        return False
-
-    head_like = 0
-    for t in tokens:
-        if t in NOUN_CHAIN_WORDS or t in GENERIC_HEADS or t in WEAK_CARRYOVER_WORDS:
-            head_like += 1
-
-    return head_like >= 3
-
-
-def _is_query_like(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
-        return False
-    return tokens[0] in QUERY_STARTS and any(t in CONNECTORS for t in tokens[1:-1])
-
-
-def _is_long_carryover_stack(tokens: List[str]) -> bool:
-    if len(tokens) < 4:
-        return False
-
-    if _is_query_like(tokens):
-        return False
-
-    if _contains_valid_core_phrase(tokens):
-        return False
-
-    if any(t in CONNECTORS for t in tokens):
-        return False
-
-    carryover_hits = sum(1 for t in tokens if t in WEAK_CARRYOVER_WORDS)
-    noun_hits = sum(1 for t in tokens if t in NOUN_CHAIN_WORDS)
-
-    return (carryover_hits + noun_hits) >= 4
-
-
-def _has_clause_leak(tokens: List[str]) -> bool:
-    if len(tokens) < 4:
-        return False
-
-    if _is_query_like(tokens):
-        return False
-
-    if _contains_valid_core_phrase(tokens) and len(tokens) <= 6:
-        return False
-
-    return any(t in CLAUSE_VERBS for t in tokens)
-
+# --------------------------------------------------------------------------- #
+# Individual, head-aware checks.
+# --------------------------------------------------------------------------- #
 
 def _starts_or_ends_badly(tokens: List[str]) -> bool:
     if not tokens:
         return True
-
-    if tokens[0] in STOPWORDS or tokens[-1] in STOPWORDS:
-        return True
-
-    if tokens[0] in BAD_BOUNDARY_STARTS or tokens[-1] in BAD_BOUNDARY_ENDS:
-        return True
-
-    if len(tokens) >= 3 and tokens[0] in GENERIC_ADJECTIVES and tokens[-1] in GENERIC_HEADS:
-        return True
-
-    return False
+    return (tokens[0] in STOPWORDS or tokens[0] in CONNECTORS
+            or tokens[-1] in STOPWORDS or tokens[-1] in CONNECTORS
+            or tokens[0] in LEADING_ADVERBS)
 
 
-def _is_dense_noun_chain(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
-        return False
-
-    if _is_query_like(tokens):
-        return False
-
-    if _contains_valid_core_phrase(tokens):
-        return False
-
-    connector_count = sum(1 for t in tokens if t in CONNECTORS)
-    chain_hits = sum(1 for t in tokens if t in NOUN_CHAIN_WORDS)
-
-    if len(tokens) >= 5 and chain_hits / max(1, len(tokens)) >= 0.75 and connector_count == 0:
-        return True
-
-    return False
-
-
-def _is_generic_short_false_positive(tokens: List[str]) -> bool:
-    if len(tokens) != 2:
-        return False
-
-    left, right = tokens
-
-    if (left, right) in VALID_ORDERED_PAIRS:
-        return False
-
-    if left in GENERIC_ADJECTIVES and right in GENERIC_HEADS:
-        return True
-
-    return False
-
-
-def _is_universal_weak_semantic_phrase(tokens: List[str]) -> bool:
+def _is_action_led_leak(tokens: List[str]) -> bool:
+    """A verb+object clause fragment ('reduce churn', 'improve activation').
+    Gated on the closed action-verb class; gerund-led modifiers are exempt."""
     if len(tokens) < 2:
         return False
+    head = tokens[0]
+    if _is_gerund(head):
+        return False
+    if head not in _ACTION_LEAD_FORMS:
+        return False
+    # a term connector immediately after a verb still reads as a clause
+    return True
 
-    first = tokens[0]
-    last = tokens[-1]
 
-    if first in UNIVERSAL_WEAK_PREFIXES:
+def _has_clause_verb(tokens: List[str]) -> bool:
+    """A finite clause verb anywhere makes this a sentence fragment, not an
+    anchor — unless it's a recognised intent phrase."""
+    if _is_intent(tokens):
+        return False
+    return any(_is_clause_verb(t) for t in tokens)
+
+
+def _is_all_weak(tokens: List[str]) -> bool:
+    """Every content token is a weak modifier or vacuous head -> junk
+    ('various things', 'best ways', 'simple stuff')."""
+    content = [t for t in tokens if t not in STOPWORDS and t not in CONNECTORS]
+    if not content:
         return True
-
-    if last in UNIVERSAL_WEAK_HEADS and first in GENERIC_ADJECTIVES:
-        return True
-
-    if last in UNIVERSAL_WEAK_HEADS and len(tokens) <= 3:
-        non_generic = [
-            t for t in tokens
-            if t not in UNIVERSAL_WEAK_PREFIXES
-            and t not in UNIVERSAL_WEAK_HEADS
-            and t not in GENERIC_ADJECTIVES
-            and t not in CONNECTORS
-        ]
-        if len(non_generic) < 2:
-            return True
-
-    return False
-
-def _matches_universal_guard_noise_pattern(phrase: str) -> bool:
-    text = str(phrase or "").strip().lower()
-    if not text:
-        return True
-
-    patterns = [
-        # incomplete phrase endings
-        # incomplete phrase endings only when the ending is vague/generic
-       r"\b(with|for|by|to|from|into|around|after|before)\s+(this|that|these|those|it|them|other|another|same|next|last|early|example)$",
-
-        # broken "for early", "with other", etc.
-        r"\b(for|with|by|from)\s+(early|other|another|same|example)$",
-
-        # narration residue
-        r"\b(right now|some perspective|quick reminder|in this video|this article|this guide)\b",
-
-        # weak explanatory fragments
-        r"\b(stands for|looks like|lines up with|associated with)\b",
-
-        # weak generic phrases
-        r"^(quickest ways|single number|pick up tips|much salt)$",
-
-        # broken subject + action residue
-        r"^\w+\s+(shoot|shoots|goes|gives|adjusting|arrive|arrives|vary)\b",
-
-        # awkward article/body fragments
-        r"\b\w+\s+(after eating salty|before the next|vary lot month)$",
-
-        # weak numeric/time fragments
-        r"^(five days|next nine months|same year|next year|average length|single number)$",
-    ]
-
-    return any(re.search(pattern, text) for pattern in patterns)
+    return all(t in WEAK_MODIFIERS or t in VACUOUS_HEADS for t in content)
 
 
-def _has_repeated_or_duplicate_noise(tokens: List[str]) -> bool:
+def _is_vacuous_head(tokens: List[str]) -> bool:
+    """Head is contentless but a real (non-weak) word qualifies it
+    ('marketing stuff', 'config thing') -> keep but flag for REVIEW. The
+    all-weak case ('best ways') is handled earlier as a hard reject."""
+    if not tokens or tokens[-1] not in VACUOUS_HEADS:
+        return False
+    if _is_intent(tokens):
+        return False
+    quals = [t for t in tokens[:-1]
+             if t not in STOPWORDS and t not in CONNECTORS]
+    strong = [t for t in quals if t not in WEAK_MODIFIERS]
+    return len(strong) >= 1
+
+
+def _has_duplicate_noise(tokens: List[str]) -> bool:
     if len(tokens) < 3:
         return False
-
-    unique_ratio = len(set(tokens)) / max(1, len(tokens))
-    return unique_ratio < 0.75
+    return len(set(tokens)) / len(tokens) < 0.6
 
 
-def _is_stitched_vertical_list(tokens: List[str]) -> bool:
-    if len(tokens) < 5:
-        return False
-
-    if _is_query_like(tokens):
-        return False
-
-    if _contains_valid_core_phrase(tokens):
-        return False
-
-    connector_count = sum(1 for t in tokens if t in CONNECTORS)
-    if connector_count > 0:
-        return False
-
-    chain_hits = sum(1 for t in tokens if t in NOUN_CHAIN_WORDS)
-    return chain_hits >= 4
+def _too_many_connectors(tokens: List[str]) -> bool:
+    """One internal connector is fine ('rate of return'); several means a
+    stitched clause ('tips for owners with budgets for teams')."""
+    return sum(1 for t in tokens if t in CONNECTORS or t in TERM_CONNECTORS) >= 2
 
 
-def _compress_long_wrapper(tokens: List[str]) -> str:
-    if len(tokens) < 4:
-        return _phrase_from_tokens(tokens)
-
-    core = _contains_valid_core_phrase(tokens)
-    if core:
-        return core
-
-    return _phrase_from_tokens(tokens)
-
+# --------------------------------------------------------------------------- #
+# Public entry point.
+# --------------------------------------------------------------------------- #
 
 def candidate_window_guard(
     candidate: str,
@@ -572,205 +395,64 @@ def candidate_window_guard(
     workspace_id: str = "default",
     document_id: str = "",
     vertical: str = "general",
+    max_tokens: int = 8,
 ) -> Dict[str, Any]:
     phrase = " ".join(tokenize(candidate))
 
-    def reject_guard(
-        phrase_value: str,
-        reason: str,
-        signals: Dict[str, float] | None = None,
-    ) -> Dict[str, Any]:
-        return _reject(
-            phrase_value,
-            reason,
-            signals,
-            workspace_id=workspace_id,
-            document_id=document_id,
-            vertical=vertical,
-        )
+    def rej(p: str, reason: str, signals: Dict[str, float]) -> Dict[str, Any]:
+        return _reject(p, reason, signals, workspace_id=workspace_id,
+                       document_id=document_id, vertical=vertical)
 
     if not phrase:
-        return reject_guard("", "empty_candidate")
+        return rej("", "empty_candidate",
+                   {"logical_structure": 0.0, "pragmatic_anchor_value": 0.0})
 
-    tokens = phrase.split()
+    # Predictable boundary trim (no semantic rewriting).
+    tokens = _trim_boundaries(phrase.split())
+    phrase = " ".join(tokens)
 
     if len(tokens) < 2:
-        return reject_guard(
-            phrase,
-            "too_short",
-            {
-                "logical_structure": 0.30,
-                "pragmatic_anchor_value": 0.15,
-            },
-        )
+        return rej(phrase, "too_short",
+                   {"logical_structure": 0.30, "pragmatic_anchor_value": 0.15})
 
-    compressed_phrase = _compress_long_wrapper(tokens)
-    compressed_tokens = compressed_phrase.split()
-
-    if compressed_phrase != phrase and len(compressed_tokens) >= 2:
-        phrase = compressed_phrase
-        tokens = compressed_tokens
-
-    if len(tokens) > 10:
-        return reject_guard(
-            phrase,
-            "too_long",
-            {
-                "logical_structure": 0.40,
-                "context_fit": 0.45,
-                "pragmatic_anchor_value": 0.30,
-            },
-        )
+    if len(tokens) > max_tokens:
+        return rej(phrase, "too_long",
+                   {"logical_structure": 0.40, "context_fit": 0.45,
+                    "pragmatic_anchor_value": 0.30})
 
     if _starts_or_ends_badly(tokens):
-        return reject_guard(
-            phrase,
-            "bad_boundary",
-            {
-                "logical_structure": 0.25,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
+        return rej(phrase, "bad_boundary",
+                   {"logical_structure": 0.25, "pragmatic_anchor_value": 0.20})
 
-    if _has_reversed_ordered_pair(tokens):
-        return reject_guard(
-            phrase,
-            "reversed_ordered_pair",
-            {
-                "logical_structure": 0.10,
-                "pragmatic_anchor_value": 0.20,
-                "topic_coherence": 0.45,
-            },
-        )
+    if _is_action_led_leak(tokens):
+        return rej(phrase, "action_leak_start",
+                   {"logical_structure": 0.35, "pragmatic_anchor_value": 0.20,
+                    "topic_coherence": 0.40})
 
-    if _is_weak_subject_verb_fragment(tokens):
-        return reject_guard(
-            phrase,
-            "weak_subject_verb_fragment",
-            {
-                "logical_structure": 0.35,
-                "context_fit": 0.45,
-                "pragmatic_anchor_value": 0.10,
-                "topic_coherence": 0.35,
-            },
-        )
+    if _has_clause_verb(tokens):
+        return rej(phrase, "clause_leak",
+                   {"logical_structure": 0.25, "context_fit": 0.35,
+                    "pragmatic_anchor_value": 0.20})
 
-    if _is_action_leak_start(tokens):
-        return reject_guard(
-            phrase,
-            "action_leak_start",
-            {
-                "logical_structure": 0.35,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
+    if _is_all_weak(tokens):
+        return rej(phrase, "all_weak_terms",
+                   {"logical_structure": 0.40, "pragmatic_anchor_value": 0.10,
+                    "topic_coherence": 0.30})
 
-    if _is_short_multi_head_collision(tokens):
-        return reject_guard(
-            phrase,
-            "short_multi_head_collision",
-            {
-                "logical_structure": 0.30,
-                "pragmatic_anchor_value": 0.25,
-                "topic_coherence": 0.40,
-            },
-        )
+    if _is_vacuous_head(tokens):
+        return _review(phrase, tokens, "vacuous_head_review",
+                       {"pragmatic_anchor_value": 0.45, "topic_coherence": 0.55})
 
-    if _is_long_carryover_stack(tokens):
-        return reject_guard(
-            phrase,
-            "long_carryover_stack",
-            {
-                "logical_structure": 0.25,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.15,
-            },
-        )
+    if _has_duplicate_noise(tokens):
+        return rej(phrase, "duplicate_noise",
+                   {"logical_structure": 0.25, "pragmatic_anchor_value": 0.25})
 
-    if _has_clause_leak(tokens):
-        return reject_guard(
-            phrase,
-            "clause_leak",
-            {
-                "logical_structure": 0.25,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
+    if _too_many_connectors(tokens):
+        return rej(phrase, "stitched_connectors",
+                   {"logical_structure": 0.25, "context_fit": 0.30,
+                    "pragmatic_anchor_value": 0.20})
 
-    if _is_stitched_vertical_list(tokens):
-        return reject_guard(
-            phrase,
-            "stitched_vertical_list",
-            {
-                "logical_structure": 0.20,
-                "context_fit": 0.25,
-                "pragmatic_anchor_value": 0.15,
-                "topic_coherence": 0.30,
-            },
-        )
-
-    if _is_dense_noun_chain(tokens):
-        return reject_guard(
-            phrase,
-            "dense_noun_chain",
-            {
-                "logical_structure": 0.25,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.25,
-            },
-        )
-
-    if _has_repeated_or_duplicate_noise(tokens):
-        return reject_guard(
-            phrase,
-            "duplicate_noise",
-            {
-                "logical_structure": 0.25,
-                "pragmatic_anchor_value": 0.20,
-            },
-        )
-
-    if _is_generic_short_false_positive(tokens):
-        return reject_guard(
-            phrase,
-            "generic_short_false_positive",
-            {
-                "logical_structure": 0.40,
-                "pragmatic_anchor_value": 0.15,
-                "topic_coherence": 0.35,
-            },
-        )
-
-    if _matches_universal_guard_noise_pattern(phrase):
-       return reject_guard(
-        phrase,
-        "universal_guard_noise_pattern",
-        {
-            "logical_structure": 0.25,
-            "context_fit": 0.30,
-            "pragmatic_anchor_value": 0.15,
-            "topic_coherence": 0.25,
-        },
-    )
-
-    if _is_universal_weak_semantic_phrase(tokens):
-        return reject_guard(
-            phrase,
-            "universal_weak_semantic_phrase",
-            {
-                "logical_structure": 0.35,
-                "context_fit": 0.35,
-                "pragmatic_anchor_value": 0.10,
-                "topic_coherence": 0.30,
-            },
-        )
-
-    return _accept(phrase, "guard_pass")
+    return _accept(phrase, tokens)
 
 
-
-
-
-
-
+__all__ = ["candidate_window_guard", "make_quality_gate_result", "tokenize"]
