@@ -3,7 +3,6 @@
 import html
 import re
 from typing import Any, Dict, List
-from backend.server.stores.automatic_boilerplate_intelligence_engine import apply_boilerplate_intelligence_v1
 
 
 UNIVERSAL_BOILERPLATE_PATTERNS_V1 = [
@@ -182,17 +181,7 @@ def clean_crawled_article_body_v1(
 
     cleaned = remove_editorial_metadata_v1(sliced)
     cleaned = trim_to_true_article_start_v1(cleaned)
-
-    boilerplate_result = apply_boilerplate_intelligence_v1(
-        text=cleaned,
-        url=url,
-        learned_rules=None,
-        include_universal=True,
-        include_domain=True,
-        include_learned=True,
-    )
-
-    cleaned = boilerplate_result.get("cleaned_text", cleaned)
+    cleaned = remove_universal_and_domain_boilerplate_v1(cleaned, url)
     cleaned = normalize_spacing_v1(cleaned)
 
     return {
@@ -207,23 +196,8 @@ def clean_crawled_article_body_v1(
         "removed_length": max(0, len(original) - len(cleaned)),
         "start_offset": start,
         "cleaned_body": cleaned,
-        "metadata": {
-            **(metadata or {}),
-            "boilerplate_intelligence": {
-                "engine": boilerplate_result.get("engine"),
-                "version": boilerplate_result.get("version"),
-                "layers": boilerplate_result.get("layers"),
-                "active_rule_count": boilerplate_result.get("active_rule_count"),
-                "removal_count": boilerplate_result.get("removal_count"),
-                "removed_word_count": boilerplate_result.get("removed_word_count"),
-                "confidence_summary": boilerplate_result.get("confidence_summary"),
-                "removal_ledger": boilerplate_result.get("removal_ledger", []),
-            "diagnostics": boilerplate_result.get("diagnostics", {}),
-            "enterprise_diagnostics": boilerplate_result.get("enterprise_diagnostics", {}),
-            },
-        },
-        "cleaning_version": "article_body_cleaner_v1_5_layer_boilerplate_intelligence",
+        "metadata": metadata or {},
+        "cleaning_version": "article_body_cleaner_v1_universal_domain_boilerplate_removed",
     }
-
 
 

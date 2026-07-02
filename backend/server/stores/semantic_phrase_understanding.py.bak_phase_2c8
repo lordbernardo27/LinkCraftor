@@ -24,216 +24,54 @@ def lookup_semantic_object_from_workspace_v1(workspace_id: str | None, normalize
     """
     Semantic Workspace lookup interface.
 
-    Production path:
-    - Reads semantic_map_v2_<workspace>.json through semantic_source.py
-    - Uses Semantic Workspace Learner indexes:
-      canonical_lookup, synonym_lookup, target_lookup
-    - Falls back to controlled verification map only if no workspace match exists.
+    Current implementation returns controlled fallback data for verification.
+    Production implementation should read from:
+    - Semantic Workspace Learner output
+    - Memory Engine
+    - Learning Engine
+    - Certified Semantic Learning Packs
+
+    This keeps Step 2 connected to the existing learning pipeline contract
+    without creating a new reasoning engine.
     """
-    query = (normalized_text or "").strip().lower()
-    if not query:
-        return None
 
-    try:
-        from backend.server.engine.semantic_source import load_workspace_semantic_map_v2
-
-        semantic_map = load_workspace_semantic_map_v2(workspace_id or "default")
-        indexes = semantic_map.get("indexes") or {}
-
-        canonical_lookup = indexes.get("canonical_lookup") or {}
-        synonym_lookup = indexes.get("synonym_lookup") or {}
-        target_lookup = indexes.get("target_lookup") or {}
-
-        semantic_objects = (
-            semantic_map.get("semantic_objects")
-            or semantic_map.get("canonical_semantic_objects")
-            or semantic_map.get("concepts")
-            or []
-        )
-
-        canonical = None
-        match_type = None
-
-        if query in canonical_lookup:
-            canonical = query
-            match_type = "direct_canonical_match"
-        elif query in synonym_lookup:
-            canonical = str(synonym_lookup.get(query) or "").strip().lower()
-            match_type = "synonym_lookup_match"
-
-        matched_obj = None
-
-        if canonical is not None:
-            idx = canonical_lookup.get(canonical)
-
-            if isinstance(idx, int) and 0 <= idx < len(semantic_objects):
-                matched_obj = semantic_objects[idx]
-            else:
-                for obj in semantic_objects:
-                    obj_canonical = (
-                        obj.get("canonical")
-                        or obj.get("canonical_concept")
-                        or obj.get("name")
-                        or obj.get("label")
-                        or ""
-                    )
-                    if str(obj_canonical).strip().lower() == canonical:
-                        matched_obj = obj
-                        break
-
-        if matched_obj:
-            canonical_concept = (
-                matched_obj.get("canonical")
-                or matched_obj.get("canonical_concept")
-                or matched_obj.get("name")
-                or matched_obj.get("label")
-                or canonical
-            )
-
-            aliases = (
-                matched_obj.get("aliases")
-                or matched_obj.get("synonyms")
-                or matched_obj.get("terms")
-                or []
-            )
-
-            semantic_object_id = (
-                matched_obj.get("semantic_object_id")
-                or matched_obj.get("id")
-                or f"semantic_object_{re.sub(r'[^a-z0-9]+', '_', str(canonical_concept).lower()).strip('_')}"
-            )
-
-            semantic_type = (
-                matched_obj.get("semantic_type")
-                or matched_obj.get("type")
-                or matched_obj.get("category")
-                or "semantic_concept"
-            )
-
-            related_concepts = (
-                matched_obj.get("related_concepts")
-                or matched_obj.get("relationships")
-                or matched_obj.get("neighbors")
-                or []
-            )
-
-            return {
-                "semantic_object_id": semantic_object_id,
-                "canonical_concept": canonical_concept,
-                "aliases": aliases,
-                "related_concepts": related_concepts,
-                "semantic_type": semantic_type,
-                "match_type": match_type or "workspace_match",
-                "confidence": 0.96 if match_type == "direct_canonical_match" else 0.91,
-                "target_urls": target_lookup.get(str(canonical_concept).strip().lower()) or target_lookup.get(canonical) or [],
-                "lookup_source": "semantic_map_v2",
-                "workspace_id": workspace_id,
-            }
-
-    except Exception:
-        pass
-
-    # Controlled fallback for verification only.
-    fallback_map = {
+    workspace_map = {
         "hypertension": {
             "semantic_object_id": "semantic_object_high_blood_pressure",
             "canonical_concept": "high blood pressure",
             "aliases": ["hypertension", "raised blood pressure", "elevated blood pressure"],
-            "related_concepts": [],
             "semantic_type": "medical_condition",
-            "match_type": "fallback_alias_equivalence",
-            "confidence": 0.78,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "alias_equivalence",
+            "confidence": 0.98,
         },
         "high blood pressure": {
             "semantic_object_id": "semantic_object_high_blood_pressure",
             "canonical_concept": "high blood pressure",
             "aliases": ["hypertension", "raised blood pressure", "elevated blood pressure"],
-            "related_concepts": [],
             "semantic_type": "medical_condition",
-            "match_type": "fallback_direct_canonical_match",
-            "confidence": 0.78,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "direct_canonical_match",
+            "confidence": 0.97,
         },
         "blood pressure monitoring": {
             "semantic_object_id": "semantic_object_blood_pressure_monitoring",
             "canonical_concept": "blood pressure monitoring",
             "aliases": ["bp monitoring"],
-            "related_concepts": [],
             "semantic_type": "medical_monitoring",
-            "match_type": "fallback_direct_canonical_match",
-            "confidence": 0.76,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "direct_canonical_match",
+            "confidence": 0.96,
         },
         "morning sickness": {
             "semantic_object_id": "semantic_object_morning_sickness",
             "canonical_concept": "morning sickness",
             "aliases": ["pregnancy nausea"],
-            "related_concepts": [],
             "semantic_type": "pregnancy_symptom",
-            "match_type": "fallback_direct_canonical_match",
-            "confidence": 0.76,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "direct_canonical_match",
+            "confidence": 0.94,
         },
     }
 
-    return fallback_map.get(query)
+    return workspace_map.get((normalized_text or "").strip().lower())
 
-
-
-
-def _build_semantic_match_candidates_v1(
-    phrase_text: str,
-    canonical_concept: str,
-    aliases: list,
-    related_concepts: list,
-    semantic_object_id: str,
-    semantic_fingerprint: str,
-) -> list:
-    """
-    Build structured semantic match candidates for Step 3 Semantic Target Discovery.
-    Step 2C does NOT query targets. It only prepares search candidates.
-    """
-    candidates = []
-
-    def add_candidate(search_text, relationship, priority, search_weight, match_mode):
-        text = str(search_text or "").strip()
-        if not text:
-            return
-
-        key = text.lower()
-        existing = {str(c.get("search_text", "")).lower() for c in candidates}
-        if key in existing:
-            return
-
-        candidates.append({
-            "search_text": text,
-            "relationship": relationship,
-            "semantic_object_id": semantic_object_id,
-            "semantic_fingerprint": semantic_fingerprint,
-            "priority": priority,
-            "search_weight": float(search_weight),
-            "match_mode": match_mode,
-            "confidence": float(search_weight),
-        })
-
-    add_candidate(phrase_text, "editor_phrase", 1, 1.00, "editor_phrase")
-
-    if canonical_concept:
-        add_candidate(canonical_concept, "canonical_concept", 2, 0.96, "canonical")
-
-    for alias in aliases or []:
-        add_candidate(alias, "alias", 3, 0.90, "alias")
-
-    for concept in related_concepts or []:
-        if isinstance(concept, dict):
-            text = concept.get("canonical") or concept.get("concept") or concept.get("text") or concept.get("label")
-        else:
-            text = concept
-
-        add_candidate(text, "related_concept", 4, 0.74, "related")
-
-    return candidates
 
 def understand_yellow_semantic_phrase_v1(
     yellow_phrase: Dict[str, Any],
@@ -270,44 +108,7 @@ def understand_yellow_semantic_phrase_v1(
         )
 
         working_phrase["routing"]["requires_target_discovery"] = False
-        
-    canonical_concept = working_phrase.get("canonical_concept") or working_phrase.get("semantic_identity", {}).get("canonical_concept")
-    aliases = working_phrase.get("aliases") or working_phrase.get("semantic_identity", {}).get("aliases") or []
-    related_concepts = working_phrase.get("related_concepts") or working_phrase.get("semantic_identity", {}).get("related_concepts") or []
-    semantic_object_id = working_phrase.get("semantic_object_id") or working_phrase.get("semantic_identity", {}).get("semantic_object_id")
-    semantic_fingerprint = working_phrase.get("semantic_fingerprint") or working_phrase.get("semantic_identity", {}).get("semantic_fingerprint")
-
-    working_phrase["source_provenance"] = {
-        "source": "semantic_phrase_understanding",
-        "uses_semantic_workspace": True,
-        "uses_memory_engine": True,
-        "uses_learning_engine": True,
-        "uses_existing_reasoning_services": True,
-        "calls_semantic_linking_reasoning_engine": False,
-        "creates_new_reasoning_engine": False,
-    }
-
-    working_phrase["semantic_match_candidates"] = _build_semantic_match_candidates_v1(
-        phrase_text=working_phrase.get("phrase_text") or working_phrase.get("text") or "",
-        canonical_concept=canonical_concept or "",
-        aliases=aliases,
-        related_concepts=related_concepts,
-        semantic_object_id=semantic_object_id or "",
-        semantic_fingerprint=semantic_fingerprint or "",
-    )
-
-    working_phrase["processing_state"] = {
-        **(working_phrase.get("processing_state") or {}),
-        "current_engine": "semantic_phrase_understanding",
-        "status": "ready_for_target_discovery",
-        "ready_for_target_discovery": True,
-        "next_expected_engine": "semantic_target_discovery",
-    }
-
-    working_phrase["ready_for_target_discovery"] = True
-    working_phrase["next_expected_engine"] = "semantic_target_discovery"
-
-    return working_phrase
+        return working_phrase
 
     search_candidates = []
 
@@ -388,43 +189,6 @@ def understand_yellow_semantic_phrase_v1(
         source="semantic_phrase_understanding",
         note="Semantic phrase understood and ready for Active Target Set candidate discovery.",
     )
-
-    
-    canonical_concept = working_phrase.get("canonical_concept") or working_phrase.get("semantic_identity", {}).get("canonical_concept")
-    aliases = working_phrase.get("aliases") or working_phrase.get("semantic_identity", {}).get("aliases") or []
-    related_concepts = working_phrase.get("related_concepts") or working_phrase.get("semantic_identity", {}).get("related_concepts") or []
-    semantic_object_id = working_phrase.get("semantic_object_id") or working_phrase.get("semantic_identity", {}).get("semantic_object_id")
-    semantic_fingerprint = working_phrase.get("semantic_fingerprint") or working_phrase.get("semantic_identity", {}).get("semantic_fingerprint")
-
-    working_phrase["source_provenance"] = {
-        "source": "semantic_phrase_understanding",
-        "uses_semantic_workspace": True,
-        "uses_memory_engine": True,
-        "uses_learning_engine": True,
-        "uses_existing_reasoning_services": True,
-        "calls_semantic_linking_reasoning_engine": False,
-        "creates_new_reasoning_engine": False,
-    }
-
-    working_phrase["semantic_match_candidates"] = _build_semantic_match_candidates_v1(
-        phrase_text=working_phrase.get("phrase_text") or working_phrase.get("text") or "",
-        canonical_concept=canonical_concept or "",
-        aliases=aliases,
-        related_concepts=related_concepts,
-        semantic_object_id=semantic_object_id or "",
-        semantic_fingerprint=semantic_fingerprint or "",
-    )
-
-    working_phrase["processing_state"] = {
-        **(working_phrase.get("processing_state") or {}),
-        "current_engine": "semantic_phrase_understanding",
-        "status": "ready_for_target_discovery",
-        "ready_for_target_discovery": True,
-        "next_expected_engine": "semantic_target_discovery",
-    }
-
-    working_phrase["ready_for_target_discovery"] = True
-    working_phrase["next_expected_engine"] = "semantic_target_discovery"
 
     return working_phrase
 
@@ -524,4 +288,3 @@ def explain_semantic_phrase_understanding_v1() -> Dict[str, Any]:
             "generate explanations",
         ],
     }
-

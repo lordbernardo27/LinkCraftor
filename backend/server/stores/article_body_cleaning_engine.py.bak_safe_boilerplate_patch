@@ -3,58 +3,6 @@
 import html
 import re
 from typing import Any, Dict, List
-from backend.server.stores.automatic_boilerplate_intelligence_engine import apply_boilerplate_intelligence_v1
-
-
-UNIVERSAL_BOILERPLATE_PATTERNS_V1 = [
-    r"(?im)^\s*Back to Top\s*$",
-    r"(?im)^\s*In This Article\s*$",
-    r"(?im)^\s*Table of Contents\s*$",
-    r"(?im)^\s*See more\s*$",
-    r"(?im)^\s*Read more\s*$",
-    r"(?im)^\s*Related articles?\s*$",
-    r"(?im)^\s*Recommended reading\s*$",
-    r"(?im)^\s*Subscribe\s*$",
-    r"(?im)^\s*Newsletter\s*$",
-    r"(?im)^\s*Share this article\s*$",
-    r"(?is)\bDownload the app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-    r"(?is)\bGet the app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-    r"(?is)\bJoin our community\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-    r"(?is)\bEditorial policy\b.*?$",
-    r"(?is)\bMedical Review Policy\b.*?(?=\bKey Takeaways\b|\bWhat are\b|\bWhat is\b|\bHow many\b|$)",
-    r"(?is)\bFact checked\b.*?$",
-]
-
-DOMAIN_BOILERPLATE_PATTERNS_V1 = {
-    "whattoexpect.com": [
-        r"(?is)\bGot more fertility questions\?.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-        r"(?is)\bGo to the What to Expect app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-        r"(?is)\bFrom the What to Expect editorial team\b.*$",
-        r"(?is)\bWhat to Expect follows strict reporting guidelines\b.*$",
-        r"(?is)\bLearn how we keep our content accurate and up-to-date\b.*$",
-        r"(?is)\bmedical review and editorial policy\b.*?$",
-    ],
-}
-
-
-def remove_universal_and_domain_boilerplate_v1(text: str, url: str = "") -> str:
-    cleaned = str(text or "")
-    domain_key = str(url or "").lower()
-
-    for pattern in UNIVERSAL_BOILERPLATE_PATTERNS_V1:
-        cleaned = re.sub(pattern, " ", cleaned)
-
-    for domain, patterns in DOMAIN_BOILERPLATE_PATTERNS_V1.items():
-        if domain in domain_key:
-            for pattern in patterns:
-                cleaned = re.sub(pattern, " ", cleaned)
-
-    cleaned = re.sub(r"[ \t]+", " ", cleaned)
-    cleaned = re.sub(r"\n\s+", "\n", cleaned)
-    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
-
-    return cleaned.strip()
-
 
 
 ARTICLE_END_MARKERS_V1 = [
@@ -182,17 +130,6 @@ def clean_crawled_article_body_v1(
 
     cleaned = remove_editorial_metadata_v1(sliced)
     cleaned = trim_to_true_article_start_v1(cleaned)
-
-    boilerplate_result = apply_boilerplate_intelligence_v1(
-        text=cleaned,
-        url=url,
-        learned_rules=None,
-        include_universal=True,
-        include_domain=True,
-        include_learned=True,
-    )
-
-    cleaned = boilerplate_result.get("cleaned_text", cleaned)
     cleaned = normalize_spacing_v1(cleaned)
 
     return {
@@ -207,23 +144,8 @@ def clean_crawled_article_body_v1(
         "removed_length": max(0, len(original) - len(cleaned)),
         "start_offset": start,
         "cleaned_body": cleaned,
-        "metadata": {
-            **(metadata or {}),
-            "boilerplate_intelligence": {
-                "engine": boilerplate_result.get("engine"),
-                "version": boilerplate_result.get("version"),
-                "layers": boilerplate_result.get("layers"),
-                "active_rule_count": boilerplate_result.get("active_rule_count"),
-                "removal_count": boilerplate_result.get("removal_count"),
-                "removed_word_count": boilerplate_result.get("removed_word_count"),
-                "confidence_summary": boilerplate_result.get("confidence_summary"),
-                "removal_ledger": boilerplate_result.get("removal_ledger", []),
-            "diagnostics": boilerplate_result.get("diagnostics", {}),
-            "enterprise_diagnostics": boilerplate_result.get("enterprise_diagnostics", {}),
-            },
-        },
-        "cleaning_version": "article_body_cleaner_v1_5_layer_boilerplate_intelligence",
+        "metadata": metadata or {},
+        "cleaning_version": "article_body_cleaner_v1_editorial_metadata_removed",
     }
-
 
 

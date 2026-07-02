@@ -29,7 +29,20 @@ This version follows the same asymmetry that makes phrase work universal:
 The score is now honest: it is computed from real, transparent signals, so the
 ACCEPT / REVIEW / REJECT bands are all reachable and mean something.
 
-No required third-party or backend dependencies; the learning hook is optional.
+POS layer
+---------
+Verb-vs-noun and head decisions are driven by a part-of-speech tagger (NLTK when
+available, a light heuristic otherwise) rather than by guessing from word lists.
+Because taggers have a compound-noun bias on short fragments, the tagger is used
+as the primary signal and a small *closed verb class* backs it up: a token counts
+as a verb when the tagger says so AND we recognise it as a verb, or when it is a
+near-unambiguous verb (optimize, configure, affect...). Ambiguous noun homographs
+(build, drive, review, support, rate, plan...) are trusted as nouns, so
+"build quality", "product reviews" and "price increase" survive while
+"reduce churn" and "blood pressure improves" do not.
+
+No required third-party or backend dependencies; NLTK and the learning hook are
+both optional and degrade gracefully.
 """
 
 from __future__ import annotations
@@ -140,8 +153,8 @@ WEAK_MODIFIERS: Set[str] = {
     "simple", "basic", "common", "general", "regular", "normal", "same",
     "various", "different", "certain", "particular", "specific", "valuable",
     "healthy", "traditional", "random", "minor", "major", "other", "another",
-    "several", "many", "some", "any", "each", "every", "main", "key", "top",
-    "real", "actual", "overall", "whole", "big", "full", "total", "only",
+    "several", "many", "some", "any", "each", "every", "main", "overall",
+    "whole", "actual", "only",
 }
 
 
@@ -161,8 +174,26 @@ def _expand_forms(lemmas: Set[str]) -> Set[str]:
     return forms
 
 
-_CLAUSE_VERB_FORMS: Set[str] = _expand_forms(CLAUSE_VERBS) | AUX_VERBS
+_CLAUSE_VERB_FORMS: Set[str] = (_expand_forms(CLAUSE_VERBS | {
+    "correlate", "fluctuate", "vary", "differ", "decline", "persist",
+}) | AUX_VERBS)
 _ACTION_LEAD_FORMS: Set[str] = _expand_forms(ACTION_LEAD_VERBS)
+
+# Verbs that are *almost never* nouns. Only these may override a confident
+# NOUN tag from the tagger (which has a compound-noun bias on short fragments).
+# Deliberately excludes build / drive / offer / support / review / design /
+# control / order / report / plan / rate / score — all common noun heads.
+STRICT_VERBS: Set[str] = {
+    "become", "mean", "depend", "require", "contain", "reveal", "affect",
+    "enable", "allow", "prevent", "ensure", "happen", "occur", "remain",
+    "appear", "seem", "explain", "describe", "struggle", "optimize", "optimise",
+    "maximize", "maximise", "minimize", "minimise", "analyze", "analyse",
+    "eliminate", "accelerate", "calculate", "configure", "deploy", "automate",
+    "streamline", "prioritize", "prioritise", "summarize", "summarise",
+    "customize", "customise", "diagnose", "mitigate", "facilitate",
+    "implement", "differentiate", "correlate", "fluctuate",
+}
+_STRICT_VERB_FORMS: Set[str] = _expand_forms(STRICT_VERBS) | AUX_VERBS
 
 
 def _is_gerund(w: str) -> bool:
@@ -170,10 +201,132 @@ def _is_gerund(w: str) -> bool:
     return len(w) > 4 and w.endswith("ing")
 
 
-def _is_clause_verb(w: str) -> bool:
+# --------------------------------------------------------------------------- #
+# POS layer: NLTK when available, else a light heuristic. Tags are coarse:
+# NOUN / VERB / ADJ / ADV / NUM / DET / ADP / CONJ / PRON / X.
+# The guard uses POS as the PRIMARY verb/head signal and the closed verb
+# lexicon as a backstop for the tagger's isolation errors (short fragments).
+# --------------------------------------------------------------------------- #
+
+_NLTK_OK: Optional[bool] = None
+
+
+def _have_nltk() -> bool:
+    global _NLTK_OK
+    if _NLTK_OK is None:
+        try:
+            import nltk  # type: ignore
+            nltk.pos_tag(["test"])
+            _NLTK_OK = True
+        except Exception:
+            _NLTK_OK = False
+    return bool(_NLTK_OK)
+
+
+def _coarsen(tag: str) -> str:
+    if tag.startswith("NN"):
+        return "NOUN"
+    if tag.startswith("VB"):
+        return "VERB"
+    if tag.startswith("JJ"):
+        return "ADJ"
+    if tag.startswith("RB"):
+        return "ADV"
+    if tag in {"DT", "PDT", "WDT"}:
+        return "DET"
+    if tag == "IN":
+        return "ADP"
+    if tag == "CC":
+        return "CONJ"
+    if tag in {"PRP", "PRP$", "WP", "WP$"}:
+        return "PRON"
+    if tag == "CD":
+        return "NUM"
+    if tag == "MD":
+        return "AUX"
+    return "X"
+
+
+_NOUN_SUFFIXES = ("tion", "sion", "ment", "ness", "ity", "ship", "ance",
+                  "ence", "ics", "ism", "age", "ure", "ist", "ery", "or",
+                  "er", "ar")
+
+
+def _heuristic_tag(w: str) -> str:
+    if w in STOPWORDS or w in CONNECTORS:
+        if w in {"and", "or"}:
+            return "CONJ"
+        if w in CONNECTORS or w in {"of", "on", "in", "to", "by", "at"}:
+            return "ADP"
+        return "DET"
+    if w in AUX_VERBS:
+        return "AUX"
+    if w.isdigit():
+        return "NUM"
     if _is_gerund(w):
+        return "NOUN"            # gerund used nominally in NP context
+    if w in _HEURISTIC_VERB_FORMS:
+        return "VERB"
+    if w in WEAK_MODIFIERS:
+        return "ADJ"
+    if w.endswith(_NOUN_SUFFIXES):
+        return "NOUN"
+    if w.endswith("ly") and len(w) > 4:
+        return "ADV"
+    return "NOUN"                # default: unknown content word -> noun head
+
+
+def _pos_tag(tokens: Sequence[str]) -> List[str]:
+    toks = list(tokens)
+    if not toks:
+        return []
+    if _have_nltk():
+        try:
+            import nltk  # type: ignore
+            return [_coarsen(t) for _, t in nltk.pos_tag(toks)]
+        except Exception:
+            pass
+    return [_heuristic_tag(t) for t in toks]
+
+
+_KNOWN_VERB_FORMS: Set[str] = (_CLAUSE_VERB_FORMS | _ACTION_LEAD_FORMS
+                               | _STRICT_VERB_FORMS)
+
+# Without a real tagger we can only safely tag *clearly verbal* words as verbs;
+# ambiguous noun homographs (build, drive, review, support, plan...) default to
+# NOUN so legitimate compounds survive the fallback path.
+_HEURISTIC_VERB_FORMS: Set[str] = _STRICT_VERB_FORMS | _expand_forms({
+    "reduce", "improve", "increase", "decrease", "avoid", "neglect", "boost",
+    "enhance", "raise", "lower", "grow", "help", "depend", "mean", "become",
+})
+
+
+def _is_verb(tok: str, tag: str) -> bool:
+    """Treat a token as a clause verb only when we are confident:
+      * the tagger says VERB *and* we recognise it as a verb, or
+      * it is a near-unambiguous (STRICT) verb, even if the tagger (which has a
+        compound-noun bias on short fragments) called it a noun.
+    An unknown word the tagger merely guessed VB on (e.g. 'template') is NOT a
+    verb, so legitimate noun heads survive."""
+    if _is_gerund(tok):
         return False
-    return w in _CLAUSE_VERB_FORMS
+    if tok in _STRICT_VERB_FORMS:
+        return True
+    if tag == "VERB" and tok in _KNOWN_VERB_FORMS:
+        return True
+    return False
+
+
+def _is_noun_like_head(tok: str, tag: str) -> bool:
+    if _is_verb(tok, tag):
+        return False
+    if tag in {"NOUN", "NUM"}:
+        return True
+    if _is_gerund(tok):
+        return True             # nominal gerund head ("strength training")
+    if tag in {"ADJ", "ADV", "DET", "ADP", "CONJ", "PRON", "AUX"}:
+        return False
+    return True                 # unknown content word -> acceptable head
 
 
 # --------------------------------------------------------------------------- #
@@ -327,49 +480,52 @@ def _starts_or_ends_badly(tokens: List[str]) -> bool:
             or tokens[0] in LEADING_ADVERBS)
 
 
-def _is_action_led_leak(tokens: List[str]) -> bool:
-    """A verb+object clause fragment ('reduce churn', 'improve activation').
-    Gated on the closed action-verb class; gerund-led modifiers are exempt."""
+def _is_action_led_leak(tokens: List[str], tags: List[str]) -> bool:
+    """Verb+object clause fragment ('reduce churn'): the phrase LEADS with a
+    verb (by tagger or lexicon) followed by a noun-ish object."""
     if len(tokens) < 2:
         return False
-    head = tokens[0]
-    if _is_gerund(head):
+    if not _is_verb(tokens[0], tags[0]):
         return False
-    if head not in _ACTION_LEAD_FORMS:
-        return False
-    # a term connector immediately after a verb still reads as a clause
-    return True
+    # leading word is a verb; the rest must look like an object NP, not e.g.
+    # an adverb tail. Any noun-like token after it -> clause leak.
+    return any(_is_noun_like_head(t, g) for t, g in zip(tokens[1:], tags[1:]))
 
 
-def _has_clause_verb(tokens: List[str]) -> bool:
-    """A finite clause verb anywhere makes this a sentence fragment, not an
-    anchor — unless it's a recognised intent phrase."""
+def _head_not_noun(tokens: List[str], tags: List[str]) -> bool:
+    """Phrase must end on a noun-like head ('very large', 'rates increase' bad)."""
+    return not _is_noun_like_head(tokens[-1], tags[-1])
+
+
+def _has_interior_clause_verb(tokens: List[str], tags: List[str]) -> bool:
+    """A finite verb inside the phrase makes it a clause, not an anchor —
+    unless it's a recognised intent phrase ('how to track spend')."""
     if _is_intent(tokens):
         return False
-    return any(_is_clause_verb(t) for t in tokens)
+    return any(_is_verb(t, g) for t, g in zip(tokens, tags))
 
 
-def _is_all_weak(tokens: List[str]) -> bool:
-    """Every content token is a weak modifier or vacuous head -> junk
-    ('various things', 'best ways', 'simple stuff')."""
-    content = [t for t in tokens if t not in STOPWORDS and t not in CONNECTORS]
-    if not content:
-        return True
-    return all(t in WEAK_MODIFIERS or t in VACUOUS_HEADS for t in content)
+def _strong_tokens(tokens: List[str], tags: List[str]) -> List[str]:
+    """Content tokens that carry real meaning: noun-like by tag and not a
+    vacuous head. Adjectives/adverbs and vacuous heads don't count."""
+    return [t for t, g in zip(tokens, tags)
+            if _is_noun_like_head(t, g) and t not in VACUOUS_HEADS]
 
 
-def _is_vacuous_head(tokens: List[str]) -> bool:
-    """Head is contentless but a real (non-weak) word qualifies it
-    ('marketing stuff', 'config thing') -> keep but flag for REVIEW. The
-    all-weak case ('best ways') is handled earlier as a hard reject."""
+def _is_all_weak(tokens: List[str], tags: List[str]) -> bool:
+    """No real noun content at all ('various things', 'best ways',
+    'main thing') -> junk."""
+    return len(_strong_tokens(tokens, tags)) == 0
+
+
+def _is_vacuous_head(tokens: List[str], tags: List[str]) -> bool:
+    """Head is contentless but a real word qualifies it ('marketing stuff',
+    'config thing') -> keep but flag for REVIEW."""
     if not tokens or tokens[-1] not in VACUOUS_HEADS:
         return False
     if _is_intent(tokens):
         return False
-    quals = [t for t in tokens[:-1]
-             if t not in STOPWORDS and t not in CONNECTORS]
-    strong = [t for t in quals if t not in WEAK_MODIFIERS]
-    return len(strong) >= 1
+    return len(_strong_tokens(tokens[:-1], tags[:-1])) >= 1
 
 
 def _has_duplicate_noise(tokens: List[str]) -> bool:
@@ -424,22 +580,28 @@ def candidate_window_guard(
         return rej(phrase, "bad_boundary",
                    {"logical_structure": 0.25, "pragmatic_anchor_value": 0.20})
 
-    if _is_action_led_leak(tokens):
+    tags = _pos_tag(tokens)
+
+    if _is_action_led_leak(tokens, tags):
         return rej(phrase, "action_leak_start",
                    {"logical_structure": 0.35, "pragmatic_anchor_value": 0.20,
                     "topic_coherence": 0.40})
 
-    if _has_clause_verb(tokens):
+    if _head_not_noun(tokens, tags):
+        return rej(phrase, "non_noun_head",
+                   {"logical_structure": 0.30, "pragmatic_anchor_value": 0.20})
+
+    if _has_interior_clause_verb(tokens, tags):
         return rej(phrase, "clause_leak",
                    {"logical_structure": 0.25, "context_fit": 0.35,
                     "pragmatic_anchor_value": 0.20})
 
-    if _is_all_weak(tokens):
+    if _is_all_weak(tokens, tags):
         return rej(phrase, "all_weak_terms",
                    {"logical_structure": 0.40, "pragmatic_anchor_value": 0.10,
                     "topic_coherence": 0.30})
 
-    if _is_vacuous_head(tokens):
+    if _is_vacuous_head(tokens, tags):
         return _review(phrase, tokens, "vacuous_head_review",
                        {"pragmatic_anchor_value": 0.45, "topic_coherence": 0.55})
 

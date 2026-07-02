@@ -1,0 +1,441 @@
+﻿from __future__ import annotations
+
+import hashlib
+import re
+from collections import Counter, defaultdict
+from typing import Any, Dict, List
+
+
+UNIVERSAL_BOILERPLATE_RULES_V1 = [
+    {
+        "rule_id": "UNI_NAV_BACK_TO_TOP",
+        "category": "navigation",
+        "pattern": r"(?im)^\s*Back to Top\s*$",
+        "confidence": 0.98,
+    },
+    {
+        "rule_id": "UNI_TOC_IN_THIS_ARTICLE",
+        "category": "table_of_contents",
+        "pattern": r"(?im)^\s*(In This Article|On This Page|Table of Contents|Jump to)\s*$",
+        "confidence": 0.95,
+    },
+    {
+        "rule_id": "UNI_PROMO_APP",
+        "category": "promotion",
+        "pattern": r"(?is)\b(download|get)\s+the\s+app\b.*?(?=\n[A-Z][^\n]{3,120}\n|$)",
+        "confidence": 0.90,
+    },
+    {
+        "rule_id": "UNI_SHARE_ARTICLE",
+        "category": "sharing",
+        "pattern": r"(?im)^\s*(Share this article|Share|Save article|Print article|Copy link)\s*$",
+        "confidence": 0.92,
+    },
+    {
+        "rule_id": "UNI_RELATED_READING",
+        "category": "related_content",
+        "pattern": r"(?im)^\s*(Related Articles?|Recommended Reading|More on this topic|You may also like)\s*$",
+        "confidence": 0.90,
+    },
+    {
+        "rule_id": "UNI_NEWSLETTER",
+        "category": "newsletter",
+        "pattern": r"(?is)\b(newsletter|subscribe)\b.*?(?=\n[A-Z][^\n]{3,120}\n|$)",
+        "confidence": 0.82,
+    },
+    {
+        "rule_id": "UNI_EDITORIAL_POLICY",
+        "category": "editorial_metadata",
+        "pattern": r"(?is)\b(editorial policy|medical review policy|fact checked|reviewed by)\b.*?(?=\n[A-Z][^\n]{3,120}\n|$)",
+        "confidence": 0.88,
+    },
+    {
+        "rule_id": "UNI_ADVERTISEMENT",
+        "category": "advertising",
+        "pattern": r"(?im)^\s*(Advertisement|Advertiser Disclosure|Sponsored|Paid Content)\s*$",
+        "confidence": 0.95,
+    },
+    {
+        "rule_id": "UNI_COMMENTS",
+        "category": "comments",
+        "pattern": r"(?im)^\s*(Comments|Join the discussion|What people are saying)\s*$",
+        "confidence": 0.90,
+    },
+]
+
+
+
+
+STRUCTURAL_BOILERPLATE_RULES_V1 = [
+    {
+        "rule_id": "STRUCT_NAV_BLOCK",
+        "category": "structural_navigation",
+        "pattern": r"(?is)<nav\b[^>]*>.*?</nav>",
+        "confidence": 0.98,
+    },
+    {
+        "rule_id": "STRUCT_FOOTER_BLOCK",
+        "category": "structural_footer",
+        "pattern": r"(?is)<footer\b[^>]*>.*?</footer>",
+        "confidence": 0.98,
+    },
+    {
+        "rule_id": "STRUCT_ASIDE_BLOCK",
+        "category": "structural_sidebar",
+        "pattern": r"(?is)<aside\b[^>]*>.*?</aside>",
+        "confidence": 0.94,
+    },
+    {
+        "rule_id": "STRUCT_COMMENT_BLOCK",
+        "category": "structural_comments",
+        "pattern": r"(?is)<[^>]*(comment|comments|discussion)[^>]*>.*?</[^>]+>",
+        "confidence": 0.90,
+    },
+    {
+        "rule_id": "STRUCT_RELATED_WIDGET",
+        "category": "structural_related_content",
+        "pattern": r"(?is)<[^>]*(related|recommend|popular|trending)[^>]*>.*?</[^>]+>",
+        "confidence": 0.86,
+    },
+    {
+        "rule_id": "STRUCT_AD_WIDGET",
+        "category": "structural_advertising",
+        "pattern": r"(?is)<[^>]*(ad|ads|advert|sponsor)[^>]*>.*?</[^>]+>",
+        "confidence": 0.88,
+    },
+]
+
+DOMAIN_EXCEPTION_RULES_V1 = {
+    "whattoexpect.com": [
+        {
+            "rule_id": "DOM_WTE_APP_PROMO",
+            "category": "domain_promotion",
+            "pattern": r"(?is)\bGot more fertility questions\?.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+            "confidence": 0.97,
+        },
+        {
+            "rule_id": "DOM_WTE_APP_GUIDE",
+            "category": "domain_promotion",
+            "pattern": r"(?is)\bGo to the What to Expect app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+            "confidence": 0.97,
+        },
+        {
+            "rule_id": "DOM_WTE_EDITORIAL_FOOTER",
+            "category": "domain_editorial_footer",
+            "pattern": r"(?is)\bFrom the What to Expect editorial team\b.*$",
+            "confidence": 0.98,
+        },
+        {
+            "rule_id": "DOM_WTE_REPORTING_GUIDELINES",
+            "category": "domain_editorial_footer",
+            "pattern": r"(?is)\bWhat to Expect follows strict reporting guidelines\b.*$",
+            "confidence": 0.98,
+        },
+        {
+            "rule_id": "DOM_WTE_ACCURACY_NOTICE",
+            "category": "domain_editorial_footer",
+            "pattern": r"(?is)\bLearn how we keep our content accurate and up-to-date\b.*$",
+            "confidence": 0.98,
+        },
+    ]
+}
+
+
+def _norm_line_v1(text: str) -> str:
+    text = re.sub(r"\s+", " ", str(text or "")).strip().lower()
+    return text
+
+
+def _hash_text_v1(text: str) -> str:
+    return hashlib.sha256(str(text or "").encode("utf-8")).hexdigest()[:16]
+
+
+def split_text_blocks_v1(text: str) -> List[str]:
+    raw = str(text or "")
+    blocks = re.split(r"\n{2,}|(?<=[.!?])\s+(?=[A-Z])", raw)
+    return [b.strip() for b in blocks if b and len(b.strip()) >= 20]
+
+
+def learn_repeated_boilerplate_blocks_v1(
+    *,
+    documents: List[Dict[str, Any]],
+    min_document_frequency_ratio: float = 0.60,
+    min_document_count: int = 3,
+) -> Dict[str, Any]:
+    """
+    Learns repeated blocks across a domain/workspace.
+
+    If the same text block appears across many pages, it is likely boilerplate.
+    This does not remove anything directly; it produces learned rules.
+    """
+
+    doc_count = len(documents)
+    block_docs: Dict[str, set] = defaultdict(set)
+    block_text: Dict[str, str] = {}
+
+    for idx, doc in enumerate(documents):
+        text = doc.get("text") or doc.get("article_text") or doc.get("cleaned_text") or doc.get("content") or ""
+        for block in split_text_blocks_v1(text):
+            norm = _norm_line_v1(block)
+            if len(norm) < 40:
+                continue
+
+            h = _hash_text_v1(norm)
+            block_docs[h].add(idx)
+            block_text[h] = block
+
+    learned_rules = []
+
+    for h, doc_indexes in block_docs.items():
+        freq = len(doc_indexes)
+        ratio = freq / max(doc_count, 1)
+
+        if freq >= min_document_count and ratio >= min_document_frequency_ratio:
+            escaped = re.escape(block_text[h])
+            learned_rules.append({
+                "rule_id": f"LEARNED_REPEAT_{h}",
+                "category": "learned_repeated_boilerplate",
+                "pattern": escaped,
+                "confidence": round(min(0.99, ratio), 4),
+                "document_frequency": freq,
+                "document_frequency_ratio": round(ratio, 4),
+                "sample": block_text[h][:240],
+            })
+
+    return {
+        "ok": True,
+        "engine": "automatic_boilerplate_learning_v1",
+        "document_count": doc_count,
+        "learned_rule_count": len(learned_rules),
+        "learned_rules": learned_rules,
+    }
+
+
+def _rules_for_domain_v1(url: str) -> List[Dict[str, Any]]:
+    domain_key = str(url or "").lower()
+    out: List[Dict[str, Any]] = []
+
+    for domain, rules in DOMAIN_EXCEPTION_RULES_V1.items():
+        if domain in domain_key:
+            out.extend(rules)
+
+    return out
+
+
+def apply_boilerplate_intelligence_v1(
+    *,
+    text: str,
+    url: str = "",
+    learned_rules: List[Dict[str, Any]] | None = None,
+    include_universal: bool = True,
+    include_domain: bool = True,
+    include_learned: bool = True,
+) -> Dict[str, Any]:
+    """
+    Applies:
+    1. Universal boilerplate rules
+    2. Learned repeated-block rules
+    3. Domain exception rules
+
+    Returns cleaned text plus a removal ledger.
+    """
+
+    cleaned = str(text or "")
+    removal_ledger: List[Dict[str, Any]] = []
+
+    active_rules: List[Dict[str, Any]] = []
+
+    # Layer 1 ? Universal rules
+    if include_universal:
+        active_rules.extend(UNIVERSAL_BOILERPLATE_RULES_V1)
+
+    # Layer 2 ? Structural rules
+    active_rules.extend(STRUCTURAL_BOILERPLATE_RULES_V1)
+
+    # Layer 3 ? Learned repeated-block rules
+    if include_learned and learned_rules:
+        active_rules.extend(learned_rules)
+
+    # Layer 4 ? Domain exception rules
+    if include_domain:
+        active_rules.extend(_rules_for_domain_v1(url))
+
+    diagnostics = {
+        "evaluated_rule_count": 0,
+        "matched_rule_count": 0,
+        "skipped_rule_count": 0,
+        "disabled_rule_count": 0,
+        "duplicate_suppression_count": 0,
+        "no_match_rule_count": 0,
+        "rule_evaluations": [],
+    }
+
+    seen_removed_hashes = set()
+
+    for rule in active_rules:
+        diagnostics["evaluated_rule_count"] += 1
+
+        rule_id = rule.get("rule_id")
+        pattern = rule.get("pattern")
+        enabled = rule.get("enabled", True)
+
+        evaluation = {
+            "rule_id": rule_id,
+            "category": rule.get("category"),
+            "enabled": enabled,
+            "matched": False,
+            "match_count": 0,
+            "skipped_reason": None,
+        }
+
+        if not enabled:
+            diagnostics["disabled_rule_count"] += 1
+            evaluation["skipped_reason"] = "rule_disabled"
+            diagnostics["rule_evaluations"].append(evaluation)
+            continue
+
+        if not pattern:
+            diagnostics["skipped_rule_count"] += 1
+            evaluation["skipped_reason"] = "missing_pattern"
+            diagnostics["rule_evaluations"].append(evaluation)
+            continue
+
+        matches = list(re.finditer(pattern, cleaned, flags=0))
+
+        if not matches:
+            diagnostics["no_match_rule_count"] += 1
+            diagnostics["rule_evaluations"].append(evaluation)
+            continue
+
+        diagnostics["matched_rule_count"] += 1
+        evaluation["matched"] = True
+        evaluation["match_count"] = len(matches)
+
+        for match in matches:
+            removed_text = match.group(0)
+
+            if not removed_text.strip():
+                diagnostics["skipped_rule_count"] += 1
+                continue
+
+            removed_hash = _hash_text_v1(removed_text)
+
+            if removed_hash in seen_removed_hashes:
+                diagnostics["duplicate_suppression_count"] += 1
+                continue
+
+            seen_removed_hashes.add(removed_hash)
+
+            removal_ledger.append({
+                "rule_id": rule_id,
+                "category": rule.get("category"),
+                "confidence": rule.get("confidence"),
+                "start": match.start(),
+                "end": match.end(),
+                "removed_text_sample": removed_text[:300],
+                "removed_text_hash": removed_hash,
+                "reason": "boilerplate_intelligence_rule_match",
+            })
+
+        diagnostics["rule_evaluations"].append(evaluation)
+        cleaned = re.sub(pattern, " ", cleaned)
+
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n\s+", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+    confidences = [
+        float(r.get("confidence") or 0)
+        for r in removal_ledger
+        if r.get("confidence") is not None
+    ]
+
+    confidence_summary = {
+        "min_confidence": round(min(confidences), 4) if confidences else None,
+        "max_confidence": round(max(confidences), 4) if confidences else None,
+        "average_confidence": round(sum(confidences) / len(confidences), 4) if confidences else None,
+        "removal_count": len(removal_ledger),
+    }
+
+    original_words = len(str(text or "").split())
+    cleaned_words = len(cleaned.split())
+    removed_words = max(0, original_words - cleaned_words)
+
+    category_counts = {}
+    category_removed_words = {}
+
+    for item in removal_ledger:
+        category = item.get("category") or "unknown"
+        sample = item.get("removed_text_sample") or ""
+
+        category_counts[category] = category_counts.get(category, 0) + 1
+        category_removed_words[category] = (
+            category_removed_words.get(category, 0)
+            + len(sample.split())
+        )
+
+    enterprise_diagnostics = {
+        "rules": {
+            "active_rule_count": len(active_rules),
+            "evaluated_rule_count": diagnostics.get("evaluated_rule_count"),
+            "matched_rule_count": diagnostics.get("matched_rule_count"),
+            "no_match_rule_count": diagnostics.get("no_match_rule_count"),
+            "skipped_rule_count": diagnostics.get("skipped_rule_count"),
+            "disabled_rule_count": diagnostics.get("disabled_rule_count"),
+            "duplicate_suppression_count": diagnostics.get("duplicate_suppression_count"),
+        },
+        "text": {
+            "original_word_count": original_words,
+            "cleaned_word_count": cleaned_words,
+            "removed_word_count": removed_words,
+            "removal_ratio": round(removed_words / max(original_words, 1), 4),
+        },
+        "categories": {
+            "category_match_counts": category_counts,
+            "category_removed_word_estimates": category_removed_words,
+            "matched_categories": sorted(category_counts.keys()),
+        },
+        "confidence": confidence_summary,
+        "ledger": {
+            "removal_count": len(removal_ledger),
+            "rule_evaluation_count": len(diagnostics.get("rule_evaluations", [])),
+        },
+    }
+
+    return {
+        "ok": True,
+        "engine": "automatic_boilerplate_intelligence_v1",
+        "version": "automatic_boilerplate_intelligence_v1_5_layers",
+        "url": url,
+        "layers": [
+            "universal_rules",
+            "structural_detection",
+            "learned_repeated_block_rules",
+            "domain_exception_rules",
+            "confidence_scoring_and_removal_ledger",
+        ],
+        "cleaned_text": cleaned,
+        "original_word_count": len(str(text or "").split()),
+        "cleaned_word_count": len(cleaned.split()),
+        "removed_word_count": max(0, len(str(text or "").split()) - len(cleaned.split())),
+        "removal_count": len(removal_ledger),
+        "removal_ledger": removal_ledger,
+        "confidence_summary": confidence_summary,
+        "diagnostics": diagnostics,
+        "enterprise_diagnostics": enterprise_diagnostics,
+        "active_rule_count": len(active_rules),
+    }
+
+
+def explain_automatic_boilerplate_intelligence_v1() -> Dict[str, Any]:
+    return {
+        "engine": "automatic_boilerplate_intelligence_v1",
+        "layers": [
+            "universal_boilerplate_rules",
+            "structural_detection",
+            "automatic_repeated_block_learning",
+            "domain_exception_rules",
+            "confidence_scoring_and_removal_ledger",
+        ],
+        "purpose": "Remove non-article template/editorial/promotional boilerplate while preserving article content.",
+    }

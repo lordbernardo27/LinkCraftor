@@ -24,161 +24,53 @@ def lookup_semantic_object_from_workspace_v1(workspace_id: str | None, normalize
     """
     Semantic Workspace lookup interface.
 
-    Production path:
-    - Reads semantic_map_v2_<workspace>.json through semantic_source.py
-    - Uses Semantic Workspace Learner indexes:
-      canonical_lookup, synonym_lookup, target_lookup
-    - Falls back to controlled verification map only if no workspace match exists.
+    Current implementation returns controlled fallback data for verification.
+    Production implementation should read from:
+    - Semantic Workspace Learner output
+    - Memory Engine
+    - Learning Engine
+    - Certified Semantic Learning Packs
+
+    This keeps Step 2 connected to the existing learning pipeline contract
+    without creating a new reasoning engine.
     """
-    query = (normalized_text or "").strip().lower()
-    if not query:
-        return None
 
-    try:
-        from backend.server.engine.semantic_source import load_workspace_semantic_map_v2
-
-        semantic_map = load_workspace_semantic_map_v2(workspace_id or "default")
-        indexes = semantic_map.get("indexes") or {}
-
-        canonical_lookup = indexes.get("canonical_lookup") or {}
-        synonym_lookup = indexes.get("synonym_lookup") or {}
-        target_lookup = indexes.get("target_lookup") or {}
-
-        semantic_objects = (
-            semantic_map.get("semantic_objects")
-            or semantic_map.get("canonical_semantic_objects")
-            or semantic_map.get("concepts")
-            or []
-        )
-
-        canonical = None
-        match_type = None
-
-        if query in canonical_lookup:
-            canonical = query
-            match_type = "direct_canonical_match"
-        elif query in synonym_lookup:
-            canonical = str(synonym_lookup.get(query) or "").strip().lower()
-            match_type = "synonym_lookup_match"
-
-        matched_obj = None
-
-        if canonical is not None:
-            idx = canonical_lookup.get(canonical)
-
-            if isinstance(idx, int) and 0 <= idx < len(semantic_objects):
-                matched_obj = semantic_objects[idx]
-            else:
-                for obj in semantic_objects:
-                    obj_canonical = (
-                        obj.get("canonical")
-                        or obj.get("canonical_concept")
-                        or obj.get("name")
-                        or obj.get("label")
-                        or ""
-                    )
-                    if str(obj_canonical).strip().lower() == canonical:
-                        matched_obj = obj
-                        break
-
-        if matched_obj:
-            canonical_concept = (
-                matched_obj.get("canonical")
-                or matched_obj.get("canonical_concept")
-                or matched_obj.get("name")
-                or matched_obj.get("label")
-                or canonical
-            )
-
-            aliases = (
-                matched_obj.get("aliases")
-                or matched_obj.get("synonyms")
-                or matched_obj.get("terms")
-                or []
-            )
-
-            semantic_object_id = (
-                matched_obj.get("semantic_object_id")
-                or matched_obj.get("id")
-                or f"semantic_object_{re.sub(r'[^a-z0-9]+', '_', str(canonical_concept).lower()).strip('_')}"
-            )
-
-            semantic_type = (
-                matched_obj.get("semantic_type")
-                or matched_obj.get("type")
-                or matched_obj.get("category")
-                or "semantic_concept"
-            )
-
-            related_concepts = (
-                matched_obj.get("related_concepts")
-                or matched_obj.get("relationships")
-                or matched_obj.get("neighbors")
-                or []
-            )
-
-            return {
-                "semantic_object_id": semantic_object_id,
-                "canonical_concept": canonical_concept,
-                "aliases": aliases,
-                "related_concepts": related_concepts,
-                "semantic_type": semantic_type,
-                "match_type": match_type or "workspace_match",
-                "confidence": 0.96 if match_type == "direct_canonical_match" else 0.91,
-                "target_urls": target_lookup.get(str(canonical_concept).strip().lower()) or target_lookup.get(canonical) or [],
-                "lookup_source": "semantic_map_v2",
-                "workspace_id": workspace_id,
-            }
-
-    except Exception:
-        pass
-
-    # Controlled fallback for verification only.
-    fallback_map = {
+    workspace_map = {
         "hypertension": {
             "semantic_object_id": "semantic_object_high_blood_pressure",
             "canonical_concept": "high blood pressure",
             "aliases": ["hypertension", "raised blood pressure", "elevated blood pressure"],
-            "related_concepts": [],
             "semantic_type": "medical_condition",
-            "match_type": "fallback_alias_equivalence",
-            "confidence": 0.78,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "alias_equivalence",
+            "confidence": 0.98,
         },
         "high blood pressure": {
             "semantic_object_id": "semantic_object_high_blood_pressure",
             "canonical_concept": "high blood pressure",
             "aliases": ["hypertension", "raised blood pressure", "elevated blood pressure"],
-            "related_concepts": [],
             "semantic_type": "medical_condition",
-            "match_type": "fallback_direct_canonical_match",
-            "confidence": 0.78,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "direct_canonical_match",
+            "confidence": 0.97,
         },
         "blood pressure monitoring": {
             "semantic_object_id": "semantic_object_blood_pressure_monitoring",
             "canonical_concept": "blood pressure monitoring",
             "aliases": ["bp monitoring"],
-            "related_concepts": [],
             "semantic_type": "medical_monitoring",
-            "match_type": "fallback_direct_canonical_match",
-            "confidence": 0.76,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "direct_canonical_match",
+            "confidence": 0.96,
         },
         "morning sickness": {
             "semantic_object_id": "semantic_object_morning_sickness",
             "canonical_concept": "morning sickness",
             "aliases": ["pregnancy nausea"],
-            "related_concepts": [],
             "semantic_type": "pregnancy_symptom",
-            "match_type": "fallback_direct_canonical_match",
-            "confidence": 0.76,
-            "lookup_source": "fallback_verification_map",
+            "match_type": "direct_canonical_match",
+            "confidence": 0.94,
         },
     }
 
-    return fallback_map.get(query)
-
+    return workspace_map.get((normalized_text or "").strip().lower())
 
 
 

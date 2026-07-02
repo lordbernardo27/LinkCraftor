@@ -61,7 +61,7 @@ def _save_priority_phrase_set(
 
     NOTE: each highlight here is a v2 selection/density candidate, so the fields
     persisted below MUST match what those engines emit (selection_score,
-    extractor_score, link_status, â€¦). Reading legacy names like quality_score
+    extractor_score, link_status, …). Reading legacy names like quality_score
     would silently persist nulls.
     """
     path = _priority_phrase_set_path(workspace_id)
@@ -491,7 +491,7 @@ def _apply_article_duplicate_url_guard(
     their resolver evidence: best_target_url / resolved_targets are deliberately
     left intact so the editor still sees what resolved, and the frontend is
     responsible for honoring `duplicate_url_suppressed` when rendering links.
-    (Marking, not blanking â€” see inline note below.)
+    (Marking, not blanking — see inline note below.)
     """
     by_url: Dict[str, List[Dict[str, Any]]] = {}
 
@@ -564,9 +564,7 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
     resolved_targets: List[Dict[str, Any]] = []
     best_target: Optional[Dict[str, Any]] = None
 
-    # Highlight painting must never wait on target resolution.
-    # Resolver can run later for accept/apply; here we return visible suggestions fast.
-    if False and workspace_id and phrase:
+    if workspace_id and phrase:
         try:
             raw_resolved_targets = resolve_intelligent_targets(
                 workspace_id,
@@ -635,29 +633,11 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
             resolved_targets = []
             best_target = None
 
-    first_position = candidate.get("first_position")
-    all_positions = candidate.get("all_positions") or []
-
-    try:
-        start_pos = int(first_position) if first_position is not None else None
-    except Exception:
-        start_pos = None
-
-    end_pos = start_pos + len(phrase) if start_pos is not None and phrase else None
-
     return {
         "phrase": phrase,
         "phrase_text": phrase,
         "text": phrase,
         "label": phrase,
-
-        # Highlight render position contract
-        "first_position": first_position,
-        "all_positions": all_positions,
-        "start": start_pos,
-        "end": end_pos,
-        "position": start_pos,
-        "offset": start_pos,
         "title": _best_title_from_candidate(candidate),
         "score": round(normalized_score, 4),
         "overlap": int(candidate.get("occurrence_count") or 1),
@@ -853,7 +833,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     # RB2 target quality gate is advisory only: quality phrases stay visible even
     # when no target URL is found. (The old _rb2_target_quality_gate /
-    # _apply_rb2_target_quality_gate_to_hits helpers were removed as dead code â€”
+    # _apply_rb2_target_quality_gate_to_hits helpers were removed as dead code —
     # they were no longer called once the gate became advisory.)
 
     all_runtime_hits = internal_strong + semantic_optional
