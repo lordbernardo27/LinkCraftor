@@ -2393,6 +2393,9 @@ fileInput?.addEventListener("change", async () => {
 
     saveState();
 
+    // Phase 1 recovery:
+    // Do not block editor display on autosave after upload.
+    setTimeout(async () => {
       try {
         if (typeof window.lcAutosaveWorkspaceSession === "function") {
           window.lcSetAutosaveStatus?.("saving");
@@ -2407,7 +2410,7 @@ fileInput?.addEventListener("change", async () => {
         console.warn("[LinkCraftor Autosave] after upload failed:", autosaveErr);
         window.lcSetAutosaveStatus?.("error", autosaveErr);
       }
-
+    }, 0);
 
     const msgParts = [`Uploaded ${accepted} file(s)`];
 

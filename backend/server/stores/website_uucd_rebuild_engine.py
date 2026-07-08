@@ -1,0 +1,489 @@
+﻿from __future__ import annotations
+
+import json
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+from backend.server.stores.website_source_pipeline_orchestrator import (
+    process_website_html_to_ucd_v1,
+)
+from backend.server.stores.website_unified_content_store import (
+    load_website_unified_content_store_v1,
+)
+from backend.server.stores.universal_unified_content_document_convergence import (
+    load_universal_unified_content_document_store_v1,
+)
+
+DATA_ROOT = Path("backend/server/data")
+
+
+def _safe_workspace_id_v1(workspace_id: str) -> str:
+    return str(workspace_id or "").strip().replace("/", "_").replace("\\", "_")
+
+
+def _site_pages_path_v1(workspace_id: str) -> Path:
+    return DATA_ROOT / f"site_pages_{_safe_workspace_id_v1(workspace_id)}.json"
+
+
+def _reports_dir_v1() -> Path:
+    path = DATA_ROOT / "website_uucd_rebuild_reports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _checkpoint_path_v1(workspace_id: str) -> Path:
+    return _reports_dir_v1() / f"website_uucd_rebuild_checkpoint_{_safe_workspace_id_v1(workspace_id)}.json"
+
+
+def _report_path_v1(workspace_id: str) -> Path:
+    return _reports_dir_v1() / f"website_uucd_rebuild_report_{_safe_workspace_id_v1(workspace_id)}.json"
+
+
+def _load_json_or_default_v1(path: Path, default: Dict[str, Any]) -> Dict[str, Any]:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def _write_json_v1(path: Path, data: Dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _load_site_pages_v1(workspace_id: str) -> List[Dict[str, Any]]:
+    path = _site_pages_path_v1(workspace_id)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Site pages file not found: {path}")
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+
+    pages = data.get("items") or data.get("pages") or data.get("urls") or []
+
+    if isinstance(pages, dict):
+        pages = list(pages.values())
+
+    out: List[Dict[str, Any]] = []
+    for item in pages:
+        if isinstance(item, str):
+            out.append({"url": item})
+        elif isinstance(item, dict):
+            out.append(item)
+
+    return out
+
+
+def _extract_url_v1(page: Dict[str, Any]) -> str:
+    return str(
+        page.get("url")
+        or page.get("loc")
+        or page.get("canonical_url")
+        or page.get("source_url")
+        or ""
+    ).strip()
+
+
+def _website_content_id_for_url_v1(url: str) -> str:
+    import hashlib
+
+    digest = hashlib.sha256(str(url or "").strip().encode("utf-8")).hexdigest()[:16]
+    return f"web_content_{digest}"
+
+
+def _existing_store_counts_v1(workspace_id: str) -> Dict[str, int]:
+    website_store = load_website_unified_content_store_v1(workspace_id)
+    uucd_store = load_universal_unified_content_document_store_v1(workspace_id)
+
+    return {
+        "website_unified_content_count": len(website_store.get("documents", {}) or {}),
+        "universal_unified_content_document_count": len(uucd_store.get("documents", {}) or {}),
+    }
+
+
+def _existing_website_content_ids_v1(workspace_id: str) -> set[str]:
+    website_store = load_website_unified_content_store_v1(workspace_id)
+    return set((website_store.get("documents", {}) or {}).keys())
+
+
+def _raw_html_store_path_v1(workspace_id: str) -> Path:
+    return DATA_ROOT / "raw_website_html" / f"raw_website_html_{_safe_workspace_id_v1(workspace_id)}.json"
+
+
+def _load_raw_html_by_url_v1(workspace_id: str) -> Dict[str, Dict[str, Any]]:
+    path = _raw_html_store_path_v1(workspace_id)
+    if not path.exists():
+        return {}
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+    pages = data.get("pages") or {}
+    if isinstance(pages, list):
+        records = pages
+    elif isinstance(pages, dict):
+        records = list(pages.values())
+    else:
+        records = []
+
+    out = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        url = str(record.get("url") or "").strip()
+        if url:
+            out[url] = record
+    return out
+
+
+def _save_checkpoint_v1(
+    *,
+    workspace_id: str,
+    checkpoint: Dict[str, Any],
+) -> None:
+    checkpoint["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+    _write_json_v1(_checkpoint_path_v1(workspace_id), checkpoint)
+
+
+def rebuild_website_uucd_for_workspace_v1(
+    *,
+    workspace_id: str,
+    limit: int | None = None,
+    dry_run: bool = False,
+    resume: bool = True,
+    force: bool = False,
+    batch_size: int | None = None,
+    checkpoint_every: int = 25,
+) -> Dict[str, Any]:
+    """
+    Enterprise bulk rebuild engine.
+
+    Loads Site Pages for a workspace and sends each page through:
+    process_website_html_to_ucd_v1()
+
+    Supports:
+    - dry_run
+    - resume
+    - force rebuild
+    - batch_size
+    - checkpointing
+    - detailed ledger
+    - final certification report
+    """
+
+    started_at = datetime.now(timezone.utc).isoformat()
+    wall_start = time.time()
+
+    pages = _load_site_pages_v1(workspace_id)
+    original_site_pages_count = len(pages)
+
+    if limit is not None:
+        pages = pages[: int(limit)]
+
+    if batch_size is not None:
+        pages = pages[: int(batch_size)]
+
+    existing_ids = _existing_website_content_ids_v1(workspace_id) if resume and not force else set()
+    raw_html_by_url = _load_raw_html_by_url_v1(workspace_id)
+
+    checkpoint_path = _checkpoint_path_v1(workspace_id)
+    previous_checkpoint = _load_json_or_default_v1(checkpoint_path, {})
+
+    attempted = 0
+    succeeded = 0
+    failed = 0
+    skipped_existing = 0
+    validation_failed = 0
+    uucd_failed = 0
+    skipped_no_url = 0
+
+    errors: List[Dict[str, Any]] = []
+    successes: List[Dict[str, Any]] = []
+    ledger: List[Dict[str, Any]] = []
+
+    if dry_run:
+        counts = _existing_store_counts_v1(workspace_id)
+
+        report = {
+            "ok": True,
+            "engine": "website_uucd_rebuild_engine_v2_enterprise",
+            "workspace_id": workspace_id,
+            "dry_run": True,
+            "resume": resume,
+            "force": force,
+            "started_at_utc": started_at,
+            "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+            "input": {
+                "site_pages_count": original_site_pages_count,
+                "selected_pages_count": len(pages),
+                "limit": limit,
+                "batch_size": batch_size,
+            },
+            "processing": {
+                "attempted": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "skipped_existing": 0,
+                "validation_failed": 0,
+                "uucd_failed": 0,
+                "skipped_no_url": 0,
+            },
+            "stores": counts,
+            "checkpoint": {
+                "path": str(checkpoint_path),
+                "previous_checkpoint_found": bool(previous_checkpoint),
+            },
+            "certification": {
+                "ready_for_full_rebuild": original_site_pages_count > 0,
+                "ready_for_semantic_pipeline": False,
+                "reason": "dry_run_only",
+            },
+            "samples": {
+                "successes": [],
+                "errors": [],
+            },
+        }
+
+        report_path = _report_path_v1(workspace_id)
+        _write_json_v1(report_path, report)
+        report["report_path"] = str(report_path)
+        return report
+
+    for index, page in enumerate(pages, start=1):
+        url = _extract_url_v1(page)
+
+        if not url:
+            skipped_no_url += 1
+            row = {
+                "index": index,
+                "url": "",
+                "status": "skipped",
+                "reason": "missing_url",
+            }
+            ledger.append(row)
+            errors.append(row)
+            continue
+
+        content_id = _website_content_id_for_url_v1(url)
+
+        if resume and not force and content_id in existing_ids:
+            skipped_existing += 1
+            ledger.append({
+                "index": index,
+                "url": url,
+                "content_id": content_id,
+                "status": "skipped_existing",
+            })
+            continue
+
+        attempted += 1
+
+        try:
+            raw_record = raw_html_by_url.get(url, {})
+            html = str(raw_record.get("html") or "")
+
+            if not html.strip():
+                failed += 1
+                row = {
+                    "index": index,
+                    "url": url,
+                    "content_id": content_id,
+                    "status": "failed",
+                    "error_type": "missing_raw_html",
+                    "message": "No raw HTML found for this URL in raw_website_html store.",
+                }
+                errors.append(row)
+                ledger.append(row)
+                continue
+
+            result = process_website_html_to_ucd_v1(
+                workspace_id=workspace_id,
+                url=url,
+                html=html,
+                title=page.get("title", "") or raw_record.get("title", ""),
+                metadata={
+                    "site_pages_record": page,
+                    "source_pipeline": "website_uucd_rebuild_engine_v2_enterprise",
+                    "rebuild_started_at_utc": started_at,
+                    "rebuild_index": index,
+                    "content_id": content_id,
+                },
+            )
+
+            status = result.get("status", {})
+            has_website_doc = bool(result.get("website_universal_unified_content_document"))
+            has_uucd = bool(result.get("universal_unified_content_document"))
+            semantic_ready = bool(status.get("semantic_ready", False))
+            uucd_error = result.get("uucd_error")
+
+            if not semantic_ready:
+                validation_failed += 1
+
+            if uucd_error:
+                uucd_failed += 1
+
+            if has_website_doc or has_uucd:
+                succeeded += 1
+                row = {
+                    "index": index,
+                    "url": url,
+                    "content_id": content_id,
+                    "status": "succeeded",
+                    "has_website_doc": has_website_doc,
+                    "has_uucd": has_uucd,
+                    "semantic_ready": semantic_ready,
+                    "uucd_error": uucd_error,
+                }
+                successes.append(row)
+                ledger.append(row)
+            else:
+                failed += 1
+                row = {
+                    "index": index,
+                    "url": url,
+                    "content_id": content_id,
+                    "status": "failed",
+                    "error_type": "no_document_created",
+                    "message": "Pipeline returned without website/UCD document.",
+                }
+                errors.append(row)
+                ledger.append(row)
+
+        except Exception as exc:
+            failed += 1
+            row = {
+                "index": index,
+                "url": url,
+                "content_id": content_id,
+                "status": "failed",
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+            }
+            errors.append(row)
+            ledger.append(row)
+
+        processed_now = attempted + skipped_no_url + skipped_existing
+
+        if checkpoint_every and processed_now % int(checkpoint_every) == 0:
+            elapsed = max(0.001, time.time() - wall_start)
+            rate = processed_now / elapsed
+            remaining = max(0, len(pages) - processed_now)
+            eta_seconds = remaining / rate if rate > 0 else None
+
+            _save_checkpoint_v1(
+                workspace_id=workspace_id,
+                checkpoint={
+                    "engine": "website_uucd_rebuild_engine_v2_enterprise",
+                    "workspace_id": workspace_id,
+                    "started_at_utc": started_at,
+                    "processed_selected_pages": processed_now,
+                    "selected_pages_count": len(pages),
+                    "attempted": attempted,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "skipped_existing": skipped_existing,
+                    "validation_failed": validation_failed,
+                    "uucd_failed": uucd_failed,
+                    "skipped_no_url": skipped_no_url,
+                    "last_index": index,
+                    "last_url": url,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "pages_per_second": round(rate, 4),
+                    "eta_seconds": round(eta_seconds, 3) if eta_seconds is not None else None,
+                    "recent_ledger": ledger[-25:],
+                },
+            )
+
+    counts = _existing_store_counts_v1(workspace_id)
+
+    finished_at = datetime.now(timezone.utc).isoformat()
+    elapsed = max(0.001, time.time() - wall_start)
+    selected_pages_count = len(pages)
+
+    certification = {
+        "site_pages_discovered": original_site_pages_count,
+        "selected_pages_count": selected_pages_count,
+        "website_store_count": counts["website_unified_content_count"],
+        "uucd_store_count": counts["universal_unified_content_document_count"],
+        "selected_pages_processed_or_skipped": (
+            attempted + skipped_existing + skipped_no_url
+        ) == selected_pages_count,
+        "zero_runtime_failures": failed == 0,
+        "website_store_has_all_site_pages": counts["website_unified_content_count"] >= original_site_pages_count,
+        "uucd_store_has_all_site_pages": counts["universal_unified_content_document_count"] >= original_site_pages_count,
+        "ready_for_semantic_pipeline": (
+            counts["universal_unified_content_document_count"] >= original_site_pages_count
+            and failed == 0
+        ),
+    }
+
+    report = {
+        "ok": True,
+        "engine": "website_uucd_rebuild_engine_v2_enterprise",
+        "workspace_id": workspace_id,
+        "dry_run": False,
+        "resume": resume,
+        "force": force,
+        "started_at_utc": started_at,
+        "finished_at_utc": finished_at,
+        "elapsed_seconds": round(elapsed, 3),
+        "input": {
+            "site_pages_count": original_site_pages_count,
+            "selected_pages_count": selected_pages_count,
+            "limit": limit,
+            "batch_size": batch_size,
+        },
+        "processing": {
+            "attempted": attempted,
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped_existing": skipped_existing,
+            "validation_failed": validation_failed,
+            "uucd_failed": uucd_failed,
+            "skipped_no_url": skipped_no_url,
+        },
+        "stores": counts,
+        "certification": certification,
+        "checkpoint": {
+            "path": str(checkpoint_path),
+            "previous_checkpoint_found": bool(previous_checkpoint),
+        },
+        "samples": {
+            "successes": successes[:20],
+            "errors": errors[:50],
+        },
+        "ledger_tail": ledger[-100:],
+    }
+
+    report_path = _report_path_v1(workspace_id)
+    _write_json_v1(report_path, report)
+    report["report_path"] = str(report_path)
+
+    _save_checkpoint_v1(
+        workspace_id=workspace_id,
+        checkpoint={
+            "engine": "website_uucd_rebuild_engine_v2_enterprise",
+            "workspace_id": workspace_id,
+            "completed_at_utc": finished_at,
+            "completed": True,
+            "report_path": str(report_path),
+            "processing": report["processing"],
+            "stores": report["stores"],
+            "certification": certification,
+        },
+    )
+
+    return report
+
+# ------------------------------------------------------------------
+# Backward-compatible UCD aliases
+# Canonical name is now UUCD.
+# ------------------------------------------------------------------
+
+rebuild_website_ucd_for_workspace_v1 = rebuild_website_uucd_for_workspace_v1
+

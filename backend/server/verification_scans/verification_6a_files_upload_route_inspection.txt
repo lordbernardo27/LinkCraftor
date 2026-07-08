@@ -1,0 +1,758 @@
+﻿Verification 6A Upload Route Implementation Inspection
+Generated: 2026-07-06 00:49:14
+Target: backend/server/routes/files.py
+
+Purpose:
+Inspect the existing @router.post("/upload") route to determine whether it satisfies:
+1. Upload request validation
+2. Allowed extension validation
+3. Workspace assignment
+4. Document ID assignment
+5. Upload metadata creation
+6. File saved to workspace storage
+7. No extraction/cleaning/semantic/UUCD boundary violation at 6A
+
+
+============================================================
+1. LOCATE @router.post('/upload')
+============================================================
+
+L702: @router.post("/upload")
+L843: @router.post("/clear_session")
+L990: @router.post("/active_target_set/save")
+L1024: @router.post("/reindex_h1s")
+L1159: @router.post("/save")
+
+
+============================================================
+2. FULL UPLOAD ROUTE CONTEXT — Lines 622 to 882
+============================================================
+
+L622: 
+L623:     if not upload_ids:
+L624:         upload_ids = list(doc_ids)
+L625: 
+L626:     out: Dict[str, Any] = {
+L627:         "workspace_id": ws_norm,
+L628:         "active_document_ids": doc_ids,
+L629:         "active_draft_ids": list(obj.get("active_draft_ids") or []),
+L630:         "active_imported_urls": list(obj.get("active_imported_urls") or []),
+L631:         "active_live_domain_urls": list(obj.get("active_live_domain_urls") or []),
+L632:         "active_upload_ids": upload_ids,
+L633:         "updated_at": datetime.utcnow().isoformat() + "Z",
+L634:     }
+L635: 
+L636:     fp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+L637:     return out
+L638: 
+L639: def _merge_active_target_set(
+L640:     workspace_id: str,
+L641:     *,
+L642:     add_document_ids: List[str] | None = None,
+L643:     add_draft_ids: List[str] | None = None,
+L644:     add_imported_urls: List[str] | None = None,
+L645:     add_live_domain_urls: List[str] | None = None,
+L646:     add_upload_ids: List[str] | None = None,
+L647: ) -> Dict[str, Any]:
+L648:     obj = _load_active_target_set(workspace_id)
+L649: 
+L650:     def _merge_unique(existing: List[str], new_values: List[str] | None) -> List[str]:
+L651:         out = [str(x).strip() for x in existing if str(x).strip()]
+L652:         seen = set(out)
+L653:         for v in new_values or []:
+L654:             s = str(v).strip()
+L655:             if s and s not in seen:
+L656:                 out.append(s)
+L657:                 seen.add(s)
+L658:         return out
+L659: 
+L660:     # Runtime document membership must REPLACE, not merge.
+L661:     # This prevents phrases from multiple uploaded documents being active together.
+L662:     if add_document_ids is not None:
+L663:         obj["active_document_ids"] = [
+L664:             str(x).strip()
+L665:             for x in add_document_ids
+L666:             if str(x).strip()
+L667:         ]
+L668:     else:
+L669:         obj["active_document_ids"] = list(obj.get("active_document_ids") or [])
+L670: 
+L671:     # Supporting-intelligence libraries may remain merged.
+L672:     obj["active_draft_ids"] = _merge_unique(
+L673:         obj.get("active_draft_ids") or [],
+L674:         add_draft_ids,
+L675:     )
+L676: 
+L677:     obj["active_imported_urls"] = _merge_unique(
+L678:         obj.get("active_imported_urls") or [],
+L679:         add_imported_urls,
+L680:     )
+L681: 
+L682:     obj["active_live_domain_urls"] = _merge_unique(
+L683:         obj.get("active_live_domain_urls") or [],
+L684:         add_live_domain_urls,
+L685:     )
+L686: 
+L687:     # Upload runtime membership must also REPLACE, not merge.
+L688:     if add_upload_ids is not None:
+L689:         obj["active_upload_ids"] = [
+L690:             str(x).strip()
+L691:             for x in add_upload_ids
+L692:             if str(x).strip()
+L693:         ]
+L694:     else:
+L695:         obj["active_upload_ids"] = list(obj.get("active_upload_ids") or [])
+L696: 
+L697:     return _write_active_target_set(workspace_id, obj)
+L698: 
+L699: # -------------------------
+L700: # API
+L701: # -------------------------
+L702: @router.post("/upload")
+L703: async def upload_file(
+L704:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+L705:     file: UploadFile = File(...),
+L706: ):
+L707:     if not file or not file.filename:
+L708:         raise HTTPException(status_code=400, detail="No file uploaded.")
+L709: 
+L710:     ext = _guess_ext(file.filename)
+L711:     if ext not in ALLOWED_EXT:
+L712:         raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
+L713: 
+L714:     ws_norm = _ws(workspace_id)
+L715: 
+L716:     raw = await file.read()
+L717:     preview = _extract_preview_from_bytes(Path(file.filename).name, ext, raw)
+L718: 
+L719:     meta = _store_and_index(
+L720:         ws_norm,
+L721:         file,
+L722:         raw,
+L723:         preview_html=str(preview.get("html") or ""),
+L724:         preview_text=str(preview.get("text") or ""),
+L725:     )
+L726: 
+L727:     processing_job_id = None
+L728: 
+L729:     try:
+L730:         from backend.server.orchestration.service import create_orchestration_job
+L731: 
+L732:         stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+L733:         doc_id = str(meta.get("doc_id") or "").strip()
+L734: 
+L735:         processing_job = create_orchestration_job(
+L736:             workspace_id=ws_norm,
+L737:             job_type="document_upload_job",
+L738:             payload={
+L739:                 "workspace_id": ws_norm,
+L740:                 "doc_id": doc_id,
+L741:                 "stored_path": stored_path,
+L742:                 "original_name": str(meta.get("filename") or ""),
+L743:                 "html": str(preview.get("html") or ""),
+L744:                 "text": str(preview.get("text") or ""),
+L745:                 "source_route": "/upload",
+L746:                 "document_count": 1,
+L747:             },
+L748:             metadata={
+L749:                 "phase": "upload_to_job_flow",
+L750:                 "filename": str(meta.get("filename") or ""),
+L751:                 "stored_name": str(meta.get("stored_name") or ""),
+L752:                 "document_count": 1,
+L753:             },
+L754:             priority=5,
+L755:         )
+L756:         processing_job_id = processing_job.job_id
+L757: 
+L758:         # DEV/LOCAL IMMEDIATE EXECUTION FIX
+L759:         # Prevent queued upload jobs from blocking RB2 highlights.
+L760:         try:
+L761:             from backend.server.orchestration.worker import execute_job
+L762:             execute_job(
+L763:                 processing_job_id,
+L764:                 "document_upload_job",
+L765:                 "local_upload_worker",
+L766:                 processing_job.payload if hasattr(processing_job, "payload") else {
+L767:                     "workspace_id": ws_norm,
+L768:                     "doc_id": doc_id,
+L769:                     "stored_path": stored_path,
+L770:                     "original_name": str(meta.get("filename") or ""),
+L771:                     "html": str(preview.get("html") or ""),
+L772:                     "text": str(preview.get("text") or ""),
+L773:                     "source_route": "/upload",
+L774:                     "document_count": 1,
+L775:                 },
+L776:             )
+L777:             print("[UPLOAD AUTO-WORKER] completed:", processing_job_id)
+L778:         except Exception as e:
+L779:             print("[UPLOAD AUTO-WORKER ERROR]", repr(e))
+L780: 
+L781:     except Exception as e:
+L782:         print("[UPLOAD_ORCHESTRATION_JOB_ERROR]", repr(e))
+L783:         traceback.print_exc()
+L784: 
+L785:     _work_append(
+L786:         ws_norm,
+L787:         {
+L788:             "ts": datetime.utcnow().isoformat() + "Z",
+L789:             "type": "upload",
+L790:             "doc_id": meta.get("doc_id"),
+L791:             "filename": meta.get("filename"),
+L792:             "h1": meta.get("h1"),
+L793:             "h1_source": meta.get("h1_source"),
+L794:             "h1_error": meta.get("h1_error"),
+L795:             "docx_normalize": meta.get("docx_normalize") or {},
+L796:         },
+L797:     )
+L798: 
+L799:     try:
+L800:         _append_to_docs_index(ws_norm, meta)
+L801:     except Exception as e:
+L802:         print("[DOC_INDEX_APPEND_ERROR]", repr(e))
+L803:         traceback.print_exc()
+L804: 
+L805:     try:
+L806:         doc_id = str(meta.get("doc_id") or "").strip()
+L807:         _merge_active_target_set(
+L808:             workspace_id=ws_norm,
+L809:             add_document_ids=[doc_id] if doc_id else [],
+L810:             add_upload_ids=[doc_id] if doc_id else [],
+L811:         )
+L812:     except Exception as e:
+L813:         print("[ACTIVE_TARGET_SET_UPLOAD_DOC_AUTOADD_ERROR]", repr(e))
+L814:         traceback.print_exc()
+L815: 
+L816:     try:
+L817:         queue_rebuild_event(
+L818:             workspace_id=ws_norm,
+L819:             trigger="document_changed",
+L820:             metadata={
+L821:                 "source": "upload_route",
+L822:                 "doc_id": doc_id,
+L823:                 "filename": str(meta.get("filename") or ""),
+L824:             },
+L825:         )
+L826:     except Exception as e:
+L827:         print("[UPLOAD_REBUILD_QUEUE_ERROR]", repr(e))
+L828: 
+L829:     return {
+L830:         "ok": True,
+L831:         "workspace_id": ws_norm,
+L832:         "doc": meta,
+L833:         "filename": preview.get("filename"),
+L834:         "ext": preview.get("ext"),
+L835:         "text": preview.get("text"),
+L836:         "html": preview.get("html"),
+L837:         "is_html": bool(preview.get("is_html")),
+L838:         "truncated": bool(preview.get("truncated")),
+L839:         "job_id": processing_job_id,
+L840:         "processing_status": "queued" if processing_job_id else "not_queued",
+L841:     }
+L842: 
+L843: @router.post("/clear_session")
+L844: def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
+L845:     ws_norm = _ws(workspace_id)
+L846: 
+L847:     removed_files: List[str] = []
+L848: 
+L849:     paths_to_remove = [
+L850:         BASE_DIR / "data" / f"upload_struct_{ws_norm}.json",
+L851:         BASE_DIR / "data" / f"upload_phrase_index_{ws_norm}.json",
+L852:         BASE_DIR / "data" / "phrase_pools" / "upload" / f"upload_phrase_pool_{ws_norm}.json",
+L853:         BASE_DIR / "data" / "phrase_pools" / "active" / f"active_phrase_pool_{ws_norm}.json",
+L854:     ]
+L855: 
+L856:     for fp in paths_to_remove:
+L857:         try:
+L858:             if fp.exists():
+L859:                 fp.unlink()
+L860:                 removed_files.append(str(fp))
+L861:         except Exception as e:
+L862:             print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
+L863: 
+L864:     # Clear actual uploaded workspace files for this session.
+L865:     # This prevents re-upload from being blocked as duplicate after Clear Session.
+L866:     try:
+L867:         ws_dir = _ws_dir(ws_norm)
+L868:         if ws_dir.exists() and ws_dir.is_dir():
+L869:             for fp in ws_dir.iterdir():
+L870:                 try:
+L871:                     if fp.is_file():
+L872:                         fp.unlink()
+L873:                         removed_files.append(str(fp))
+L874:                 except Exception as e:
+L875:                     print("[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]", str(fp), repr(e))
+L876:     except Exception as e:
+L877:         print("[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]", repr(e))
+L878: 
+L879:     try:
+L880:         active_obj = _load_active_target_set(ws_norm)
+L881:         active_obj["active_document_ids"] = []
+L882:         active_obj["active_upload_ids"] = []
+
+
+============================================================
+3.1 Upload request validation indicators
+============================================================
+
+L16: from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Body
+L120: return {"ok": True, "changed": False, "reason": "no_nonempty_para"}
+L163: def _strict_h1_from_docx_file(stored_path: str) -> Tuple[str, str, str]:
+L230: return _strict_h1_from_docx_file(stored_path or "")
+L295: def _guess_ext(filename: str) -> str:
+L296: return (Path((filename or "").strip()).suffix or "").lower()
+L370: def _extract_preview_from_bytes(filename: str, ext: str, raw: bytes) -> Dict[str, Any]:
+L435: "filename": Path(filename).name,
+L446: file: UploadFile,
+L452: ext = _guess_ext(file.filename)
+L457: safe_name = Path(file.filename).name
+L475: "filename": safe_name,
+L478: "content_type": file.content_type or "",
+L552: "filename": meta.get("filename"),
+L703: async def upload_file(
+L705: file: UploadFile = File(...),
+L707: if not file or not file.filename:
+L710: ext = _guess_ext(file.filename)
+L716: raw = await file.read()
+L717: preview = _extract_preview_from_bytes(Path(file.filename).name, ext, raw)
+L742: "original_name": str(meta.get("filename") or ""),
+L750: "filename": str(meta.get("filename") or ""),
+L770: "original_name": str(meta.get("filename") or ""),
+L791: "filename": meta.get("filename"),
+L823: "filename": str(meta.get("filename") or ""),
+L833: "filename": preview.get("filename"),
+L871: if fp.is_file():
+L932: "filename": it.get("filename"),
+L1034: if not p.is_file():
+L1081: "filename": safe_name,
+L1084: "content_type": "",
+L1154: "filename": hit.get("filename"),
+L1202: def get_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+L1220: filename=hit.get("filename") or "document",
+L1221: media_type=hit.get("content_type") or "application/octet-stream",
+L1226: def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+L1243: ext = str(hit.get("ext") or _guess_ext(hit.get("filename") or "")).lower()
+L1244: preview = _extract_preview_from_bytes(hit.get("filename") or "document", ext, raw)
+L1250: "filename": preview.get("filename"),
+L1267: file: UploadFile = File(...),
+L1269: return await upload_file(workspace_id=workspace_id, file=file)
+
+
+============================================================
+3.2 Allowed extension validation indicators
+============================================================
+
+L31: ALLOWED_EXT = {".docx", ".txt", ".md", ".html", ".htm"}
+L229: if e == ".docx":
+L232: if e in (".html", ".htm"):
+L235: if e in (".md", ".markdown"):
+L238: if e == ".txt":
+L290: tmp = path.with_suffix(".tmp")
+L296: return (Path((filename or "").strip()).suffix or "").lower()
+L324: tmp = path.with_suffix(".tmp")
+L347: tmp = path.with_suffix(path.suffix + ".tmp")
+L378: if ext == ".txt":
+L383: elif ext == ".md":
+L387: html_out = markdown2.markdown(md)
+L395: elif ext in (".html", ".htm"):
+L401: elif ext == ".docx":
+L463: if ext == ".docx":
+L484: "docx_normalize": normalize_info if ext == ".docx" else {},
+L512: if (ext or "").lower().strip() == ".docx" and stored_path:
+L711: if ext not in ALLOWED_EXT:
+L712: raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
+L1051: if ext not in ALLOWED_EXT:
+L1054: if ext == ".docx":
+L1122: if ext != ".docx":
+L1183: snap_name = f"{doc_id}__{ts_compact}.html"
+
+
+============================================================
+3.3 Workspace assignment indicators
+============================================================
+
+L44: _WS_SAFE_RE = re.compile(r"[^a-z0-9_]+", re.IGNORECASE)
+L245: # Workspace helpers (WS-only)
+L247: def _ws(workspace_id: str) -> str:
+L248: raw = (workspace_id or "default").strip()
+L256: if raw.startswith("ws_ws_"):
+L259: if raw.startswith("ws_"):
+L263: s = _WS_SAFE_RE.sub("_", s)
+L267: return f"ws_{s}"[:80]
+L270: def _ws_dir(workspace_id: str) -> Path:
+L271: return DOCS_DIR / _ws(workspace_id)
+L274: def _index_path(workspace_id: str) -> Path:
+L275: return _ws_dir(workspace_id) / "index.json"
+L308: def _work_index_path(workspace_id: str) -> Path:
+L309: return _ws_dir(workspace_id) / "work_index.json"
+L329: def _work_append(workspace_id: str, entry: Dict[str, Any]) -> None:
+L330: p = _work_index_path(workspace_id)
+L339: def _snapshot_dir(workspace_id: str) -> Path:
+L340: p = _ws_dir(workspace_id) / "snapshots"
+L445: workspace_id: str,
+L453: ws_dir = _ws_dir(workspace_id)
+L454: ws_dir.mkdir(parents=True, exist_ok=True)
+L459: stored_path = ws_dir / stored_name
+L487: idx_path = _index_path(workspace_id)
+L495: workspace_id: str,
+L502: idxp = _index_path(workspace_id)
+L505: ws_dir = _ws_dir(workspace_id)
+L510: stored_path = str(ws_dir / stored_name) if stored_name else None
+L530: def _docs_index_path(workspace_id: str) -> Path:
+L531: ws = _ws(workspace_id)
+L532: return BASE_DIR / "data" / "docs" / ws / "index.json"
+L535: def _append_to_docs_index(workspace_id: str, meta: Dict[str, Any]):
+L536: fp = _docs_index_path(workspace_id)
+L539: rows = []
+L542: rows = json.loads(fp.read_text(encoding="utf-8"))
+L543: if not isinstance(rows, list):
+L544: rows = []
+L546: rows = []
+L548: rows.append(
+L559: fp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+L565: def _active_target_set_path(workspace_id: str) -> Path:
+L566: return BASE_DIR / "data" / "target_pools" / f"active_target_set_{_ws(workspace_id)}.json"
+L569: def _default_active_target_set(workspace_id: str) -> Dict[str, Any]:
+L571: "workspace_id": _ws(workspace_id),
+L581: def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
+L582: ws_norm = _ws(workspace_id)
+L583: fp = _active_target_set_path(ws_norm)
+L584: obj = _default_active_target_set(ws_norm)
+L597: obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
+L615: def _write_active_target_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str, Any]:
+L616: ws_norm = _ws(workspace_id)
+L617: fp = _active_target_set_path(ws_norm)
+L627: "workspace_id": ws_norm,
+L640: workspace_id: str,
+L648: obj = _load_active_target_set(workspace_id)
+L697: return _write_active_target_set(workspace_id, obj)
+L704: workspace_id: str = Query("ws_betterhealthcheck_com"),
+L714: ws_norm = _ws(workspace_id)
+L720: ws_norm,
+L732: stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+L736: workspace_id=ws_norm,
+L739: "workspace_id": ws_norm,
+L767: "workspace_id": ws_norm,
+L786: ws_norm,
+L800: _append_to_docs_index(ws_norm, meta)
+L808: workspace_id=ws_norm,
+L818: workspace_id=ws_norm,
+L831: "workspace_id": ws_norm,
+L844: def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
+L845: ws_norm = _ws(workspace_id)
+L850: BASE_DIR / "data" / f"upload_struct_{ws_norm}.json",
+L851: BASE_DIR / "data" / f"upload_phrase_index_{ws_norm}.json",
+L852: BASE_DIR / "data" / "phrase_pools" / "upload" / f"upload_phrase_pool_{ws_norm}.json",
+L853: BASE_DIR / "data" / "phrase_pools" / "active" / f"active_phrase_pool_{ws_norm}.json",
+L864: # Clear actual uploaded workspace files for this session.
+L867: ws_dir = _ws_dir(ws_norm)
+L868: if ws_dir.exists() and ws_dir.is_dir():
+L869: for fp in ws_dir.iterdir():
+L875: print("[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]", str(fp), repr(e))
+L877: print("[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]", repr(e))
+L880: active_obj = _load_active_target_set(ws_norm)
+L883: _write_active_target_set(ws_norm, active_obj)
+L889: workspace_id=ws_norm,
+L901: "workspace_id": ws_norm,
+L920: def list_files(workspace_id: str = Query("ws_betterhealthcheck_com")):
+L921: ws_norm = _ws(workspace_id)
+L922: items = _safe_read_index(_index_path(ws_norm))
+L941: return {"ok": True, "workspace_id": ws_norm, "items": out}
+L945: def list_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
+L946: ws_norm = _ws(workspace_id)
+L947: items = _safe_read_index(_index_path(ws_norm))
+L963: return {"ok": True, "workspace_id": ws_norm, "h1s": h1s}
+L968: workspace_id: str | None = Query(None),
+L969: workspaceId: str | None = Query(None),
+L972: ws = _ws(workspace_id or workspaceId or "default")
+L973: data = _load_active_target_set(ws)
+L977: "workspace_id": ws,
+L978: "workspaceId": ws,
+L979: "exists": _active_target_set_path(ws).exists(),
+L992: workspace_id = str(payload.get("workspace_id") or "ws_betterhealthcheck_com")
+L994: existing = _load_active_target_set(workspace_id)
+L1004: saved = _write_active_target_set(workspace_id, obj)
+L1009: save_active_phrase_set(workspace_id, {
+L1020: "workspace_id": workspace_id,
+L1025: def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
+L1026: ws_norm = _ws(workspace_id)
+L1027: ws_dir = _ws_dir(ws_norm)
+L1028: ws_dir.mkdir(parents=True, exist_ok=True)
+L1033: for p in ws_dir.iterdir():
+L1094: idx_path = _index_path(ws_norm)
+L1099: "workspace_id": ws_norm,
+L1110: workspace_id: str = Query("ws_betterhealthcheck_com"),
+L1114: ws_norm = _ws(workspace_id)
+L1116: items = _safe_read_index(_index_path(ws_norm))
+L1126: p = _ws_dir(ws_norm) / stored_name
+L1152: "workspace_id": ws_norm,
+L1161: workspace_id: str = Query("ws_betterhealthcheck_com"),
+L1165: ws_norm = _ws(workspace_id)
+L1171: items = _safe_read_index(_index_path(ws_norm))
+L1184: snap_path = _snapshot_dir(ws_norm) / snap_name
+L1188: updated_rec = _update_index_h1(ws_norm, doc_id, ext=ext, html_in=html_in, text_in=text_in)
+L1192: "workspace_id": ws_norm,
+L1202: def get_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+L1203: ws_norm = _ws(workspace_id)
+L1209: items = _safe_read_index(_index_path(ws_norm))
+L1214: path = _ws_dir(ws_norm) / (hit.get("stored_name") or "")
+L1226: def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+L1227: ws_norm = _ws(workspace_id)
+L1233: items = _safe_read_index(_index_path(ws_norm))
+L1238: path = _ws_dir(ws_norm) / (hit.get("stored_name") or "")
+L1248: "workspace_id": ws_norm,
+L1266: workspace_id: str = Query("ws_betterhealthcheck_com"),
+L1269: return await upload_file(workspace_id=workspace_id, file=file)
+
+
+============================================================
+3.4 Document ID assignment indicators
+============================================================
+
+L7: import uuid
+L359: def _decode_text_bytes(raw: bytes) -> str:
+L361: s = raw.decode("utf-8")
+L364: s = raw.decode("utf-8", errors="ignore")
+L366: s = raw.decode(errors="ignore")
+L379: text = _decode_text_bytes(raw)
+L384: md = _decode_text_bytes(raw)
+L396: html_raw = _decode_text_bytes(raw)
+L414: text = raw.decode("utf-8", errors="ignore").strip()
+L422: text = _decode_text_bytes(raw)
+L456: doc_id = uuid.uuid4().hex
+L458: stored_name = f"{doc_id}__{safe_name}"
+L474: "doc_id": doc_id,
+L496: doc_id: str,
+L508: if isinstance(rec, dict) and str(rec.get("doc_id") or "") == doc_id:
+L550: "doc_id": meta.get("doc_id"),
+L572: "active_document_ids": [],
+L598: obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
+L609: # Canonical fallback: uploaded docs are doc_ids
+L610: obj["active_upload_ids"] = list(obj["active_document_ids"])
+L620: doc_ids = list(obj.get("active_document_ids") or [])
+L624: upload_ids = list(doc_ids)
+L628: "active_document_ids": doc_ids,
+L642: add_document_ids: List[str] | None = None,
+L662: if add_document_ids is not None:
+L663: obj["active_document_ids"] = [
+L665: for x in add_document_ids
+L669: obj["active_document_ids"] = list(obj.get("active_document_ids") or [])
+L708: raise HTTPException(status_code=400, detail="No file uploaded.")
+L712: raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
+L733: doc_id = str(meta.get("doc_id") or "").strip()
+L740: "doc_id": doc_id,
+L768: "doc_id": doc_id,
+L790: "doc_id": meta.get("doc_id"),
+L806: doc_id = str(meta.get("doc_id") or "").strip()
+L809: add_document_ids=[doc_id] if doc_id else [],
+L810: add_upload_ids=[doc_id] if doc_id else [],
+L822: "doc_id": doc_id,
+L881: active_obj["active_document_ids"] = []
+L907: "active_document_ids": True,
+L931: "doc_id": it.get("doc_id"),
+L997: "active_document_ids": list(payload.get("active_document_ids") or existing.get("active_document_ids") or []),
+L1010: "active_document_ids": obj.get("active_document_ids") or [],
+L1044: doc_id, safe_name = name.split("__", 1)
+L1045: doc_id = (doc_id or "").strip()
+L1047: if not doc_id or len(doc_id) < 16:
+L1080: "doc_id": doc_id,
+L1111: doc_id: str = Query(...),
+L1117: hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+L1119: raise HTTPException(status_code=404, detail="doc_id not found")
+L1123: raise HTTPException(status_code=400, detail="docx_only")
+L1128: raise HTTPException(status_code=404, detail="stored_file_missing")
+L1131: raise HTTPException(status_code=500, detail="python_docx_not_available")
+L1136: raise HTTPException(status_code=500, detail=f"docx_read_failed:{str(e)[:160]}")
+L1153: "doc_id": doc_id,
+L1162: doc_id: str = Query(...),
+L1167: doc_id = (doc_id or "").strip()
+L1168: if not doc_id:
+L1169: raise HTTPException(status_code=400, detail="doc_id is required")
+L1172: hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+L1174: raise HTTPException(status_code=404, detail="doc_id not found")
+L1180: raise HTTPException(status_code=400, detail="html is required")
+L1183: snap_name = f"{doc_id}__{ts_compact}.html"
+L1188: updated_rec = _update_index_h1(ws_norm, doc_id, ext=ext, html_in=html_in, text_in=text_in)
+L1193: "doc_id": doc_id,
+L1202: def get_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+L1205: doc_id = (doc_id or "").strip()
+L1206: if not doc_id:
+L1207: raise HTTPException(status_code=400, detail="doc_id is required")
+L1210: hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+L1212: raise HTTPException(status_code=404, detail="doc_id not found")
+L1216: raise HTTPException(status_code=404, detail="Stored file missing on disk")
+L1226: def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+L1229: doc_id = (doc_id or "").strip()
+L1230: if not doc_id:
+L1231: raise HTTPException(status_code=400, detail="doc_id is required")
+L1234: hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+L1236: raise HTTPException(status_code=404, detail="doc_id not found")
+L1240: raise HTTPException(status_code=404, detail="Stored file missing on disk")
+L1249: "doc_id": hit.get("doc_id"),
+
+
+============================================================
+3.5 Metadata creation indicators
+============================================================
+
+L295: def _guess_ext(filename: str) -> str:
+L296: return (Path((filename or "").strip()).suffix or "").lower()
+L370: def _extract_preview_from_bytes(filename: str, ext: str, raw: bytes) -> Dict[str, Any]:
+L435: "filename": Path(filename).name,
+L452: ext = _guess_ext(file.filename)
+L457: safe_name = Path(file.filename).name
+L473: meta = {
+L475: "filename": safe_name,
+L478: "content_type": file.content_type or "",
+L479: "uploaded_at": datetime.utcnow().isoformat() + "Z",
+L489: items.append(meta)
+L491: return meta
+L535: def _append_to_docs_index(workspace_id: str, meta: Dict[str, Any]):
+L550: "doc_id": meta.get("doc_id"),
+L551: "stored_name": meta.get("stored_name"),
+L552: "filename": meta.get("filename"),
+L553: "h1": meta.get("h1"),
+L554: "h1_source": meta.get("h1_source"),
+L555: "uploaded_at": datetime.utcnow().isoformat() + "Z",
+L707: if not file or not file.filename:
+L708: raise HTTPException(status_code=400, detail="No file uploaded.")
+L710: ext = _guess_ext(file.filename)
+L712: raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
+L717: preview = _extract_preview_from_bytes(Path(file.filename).name, ext, raw)
+L719: meta = _store_and_index(
+L732: stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+L733: doc_id = str(meta.get("doc_id") or "").strip()
+L742: "original_name": str(meta.get("filename") or ""),
+L748: metadata={
+L750: "filename": str(meta.get("filename") or ""),
+L751: "stored_name": str(meta.get("stored_name") or ""),
+L770: "original_name": str(meta.get("filename") or ""),
+L790: "doc_id": meta.get("doc_id"),
+L791: "filename": meta.get("filename"),
+L792: "h1": meta.get("h1"),
+L793: "h1_source": meta.get("h1_source"),
+L794: "h1_error": meta.get("h1_error"),
+L795: "docx_normalize": meta.get("docx_normalize") or {},
+L800: _append_to_docs_index(ws_norm, meta)
+L806: doc_id = str(meta.get("doc_id") or "").strip()
+L820: metadata={
+L823: "filename": str(meta.get("filename") or ""),
+L832: "doc": meta,
+L833: "filename": preview.get("filename"),
+L840: "processing_status": "queued" if processing_job_id else "not_queued",
+L891: metadata={
+L923: items.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
+L932: "filename": it.get("filename"),
+L934: "uploaded_at": it.get("uploaded_at"),
+L1072: uploaded_at = datetime.utcfromtimestamp(p.stat().st_mtime).isoformat() + "Z"
+L1075: uploaded_at = datetime.utcnow().isoformat() + "Z"
+L1081: "filename": safe_name,
+L1084: "content_type": "",
+L1085: "uploaded_at": uploaded_at,
+L1093: entries.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
+L1119: raise HTTPException(status_code=404, detail="doc_id not found")
+L1123: raise HTTPException(status_code=400, detail="docx_only")
+L1128: raise HTTPException(status_code=404, detail="stored_file_missing")
+L1131: raise HTTPException(status_code=500, detail="python_docx_not_available")
+L1136: raise HTTPException(status_code=500, detail=f"docx_read_failed:{str(e)[:160]}")
+L1154: "filename": hit.get("filename"),
+L1169: raise HTTPException(status_code=400, detail="doc_id is required")
+L1174: raise HTTPException(status_code=404, detail="doc_id not found")
+L1180: raise HTTPException(status_code=400, detail="html is required")
+L1207: raise HTTPException(status_code=400, detail="doc_id is required")
+L1212: raise HTTPException(status_code=404, detail="doc_id not found")
+L1216: raise HTTPException(status_code=404, detail="Stored file missing on disk")
+L1220: filename=hit.get("filename") or "document",
+L1221: media_type=hit.get("content_type") or "application/octet-stream",
+L1231: raise HTTPException(status_code=400, detail="doc_id is required")
+L1236: raise HTTPException(status_code=404, detail="doc_id not found")
+L1240: raise HTTPException(status_code=404, detail="Stored file missing on disk")
+L1243: ext = str(hit.get("ext") or _guess_ext(hit.get("filename") or "")).lower()
+L1244: preview = _extract_preview_from_bytes(hit.get("filename") or "document", ext, raw)
+L1250: "filename": preview.get("filename"),
+L1257: "processing_status": "queued" if processing_job_id else "not_queued",
+
+
+============================================================
+3.6 File save/storage indicators
+============================================================
+
+L81: def _normalize_docx_title_in_place(stored_path: str) -> Dict[str, Any]:
+L82: if not stored_path:
+L88: doc = DocxDocument(stored_path)
+L150: doc.save(stored_path)
+L152: return {"ok": False, "error": f"docx_save_failed:{str(e)[:120]}", "para_index": target_i}
+L163: def _strict_h1_from_docx_file(stored_path: str) -> Tuple[str, str, str]:
+L164: if not stored_path:
+L170: doc = DocxDocument(stored_path)
+L225: stored_path: str | None = None,
+L230: return _strict_h1_from_docx_file(stored_path or "")
+L289: path.parent.mkdir(parents=True, exist_ok=True)
+L323: path.parent.mkdir(parents=True, exist_ok=True)
+L337: # Save snapshots
+L341: p.mkdir(parents=True, exist_ok=True)
+L346: path.parent.mkdir(parents=True, exist_ok=True)
+L454: ws_dir.mkdir(parents=True, exist_ok=True)
+L459: stored_path = ws_dir / stored_name
+L460: stored_path.write_bytes(raw)
+L464: normalize_info = _normalize_docx_title_in_place(str(stored_path))
+L470: stored_path=str(stored_path),
+L510: stored_path = str(ws_dir / stored_name) if stored_name else None
+L512: if (ext or "").lower().strip() == ".docx" and stored_path:
+L513: _normalize_docx_title_in_place(stored_path)
+L519: stored_path=stored_path,
+L537: fp.parent.mkdir(parents=True, exist_ok=True)
+L618: fp.parent.mkdir(parents=True, exist_ok=True)
+L732: stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+L741: "stored_path": stored_path,
+L769: "stored_path": stored_path,
+L990: @router.post("/active_target_set/save")
+L991: async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
+L1004: saved = _write_active_target_set(workspace_id, obj)
+L1007: from backend.server.stores.active_phrase_set_store import save_active_phrase_set
+L1009: save_active_phrase_set(workspace_id, {
+L1017: print("[ACTIVE_PHRASE_SET_SAVE_ERROR]", repr(e))
+L1021: "active_target_set": saved,
+L1028: ws_dir.mkdir(parents=True, exist_ok=True)
+L1058: raw = p.read_bytes()
+L1068: stored_path=str(p),
+L1159: @router.post("/save")
+L1160: async def save_doc(
+L1242: raw = path.read_bytes()
+
+
+============================================================
+3.7 Boundary violation indicators — should not happen inside pure 6A
+============================================================
+
+
+
+============================================================
+4. ROUTE BLOCK BOUNDARY GUESS
+============================================================
+
+Upload route starts at line: 702
+Next route decorators:
+L843: @router.post("/clear_session")
+L919: @router.get("/list")
+L944: @router.get("/h1s")
+
+
+============================================================
+5. VERIFICATION 6A DECISION TEMPLATE
+============================================================
+
+To approve 6A, this route must show:
+
+[ ] Upload request validation
+[ ] Allowed extension validation: DOCX, TXT, HTML, MD
+[ ] Workspace assignment
+[ ] Document ID assignment
+[ ] Upload metadata creation
+[ ] File saved to workspace storage
+[ ] Clean boundary: no extraction, no cleaning, no semantic processing, no UUCD creation
+
+Decision:
+- APPROVE if all boxes are satisfied.
+- PATCH if one or more boxes are missing.
+- SPLIT if this route mixes upload ingress with extractor/intelligence responsibilities.

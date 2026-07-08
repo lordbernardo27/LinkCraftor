@@ -176,10 +176,7 @@ def process_website_html_to_ucd_v1(
             },
         )
 
-        upsert_unified_content_document_v1(
-            workspace_id=workspace_id,
-            document=ucd_document,
-        )
+        upsert_unified_content_document_v1(ucd_document)
 
     except Exception as exc:
         ucd_error = str(exc)

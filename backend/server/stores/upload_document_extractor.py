@@ -141,10 +141,15 @@ def extract_txt_upload_v1(path: str | Path) -> UploadExtractionResult:
 
 
 
+def _clean_markdown_line_prefix_v1(line: str) -> str:
+    # Handles UTF-8 BOM and mojibake BOM seen as ??? before Markdown headings.
+    return str(line or "").replace("\ufeff", "").replace("???", "").strip()
+
+
 def _extract_markdown_headings_v1(text: str) -> List[str]:
     headings: List[str] = []
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = _clean_markdown_line_prefix_v1(line)
         if stripped.startswith("#"):
             heading = stripped.lstrip("#").strip()
             if heading:
@@ -156,7 +161,7 @@ def _strip_markdown_syntax_v1(text: str) -> str:
     cleaned_lines: List[str] = []
 
     for line in text.splitlines():
-        stripped = line.strip()
+        stripped = _clean_markdown_line_prefix_v1(line)
 
         if not stripped:
             continue

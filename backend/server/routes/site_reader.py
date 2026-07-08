@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import requests
 from fastapi import APIRouter, Query
+from backend.server.runtime.live_route_orchestration_hooks import enqueue_and_run_website_ingestion_job_v1
 from pydantic import BaseModel, Field
 
 class ActiveTargetSetPayload(BaseModel):
@@ -555,6 +556,7 @@ def ingest_one_page(workspace_id: str, url: str) -> dict:
 
     return {
         "ok": True,
+        "universal_knowledge_orchestration": orchestration_result if "orchestration_result" in locals() else None,
         "url": url,
         "h1": h1,
         "phrases_added": sum(len(v) for v in bundle.values()),
@@ -794,7 +796,22 @@ def connect_domain(payload: ConnectDomainPayload):
     domain = _normalize_domain(payload.domain)
 
     if not domain:
-        return {"ok": False, "error": "invalid_domain"}
+        
+    try:
+        orchestration_result = enqueue_and_run_website_ingestion_job_v1(
+            workspace_id=workspace_id,
+            domain=domain if "domain" in locals() else "",
+            payload={
+                "route": "/api/site/workspace/connect_domain",
+            },
+        )
+    except Exception as e:
+        orchestration_result = {
+            "ok": False,
+            "error": f"website_orchestration_failed:{str(e)[:160]}",
+        }
+
+return {"ok": False, "error": "invalid_domain"}
 
     # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
     requested_workspace_id = str(payload.workspace_id or "").strip()

@@ -156,6 +156,33 @@ app.include_router(owner_audit_router)
 app.include_router(workspace_autosave_router)
 
 
+# -------------------------
+# Phase 2.3 Background Worker Startup
+# -------------------------
+async def _linkcraftor_background_worker_loop():
+    from backend.server.orchestration.worker import run_one_job
+
+    worker_id = "local_auto_worker_1"
+
+    while True:
+        try:
+            result = run_one_job(worker_id=worker_id)
+            if not result.get("job"):
+                await asyncio.sleep(2)
+            else:
+                await asyncio.sleep(0.25)
+        except Exception as e:
+            log.exception("[BACKGROUND_WORKER_LOOP_ERROR] %s", e)
+            await asyncio.sleep(5)
+
+
+@app.on_event("startup")
+async def _start_linkcraftor_background_worker():
+    asyncio.create_task(_linkcraftor_background_worker_loop())
+    log.info("[BACKGROUND_WORKER] local auto worker started")
+
+
+
 # =========================
 
 
@@ -888,3 +915,6 @@ if not _already_mounted("backend.server.routes.external.import_clear", "/api/ext
         prefix="/api/external/import_clear_runtime",
     )
 
+
+from .routes.site_workspace import router as site_workspace_router
+app.include_router(site_workspace_router)

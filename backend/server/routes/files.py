@@ -699,6 +699,7 @@ def _merge_active_target_set(
 # -------------------------
 # API
 # -------------------------
+
 @router.post("/upload")
 async def upload_file(
     workspace_id: str = Query("ws_betterhealthcheck_com"),
@@ -746,85 +747,32 @@ async def upload_file(
                 "document_count": 1,
             },
             metadata={
-                "phase": "upload_to_job_flow",
+                "phase": "phase_2_background_orchestration",
                 "filename": str(meta.get("filename") or ""),
                 "stored_name": str(meta.get("stored_name") or ""),
                 "document_count": 1,
             },
             priority=5,
         )
+
         processing_job_id = processing_job.job_id
 
-        # DEV/LOCAL IMMEDIATE EXECUTION FIX
-        # Prevent queued upload jobs from blocking RB2 highlights.
-        try:
-            from backend.server.orchestration.worker import execute_job
-            execute_job(
-                processing_job_id,
-                "document_upload_job",
-                "local_upload_worker",
-                processing_job.payload if hasattr(processing_job, "payload") else {
-                    "workspace_id": ws_norm,
-                    "doc_id": doc_id,
-                    "stored_path": stored_path,
-                    "original_name": str(meta.get("filename") or ""),
-                    "html": str(preview.get("html") or ""),
-                    "text": str(preview.get("text") or ""),
-                    "source_route": "/upload",
-                    "document_count": 1,
-                },
-            )
-            print("[UPLOAD AUTO-WORKER] completed:", processing_job_id)
-        except Exception as e:
-            print("[UPLOAD AUTO-WORKER ERROR]", repr(e))
+        meta["universal_knowledge_orchestration"] = {
+            "ok": True,
+            "status": "queued",
+            "note": "Phase 2: orchestration job created and queued without blocking upload.",
+            "job_id": processing_job_id,
+        }
 
     except Exception as e:
-        print("[UPLOAD_ORCHESTRATION_JOB_ERROR]", repr(e))
+        print("[UPLOAD_ORCHESTRATION_QUEUE_ERROR]", repr(e))
         traceback.print_exc()
-
-    _work_append(
-        ws_norm,
-        {
-            "ts": datetime.utcnow().isoformat() + "Z",
-            "type": "upload",
-            "doc_id": meta.get("doc_id"),
-            "filename": meta.get("filename"),
-            "h1": meta.get("h1"),
-            "h1_source": meta.get("h1_source"),
-            "h1_error": meta.get("h1_error"),
-            "docx_normalize": meta.get("docx_normalize") or {},
-        },
-    )
-
-    try:
-        _append_to_docs_index(ws_norm, meta)
-    except Exception as e:
-        print("[DOC_INDEX_APPEND_ERROR]", repr(e))
-        traceback.print_exc()
-
-    try:
-        doc_id = str(meta.get("doc_id") or "").strip()
-        _merge_active_target_set(
-            workspace_id=ws_norm,
-            add_document_ids=[doc_id] if doc_id else [],
-            add_upload_ids=[doc_id] if doc_id else [],
-        )
-    except Exception as e:
-        print("[ACTIVE_TARGET_SET_UPLOAD_DOC_AUTOADD_ERROR]", repr(e))
-        traceback.print_exc()
-
-    try:
-        queue_rebuild_event(
-            workspace_id=ws_norm,
-            trigger="document_changed",
-            metadata={
-                "source": "upload_route",
-                "doc_id": doc_id,
-                "filename": str(meta.get("filename") or ""),
-            },
-        )
-    except Exception as e:
-        print("[UPLOAD_REBUILD_QUEUE_ERROR]", repr(e))
+        meta["universal_knowledge_orchestration"] = {
+            "ok": False,
+            "status": "queue_failed",
+            "error": str(e)[:160],
+            "job_id": None,
+        }
 
     return {
         "ok": True,
@@ -837,8 +785,9 @@ async def upload_file(
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
         "job_id": processing_job_id,
-        "processing_status": "queued" if processing_job_id else "not_queued",
+        "processing_status": "queued" if processing_job_id else "queue_failed",
     }
+
 
 @router.post("/clear_session")
 def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
@@ -1253,8 +1202,8 @@ def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: 
         "html": preview.get("html"),
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
-        "job_id": processing_job_id,
-        "processing_status": "queued" if processing_job_id else "not_queued",
+        "job_id": None, 
+        "processing_status": "not_applicable",
         "h1": hit.get("h1") or "",
         "h1_source": hit.get("h1_source") or "",
         "h1_error": hit.get("h1_error") or "",
@@ -1267,5 +1216,7 @@ async def legacy_upload(
     file: UploadFile = File(...),
 ):
     return await upload_file(workspace_id=workspace_id, file=file)
+
+
 
 

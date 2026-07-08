@@ -103,12 +103,127 @@ def run_document_upload_job(
 
     update_orchestration_progress(
         job_id,
+        20.0,
+        {"step": "running_upload_document_extractor"},
+        current_step="running_upload_document_extractor",
+        progress_message="Running uploaded document extractor.",
+        total_steps=10,
+        processed_count=3,
+    )
+
+    from backend.server.stores.upload_document_extractor import extract_upload_document_v1
+    from backend.server.stores.uploaded_document_unified_content import build_and_write_uduc_from_extraction_result
+    from backend.server.stores.universal_unified_content_document_convergence import build_and_write_uucd_from_uduc_v1
+    from backend.server.stores.universal_article_body_store import build_universal_article_body_store_from_uucd_file_v2
+    from backend.server.stores.uucd_body_store_certification import certify_uucd_body_store_v1
+
+    extraction_result = extract_upload_document_v1(stored_path)
+
+    uduc_result = build_and_write_uduc_from_extraction_result(
+        extraction_result=extraction_result,
+        workspace_id=workspace_id,
+        document_id=doc_id,
+        original_filename=original_name,
+        stored_filename=str(payload.get("stored_name") or ""),
+        stored_path=stored_path,
+        source_metadata={
+            "doc_id": doc_id,
+            "filename": original_name,
+            "stored_path": stored_path,
+            "source_route": str(payload.get("source_route") or ""),
+            "document_count": payload.get("document_count"),
+        },
+    )
+
+    update_orchestration_progress(
+        job_id,
+        24.0,
+        {
+            "step": "uploaded_document_unified_content_created",
+            "doc_id": doc_id,
+            "uduc_path": uduc_result.get("uduc_path"),
+        },
+        current_step="uploaded_document_unified_content_created",
+        progress_message="Uploaded Document Unified Content created.",
+        total_steps=10,
+        processed_count=4,
+    )
+
+    uucd_result = build_and_write_uucd_from_uduc_v1(uduc_result.get("uduc") or {})
+
+    update_orchestration_progress(
+        job_id,
+        24.5,
+        {
+            "step": "universal_unified_content_document_created",
+            "doc_id": doc_id,
+            "uucd_path": uucd_result.get("uucd_path"),
+        },
+        current_step="universal_unified_content_document_created",
+        progress_message="Universal Unified Content Document created.",
+        total_steps=10,
+        processed_count=5,
+    )
+
+    body_store_result = build_universal_article_body_store_from_uucd_file_v2(
+        workspace_id=workspace_id,
+        uucd_path=uucd_result.get("uucd_path"),
+        write_back_uucd=True,
+    )
+
+    update_orchestration_progress(
+        job_id,
+        24.8,
+        {
+            "step": "universal_article_body_store_created",
+            "doc_id": doc_id,
+            "body_index_path": body_store_result.get("body_index_path"),
+        },
+        current_step="universal_article_body_store_created",
+        progress_message="Universal Article Body Store updated.",
+        total_steps=10,
+        processed_count=6,
+    )
+
+    body_index_for_current_doc = dict(body_store_result.get("index") or {})
+    body_index_for_current_doc["bodies"] = [
+        body
+        for body in (body_index_for_current_doc.get("bodies") or [])
+        if isinstance(body, dict) and str(body.get("document_id") or "") == doc_id
+    ]
+
+    certification_result = certify_uucd_body_store_v1(
+        workspace_id=workspace_id,
+        uucd_payload=body_store_result.get("uucd_payload") or {},
+        body_index=body_index_for_current_doc,
+        lifecycle_registry={"sources": {}, "events": []},
+        asset_version_registry={"assets": []},
+        authorization_payload={"unauthorized_documents_quarantined": 0},
+    )
+
+    update_orchestration_progress(
+        job_id,
+        24.9,
+        {
+            "step": "uucd_body_store_certification_completed",
+            "doc_id": doc_id,
+            "certification_path": certification_result.get("certification_path"),
+            "semantic_ready": (certification_result.get("certification") or {}).get("semantic_ready"),
+        },
+        current_step="uucd_body_store_certification_completed",
+        progress_message="UUCD / Body Store Certification completed.",
+        total_steps=10,
+        processed_count=7,
+    )
+
+    update_orchestration_progress(
+        job_id,
         25.0,
         {"step": "running_smart_extractor"},
         current_step="running_smart_extractor",
         progress_message="Running Smart Extractor.",
         total_steps=10,
-        processed_count=3,
+        processed_count=5,
     )
 
     update_orchestration_progress(
@@ -118,7 +233,7 @@ def run_document_upload_job(
         current_step="running_candidate_window_guard",
         progress_message="Running Candidate Window Guard.",
         total_steps=10,
-        processed_count=4,
+        processed_count=6,
     )
 
     update_orchestration_progress(
@@ -240,6 +355,40 @@ def run_document_upload_job(
         "worker_id": worker_id,
         "workspace_id": workspace_id,
         "doc_id": doc_id,
+        "uduc_result": {
+            "ok": uduc_result.get("ok") if isinstance(uduc_result, dict) else False,
+            "uduc_path": uduc_result.get("uduc_path") if isinstance(uduc_result, dict) else None,
+            "document_id": uduc_result.get("document_id") if isinstance(uduc_result, dict) else doc_id,
+        },
+        "uucd_result": {
+            "ok": uucd_result.get("ok") if isinstance(uucd_result, dict) else False,
+            "uucd_path": uucd_result.get("uucd_path") if isinstance(uucd_result, dict) else None,
+            "document_id": (
+                (uucd_result.get("uucd") or {}).get("document_id")
+                if isinstance(uucd_result, dict) and isinstance(uucd_result.get("uucd"), dict)
+                else doc_id
+            ),
+        },
+        "body_store_result": {
+            "ok": body_store_result.get("ok") if isinstance(body_store_result, dict) else False,
+            "body_index_path": body_store_result.get("body_index_path") if isinstance(body_store_result, dict) else None,
+            "bodies_written": body_store_result.get("bodies_written") if isinstance(body_store_result, dict) else None,
+            "missing_bodies": body_store_result.get("missing_bodies") if isinstance(body_store_result, dict) else None,
+        },
+        "certification_result": {
+            "ok": certification_result.get("ok") if isinstance(certification_result, dict) else False,
+            "certification_path": certification_result.get("certification_path") if isinstance(certification_result, dict) else None,
+            "semantic_ready": (
+                (certification_result.get("certification") or {}).get("semantic_ready")
+                if isinstance(certification_result, dict)
+                else False
+            ),
+            "certification_level": (
+                (certification_result.get("certification") or {}).get("certification_level")
+                if isinstance(certification_result, dict)
+                else "unknown"
+            ),
+        },
         "intel_result": intel_result,
         "upload_pool_phrase_count": upload_pool_result.get("phrase_count") if isinstance(upload_pool_result, dict) else None,
         "active_pool_phrase_count": active_pool_result.get("phrase_count") if isinstance(active_pool_result, dict) else None,
