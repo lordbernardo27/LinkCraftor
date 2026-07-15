@@ -1,6 +1,10 @@
 from __future__ import annotations
+
+import os
 from backend.server.stores.uploaded_document_unified_content import build_and_write_uduc_from_extraction_result
 from backend.server.stores.universal_unified_content_document_convergence import build_and_write_uucd_from_uduc_v1
+from backend.server.stores.enterprise_raw_html_acquisition_engine import acquire_raw_html_for_workspace_v1
+from backend.server.workers.website_unified_content_batch_worker import run_website_unified_content_batch_v1
 
 
 
@@ -111,8 +115,17 @@ def execute_universal_knowledge_job_v1(job: Dict[str, Any]) -> Dict[str, Any]:
             result["document_count"] = len(payload.get("documents") or [])
             result["uduc_write_results"] = _write_uduc_for_upload_batch_job(job)
 
-        if job_type in {"website_connection_batch", "website_crawl_batch"}:
-            result["url_count"] = len(payload.get("urls") or [])
+        if job_type in {"website_connection_batch", "website_crawl_batch", "raw_html_acquisition"}:
+            result["website_acquisition"] = _run_website_raw_html_acquisition_job(job)
+
+        if job_type == "build_website_unified_content":
+            result["website_unified_content"] = run_website_unified_content_batch_v1(
+                workspace_id=workspace_id,
+                assigned_html_ids=payload.get("assigned_html_ids") or [],
+                batch_id=payload.get("batch_id") or job.get("batch_id") or "",
+                batch_index=payload.get("batch_index"),
+                batch_count=payload.get("batch_count"),
+            )
 
         update_job_progress(
             workspace_id=workspace_id,
@@ -260,3 +273,139 @@ def _write_uduc_for_upload_batch_job(job):
         })
 
     return results
+
+
+def _run_website_raw_html_acquisition_job(job):
+    payload = job.get("payload") or {}
+    workspace_id = job.get("workspace_id") or payload.get("workspace_id") or "default"
+
+    batch_size = int(payload.get("batch_size") or 100)
+    checkpoint_every = int(payload.get("checkpoint_every") or 25)
+    sleep_seconds = float(payload.get("sleep_seconds") or 0.15)
+
+    assigned_urls = payload.get("assigned_urls") or []
+
+    if assigned_urls:
+        from pathlib import Path
+        import json
+
+        site_pages_path = Path("backend/server/data") / f"site_pages_{workspace_id}.json"
+        site_pages_path.parent.mkdir(parents=True, exist_ok=True)
+
+        temp_workspace_id = f"{workspace_id}__assigned_{job.get('job_id')}"
+        temp_site_pages_path = Path("backend/server/data") / f"site_pages_{temp_workspace_id}.json"
+
+        temp_site_pages_path.write_text(
+            json.dumps({
+                "workspace_id": temp_workspace_id,
+                "source_workspace_id": workspace_id,
+                "pages": [{"url": url} for url in assigned_urls],
+            }, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        result = acquire_raw_html_for_workspace_v1(
+            workspace_id=temp_workspace_id,
+            resume=True,
+            force=False,
+            batch_size=batch_size,
+            checkpoint_every=checkpoint_every,
+            sleep_seconds=sleep_seconds,
+        )
+
+        # Merge temp raw store into the real workspace raw store.
+        real_path = Path("backend/server/data/raw_website_html") / f"raw_website_html_{workspace_id}.json"
+        temp_path = Path("backend/server/data/raw_website_html") / f"raw_website_html_{temp_workspace_id}.json"
+
+        real_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if real_path.exists():
+            real_store = json.loads(real_path.read_text(encoding="utf-8"))
+        else:
+            real_store = {
+                "version": "raw_website_html_store_v1",
+                "workspace_id": workspace_id,
+                "pages": {},
+            }
+
+        temp_store = json.loads(temp_path.read_text(encoding="utf-8")) if temp_path.exists() else {"pages": {}}
+
+        real_store.setdefault("pages", {})
+        for html_id, record in (temp_store.get("pages") or {}).items():
+            record["workspace_id"] = workspace_id
+            real_store["pages"][html_id] = record
+
+        merge_temp_path = real_path.with_name(
+            real_path.name
+            + f".merge_{os.getpid()}.tmp"
+        )
+
+        with merge_temp_path.open(
+            "w",
+            encoding="utf-8",
+            newline="\\n",
+        ) as merge_handle:
+            json.dump(
+                real_store,
+                merge_handle,
+                indent=2,
+                ensure_ascii=False,
+            )
+            merge_handle.flush()
+            os.fsync(
+                merge_handle.fileno()
+            )
+
+        os.replace(
+            merge_temp_path,
+            real_path,
+        )
+
+        raw_html_count = len(real_store.get("pages") or {})
+
+        return {
+            "ok": True,
+            "stage": "raw_html_acquisition",
+            "mode": "assigned_urls",
+            "assigned_count": len(assigned_urls),
+            "processing": result.get("processing"),
+            "stores": {
+                "raw_html_store_count": raw_html_count,
+                "raw_html_store_path": str(real_path),
+            },
+            "certification": {
+                **(result.get("certification") or {}),
+                "raw_html_store_count": raw_html_count,
+                "worker_batch_complete": True,
+            },
+            "report_path": result.get("report_path"),
+            "raw_html_complete": False,
+            "next_job_created": False,
+            "next_job_id": None,
+        }
+
+    result = acquire_raw_html_for_workspace_v1(
+        workspace_id=workspace_id,
+        resume=True,
+        force=False,
+        batch_size=batch_size,
+        checkpoint_every=checkpoint_every,
+        sleep_seconds=sleep_seconds,
+    )
+
+    certification = result.get("certification") or {}
+    raw_html_complete = bool(certification.get("raw_html_complete_for_site_pages"))
+
+    return {
+        "ok": True,
+        "stage": "raw_html_acquisition",
+        "mode": "resume_batch",
+        "processing": result.get("processing"),
+        "stores": result.get("stores"),
+        "certification": certification,
+        "report_path": result.get("report_path"),
+        "raw_html_complete": raw_html_complete,
+        "next_job_created": False,
+        "next_job_id": None,
+    }
+

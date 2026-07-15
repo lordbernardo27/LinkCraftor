@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import shutil
@@ -23,7 +23,6 @@ PRESERVED_TARGETS = [
     ROOT / "docs",
     ROOT / "workspaces",
     ROOT / "raw_website_html",
-    ROOT / "clean_website_html",
     ROOT / "website_unified_content",
     ROOT / "site_pages_ws_whattoexpect_com.json",
     ROOT / "site_sources_ws_whattoexpect_com.json",

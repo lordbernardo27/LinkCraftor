@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from pathlib import Path
@@ -173,7 +173,7 @@ def normalize_upload_doc(row: Dict[str, Any], workspace_id: str, index: int) -> 
 def collect_website_registry_docs(workspace_id: str) -> List[Dict[str, Any]]:
     candidates = [
         ROOT / "website_unified_content" / f"website_unified_content_{workspace_id}.json",
-        ROOT / "clean_website_html" / f"clean_website_html_{workspace_id}.json",
+        ROOT / "raw_website_html" / f"raw_website_html_{workspace_id}.json",
         ROOT / "raw_website_html" / f"raw_website_html_{workspace_id}.json",
     ]
 

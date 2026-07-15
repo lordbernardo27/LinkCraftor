@@ -1,0 +1,981 @@
+
+==============================================================================================================
+FILE: backend\server\workers\universal_knowledge_worker.py
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: execute_universal_knowledge_job_v1
+--------------------------------------------------------------------------------------------------------------
+   11: from backend.server.jobs.universal_knowledge_orchestrator import (
+   12:     create_universal_knowledge_job,
+   13:     record_job_failure,
+   14:     update_job_progress,
+   15:     update_job_status,
+   16: )
+   17: 
+   18: 
+   19: def execute_universal_knowledge_job_v1(job: Dict[str, Any]) -> Dict[str, Any]:
+   20:     """
+   21:     Local worker execution contract.
+   22: 
+   23:     This is the first local worker foundation. In production, this same job
+   24:     contract can be executed by Celery/RQ/SQS/Lambda/App Runner workers.
+   25:     """
+   26: 
+   27:     workspace_id = job.get("workspace_id") or "default"
+   28:     job_id = job.get("job_id") or ""
+   29:     job_type = job.get("job_type") or ""
+   30:     payload = job.get("payload") or {}
+   31: 
+   32:     try:
+   33:         update_job_status(
+   34:             workspace_id=workspace_id,
+   35:             job_id=job_id,
+   36:             status="running",
+   37:             message=f"Running {job_type}.",
+   38:         )
+   39:         update_job_progress(
+   40:             workspace_id=workspace_id,
+   41:             job_id=job_id,
+   42:             percent=10,
+   43:             message="Worker accepted job.",
+   44:             step="worker_accepted",
+   45:         )
+   46: 
+   47:         stage_groups = {
+   48:             "upload_arm": {
+   49:                 "upload_document_batch",
+   50:                 "upload_file_route_validation",
+   51:                 "format_detection",
+   52:                 "format_router",
+   53:                 "upload_document_extraction",
+   54:                 "build_uduc",
+   55:                 "build_uucd_from_uduc",
+   56:             },
+   57:             "website_arm": {
+   58:                 "website_connection_batch",
+   59:                 "website_crawl_batch",
+   60:                 "site_page_discovery",
+   61:                 "raw_html_acquisition",
+   62:                 "html_cleaning",
+   63:                 "article_extraction",
+   64:                 "content_normalization",
+   65:                 "build_website_unified_content",
+   66:                 "build_uucd_from_website",
+   67:             },
+   68:             "canonical": {
+   69:                 "build_uucd",
+   70:                 "source_authorization",
+   71:                 "source_lifecycle",
+   72:                 "source_asset_versioning",
+   73:                 "build_body_store",
+   74:                 "verify_body_store",
+   75:                 "certify_uucd_body_store",
+   76:             },
+   77:             "semantic": {
+   78:                 "semantic_article_reader",
+   79:                 "semantic_context_builder",
+   80:                 "entity_concept_extraction",
+   81:                 "phrase_neighborhood_intelligence",
+   82:                 "topic_intent_intelligence",
+   83:                 "section_evidence_builder",
+   84:                 "semantic_relationship_graph",
+   85:                 "semantic_learning_export",
+   86:                 "semantic_end_to_end_certification",
+   87:             },
+   88:         }
+   89: 
+   90:         group = ""
+   91:         for group_name, job_types in stage_groups.items():
+   92:             if job_type in job_types:
+   93:                 group = group_name
+   94:                 break
+   95: 
+   96:         if not group:
+   97:             raise ValueError(f"Unsupported worker job_type: {job_type}")
+   98: 
+   99:         if group == "semantic" and payload.get("semantic_ready") is not True:
+  100:             raise ValueError("Semantic job blocked because semantic_ready is not true.")
+  101: 
+  102:         result = {
+  103:             "handled": True,
+  104:             "job_type": job_type,
+  105:             "stage_group": group,
+  106:             "workspace_id": workspace_id,
+  107:             "stage_index": payload.get("stage_index"),
+  108:             "stage_count": payload.get("stage_count"),
+  109:             "note": "Stage accepted by full pipeline worker contract.",
+  110:         }
+  111: 
+  112:         if job_type == "upload_document_batch":
+  113:             result["document_count"] = len(payload.get("documents") or [])
+  114:             result["uduc_write_results"] = _write_uduc_for_upload_batch_job(job)
+  115: 
+  116:         if job_type in {"website_connection_batch", "website_crawl_batch", "raw_html_acquisition"}:
+  117:             result["website_acquisition"] = _run_website_raw_html_acquisition_job(job)
+  118: 
+  119:         if job_type == "build_website_unified_content":
+  120:             result["website_unified_content"] = run_website_unified_content_batch_v1(
+  121:                 workspace_id=workspace_id,
+  122:                 assigned_html_ids=payload.get("assigned_html_ids") or [],
+  123:                 batch_id=payload.get("batch_id") or job.get("batch_id") or "",
+  124:                 batch_index=payload.get("batch_index"),
+  125:                 batch_count=payload.get("batch_count"),
+  126:             )
+  127: 
+  128:         update_job_progress(
+  129:             workspace_id=workspace_id,
+  130:             job_id=job_id,
+  131:             percent=100,
+  132:             message="Job completed.",
+  133:             step="job_completed",
+  134:         )
+  135: 
+  136:         update_job_status(
+  137:             workspace_id=workspace_id,
+  138:             job_id=job_id,
+  139:             status="completed",
+  140:             message="Job completed.",
+  141:             result=result,
+  142:         )
+  143: 
+  144:         return {
+  145:             "ok": True,
+  146:             "job_id": job_id,
+  147:             "workspace_id": workspace_id,
+  148:             "job_type": job_type,
+  149:             "result": result,
+  150:         }
+  151: 
+  152:     except Exception as e:
+  153:         failure = record_job_failure(
+  154:             workspace_id=workspace_id,
+  155:             job_id=job_id,
+  156:             job_type=job_type,
+  157:             error=str(e),
+  158:             payload=payload,
+  159:         )
+  160: 
+  161:         return {
+  162:             "ok": False,
+  163:             "job_id": job_id,
+  164:             "workspace_id": workspace_id,
+  165:             "job_type": job_type,
+  166:             "failure": failure,
+  167:         }
+  168: 
+  169: 
+  170: def create_and_execute_local_job_v1(
+  171:     *,
+  172:     workspace_id: str,
+  173:     job_type: str,
+  174:     payload: Dict[str, Any] | None = None,
+  175: ) -> Dict[str, Any]:
+  176:     job = create_universal_knowledge_job(
+  177:         workspace_id=workspace_id,
+  178:         job_type=job_type,
+  179:         payload=payload or {},
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: _run_website_raw_html_acquisition_job
+--------------------------------------------------------------------------------------------------------------
+  268:             "uduc_path": written.get("path") or written.get("output_path"),
+  269:             "uucd_path": uucd_written.get("uucd_path"),
+  270:             "uucd_written": bool(uucd_written.get("ok")),
+  271:         })
+  272: 
+  273:     return results
+  274: 
+  275: 
+  276: def _run_website_raw_html_acquisition_job(job):
+  277:     payload = job.get("payload") or {}
+  278:     workspace_id = job.get("workspace_id") or payload.get("workspace_id") or "default"
+  279: 
+  280:     batch_size = int(payload.get("batch_size") or 100)
+  281:     checkpoint_every = int(payload.get("checkpoint_every") or 25)
+  282:     sleep_seconds = float(payload.get("sleep_seconds") or 0.15)
+  283: 
+  284:     assigned_urls = payload.get("assigned_urls") or []
+  285: 
+  286:     if assigned_urls:
+  287:         from pathlib import Path
+  288:         import json
+  289: 
+  290:         site_pages_path = Path("backend/server/data") / f"site_pages_{workspace_id}.json"
+  291:         site_pages_path.parent.mkdir(parents=True, exist_ok=True)
+  292: 
+  293:         temp_workspace_id = f"{workspace_id}__assigned_{job.get('job_id')}"
+  294:         temp_site_pages_path = Path("backend/server/data") / f"site_pages_{temp_workspace_id}.json"
+  295: 
+  296:         temp_site_pages_path.write_text(
+  297:             json.dumps({
+  298:                 "workspace_id": temp_workspace_id,
+  299:                 "source_workspace_id": workspace_id,
+  300:                 "pages": [{"url": url} for url in assigned_urls],
+  301:             }, indent=2, ensure_ascii=False),
+  302:             encoding="utf-8",
+  303:         )
+  304: 
+  305:         result = acquire_raw_html_for_workspace_v1(
+  306:             workspace_id=temp_workspace_id,
+  307:             resume=True,
+  308:             force=False,
+  309:             batch_size=batch_size,
+  310:             checkpoint_every=checkpoint_every,
+  311:             sleep_seconds=sleep_seconds,
+  312:         )
+  313: 
+  314:         # Merge temp raw store into the real workspace raw store.
+  315:         real_path = Path("backend/server/data/raw_website_html") / f"raw_website_html_{workspace_id}.json"
+  316:         temp_path = Path("backend/server/data/raw_website_html") / f"raw_website_html_{temp_workspace_id}.json"
+  317: 
+  318:         real_path.parent.mkdir(parents=True, exist_ok=True)
+  319: 
+  320:         if real_path.exists():
+  321:             real_store = json.loads(real_path.read_text(encoding="utf-8"))
+  322:         else:
+  323:             real_store = {
+  324:                 "version": "raw_website_html_store_v1",
+  325:                 "workspace_id": workspace_id,
+  326:                 "pages": {},
+  327:             }
+  328: 
+  329:         temp_store = json.loads(temp_path.read_text(encoding="utf-8")) if temp_path.exists() else {"pages": {}}
+  330: 
+  331:         real_store.setdefault("pages", {})
+  332:         for html_id, record in (temp_store.get("pages") or {}).items():
+  333:             record["workspace_id"] = workspace_id
+  334:             real_store["pages"][html_id] = record
+  335: 
+  336:         real_path.write_text(json.dumps(real_store, indent=2, ensure_ascii=False), encoding="utf-8")
+  337: 
+  338:         raw_html_count = len(real_store.get("pages") or {})
+  339: 
+  340:         return {
+  341:             "ok": True,
+  342:             "stage": "raw_html_acquisition",
+  343:             "mode": "assigned_urls",
+  344:             "assigned_count": len(assigned_urls),
+  345:             "processing": result.get("processing"),
+  346:             "stores": {
+  347:                 "raw_html_store_count": raw_html_count,
+  348:                 "raw_html_store_path": str(real_path),
+  349:             },
+  350:             "certification": {
+  351:                 **(result.get("certification") or {}),
+  352:                 "raw_html_store_count": raw_html_count,
+  353:                 "worker_batch_complete": True,
+  354:             },
+  355:             "report_path": result.get("report_path"),
+  356:             "raw_html_complete": False,
+  357:             "next_job_created": False,
+  358:             "next_job_id": None,
+  359:         }
+  360: 
+  361:     result = acquire_raw_html_for_workspace_v1(
+  362:         workspace_id=workspace_id,
+  363:         resume=True,
+  364:         force=False,
+  365:         batch_size=batch_size,
+  366:         checkpoint_every=checkpoint_every,
+  367:         sleep_seconds=sleep_seconds,
+  368:     )
+  369: 
+  370:     certification = result.get("certification") or {}
+  371:     raw_html_complete = bool(certification.get("raw_html_complete_for_site_pages"))
+  372: 
+  373:     return {
+  374:         "ok": True,
+  375:         "stage": "raw_html_acquisition",
+  376:         "mode": "resume_batch",
+  377:         "processing": result.get("processing"),
+  378:         "stores": result.get("stores"),
+  379:         "certification": certification,
+  380:         "report_path": result.get("report_path"),
+  381:         "raw_html_complete": raw_html_complete,
+  382:         "next_job_created": False,
+  383:         "next_job_id": None,
+  384:     }
+  385: 
+
+==============================================================================================================
+FILE: backend\server\workers\universal_knowledge_queue_runner.py
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: _write_remaining_queue_v1
+--------------------------------------------------------------------------------------------------------------
+    7: from backend.server.jobs.universal_knowledge_orchestrator import (
+    8:     queue_path,
+    9:     read_queue,
+   10:     safe_id,
+   11: )
+   12: from backend.server.workers.universal_knowledge_worker import execute_universal_knowledge_job_v1
+   13: 
+   14: 
+   15: def _write_remaining_queue_v1(workspace_id: str, jobs: List[Dict[str, Any]]) -> None:
+   16:     path = queue_path(workspace_id)
+   17:     path.parent.mkdir(parents=True, exist_ok=True)
+   18:     path.write_text(
+   19:         "\n".join(json.dumps(job, ensure_ascii=False) for job in jobs) + ("\n" if jobs else ""),
+   20:         encoding="utf-8",
+   21:     )
+   22: 
+   23: 
+   24: def run_universal_knowledge_queue_v1(
+   25:     *,
+   26:     workspace_id: str,
+   27:     max_jobs: int = 20,
+   28:     job_type: str | None = None,
+   29: ) -> Dict[str, Any]:
+   30:     ws = safe_id(workspace_id)
+   31:     queued = read_queue(ws, limit=10000)
+   32: 
+   33:     pending = []
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: run_universal_knowledge_queue_v1
+--------------------------------------------------------------------------------------------------------------
+   16:     path = queue_path(workspace_id)
+   17:     path.parent.mkdir(parents=True, exist_ok=True)
+   18:     path.write_text(
+   19:         "\n".join(json.dumps(job, ensure_ascii=False) for job in jobs) + ("\n" if jobs else ""),
+   20:         encoding="utf-8",
+   21:     )
+   22: 
+   23: 
+   24: def run_universal_knowledge_queue_v1(
+   25:     *,
+   26:     workspace_id: str,
+   27:     max_jobs: int = 20,
+   28:     job_type: str | None = None,
+   29: ) -> Dict[str, Any]:
+   30:     ws = safe_id(workspace_id)
+   31:     queued = read_queue(ws, limit=10000)
+   32: 
+   33:     pending = []
+   34:     remaining = []
+   35: 
+   36:     for job in queued:
+   37:         if job.get("status") != "queued":
+   38:             remaining.append(job)
+   39:             continue
+   40: 
+   41:         if job_type and job.get("job_type") != job_type:
+   42:             remaining.append(job)
+   43:             continue
+   44: 
+   45:         if len(pending) < int(max_jobs):
+   46:             pending.append(job)
+   47:         else:
+   48:             remaining.append(job)
+   49: 
+   50:     results = []
+   51: 
+   52:     for job in pending:
+   53:         result = execute_universal_knowledge_job_v1(job)
+   54:         results.append(result)
+   55: 
+   56:     _write_remaining_queue_v1(ws, remaining)
+   57: 
+   58:     return {
+   59:         "ok": True,
+   60:         "workspace_id": ws,
+   61:         "max_jobs": int(max_jobs),
+   62:         "job_type_filter": job_type,
+   63:         "executed_count": len(results),
+   64:         "remaining_count": len(remaining),
+   65:         "results": results,
+   66:     }
+   67: 
+   68: 
+   69: if __name__ == "__main__":
+   70:     import argparse
+   71: 
+   72:     parser = argparse.ArgumentParser()
+   73:     parser.add_argument("--workspace-id", required=True)
+   74:     parser.add_argument("--max-jobs", type=int, default=20)
+   75:     parser.add_argument("--job-type", default=None)
+   76: 
+   77:     args = parser.parse_args()
+   78: 
+
+==============================================================================================================
+FILE: backend\server\workers\website_raw_html_acquisition_orchestrator.py
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: create_raw_html_acquisition_batch_jobs_v1
+--------------------------------------------------------------------------------------------------------------
+   77: 
+   78:     pages = data.get("pages") or {}
+   79:     if isinstance(pages, dict):
+   80:         return set(pages.keys())
+   81: 
+   82:     return set()
+   83: 
+   84: 
+   85: def create_raw_html_acquisition_batch_jobs_v1(
+   86:     *,
+   87:     workspace_id: str,
+   88:     batch_size: int = 100,
+   89:     checkpoint_every: int = 25,
+   90:     sleep_seconds: float = 0.15,
+   91:     max_batches: int | None = None,
+   92: ) -> Dict[str, Any]:
+   93:     """
+   94:     Fan-out orchestrator for website Raw HTML acquisition.
+   95: 
+   96:     Reads Site Pages, subtracts already-acquired Raw HTML records,
+   97:     splits remaining URLs into batches, and creates queued jobs.
+   98: 
+   99:     Workers should process assigned_urls only.
+  100:     Workers should not create successor jobs.
+  101:     """
+  102: 
+  103:     pages = _load_site_pages_v1(workspace_id)
+  104:     existing_ids = _existing_raw_html_ids_v1(workspace_id)
+  105: 
+  106:     remaining = [
+  107:         page for page in pages
+  108:         if page.get("html_id") not in existing_ids
+  109:     ]
+  110: 
+  111:     batches = [
+  112:         remaining[i:i + int(batch_size)]
+  113:         for i in range(0, len(remaining), int(batch_size))
+  114:     ]
+  115: 
+  116:     if max_batches is not None:
+  117:         batches = batches[: int(max_batches)]
+  118: 
+  119:     created_jobs = []
+  120:     batch_group_id = "raw_html_batch_" + hashlib.sha256(
+  121:         f"{workspace_id}:{len(pages)}:{len(existing_ids)}:{len(remaining)}".encode("utf-8")
+  122:     ).hexdigest()[:16]
+  123: 
+  124:     for index, batch in enumerate(batches, start=1):
+  125:         job = create_universal_knowledge_job(
+  126:             workspace_id=workspace_id,
+  127:             job_type="raw_html_acquisition",
+  128:             payload={
+  129:                 "workspace_id": workspace_id,
+  130:                 "mode": "assigned_urls",
+  131:                 "assigned_urls": [page["url"] for page in batch],
+  132:                 "assigned_count": len(batch),
+  133:                 "batch_index": index,
+  134:                 "batch_count": len(batches),
+  135:                 "batch_size": int(batch_size),
+  136:                 "checkpoint_every": int(checkpoint_every),
+  137:                 "sleep_seconds": float(sleep_seconds),
+  138:                 "auto_continue": False,
+  139:                 "trigger": "raw_html_fanout_orchestrator",
+  140:             },
+  141:             batch_id=batch_group_id,
+  142:         )
+  143:         created_jobs.append({
+  144:             "job_id": job.get("job_id"),
+  145:             "batch_index": index,
+  146:             "assigned_count": len(batch),
+  147:         })
+  148: 
+  149:     return {
+  150:         "ok": True,
+  151:         "workspace_id": workspace_id,
+  152:         "site_pages_count": len(pages),
+  153:         "existing_raw_html_count": len(existing_ids),
+  154:         "remaining_raw_html_count": len(remaining),
+  155:         "batch_size": int(batch_size),
+  156:         "batch_count": len(batches),
+  157:         "created_job_count": len(created_jobs),
+  158:         "batch_group_id": batch_group_id,
+  159:         "created_jobs": created_jobs[:50],
+  160:     }
+
+==============================================================================================================
+FILE: backend\server\stores\enterprise_raw_html_acquisition_engine.py
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: _load_raw_html_store_v1
+--------------------------------------------------------------------------------------------------------------
+   95:         page.get("url")
+   96:         or page.get("loc")
+   97:         or page.get("canonical_url")
+   98:         or page.get("source_url")
+   99:         or ""
+  100:     ).strip()
+  101: 
+  102: 
+  103: def _load_raw_html_store_v1(workspace_id: str) -> Dict[str, Any]:
+  104:     path = _raw_html_store_path_v1(workspace_id)
+  105:     return _load_json_v1(
+  106:         path,
+  107:         {
+  108:             "version": "raw_website_html_store_v1",
+  109:             "workspace_id": workspace_id,
+  110:             "pages": {},
+  111:             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+  112:         },
+  113:     )
+  114: 
+  115: 
+  116: def _save_raw_html_store_v1(workspace_id: str, store: Dict[str, Any]) -> None:
+  117:     store["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+  118:     _write_json_v1(_raw_html_store_path_v1(workspace_id), store)
+  119: 
+  120: 
+  121: def _decode_html_bytes_v1(content: bytes, content_type: str = "") -> str:
+  122:     if not isinstance(content, (bytes, bytearray)):
+  123:         return ""
+  124: 
+  125:     if len(content) > MAX_HTML_BYTES:
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: _save_raw_html_store_v1
+--------------------------------------------------------------------------------------------------------------
+  108:             "version": "raw_website_html_store_v1",
+  109:             "workspace_id": workspace_id,
+  110:             "pages": {},
+  111:             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+  112:         },
+  113:     )
+  114: 
+  115: 
+  116: def _save_raw_html_store_v1(workspace_id: str, store: Dict[str, Any]) -> None:
+  117:     store["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+  118:     _write_json_v1(_raw_html_store_path_v1(workspace_id), store)
+  119: 
+  120: 
+  121: def _decode_html_bytes_v1(content: bytes, content_type: str = "") -> str:
+  122:     if not isinstance(content, (bytes, bytearray)):
+  123:         return ""
+  124: 
+  125:     if len(content) > MAX_HTML_BYTES:
+  126:         content = content[:MAX_HTML_BYTES]
+  127: 
+  128:     content_type_lower = (content_type or "").lower()
+  129:     encoding = None
+  130: 
+
+--------------------------------------------------------------------------------------------------------------
+FUNCTION: acquire_raw_html_for_workspace_v1
+--------------------------------------------------------------------------------------------------------------
+  351: 
+  352: def _clear_failure_if_success_v1(*, registry: Dict[str, Any], html_id: str) -> None:
+  353:     failures = registry.setdefault("failures", {})
+  354:     if html_id in failures:
+  355:         failures[html_id]["resolved"] = True
+  356:         failures[html_id]["resolved_at_utc"] = _utc_now_iso_v1()
+  357:         failures[html_id]["excluded"] = False
+  358: 
+  359: def acquire_raw_html_for_workspace_v1(
+  360:     *,
+  361:     workspace_id: str,
+  362:     dry_run: bool = False,
+  363:     resume: bool = True,
+  364:     force: bool = False,
+  365:     batch_size: int | None = None,
+  366:     limit: int | None = None,
+  367:     checkpoint_every: int = 25,
+  368:     sleep_seconds: float = 0.0,
+  369: ) -> Dict[str, Any]:
+  370:     """
+  371:     Enterprise Raw HTML Acquisition Engine.
+  372: 
+  373:     Converts:
+  374:     Site Pages → Raw HTML Store
+  375: 
+  376:     Supports:
+  377:     - dry run
+  378:     - resume
+  379:     - force refresh
+  380:     - batch processing
+  381:     - checkpointing
+  382:     - fetch diagnostics
+  383:     - acquisition report
+  384:     """
+  385: 
+  386:     started_at = datetime.now(timezone.utc).isoformat()
+  387:     wall_start = time.time()
+  388: 
+  389:     pages = _load_site_pages_v1(workspace_id)
+  390:     site_pages_count = len(pages)
+  391: 
+  392:     store = _load_raw_html_store_v1(workspace_id)
+  393:     store.setdefault("pages", {})
+  394: 
+  395:     failure_registry = _load_failure_registry_v1(workspace_id)
+  396:     failure_records = failure_registry.get("failures", {}) or {}
+  397:     excluded_failure_ids = {
+  398:         html_id for html_id, record in failure_records.items()
+  399:         if isinstance(record, dict)
+  400:         and record.get("excluded") is True
+  401:         and record.get("resolved") is not True
+  402:     }
+  403: 
+  404:     existing_ids = set(store.get("pages", {}).keys())
+  405: 
+  406:     original_pages = list(pages)
+  407: 
+  408:     if resume and not force:
+  409:         missing_pages = []
+  410:         existing_pages = []
+  411: 
+  412:         excluded_pages = []
+  413: 
+  414:         for page in original_pages:
+  415:             url = _extract_url_v1(page)
+  416:             html_id = _raw_html_id_for_url_v1(url) if url else ""
+  417: 
+  418:             if html_id and html_id in existing_ids:
+  419:                 existing_pages.append(page)
+  420:             elif html_id and html_id in excluded_failure_ids:
+  421:                 excluded_pages.append(page)
+  422:             else:
+  423:                 missing_pages.append(page)
+  424: 
+  425:         pages = missing_pages
+  426:     else:
+  427:         excluded_pages = []
+  428: 
+  429:     if limit is not None:
+  430:         pages = pages[: int(limit)]
+  431: 
+  432:     if batch_size is not None:
+  433:         pages = pages[: int(batch_size)]
+  434: 
+  435:     selected_pages_count = len(pages)
+  436:     missing_pages_count = len(pages)
+  437:     existing_pages_count = len(existing_ids)
+  438: 
+  439:     if dry_run:
+  440:         report = {
+  441:             "ok": True,
+  442:             "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+  443:             "workspace_id": workspace_id,
+  444:             "dry_run": True,
+  445:             "resume": resume,
+  446:             "force": force,
+  447:             "started_at_utc": started_at,
+  448:             "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+  449:             "input": {
+  450:                 "site_pages_count": site_pages_count,
+  451:                 "selected_pages_count": selected_pages_count,
+  452:                 "existing_raw_html_count": len(existing_ids),
+  453:                 "missing_pages_selected": missing_pages_count,
+  454:                 "batch_size": batch_size,
+  455:                 "limit": limit,
+  456:             },
+  457:             "processing": {
+  458:                 "attempted": 0,
+  459:                 "succeeded": 0,
+  460:                 "failed": 0,
+  461:                 "skipped_existing": 0,
+  462:                 "skipped_no_url": 0,
+  463:             },
+  464:             "certification": {
+  465:                 "ready_to_acquire": site_pages_count > 0,
+  466:                 "raw_html_complete": len(existing_ids) >= site_pages_count,
+  467:                 "reason": "dry_run_only",
+  468:             },
+  469:         }
+  470: 
+  471:         report_path = _report_path_v1(workspace_id)
+  472:         _write_json_v1(report_path, report)
+  473:         report["report_path"] = str(report_path)
+  474:         return report
+  475: 
+  476:     attempted = 0
+  477:     succeeded = 0
+  478:     failed = 0
+  479:     skipped_existing = 0
+  480:     skipped_no_url = 0
+  481: 
+  482:     http_status_distribution: Dict[str, int] = {}
+  483:     content_type_distribution: Dict[str, int] = {}
+  484:     redirect_count = 0
+  485:     retry_attempt_total = 0
+  486:     total_fetch_seconds = 0.0
+  487:     consecutive_failures = 0
+  488:     max_consecutive_failures = 0
+  489: 
+  490:     temporary_failures = 0
+  491:     permanent_failures = 0
+  492:     newly_excluded = 0
+  493:     already_excluded = len(excluded_pages) if "excluded_pages" in locals() else 0
+  494:     registry_updated = False
+  495: 
+  496:     ledger: List[Dict[str, Any]] = []
+  497:     errors: List[Dict[str, Any]] = []
+  498:     successes: List[Dict[str, Any]] = []
+  499: 
+  500:     session = requests.Session()
+  501: 
+  502:     for index, page in enumerate(pages, start=1):
+  503:         url = _extract_url_v1(page)
+  504: 
+  505:         if not url:
+  506:             skipped_no_url += 1
+  507:             row = {
+  508:                 "index": index,
+  509:                 "status": "skipped",
+  510:                 "reason": "missing_url",
+  511:                 "url": "",
+  512:             }
+  513:             ledger.append(row)
+  514:             errors.append(row)
+  515:             continue
+  516: 
+  517:         html_id = _raw_html_id_for_url_v1(url)
+  518: 
+  519:         if resume and not force and html_id in existing_ids:
+  520:             skipped_existing += 1
+  521:             ledger.append({
+  522:                 "index": index,
+  523:                 "url": url,
+  524:                 "html_id": html_id,
+  525:                 "status": "skipped_existing",
+  526:             })
+  527:             continue
+  528: 
+  529:         attempted += 1
+  530:         fetch = _fetch_html_v1(url=url, session=session)
+  531: 
+  532:         status_key = str(fetch.get("status_code", 0))
+  533:         http_status_distribution[status_key] = http_status_distribution.get(status_key, 0) + 1
+  534: 
+  535:         content_type_key = str(fetch.get("content_type") or "unknown").split(";")[0].strip().lower() or "unknown"
+  536:         content_type_distribution[content_type_key] = content_type_distribution.get(content_type_key, 0) + 1
+  537: 
+  538:         retry_attempt_total += int(fetch.get("attempts", 0) or 0)
+  539:         total_fetch_seconds += float(fetch.get("elapsed_seconds", 0.0) or 0.0)
+  540: 
+  541:         if fetch.get("redirected"):
+  542:             redirect_count += 1
+  543: 
+  544:         if fetch.get("ok"):
+  545:             record = {
+  546:                 "html_id": html_id,
+  547:                 "workspace_id": workspace_id,
+  548:                 "url": url,
+  549:                 "final_url": fetch.get("final_url"),
+  550:                 "title": page.get("title", ""),
+  551:                 "source_type": "website_crawl",
+  552:                 "status_code": fetch.get("status_code"),
+  553:                 "content_type": fetch.get("content_type"),
+  554:                 "html": fetch.get("html"),
+  555:                 "html_length": fetch.get("html_length"),
+  556:                 "byte_length": fetch.get("byte_length"),
+  557:                 "captured_at_utc": datetime.now(timezone.utc).isoformat(),
+  558:                 "metadata": {
+  559:                     "site_pages_record": page,
+  560:                     "acquisition_engine": "enterprise_raw_html_acquisition_engine_v1",
+  561:                     "elapsed_seconds": fetch.get("elapsed_seconds"),
+  562:                     "domain": urlparse(url).netloc,
+  563:                 },
+  564:             }
+  565: 
+  566:             store["pages"][html_id] = record
+  567:             existing_ids.add(html_id)
+  568:             succeeded += 1
+  569:             consecutive_failures = 0
+  570: 
+  571:             _clear_failure_if_success_v1(
+  572:                 registry=failure_registry,
+  573:                 html_id=html_id,
+  574:             )
+  575:             registry_updated = True
+  576: 
+  577:             row = {
+  578:                 "index": index,
+  579:                 "url": url,
+  580:                 "html_id": html_id,
+  581:                 "status": "succeeded",
+  582:                 "status_code": fetch.get("status_code"),
+  583:                 "html_length": fetch.get("html_length"),
+  584:                 "elapsed_seconds": fetch.get("elapsed_seconds"),
+  585:                 "attempts": fetch.get("attempts"),
+  586:                 "redirected": fetch.get("redirected"),
+  587:                 "final_url": fetch.get("final_url"),
+  588:                 "content_type": fetch.get("content_type"),
+  589:             }
+  590:             successes.append(row)
+  591:             ledger.append(row)
+  592: 
+  593:         else:
+  594:             failed += 1
+  595:             consecutive_failures += 1
+  596:             max_consecutive_failures = max(max_consecutive_failures, consecutive_failures)
+  597: 
+  598:             failure_record = _record_failure_v1(
+  599:                 registry=failure_registry,
+  600:                 url=url,
+  601:                 html_id=html_id,
+  602:                 status_code=int(fetch.get("status_code", 0) or 0),
+  603:                 error=str(fetch.get("error", "")),
+  604:                 final_url=str(fetch.get("final_url", "")),
+  605:                 content_type=str(fetch.get("content_type", "")),
+  606:             )
+  607:             registry_updated = True
+  608: 
+  609:             if failure_record.get("failure_type") == "permanent":
+  610:                 permanent_failures += 1
+  611:             else:
+  612:                 temporary_failures += 1
+  613: 
+  614:             if failure_record.get("excluded") is True:
+  615:                 newly_excluded += 1
+  616: 
+  617:             row = {
+  618:                 "index": index,
+  619:                 "url": url,
+  620:                 "html_id": html_id,
+  621:                 "status": "failed",
+  622:                 "status_code": fetch.get("status_code"),
+  623:                 "error": fetch.get("error") or "fetch_failed",
+  624:                 "elapsed_seconds": fetch.get("elapsed_seconds"),
+  625:                 "attempts": fetch.get("attempts"),
+  626:                 "redirected": fetch.get("redirected"),
+  627:                 "final_url": fetch.get("final_url"),
+  628:                 "content_type": fetch.get("content_type"),
+  629:             }
+  630:             errors.append(row)
+  631:             ledger.append(row)
+  632: 
+  633:         processed = attempted + skipped_existing + skipped_no_url
+  634: 
+  635:         if checkpoint_every and processed % int(checkpoint_every) == 0:
+  636:             _save_raw_html_store_v1(workspace_id, store)
+  637: 
+  638:             elapsed = max(0.001, time.time() - wall_start)
+  639:             rate = processed / elapsed
+  640:             remaining = max(0, selected_pages_count - processed)
+  641:             eta_seconds = remaining / rate if rate > 0 else None
+  642: 
+  643:             checkpoint = {
+  644:                 "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+  645:                 "workspace_id": workspace_id,
+  646:                 "started_at_utc": started_at,
+  647:                 "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+  648:                 "processed_selected_pages": processed,
+  649:                 "selected_pages_count": selected_pages_count,
+  650:                 "attempted": attempted,
+  651:                 "succeeded": succeeded,
+  652:                 "failed": failed,
+  653:                 "skipped_existing": skipped_existing,
+  654:                 "skipped_no_url": skipped_no_url,
+  655:                 "raw_html_store_count": len(store.get("pages", {}) or {}),
+  656:                 "http_status_distribution": http_status_distribution,
+  657:                 "content_type_distribution": content_type_distribution,
+  658:                 "redirect_count": redirect_count,
+  659:                 "retry_attempt_total": retry_attempt_total,
+  660:                 "max_consecutive_failures": max_consecutive_failures,
+  661:                 "last_index": index,
+  662:                 "last_url": url,
+  663:                 "elapsed_seconds": round(elapsed, 3),
+  664:                 "pages_per_second": round(rate, 4),
+  665:                 "eta_seconds": round(eta_seconds, 3) if eta_seconds is not None else None,
+  666:                 "recent_ledger": ledger[-25:],
+  667:             }
+  668:             _write_json_v1(_checkpoint_path_v1(workspace_id), checkpoint)
+  669: 
+  670:         if sleep_seconds:
+  671:             time.sleep(float(sleep_seconds))
+  672: 
+  673:     _save_raw_html_store_v1(workspace_id, store)
+  674: 
+  675:     elapsed = max(0.001, time.time() - wall_start)
+  676:     if registry_updated:
+  677:         _save_failure_registry_v1(workspace_id, failure_registry)
+  678: 
+  679:     raw_html_count = len(store.get("pages", {}) or {})
+  680: 
+  681:     average_fetch_seconds = (
+  682:         total_fetch_seconds / attempted
+  683:         if attempted > 0
+  684:         else 0.0
+  685:     )
+  686: 
+  687:     pages_per_minute = (
+  688:         (attempted + skipped_existing + skipped_no_url) / elapsed * 60.0
+  689:         if elapsed > 0
+  690:         else 0.0
+  691:     )
+  692: 
+  693:     certification = {
+  694:         "site_pages_count": site_pages_count,
+  695:         "selected_pages_count": selected_pages_count,
+  696:         "raw_html_store_count": raw_html_count,
+  697:         "selected_pages_processed_or_skipped": (
+  698:             attempted + skipped_existing + skipped_no_url
+  699:         ) == selected_pages_count,
+  700:         "zero_runtime_failures": failed == 0,
+  701:         "raw_html_complete_for_site_pages": raw_html_count >= site_pages_count,
+  702:         "ready_for_ucd_rebuild": raw_html_count > 0,
+  703:         "http_success_rate": round((succeeded / attempted) * 100.0, 2) if attempted else 0.0,
+  704:         "max_consecutive_failures": max_consecutive_failures,
+  705:         "failure_registry_enabled": True,
+  706:         "excluded_failures": already_excluded + newly_excluded,
+  707:         "engine_runtime_failures": temporary_failures,
+  708:         "expected_http_failures": permanent_failures,
+  709:     }
+  710: 
+  711:     report = {
+  712:         "ok": True,
+  713:         "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+  714:         "workspace_id": workspace_id,
+  715:         "dry_run": False,
+  716:         "resume": resume,
+  717:         "force": force,
+  718:         "started_at_utc": started_at,
+  719:         "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+  720:         "elapsed_seconds": round(elapsed, 3),
+  721:         "input": {
+  722:             "site_pages_count": site_pages_count,
+  723:             "selected_pages_count": selected_pages_count,
+  724:             "existing_raw_html_count_before": len(existing_ids) - succeeded,
+  725:             "missing_pages_selected": missing_pages_count,
+  726:             "missing_only_queue_enabled": bool(resume and not force),
+  727:             "batch_size": batch_size,
+  728:             "limit": limit,
+  729:         },
+  730:         "processing": {
+  731:             "attempted": attempted,
+  732:             "succeeded": succeeded,
+  733:             "failed": failed,
+  734:             "skipped_existing": skipped_existing,
+  735:             "skipped_no_url": skipped_no_url,
+  736:         },
+  737:         "stores": {
+  738:             "raw_html_store_count": raw_html_count,
+  739:             "raw_html_store_path": str(_raw_html_store_path_v1(workspace_id)),
+  740:         },
+  741:         "diagnostics": {
+  742:             "http_status_distribution": http_status_distribution,
+  743:             "content_type_distribution": content_type_distribution,
+  744:             "redirect_count": redirect_count,
+  745:             "retry_attempt_total": retry_attempt_total,
+  746:             "average_fetch_seconds": round(average_fetch_seconds, 3),
+  747:             "pages_per_minute": round(pages_per_minute, 3),
+  748:             "max_consecutive_failures": max_consecutive_failures,
+  749:             "temporary_failures": temporary_failures,
+  750:             "permanent_failures": permanent_failures,
+  751:             "newly_excluded": newly_excluded,
+  752:             "already_excluded": already_excluded,
+  753:             "failure_registry_count": len(failure_registry.get("failures", {}) or {}),
+  754:             "failure_registry_path": str(_failure_registry_path_v1(workspace_id)),
+  755:         },
+  756:         "certification": certification,
+  757:         "samples": {
+  758:             "successes": successes[:20],
+  759:             "errors": errors[:50],
+  760:         },
+  761:         "ledger_tail": ledger[-100:],
+  762:     }
+  763: 
+  764:     report_path = _report_path_v1(workspace_id)
+  765:     _write_json_v1(report_path, report)
+  766:     report["report_path"] = str(report_path)
+  767: 
+  768:     return report

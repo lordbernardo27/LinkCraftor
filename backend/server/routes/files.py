@@ -9,7 +9,7 @@ import re
 import html
 import traceback
 from backend.server.stores.rebuild_governance import queue_rebuild_event
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse
 
 import mammoth
 
-# âœ… Strict DOCX style-based H1 extraction (no fallbacks)
+# Strict DOCX style-based H1 extraction (no fallbacks)
 try:
     from docx import Document as DocxDocument  # python-docx
 except Exception:
@@ -35,6 +35,23 @@ DATA_DIR = BASE_DIR / "data"
 DOCS_DIR = DATA_DIR / "docs"
 
 TEXT_LIMIT = 200_000
+
+# Workspace-level files that must never be deleted by clear_session's
+# uploaded-file sweep. Uploaded documents are stored as "{doc_id}__{name}".
+_WS_PROTECTED_FILES = {"index.json", "work_index.json"}
+
+
+def _utc_now_iso() -> str:
+    """Timezone-aware UTC timestamp, formatted with a trailing 'Z'.
+
+    Replaces deprecated datetime.utcnow() (removed-path in Python 3.12+).
+    """
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_from_timestamp_iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
 
 # -------------------------
 # STRICT H1 extraction helpers (NO FALLBACKS)
@@ -233,7 +250,17 @@ def _derive_h1_for_index(
         return _strict_h1_from_html(preview_html or "")
 
     if e in (".md", ".markdown"):
-        return _strict_h1_from_md(preview_text or "")
+        # FIX: when markdown2 is installed, preview_text is tag-stripped HTML
+        # (no "# " lines survive), so the raw-markdown scan never matched and
+        # md H1s were silently lost. Try the raw-md scan first (covers the
+        # markdown2-missing fallback path), then the rendered <h1>.
+        h1, src, err = _strict_h1_from_md(preview_text or "")
+        if h1:
+            return h1, src, err
+        h1, src, err = _strict_h1_from_html(preview_html or "")
+        if h1:
+            return h1, "md:rendered_h1", err
+        return "", "", "no_strict_h1_found"
 
     if e == ".txt":
         return "", "", "txt_no_structural_h1"
@@ -470,13 +497,21 @@ def _store_and_index(
         stored_path=str(stored_path),
     )
 
+    # Normalization may rewrite the stored .docx; record the size actually
+    # on disk (plus the original upload size) so the index never lies.
+    try:
+        stored_bytes = int(stored_path.stat().st_size)
+    except Exception:
+        stored_bytes = len(raw)
+
     meta = {
         "doc_id": doc_id,
         "filename": safe_name,
         "ext": ext,
-        "bytes": len(raw),
+        "bytes": stored_bytes,
+        "original_bytes": len(raw),
         "content_type": file.content_type or "",
-        "uploaded_at": datetime.utcnow().isoformat() + "Z",
+        "uploaded_at": _utc_now_iso(),
         "stored_name": stored_name,
         "h1": h1,
         "h1_source": h1_source,
@@ -521,42 +556,15 @@ def _update_index_h1(
             rec["h1"] = h1
             rec["h1_source"] = h1_source
             rec["h1_error"] = h1_error
-            rec["h1_updated_at"] = datetime.utcnow().isoformat() + "Z"
+            rec["h1_updated_at"] = _utc_now_iso()
             _safe_write_index(idxp, items)
             return rec
     return None
 
 
-def _docs_index_path(workspace_id: str) -> Path:
-    ws = _ws(workspace_id)
-    return BASE_DIR / "data" / "docs" / ws / "index.json"
-
-
-def _append_to_docs_index(workspace_id: str, meta: Dict[str, Any]):
-    fp = _docs_index_path(workspace_id)
-    fp.parent.mkdir(parents=True, exist_ok=True)
-
-    rows = []
-    if fp.exists():
-        try:
-            rows = json.loads(fp.read_text(encoding="utf-8"))
-            if not isinstance(rows, list):
-                rows = []
-        except Exception:
-            rows = []
-
-    rows.append(
-        {
-            "doc_id": meta.get("doc_id"),
-            "stored_name": meta.get("stored_name"),
-            "filename": meta.get("filename"),
-            "h1": meta.get("h1"),
-            "h1_source": meta.get("h1_source"),
-            "uploaded_at": datetime.utcnow().isoformat() + "Z",
-        }
-    )
-
-    fp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+# NOTE: The former _docs_index_path/_append_to_docs_index helpers were removed.
+# They pointed at the exact same index.json as _index_path/_store_and_index and
+# would have produced duplicate entries if ever called.
 
 
 # -------------------------
@@ -574,7 +582,7 @@ def _default_active_target_set(workspace_id: str) -> Dict[str, Any]:
         "active_imported_urls": [],
         "active_live_domain_urls": [],
         "active_upload_ids": [],
-        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": _utc_now_iso(),
     }
 
 
@@ -594,7 +602,9 @@ def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
     if not isinstance(raw, dict):
         return obj
 
-        obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
+    # FIX: this line was previously indented inside the block above,
+    # making it unreachable dead code.
+    obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
     obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
     obj["active_draft_ids"] = list(raw.get("active_draft_ids") or [])
     obj["active_imported_urls"] = list(
@@ -611,6 +621,7 @@ def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
 
     obj["updated_at"] = str(raw.get("updated_at") or obj["updated_at"])
     return obj
+
 
 def _write_active_target_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str, Any]:
     ws_norm = _ws(workspace_id)
@@ -630,11 +641,15 @@ def _write_active_target_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str
         "active_imported_urls": list(obj.get("active_imported_urls") or []),
         "active_live_domain_urls": list(obj.get("active_live_domain_urls") or []),
         "active_upload_ids": upload_ids,
-        "updated_at": datetime.utcnow().isoformat() + "Z",
+        "updated_at": _utc_now_iso(),
     }
 
-    fp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    # Atomic write (was a plain write_text; a crash mid-write could corrupt the file).
+    tmp = fp.with_suffix(".tmp")
+    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, fp)
     return out
+
 
 def _merge_active_target_set(
     workspace_id: str,
@@ -696,6 +711,7 @@ def _merge_active_target_set(
 
     return _write_active_target_set(workspace_id, obj)
 
+
 # -------------------------
 # API
 # -------------------------
@@ -740,6 +756,7 @@ async def upload_file(
                 "workspace_id": ws_norm,
                 "doc_id": doc_id,
                 "stored_path": stored_path,
+                "stored_name": str(meta.get("stored_name") or ""),
                 "original_name": str(meta.get("filename") or ""),
                 "html": str(preview.get("html") or ""),
                 "text": str(preview.get("text") or ""),
@@ -810,20 +827,32 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
         except Exception as e:
             print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
 
-    # Clear actual uploaded workspace files for this session.
+    # Clear uploaded workspace document files for this session.
     # This prevents re-upload from being blocked as duplicate after Clear Session.
+    # FIX: only remove stored upload files ("{doc_id}__{name}"); previously this
+    # deleted EVERY file in the directory, wiping index.json and work_index.json.
     try:
         ws_dir = _ws_dir(ws_norm)
         if ws_dir.exists() and ws_dir.is_dir():
             for fp in ws_dir.iterdir():
                 try:
-                    if fp.is_file():
+                    if not fp.is_file():
+                        continue
+                    if fp.name in _WS_PROTECTED_FILES:
+                        continue
+                    if fp.suffix == ".tmp" or "__" in fp.name:
                         fp.unlink()
                         removed_files.append(str(fp))
                 except Exception as e:
                     print("[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]", str(fp), repr(e))
     except Exception as e:
         print("[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]", repr(e))
+
+    # Keep the document index consistent with the now-empty upload directory.
+    try:
+        _safe_write_index(_index_path(ws_norm), [])
+    except Exception as e:
+        print("[CLEAR_FILE_SESSION_INDEX_RESET_ERROR]", repr(e))
 
     try:
         active_obj = _load_active_target_set(ws_norm)
@@ -853,11 +882,14 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
             "upload_phrase_index": True,
             "upload_phrase_pool": True,
             "active_phrase_pool": True,
+            "document_index": True,
             "active_document_ids": True,
             "active_upload_ids": True,
         },
         "removed_files": removed_files,
         "preserved": [
+            "work_index",
+            "snapshots",
             "draft_intelligence",
             "imported_urls",
             "live_domain_intelligence",
@@ -912,7 +944,12 @@ def list_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
     return {"ok": True, "workspace_id": ws_norm, "h1s": h1s}
 
 
-@router.get("/api/site/target_pools/active_target_set")
+# FIX: this route previously lived on `router` (prefix /api/files) with a full
+# path of "/api/site/target_pools/active_target_set", producing the URL
+# /api/files/api/site/target_pools/active_target_set. It now lives on
+# legacy_router (prefix /api) so the effective URL is
+# /api/site/target_pools/active_target_set as intended.
+@legacy_router.get("/site/target_pools/active_target_set")
 def get_active_target_set(
     workspace_id: str | None = Query(None),
     workspaceId: str | None = Query(None),
@@ -942,12 +979,20 @@ async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
 
     existing = _load_active_target_set(workspace_id)
 
+    # FIX: use key-presence checks instead of `or` fallbacks. With `or`, a
+    # client sending an explicit empty list (to clear a category) silently
+    # fell back to the existing values and could never clear anything.
+    def _field(key: str) -> List[str]:
+        if key in payload:
+            return list(payload.get(key) or [])
+        return list(existing.get(key) or [])
+
     obj = {
-        "active_document_ids": list(payload.get("active_document_ids") or existing.get("active_document_ids") or []),
-        "active_draft_ids": list(payload.get("active_draft_ids") or existing.get("active_draft_ids") or []),
-        "active_imported_urls": list(payload.get("active_imported_urls") or existing.get("active_imported_urls") or []),
-        "active_live_domain_urls": list(payload.get("active_live_domain_urls") or existing.get("active_live_domain_urls") or []),
-        "active_upload_ids": list(payload.get("active_upload_ids") or existing.get("active_upload_ids") or []),
+        "active_document_ids": _field("active_document_ids"),
+        "active_draft_ids": _field("active_draft_ids"),
+        "active_imported_urls": _field("active_imported_urls"),
+        "active_live_domain_urls": _field("active_live_domain_urls"),
+        "active_upload_ids": _field("active_upload_ids"),
     }
 
     saved = _write_active_target_set(workspace_id, obj)
@@ -966,9 +1011,10 @@ async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
         print("[ACTIVE_PHRASE_SET_SAVE_ERROR]", repr(e))
     return {
         "ok": True,
-        "workspace_id": workspace_id,
+        "workspace_id": _ws(workspace_id),
         "active_target_set": saved,
     }
+
 
 @router.post("/reindex_h1s")
 def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
@@ -983,7 +1029,7 @@ def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
         if not p.is_file():
             continue
         name = p.name
-        if name == "index.json" or name == "work_index.json":
+        if name in _WS_PROTECTED_FILES:
             continue
         if name.endswith(".tmp"):
             continue
@@ -1018,10 +1064,10 @@ def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
         )
 
         try:
-            uploaded_at = datetime.utcfromtimestamp(p.stat().st_mtime).isoformat() + "Z"
+            uploaded_at = _utc_from_timestamp_iso(p.stat().st_mtime)
             size_bytes = int(p.stat().st_size)
         except Exception:
-            uploaded_at = datetime.utcnow().isoformat() + "Z"
+            uploaded_at = _utc_now_iso()
             size_bytes = len(raw)
 
         entries.append(
@@ -1128,7 +1174,7 @@ async def save_doc(
     if not html_in:
         raise HTTPException(status_code=400, detail="html is required")
 
-    ts_compact = datetime.utcnow().isoformat().replace(":", "").replace("-", "") + "Z"
+    ts_compact = _utc_now_iso().replace(":", "").replace("-", "")
     snap_name = f"{doc_id}__{ts_compact}.html"
     snap_path = _snapshot_dir(ws_norm) / snap_name
     _safe_write_text(snap_path, html_in)
@@ -1202,7 +1248,7 @@ def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: 
         "html": preview.get("html"),
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
-        "job_id": None, 
+        "job_id": None,
         "processing_status": "not_applicable",
         "h1": hit.get("h1") or "",
         "h1_source": hit.get("h1_source") or "",
@@ -1216,7 +1262,3 @@ async def legacy_upload(
     file: UploadFile = File(...),
 ):
     return await upload_file(workspace_id=workspace_id, file=file)
-
-
-
-

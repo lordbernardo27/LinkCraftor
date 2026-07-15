@@ -1,0 +1,1775 @@
+
+====================================================================================================
+FILE: backend\server\stores\clean_website_html_store.py
+====================================================================================================
+    1: ﻿from __future__ import annotations
+    2: 
+    3: import json
+    4: from datetime import datetime, timezone
+    5: from pathlib import Path
+    6: from typing import Any, Dict
+    7: 
+    8: from backend.server.stores.raw_website_html_store import load_raw_website_html_store_v1
+    9: from backend.server.stores.html_cleaning_engine import clean_raw_html_v1
+   10: 
+   11: DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
+   12: STORE_DIR = DATA_ROOT / "clean_website_html"
+   13: 
+   14: 
+   15: def _safe_workspace_id_v1(workspace_id: str) -> str:
+   16:     return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in str(workspace_id or "default"))
+   17: 
+   18: 
+   19: def _store_path_v1(workspace_id: str) -> Path:
+   20:     STORE_DIR.mkdir(parents=True, exist_ok=True)
+   21:     return STORE_DIR / f"clean_website_html_{_safe_workspace_id_v1(workspace_id)}.json"
+   22: 
+   23: 
+   24: def load_clean_website_html_store_v1(workspace_id: str) -> Dict[str, Any]:
+   25:     fp = _store_path_v1(workspace_id)
+   26:     if not fp.exists():
+   27:         return {
+   28:             "version": "clean_website_html_store_v1",
+   29:             "workspace_id": workspace_id,
+   30:             "updated_at_utc": None,
+   31:             "pages": {},
+   32:             "counts": {
+   33:                 "raw_pages": 0,
+   34:                 "cleaned_pages": 0,
+   35:                 "failed_pages": 0,
+   36:             },
+   37:             "failures": [],
+   38:         }
+   39:     return json.loads(fp.read_text(encoding="utf-8"))
+   40: 
+   41: 
+   42: def save_clean_website_html_store_v1(workspace_id: str, store: Dict[str, Any]) -> Path:
+   43:     fp = _store_path_v1(workspace_id)
+   44:     store["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+   45:     fp.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
+   46:     return fp
+   47: 
+   48: 
+   49: def build_clean_website_html_store_v1(
+   50:     *,
+   51:     workspace_id: str,
+   52:     limit: int | None = None,
+   53: ) -> Dict[str, Any]:
+   54:     raw_store = load_raw_website_html_store_v1(workspace_id)
+   55:     raw_pages = raw_store.get("pages") or {}
+   56: 
+   57:     store = {
+   58:         "version": "clean_website_html_store_v1",
+   59:         "workspace_id": workspace_id,
+   60:         "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+   61:         "source_store_version": raw_store.get("version"),
+   62:         "pages": {},
+   63:         "counts": {
+   64:             "raw_pages": len(raw_pages),
+   65:             "attempted_pages": 0,
+   66:             "cleaned_pages": 0,
+   67:             "failed_pages": 0,
+   68:         },
+   69:         "failures": [],
+   70:     }
+   71: 
+   72:     items = list(raw_pages.items())
+   73:     if limit is not None:
+   74:         items = items[: int(limit)]
+   75: 
+   76:     for html_id, rec in items:
+   77:         store["counts"]["attempted_pages"] += 1
+   78: 
+   79:         try:
+   80:             result = clean_raw_html_v1(
+   81:                 raw_html=rec.get("html", ""),
+   82:                 url=rec.get("url", ""),
+   83:                 title=rec.get("title", ""),
+   84:                 metadata={
+   85:                     "html_id": html_id,
+   86:                     "raw_html_length": rec.get("html_length"),
+   87:                     "status_code": rec.get("status_code"),
+   88:                     "content_type": rec.get("content_type"),
+   89:                     "source_stage": "raw_website_html_store",
+   90:                 },
+   91:             )
+   92: 
+   93:             clean_html = result.get("cleaned_html", "")
+   94: 
+   95:             if not clean_html:
+   96:                 raise ValueError("cleaned_html_empty")
+   97: 
+   98:             store["pages"][html_id] = {
+   99:                 "html_id": html_id,
+  100:                 "workspace_id": workspace_id,
+  101:                 "url": rec.get("url", ""),
+  102:                 "title": rec.get("title", ""),
+  103:                 "cleaned_html": clean_html,
+  104:                 "original_length": result.get("original_length"),
+  105:                 "cleaned_length": result.get("cleaned_length"),
+  106:                 "removed_block_count": result.get("removed_block_count"),
+  107:                 "cleaning_engine": result.get("engine"),
+  108:                 "cleaned_at_utc": datetime.now(timezone.utc).isoformat(),
+  109:                 "metadata": result.get("metadata", {}),
+  110:             }
+  111: 
+  112:             store["counts"]["cleaned_pages"] += 1
+  113: 
+  114:         except Exception as exc:
+  115:             store["counts"]["failed_pages"] += 1
+  116:             store["failures"].append({
+  117:                 "html_id": html_id,
+  118:                 "url": rec.get("url", ""),
+  119:                 "error": str(exc),
+  120:             })
+  121: 
+  122:     save_clean_website_html_store_v1(workspace_id, store)
+  123: 
+  124:     return {
+  125:         "ok": True,
+  126:         "workspace_id": workspace_id,
+  127:         "store_path": str(_store_path_v1(workspace_id)),
+  128:         "counts": store["counts"],
+  129:         "failure_sample": store["failures"][:10],
+  130:     }
+  131: 
+  132: 
+  133: def explain_clean_website_html_store_v1() -> Dict[str, Any]:
+  134:     return {
+  135:         "name": "Clean Website HTML Store",
+  136:         "version": "clean_website_html_store_v1",
+  137:         "pipeline_stage": "HTML Cleaner",
+  138:         "input": "raw_website_html_store_v1",
+  139:         "output": "clean_website_html_store_v1",
+  140:         "next_stage": "Article Extractor",
+  141:     }
+
+====================================================================================================
+FILE: backend\server\stores\raw_website_html_store.py
+====================================================================================================
+    1: ﻿from __future__ import annotations
+    2: 
+    3: import hashlib
+    4: import json
+    5: from datetime import datetime, timezone
+    6: from pathlib import Path
+    7: from typing import Any, Dict
+    8: 
+    9: 
+   10: DATA_ROOT = Path("backend/server/data")
+   11: STORE_DIR = DATA_ROOT / "raw_website_html"
+   12: 
+   13: 
+   14: def _safe_workspace_id_v1(workspace_id: str) -> str:
+   15:     return "".join(
+   16:         c if c.isalnum() or c in ("_", "-") else "_"
+   17:         for c in str(workspace_id or "default")
+   18:     )
+   19: 
+   20: 
+   21: def html_id_for_url_v1(url: str) -> str:
+   22:     digest = hashlib.sha256(str(url or "").strip().encode("utf-8")).hexdigest()[:16]
+   23:     return f"raw_html_{digest}"
+   24: 
+   25: 
+   26: def _store_path_v1(workspace_id: str) -> Path:
+   27:     STORE_DIR.mkdir(parents=True, exist_ok=True)
+   28:     return STORE_DIR / f"raw_website_html_{_safe_workspace_id_v1(workspace_id)}.json"
+   29: 
+   30: 
+   31: def load_raw_website_html_store_v1(workspace_id: str) -> Dict[str, Any]:
+   32:     path = _store_path_v1(workspace_id)
+   33: 
+   34:     if not path.exists():
+   35:         return {
+   36:             "version": "raw_website_html_store_v1",
+   37:             "workspace_id": workspace_id,
+   38:             "pages": {},
+   39:             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+   40:         }
+   41: 
+   42:     try:
+   43:         return json.loads(path.read_text(encoding="utf-8"))
+   44:     except Exception:
+   45:         return {
+   46:             "version": "raw_website_html_store_v1",
+   47:             "workspace_id": workspace_id,
+   48:             "pages": {},
+   49:             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+   50:             "recovered_from_error": True,
+   51:         }
+   52: 
+   53: 
+   54: def save_raw_website_html_store_v1(
+   55:     workspace_id: str,
+   56:     store: Dict[str, Any],
+   57: ) -> Path:
+   58:     path = _store_path_v1(workspace_id)
+   59:     store["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
+   60:     path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
+   61:     return path
+   62: 
+   63: 
+   64: def upsert_raw_website_html_v1(
+   65:     *,
+   66:     workspace_id: str,
+   67:     url: str,
+   68:     html: str,
+   69:     title: str = "",
+   70:     status_code: int | None = None,
+   71:     content_type: str = "",
+   72:     metadata: Dict[str, Any] | None = None,
+   73: ) -> Dict[str, Any]:
+   74:     store = load_raw_website_html_store_v1(workspace_id)
+   75: 
+   76:     html_id = html_id_for_url_v1(url)
+   77:     now = datetime.now(timezone.utc).isoformat()
+   78: 
+   79:     record = {
+   80:         "html_id": html_id,
+   81:         "workspace_id": workspace_id,
+   82:         "url": url,
+   83:         "title": title,
+   84:         "html": str(html or ""),
+   85:         "html_length": len(str(html or "")),
+   86:         "status_code": status_code,
+   87:         "content_type": content_type,
+   88:         "metadata": metadata or {},
+   89:         "captured_at_utc": now,
+   90:         "source_type": "raw_website_html",
+   91:     }
+   92: 
+   93:     store.setdefault("pages", {})
+   94:     store["pages"][html_id] = record
+   95: 
+   96:     save_raw_website_html_store_v1(workspace_id, store)
+   97: 
+   98:     return record
+   99: 
+  100: 
+  101: def get_raw_website_html_v1(
+  102:     *,
+  103:     workspace_id: str,
+  104:     url: str | None = None,
+  105:     html_id: str | None = None,
+  106: ) -> Dict[str, Any] | None:
+  107:     store = load_raw_website_html_store_v1(workspace_id)
+  108: 
+  109:     if html_id:
+  110:         return store.get("pages", {}).get(html_id)
+  111: 
+  112:     if url:
+  113:         return store.get("pages", {}).get(html_id_for_url_v1(url))
+  114: 
+  115:     return None
+
+====================================================================================================
+FILE: backend\server\stores\website_source_pipeline_orchestrator.py
+====================================================================================================
+    1: from __future__ import annotations
+    2: 
+    3: from typing import Any, Dict
+    4: 
+    5: from backend.server.stores.raw_website_html_store import upsert_raw_website_html_v1
+    6: from backend.server.stores.html_cleaning_engine import clean_raw_html_v1
+    7: from backend.server.stores.main_content_extraction_engine import extract_main_content_from_html_v1
+    8: from backend.server.stores.website_article_integrity_validator import build_website_article_integrity_result_v1
+    9: from backend.server.stores.article_validation_engine import validate_article_v1
+   10: from backend.server.stores.website_unified_content_store import upsert_website_unified_content_document_v1
+   11: from backend.server.stores.universal_unified_content_document_convergence import build_and_write_uucd_from_wuc_v1
+   12: 
+   13: 
+   14: def process_website_html_to_ucd_v1(
+   15:     *,
+   16:     workspace_id: str,
+   17:     url: str,
+   18:     html: str,
+   19:     title: str = "",
+   20:     h1: str = "",
+   21:     status_code: int | None = None,
+   22:     content_type: str = "",
+   23:     metadata: Dict[str, Any] | None = None,
+   24: ) -> Dict[str, Any]:
+   25:     """
+   26:     Website-source-only orchestrator.
+   27: 
+   28:     This is the permanent website ingestion chain:
+   29: 
+   30:     Raw HTML Store
+   31:       -> Main Content Extraction
+   32:       -> Article Cleaning + Boilerplate Detection
+   33:       -> Article Validation
+   34:       -> Website Unified Content Store
+   35:       -> Unified Content Document Store
+   36: 
+   37:     Upload documents do not enter this pipeline.
+   38:     """
+   39: 
+   40:     metadata = metadata or {}
+   41: 
+   42:     raw_record = upsert_raw_website_html_v1(
+   43:         workspace_id=workspace_id,
+   44:         url=url,
+   45:         html=html,
+   46:         title=title,
+   47:         status_code=status_code,
+   48:         content_type=content_type,
+   49:         metadata={
+   50:             **metadata,
+   51:             "source_pipeline": "website_source_pipeline_orchestrator_v1",
+   52:             "stage": "raw_html_store",
+   53:         },
+   54:     )
+   55: 
+   56:     html_cleaning = clean_raw_html_v1(
+   57:         raw_html=html,
+   58:         url=url,
+   59:         title=title,
+   60:         metadata={
+   61:             **metadata,
+   62:             "html_id": raw_record.get("html_id"),
+   63:             "source_pipeline": "website_source_pipeline_orchestrator_v1",
+   64:             "stage": "html_cleaner",
+   65:         },
+   66:     )
+   67: 
+   68:     extraction = extract_main_content_from_html_v1(
+   69:         html_text=html_cleaning.get("cleaned_html", ""),
+   70:         url=url,
+   71:         title=title,
+   72:         metadata={
+   73:             **metadata,
+   74:             "html_id": raw_record.get("html_id"),
+   75:             "html_cleaner": {
+   76:                 "engine": html_cleaning.get("engine"),
+   77:                 "original_length": html_cleaning.get("original_length"),
+   78:                 "cleaned_length": html_cleaning.get("cleaned_length"),
+   79:                 "removed_block_count": html_cleaning.get("removed_block_count"),
+   80:             },
+   81:             "source_pipeline": "website_source_pipeline_orchestrator_v1",
+   82:             "stage": "article_extractor",
+   83:         },
+   84:     )
+   85: 
+   86:     cleaning = build_website_article_integrity_result_v1(
+   87:         raw_main_html=html,
+   88:         raw_article_text=extraction.get("main_content", ""),
+   89:         headings=extraction.get("headings", []),
+   90:         title=title or h1 or extraction.get("title", ""),
+   91:         url=url,
+   92:         metadata={
+   93:             **metadata,
+   94:             "html_id": raw_record.get("html_id"),
+   95:             "extractor_version": extraction.get("extractor_version"),
+   96:             "source_pipeline": "website_source_pipeline_orchestrator_v1",
+   97:             "stage": "article_integrity_validation",
+   98:         },
+   99:     )
+  100: 
+  101:     validation = validate_article_v1(
+  102:         cleaned_article_text=cleaning.get("cleaned_article_text", ""),
+  103:         title=title or h1 or extraction.get("title", ""),
+  104:         headings=cleaning.get("headings", []),
+  105:         removed_sections=cleaning.get("removed_sections", []),
+  106:         metadata={
+  107:             **metadata,
+  108:             "html_id": raw_record.get("html_id"),
+  109:             "source_pipeline": "website_source_pipeline_orchestrator_v1",
+  110:             "stage": "article_validation",
+  111:         },
+  112:     )
+  113: 
+  114:     website_doc = upsert_website_unified_content_document_v1(
+  115:         workspace_id=workspace_id,
+  116:         url=url,
+  117:         title=title or h1 or extraction.get("title", ""),
+  118:         h1=h1,
+  119:         article_body=cleaning.get("cleaned_article_text", ""),
+  120:         headings=cleaning.get("headings", []),
+  121:         metadata={
+  122:             **metadata,
+  123:             "html_id": raw_record.get("html_id"),
+  124:             "raw_html_length": raw_record.get("html_length"),
+  125:             "source_pipeline": "website_source_pipeline_orchestrator_v1",
+  126:             "stage": "website_unified_content_store",
+  127:             "html_cleaning": {
+  128:                 "engine": html_cleaning.get("engine"),
+  129:                 "original_length": html_cleaning.get("original_length"),
+  130:                 "cleaned_length": html_cleaning.get("cleaned_length"),
+  131:                 "removed_block_count": html_cleaning.get("removed_block_count"),
+  132:             },
+  133:             "extraction": {
+  134:                 "selected_tag": extraction.get("selected_tag"),
+  135:                 "word_count": extraction.get("word_count"),
+  136:                 "content_length": extraction.get("content_length"),
+  137:                 "candidate_count": extraction.get("candidate_count"),
+  138:             },
+  139:             "cleaning_statistics": cleaning.get("statistics", {}),
+  140:             "removed_sections": cleaning.get("removed_sections", []),
+  141:             "validation": validation,
+  142:         },
+  143:         quality={
+  144:             "validation_passed": validation.get("passed"),
+  145:             "quality_grade": validation.get("quality_grade"),
+  146:             "validation_score": validation.get("validation_score"),
+  147:             "warnings": validation.get("warnings", []),
+  148:             "rejection_reasons": validation.get("rejection_reasons", []),
+  149:         },
+  150:         semantic_features={
+  151:             "semantic_ready": bool(validation.get("eligible_for_unified_content_document", False)),
+  152:             "source_pipeline": "website_html_to_validated_ucd",
+  153:             "source_type": "website",
+  154:         },
+  155:     )
+  156: 
+  157:     uucd_document = None
+  158:     uucd_error = None
+  159:     try:
+  160:         uucd_result = build_and_write_uucd_from_wuc_v1(website_doc)
+  161:         uucd_document = uucd_result.get("uucd")
+  162:     except Exception as exc:
+  163:         uucd_error = str(exc)
+  164: 
+  165:     return {
+  166:         "ok": True,
+  167:         "workspace_id": workspace_id,
+  168:         "url": url,
+  169:         "pipeline": "website_source_pipeline_orchestrator_v1",
+  170:         "source_boundary": {
+  171:             "source_type": "website",
+  172:             "upload_document_pipeline_used": False,
+  173:             "merges_at": "universal_unified_content_document",
+  174:         },
+  175:         "raw_record": raw_record,
+  176:         "html_cleaning": html_cleaning,
+  177:         "extraction": extraction,
+  178:         "cleaning": cleaning,
+  179:         "validation": validation,
+  180:         "website_unified_content_document": website_doc,
+  181:         "universal_unified_content_document": uucd_document,
+  182:         "uucd_error": uucd_error,
+  183:         "status": {
+  184:             "raw_html_stored": True,
+  185:             "html_cleaned": bool(html_cleaning.get("cleaned_html")),
+  186:             "main_content_extracted": bool(extraction.get("main_content")),
+  187:             "article_cleaned": bool(cleaning.get("cleaned_article_text")),
+  188:             "article_validated": True,
+  189:             "website_content_stored": True,
+  190:             "uucd_stored": uucd_document is not None and not uucd_error,
+  191:         },
+  192:     }
+  193: 
+  194: 
+  195: def explain_website_source_pipeline_orchestrator_v1() -> Dict[str, Any]:
+  196:     return {
+  197:         "name": "Website Source Pipeline Orchestrator",
+  198:         "version": "website_source_pipeline_orchestrator_v1",
+  199:         "source_type": "website_only",
+  200:         "pipeline": [
+  201:             "Raw HTML Store",
+  202:             "HTML Cleaner",
+  203:             "Article Extractor",
+  204:             "Article Cleaning Pipeline",
+  205:             "Boilerplate Detection",
+  206:             "Article Validation",
+  207:             "Website Unified Content Store",
+  208:             "Universal Unified Content Document Store",
+  209:         ],
+  210:         "does_not_process": [
+  211:             "uploaded documents",
+  212:             "PDF uploads",
+  213:             "DOCX uploads",
+  214:             "TXT uploads",
+  215:         ],
+  216:         "merge_point": "Universal Unified Content Document",
+  217:     }
+  218: 
+  219: 
+
+====================================================================================================
+FILE: backend\server\workers\website_unified_content_batch_worker.py
+====================================================================================================
+    1: from __future__ import annotations
+    2: 
+    3: import json
+    4: import html
+    5: import re
+    6: from pathlib import Path
+    7: from typing import Any, Dict, List
+    8: 
+    9: from backend.server.stores.main_content_extraction_engine import (
+   10:     extract_main_content_from_html_v1,
+   11: )
+   12: from backend.server.stores.website_article_integrity_validator import (
+   13:     build_website_article_integrity_result_v1,
+   14: )
+   15: from backend.server.stores.article_validation_engine import (
+   16:     validate_article_v1,
+   17: )
+   18: from backend.server.stores.website_unified_content_store import (
+   19:     upsert_website_unified_content_document_v1,
+   20: )
+   21: from backend.server.stores.universal_unified_content_document_convergence import (
+   22:     build_and_write_uucd_from_wuc_v1,
+   23: )
+   24: 
+   25: 
+   26: DATA_ROOT = Path("backend/server/data")
+   27: 
+   28: 
+   29: def _plain_html_text_v1(value: str) -> str:
+   30:     value = re.sub(r"(?is)<[^>]+>", " ", str(value or ""))
+   31:     value = html.unescape(value)
+   32:     return re.sub(r"\s+", " ", value).strip()
+   33: 
+   34: 
+   35: def _extract_title_from_html_v1(html_text: str) -> str:
+   36:     match = re.search(
+   37:         r"(?is)<title\b[^>]*>(.*?)</title>",
+   38:         str(html_text or ""),
+   39:     )
+   40:     return _plain_html_text_v1(match.group(1)) if match else ""
+   41: 
+   42: 
+   43: def _extract_h1_from_html_v1(html_text: str) -> str:
+   44:     match = re.search(
+   45:         r"(?is)<h1\b[^>]*>(.*?)</h1>",
+   46:         str(html_text or ""),
+   47:     )
+   48:     return _plain_html_text_v1(match.group(1)) if match else ""
+   49: 
+   50: 
+   51: def _safe_workspace_id_v1(workspace_id: str) -> str:
+   52:     return "".join(
+   53:         c if c.isalnum() or c in ("_", "-") else "_"
+   54:         for c in str(workspace_id or "default")
+   55:     )
+   56: 
+   57: 
+   58: def _clean_store_path_v1(workspace_id: str) -> Path:
+   59:     ws = _safe_workspace_id_v1(workspace_id)
+   60:     return (
+   61:         DATA_ROOT
+   62:         / "clean_website_html"
+   63:         / f"clean_website_html_{ws}.json"
+   64:     )
+   65: 
+   66: 
+   67: def run_website_unified_content_batch_v1(
+   68:     *,
+   69:     workspace_id: str,
+   70:     assigned_html_ids: List[str],
+   71:     batch_id: str = "",
+   72:     batch_index: int | None = None,
+   73:     batch_count: int | None = None,
+   74: ) -> Dict[str, Any]:
+   75:     """
+   76:     Converts assigned Clean HTML records into:
+   77:     - Website Unified Content
+   78:     - UUCD
+   79: 
+   80:     Boundary:
+   81:     - Does not crawl.
+   82:     - Does not rewrite Raw HTML Store.
+   83:     - Does not rebuild Clean HTML Store.
+   84:     """
+   85: 
+   86:     path = _clean_store_path_v1(workspace_id)
+   87: 
+   88:     if not path.exists():
+   89:         raise FileNotFoundError(f"Clean HTML Store not found: {path}")
+   90: 
+   91:     clean_store = json.loads(path.read_text(encoding="utf-8"))
+   92:     clean_pages = clean_store.get("pages") or {}
+   93: 
+   94:     attempted = 0
+   95:     succeeded = 0
+   96:     failed = 0
+   97:     missing_clean_record = 0
+   98:     extraction_failed = 0
+   99:     article_cleaning_failed = 0
+  100:     website_store_failed = 0
+  101:     uucd_failed = 0
+  102: 
+  103:     successes: List[Dict[str, Any]] = []
+  104:     errors: List[Dict[str, Any]] = []
+  105: 
+  106:     for html_id in assigned_html_ids:
+  107:         attempted += 1
+  108:         record = clean_pages.get(html_id)
+  109: 
+  110:         if not isinstance(record, dict):
+  111:             missing_clean_record += 1
+  112:             failed += 1
+  113:             errors.append({
+  114:                 "html_id": html_id,
+  115:                 "error_type": "missing_clean_html_record",
+  116:             })
+  117:             continue
+  118: 
+  119:         url = str(record.get("url") or "").strip()
+  120:         cleaned_html = str(record.get("cleaned_html") or "")
+  121: 
+  122:         html_title = _extract_title_from_html_v1(cleaned_html)
+  123:         html_h1 = _extract_h1_from_html_v1(cleaned_html)
+  124: 
+  125:         title = str(
+  126:             record.get("title")
+  127:             or html_title
+  128:             or html_h1
+  129:             or ""
+  130:         ).strip()
+  131: 
+  132:         if not url or not cleaned_html.strip():
+  133:             missing_clean_record += 1
+  134:             failed += 1
+  135:             errors.append({
+  136:                 "html_id": html_id,
+  137:                 "url": url,
+  138:                 "error_type": "empty_clean_html_or_url",
+  139:             })
+  140:             continue
+  141: 
+  142:         try:
+  143:             extraction = extract_main_content_from_html_v1(
+  144:                 html_text=cleaned_html,
+  145:                 url=url,
+  146:                 title=title,
+  147:                 metadata={
+  148:                     "html_id": html_id,
+  149:                     "source_stage": "clean_website_html_store",
+  150:                     "batch_id": batch_id,
+  151:                     "batch_index": batch_index,
+  152:                     "batch_count": batch_count,
+  153:                 },
+  154:             )
+  155: 
+  156:             main_content = str(extraction.get("main_content") or "")
+  157:             if not main_content.strip():
+  158:                 extraction_failed += 1
+  159:                 failed += 1
+  160:                 errors.append({
+  161:                     "html_id": html_id,
+  162:                     "url": url,
+  163:                     "error_type": "main_content_empty",
+  164:                 })
+  165:                 continue
+  166: 
+  167:             cleaning = build_website_article_integrity_result_v1(
+  168:                 raw_main_html=cleaned_html,
+  169:                 raw_article_text=main_content,
+  170:                 headings=extraction.get("headings", []),
+  171:                 title=title or extraction.get("title", ""),
+  172:                 url=url,
+  173:                 metadata={
+  174:                     "html_id": html_id,
+  175:                     "source_stage": "website_unified_content_batch_worker",
+  176:                     "batch_id": batch_id,
+  177:                     "batch_index": batch_index,
+  178:                     "batch_count": batch_count,
+  179:                 },
+  180:             )
+  181: 
+  182:             article_text = str(cleaning.get("cleaned_article_text") or "")
+  183:             if not article_text.strip():
+  184:                 article_cleaning_failed += 1
+  185:                 failed += 1
+  186:                 errors.append({
+  187:                     "html_id": html_id,
+  188:                     "url": url,
+  189:                     "error_type": "cleaned_article_text_empty",
+  190:                 })
+  191:                 continue
+  192: 
+  193:             validation = validate_article_v1(
+  194:                 cleaned_article_text=article_text,
+  195:                 title=title or extraction.get("title", ""),
+  196:                 headings=cleaning.get("headings", []),
+  197:                 removed_sections=cleaning.get("removed_sections", []),
+  198:                 metadata={
+  199:                     "html_id": html_id,
+  200:                     "source_stage": "website_unified_content_batch_worker",
+  201:                     "batch_id": batch_id,
+  202:                     "batch_index": batch_index,
+  203:                     "batch_count": batch_count,
+  204:                 },
+  205:             )
+  206: 
+  207:             try:
+  208:                 website_doc = upsert_website_unified_content_document_v1(
+  209:                     workspace_id=workspace_id,
+  210:                     url=url,
+  211:                     title=title or extraction.get("title", ""),
+  212:                     h1=str(extraction.get("h1") or html_h1 or ""),
+  213:                     article_body=article_text,
+  214:                         headings=cleaning.get("headings", []),
+  215:                     metadata={
+  216:                         "html_id": html_id,
+  217:                         "source_stage": "clean_website_html_store",
+  218:                         "source_pipeline": "website_unified_content_batch_worker_v1",
+  219:                         "batch_id": batch_id,
+  220:                         "batch_index": batch_index,
+  221:                         "batch_count": batch_count,
+  222:                         "extraction": {
+  223:                             "selected_tag": extraction.get("selected_tag"),
+  224:                             "word_count": extraction.get("word_count"),
+  225:                             "content_length": extraction.get("content_length"),
+  226:                             "candidate_count": extraction.get("candidate_count"),
+  227:                         },
+  228:                         "cleaning_statistics": cleaning.get("statistics", {}),
+  229:                         "removed_sections": cleaning.get("removed_sections", []),
+  230:                         "validation": validation,
+  231:                     },
+  232:                     quality={
+  233:                         "validation_passed": validation.get("passed"),
+  234:                         "quality_grade": validation.get("quality_grade"),
+  235:                         "validation_score": validation.get("validation_score"),
+  236:                         "warnings": validation.get("warnings", []),
+  237:                         "rejection_reasons": validation.get("rejection_reasons", []),
+  238:                     },
+  239:                     semantic_features={
+  240:                         "semantic_ready": bool(
+  241:                             validation.get(
+  242:                                 "eligible_for_unified_content_document",
+  243:                                 False,
+  244:                             )
+  245:                         ),
+  246:                         "source_pipeline": (
+  247:                             "website_unified_content_batch_worker_v1"
+  248:                         ),
+  249:                         "source_type": "website",
+  250:                     },
+  251:                 )
+  252:             except Exception as exc:
+  253:                 website_store_failed += 1
+  254:                 failed += 1
+  255:                 errors.append({
+  256:                     "html_id": html_id,
+  257:                     "url": url,
+  258:                     "error_type": "website_store_write_failed",
+  259:                     "error": str(exc),
+  260:                 })
+  261:                 continue
+  262: 
+  263:             try:
+  264:                 uucd_result = build_and_write_uucd_from_wuc_v1(website_doc)
+  265:             except Exception as exc:
+  266:                 uucd_failed += 1
+  267:                 failed += 1
+  268:                 errors.append({
+  269:                     "html_id": html_id,
+  270:                     "url": url,
+  271:                     "error_type": "uucd_write_failed",
+  272:                     "error": str(exc),
+  273:                     "website_content_id": website_doc.get("content_id"),
+  274:                 })
+  275:                 continue
+  276: 
+  277:             succeeded += 1
+  278:             successes.append({
+  279:                 "html_id": html_id,
+  280:                 "url": url,
+  281:                 "website_content_id": website_doc.get("content_id"),
+  282:                 "uucd_path": uucd_result.get("uucd_path"),
+  283:                 "semantic_ready": bool(
+  284:                     website_doc.get("semantic_features", {}).get(
+  285:                         "semantic_ready"
+  286:                     )
+  287:                 ),
+  288:             })
+  289: 
+  290:         except Exception as exc:
+  291:             failed += 1
+  292:             errors.append({
+  293:                 "html_id": html_id,
+  294:                 "url": url,
+  295:                 "error_type": "unexpected_processing_error",
+  296:                 "error": f"{type(exc).__name__}: {exc}",
+  297:             })
+  298: 
+  299:     return {
+  300:         "ok": failed == 0,
+  301:         "workspace_id": workspace_id,
+  302:         "stage": "website_unified_content_and_uucd",
+  303:         "batch_id": batch_id,
+  304:         "batch_index": batch_index,
+  305:         "batch_count": batch_count,
+  306:         "processing": {
+  307:             "assigned": len(assigned_html_ids),
+  308:             "attempted": attempted,
+  309:             "succeeded": succeeded,
+  310:             "failed": failed,
+  311:             "missing_clean_record": missing_clean_record,
+  312:             "extraction_failed": extraction_failed,
+  313:             "article_cleaning_failed": article_cleaning_failed,
+  314:             "website_store_failed": website_store_failed,
+  315:             "uucd_failed": uucd_failed,
+  316:         },
+  317:         "success_sample": successes[:10],
+  318:         "error_sample": errors[:25],
+  319:     }
+  320: 
+
+====================================================================================================
+FILE: backend\server\workers\website_unified_content_orchestrator.py
+====================================================================================================
+    1: ﻿from __future__ import annotations
+    2: 
+    3: import hashlib
+    4: import json
+    5: from pathlib import Path
+    6: from typing import Any, Dict, List, Set
+    7: 
+    8: from backend.server.jobs.universal_knowledge_orchestrator import (
+    9:     create_universal_knowledge_job,
+   10: )
+   11: 
+   12: 
+   13: DATA_ROOT = Path("backend/server/data")
+   14: 
+   15: 
+   16: def _safe_workspace_id_v1(workspace_id: str) -> str:
+   17:     return "".join(
+   18:         c if c.isalnum() or c in ("_", "-") else "_"
+   19:         for c in str(workspace_id or "default")
+   20:     )
+   21: 
+   22: 
+   23: def _clean_store_path_v1(workspace_id: str) -> Path:
+   24:     ws = _safe_workspace_id_v1(workspace_id)
+   25:     return (
+   26:         DATA_ROOT
+   27:         / "clean_website_html"
+   28:         / f"clean_website_html_{ws}.json"
+   29:     )
+   30: 
+   31: 
+   32: def _website_store_path_v1(workspace_id: str) -> Path:
+   33:     ws = _safe_workspace_id_v1(workspace_id)
+   34:     return (
+   35:         DATA_ROOT
+   36:         / "website_unified_content"
+   37:         / f"website_unified_content_{ws}.json"
+   38:     )
+   39: 
+   40: 
+   41: def _content_id_for_url_v1(url: str) -> str:
+   42:     digest = hashlib.sha256(
+   43:         str(url or "").strip().encode("utf-8")
+   44:     ).hexdigest()[:16]
+   45:     return f"web_content_{digest}"
+   46: 
+   47: 
+   48: def _existing_content_ids_v1(workspace_id: str) -> Set[str]:
+   49:     path = _website_store_path_v1(workspace_id)
+   50: 
+   51:     if not path.exists():
+   52:         return set()
+   53: 
+   54:     try:
+   55:         data = json.loads(path.read_text(encoding="utf-8"))
+   56:     except Exception:
+   57:         return set()
+   58: 
+   59:     documents = data.get("documents") or {}
+   60:     return set(documents.keys()) if isinstance(documents, dict) else set()
+   61: 
+   62: 
+   63: def create_website_unified_content_batch_jobs_v1(
+   64:     *,
+   65:     workspace_id: str,
+   66:     batch_size: int = 50,
+   67:     max_batches: int | None = None,
+   68: ) -> Dict[str, Any]:
+   69:     """
+   70:     Fan-out orchestrator:
+   71: 
+   72:     Clean HTML Store
+   73:     → Website Unified Content batch jobs
+   74:     → UUCD batch jobs
+   75:     """
+   76: 
+   77:     clean_path = _clean_store_path_v1(workspace_id)
+   78: 
+   79:     if not clean_path.exists():
+   80:         raise FileNotFoundError(
+   81:             f"Clean HTML Store not found: {clean_path}"
+   82:         )
+   83: 
+   84:     clean_store = json.loads(clean_path.read_text(encoding="utf-8"))
+   85:     clean_pages = clean_store.get("pages") or {}
+   86: 
+   87:     existing_content_ids = _existing_content_ids_v1(workspace_id)
+   88: 
+   89:     remaining_html_ids: List[str] = []
+   90: 
+   91:     for html_id, record in clean_pages.items():
+   92:         if not isinstance(record, dict):
+   93:             continue
+   94: 
+   95:         url = str(record.get("url") or "").strip()
+   96:         if not url:
+   97:             continue
+   98: 
+   99:         content_id = _content_id_for_url_v1(url)
+  100: 
+  101:         if content_id not in existing_content_ids:
+  102:             remaining_html_ids.append(html_id)
+  103: 
+  104:     batches = [
+  105:         remaining_html_ids[i:i + int(batch_size)]
+  106:         for i in range(0, len(remaining_html_ids), int(batch_size))
+  107:     ]
+  108: 
+  109:     if max_batches is not None:
+  110:         batches = batches[: int(max_batches)]
+  111: 
+  112:     batch_group_id = (
+  113:         "website_content_batch_"
+  114:         + hashlib.sha256(
+  115:             (
+  116:                 f"{workspace_id}:"
+  117:                 f"{len(clean_pages)}:"
+  118:                 f"{len(existing_content_ids)}:"
+  119:                 f"{len(remaining_html_ids)}"
+  120:             ).encode("utf-8")
+  121:         ).hexdigest()[:16]
+  122:     )
+  123: 
+  124:     created_jobs = []
+  125: 
+  126:     for index, html_ids in enumerate(batches, start=1):
+  127:         job = create_universal_knowledge_job(
+  128:             workspace_id=workspace_id,
+  129:             job_type="build_website_unified_content",
+  130:             payload={
+  131:                 "workspace_id": workspace_id,
+  132:                 "mode": "assigned_clean_html_ids",
+  133:                 "assigned_html_ids": html_ids,
+  134:                 "assigned_count": len(html_ids),
+  135:                 "batch_index": index,
+  136:                 "batch_count": len(batches),
+  137:                 "batch_id": batch_group_id,
+  138:                 "trigger": "website_content_fanout_orchestrator",
+  139:             },
+  140:             batch_id=batch_group_id,
+  141:         )
+  142: 
+  143:         created_jobs.append({
+  144:             "job_id": job.get("job_id"),
+  145:             "batch_index": index,
+  146:             "assigned_count": len(html_ids),
+  147:         })
+  148: 
+  149:     return {
+  150:         "ok": True,
+  151:         "workspace_id": workspace_id,
+  152:         "clean_html_count": len(clean_pages),
+  153:         "existing_website_content_count": len(existing_content_ids),
+  154:         "remaining_website_content_count": len(remaining_html_ids),
+  155:         "batch_size": int(batch_size),
+  156:         "batch_count": len(batches),
+  157:         "created_job_count": len(created_jobs),
+  158:         "batch_group_id": batch_group_id,
+  159:         "created_jobs": created_jobs[:100],
+  160:     }
+
+====================================================================================================
+FILE: backend\server\runtime\automatic_canonical_rebuild_runner.py
+====================================================================================================
+    1: from __future__ import annotations
+    2: 
+    3: import json
+    4: from pathlib import Path
+    5: from typing import Any, Dict, List
+    6: 
+    7: from backend.server.jobs.universal_knowledge_orchestrator import create_universal_knowledge_job
+    8: from backend.server.stores.universal_article_body_store import build_universal_article_body_store_from_uucd_payload_v2
+    9: from backend.server.stores.uucd_body_store_certification import certify_uucd_body_store_v1
+   10: from backend.server.workers.universal_knowledge_worker import execute_universal_knowledge_job_v1
+   11: 
+   12: 
+   13: ROOT = Path("backend/server/data")
+   14: DOCS_DIR = ROOT / "docs"
+   15: RAW_HTML_DIR = ROOT / "raw_website_html"
+   16: CLEAN_HTML_DIR = ROOT / "clean_website_html"
+   17: UDUC_DIR = ROOT / "uploaded_document_unified_content"
+   18: UUCD_DIR = ROOT / "universal_unified_content_documents"
+   19: 
+   20: 
+   21: def read_text(path: Path) -> str:
+   22:     return path.read_text(encoding="utf-8", errors="ignore")
+   23: 
+   24: 
+   25: def write_json(path: Path, data: Any) -> Path:
+   26:     path.parent.mkdir(parents=True, exist_ok=True)
+   27:     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+   28:     return path
+   29: 
+   30: 
+   31: def safe_id(value: str) -> str:
+   32:     return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in str(value or "unknown"))[:120]
+   33: 
+   34: 
+   35: def collect_uploaded_documents(workspace_id: str) -> List[Dict[str, Any]]:
+   36:     docs: List[Dict[str, Any]] = []
+   37: 
+   38:     if not DOCS_DIR.exists():
+   39:         return docs
+   40: 
+   41:     allowed = {".txt", ".md", ".html", ".htm", ".json"}
+   42: 
+   43:     for fp in DOCS_DIR.rglob("*"):
+   44:         if not fp.is_file() or fp.suffix.lower() not in allowed:
+   45:             continue
+   46: 
+   47:         text = read_text(fp).strip()
+   48:         if not text:
+   49:             continue
+   50: 
+   51:         doc_id = safe_id(fp.stem)
+   52: 
+   53:         docs.append({
+   54:             "schema_version": "uploaded_document_unified_content_v1",
+   55:             "workspace_id": workspace_id,
+   56:             "document_id": doc_id,
+   57:             "source_type": "uploaded_document",
+   58:             "source_format": fp.suffix.lower().lstrip("."),
+   59:             "original_filename": fp.name,
+   60:             "stored_path": str(fp),
+   61:             "title": fp.stem.replace("_", " ").replace("-", " ").strip(),
+   62:             "h1": fp.stem.replace("_", " ").replace("-", " ").strip(),
+   63:             "headings": [],
+   64:             "content_body": text,
+   65:             "structure": {
+   66:                 "paragraph_count": max(1, len([b for b in text.split("\n\n") if b.strip()])),
+   67:                 "estimated_character_count": len(text),
+   68:                 "source": "automatic_rebuild_runner",
+   69:             },
+   70:             "metadata": {
+   71:                 "rebuilt_from": str(fp),
+   72:                 "automatic_rebuild": True,
+   73:             },
+   74:         })
+   75: 
+   76:     return docs
+   77: 
+   78: 
+   79: def collect_website_documents(workspace_id: str) -> List[Dict[str, Any]]:
+   80:     docs: List[Dict[str, Any]] = []
+   81: 
+   82:     candidates = []
+   83: 
+   84:     for folder in [CLEAN_HTML_DIR, RAW_HTML_DIR]:
+   85:         if folder.exists():
+   86:             candidates.extend([p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in {".html", ".htm", ".txt"}])
+   87: 
+   88:     seen = set()
+   89: 
+   90:     for fp in candidates:
+   91:         if str(fp) in seen:
+   92:             continue
+   93:         seen.add(str(fp))
+   94: 
+   95:         text = read_text(fp).strip()
+   96:         if not text:
+   97:             continue
+   98: 
+   99:         doc_id = safe_id(fp.stem)
+  100: 
+  101:         docs.append({
+  102:             "schema_version": "website_unified_content_v1",
+  103:             "workspace_id": workspace_id,
+  104:             "document_id": doc_id,
+  105:             "source_type": "website",
+  106:             "source_format": "html" if fp.suffix.lower() in {".html", ".htm"} else "txt",
+  107:             "source_identity": {
+  108:                 "source_file": str(fp),
+  109:             },
+  110:             "title": fp.stem.replace("_", " ").replace("-", " ").strip(),
+  111:             "h1": fp.stem.replace("_", " ").replace("-", " ").strip(),
+  112:             "headings": [],
+  113:             "content_body": text,
+  114:             "structure": {
+  115:                 "paragraph_count": max(1, len([b for b in text.split("\n\n") if b.strip()])),
+  116:                 "estimated_character_count": len(text),
+  117:                 "source": "automatic_rebuild_runner",
+  118:             },
+  119:             "metadata": {
+  120:                 "rebuilt_from": str(fp),
+  121:                 "automatic_rebuild": True,
+  122:             },
+  123:         })
+  124: 
+  125:     return docs
+  126: 
+  127: 
+  128: def create_and_run_jobs(workspace_id: str, docs: List[Dict[str, Any]], source_type: str) -> List[Dict[str, Any]]:
+  129:     results = []
+  130: 
+  131:     for doc in docs:
+  132:         job_type = "upload_document_extraction" if source_type == "uploaded_document" else "article_extraction"
+  133: 
+  134:         job = create_universal_knowledge_job(
+  135:             workspace_id=workspace_id,
+  136:             job_type=job_type,
+  137:             payload={
+  138:                 "document_id": doc["document_id"],
+  139:                 "source_type": source_type,
+  140:                 "title": doc.get("title"),
+  141:                 "automatic_rebuild": True,
+  142:             },
+  143:         )
+  144: 
+  145:         results.append(execute_universal_knowledge_job_v1(job))
+  146: 
+  147:     return results
+  148: 
+  149: 
+  150: def build_uucd_collection(workspace_id: str, upload_docs: List[Dict[str, Any]], website_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
+  151:     docs = []
+  152: 
+  153:     for doc in website_docs:
+  154:         docs.append({
+  155:             "schema_version": "universal_unified_content_document_v1",
+  156:             "pipeline_version": "automatic_rebuild_runner_v1",
+  157:             "workspace_id": workspace_id,
+  158:             "document_id": doc["document_id"],
+  159:             "source_type": "website",
+  160:             "source_format": doc.get("source_format", "html"),
+  161:             "source_identity": doc.get("source_identity", {}),
+  162:             "title": doc.get("title", ""),
+  163:             "h1": doc.get("h1", ""),
+  164:             "headings": doc.get("headings", []),
+  165:             "content_body": doc.get("content_body", ""),
+  166:             "structure": doc.get("structure", {}),
+  167:             "metadata": doc.get("metadata", {}),
+  168:         })
+  169: 
+  170:     for doc in upload_docs:
+  171:         docs.append({
+  172:             "schema_version": "universal_unified_content_document_v1",
+  173:             "pipeline_version": "automatic_rebuild_runner_v1",
+  174:             "workspace_id": workspace_id,
+  175:             "document_id": doc["document_id"],
+  176:             "source_type": "uploaded_document",
+  177:             "source_format": doc.get("source_format", ""),
+  178:             "source_identity": {
+  179:                 "original_filename": doc.get("original_filename", ""),
+  180:                 "stored_path": doc.get("stored_path", ""),
+  181:             },
+  182:             "title": doc.get("title", ""),
+  183:             "h1": doc.get("h1", ""),
+  184:             "headings": doc.get("headings", []),
+  185:             "content_body": doc.get("content_body", ""),
+  186:             "structure": doc.get("structure", {}),
+  187:             "metadata": doc.get("metadata", {}),
+  188:         })
+  189: 
+  190:     return {
+  191:         "schema_version": "uucd_collection_v1",
+  192:         "pipeline_version": "automatic_rebuild_runner_v1",
+  193:         "workspace_id": workspace_id,
+  194:         "documents": docs,
+  195:     }
+  196: 
+  197: 
+  198: def run_automatic_canonical_rebuild(workspace_id: str) -> Dict[str, Any]:
+  199:     UDUC_DIR.mkdir(parents=True, exist_ok=True)
+  200:     UUCD_DIR.mkdir(parents=True, exist_ok=True)
+  201: 
+  202:     upload_docs = collect_uploaded_documents(workspace_id)
+  203:     website_docs = collect_website_documents(workspace_id)
+  204: 
+  205:     # Remove internal metadata/index files before creating jobs.
+  206:     upload_docs = [
+  207:         d for d in upload_docs
+  208:         if str(d.get("document_id") or "").lower() not in {"index", "work_index"}
+  209:         and str(d.get("filename") or "").lower() not in {"index.json", "work_index.json"}
+  210:         and str(d.get("title") or "").lower() not in {"index", "work index"}
+  211:         and "__test" not in str(d.get("document_id") or "").lower()
+  212:         and "__test2" not in str(d.get("document_id") or "").lower()
+  213:         and "__wrap_test" not in str(d.get("document_id") or "").lower()
+  214:         and "__tmp_upload_test" not in str(d.get("document_id") or "").lower()
+  215:         and "__ui_store_test" not in str(d.get("document_id") or "").lower()
+  216:     ]
+  217: 
+  218:     upload_job_results = create_and_run_jobs(workspace_id, upload_docs, "uploaded_document")
+  219:     website_job_results = create_and_run_jobs(workspace_id, website_docs, "website")
+  220: 
+  221:     # Skip internal metadata/index files. They are not user documents.
+  222:     upload_docs = [
+  223:         d for d in upload_docs
+  224:         if str(d.get("document_id") or "").lower() not in {"index", "work_index"}
+  225:         and not str(d.get("filename") or "").lower() in {"index.json", "work_index.json"}
+  226:         and not str(d.get("title") or "").lower() in {"index", "work index"}
+  227:     ]
+  228: 
+  229:     for doc in upload_docs:
+  230:         write_json(UDUC_DIR / workspace_id / f"{doc['document_id']}.json", doc)
+  231: 
+  232:     uucd_payload = build_uucd_collection(workspace_id, upload_docs, website_docs)
+  233:     uucd_path = write_json(UUCD_DIR / f"universal_unified_content_documents_{workspace_id}.json", uucd_payload)
+  234: 
+  235:     body_result = build_universal_article_body_store_from_uucd_payload_v2(
+  236:         workspace_id=workspace_id,
+  237:         uucd_payload=uucd_payload,
+  238:     )
+  239: 
+  240:     lifecycle_registry = {
+  241:         "schema_version": "source_lifecycle_control_v1",
+  242:         "workspace_id": workspace_id,
+  243:         "sources": {},
+  244:         "events": [],
+  245:     }
+  246: 
+  247:     asset_registry = {
+  248:         "schema_version": "source_asset_versions_v1",
+  249:         "workspace_id": workspace_id,
+  250:         "assets": [
+  251:             {"asset_id": f"asset_{d['document_id']}", "document_id": d["document_id"]}
+  252:             for d in uucd_payload["documents"]
+  253:         ],
+  254:     }
+  255: 
+  256:     authorization_payload = {
+  257:         "schema_version": "source_authorization_v1",
+  258:         "workspace_id": workspace_id,
+  259:         "counts": {
+  260:             "unauthorized_documents_quarantined": 0,
+  261:         },
+  262:     }
+  263: 
+  264:     cert_result = certify_uucd_body_store_v1(
+  265:         workspace_id=workspace_id,
+  266:         uucd_payload=uucd_payload,
+  267:         body_index=body_result["index"],
+  268:         lifecycle_registry=lifecycle_registry,
+  269:         asset_version_registry=asset_registry,
+  270:         authorization_payload=authorization_payload,
+  271:     )
+  272: 
+  273:     report = {
+  274:         "ok": True,
+  275:         "workspace_id": workspace_id,
+  276:         "uploaded_documents_found": len(upload_docs),
+  277:         "website_documents_found": len(website_docs),
+  278:         "total_uucd_documents": len(uucd_payload["documents"]),
+  279:         "upload_jobs_run": len(upload_job_results),
+  280:         "website_jobs_run": len(website_job_results),
+  281:         "uucd_path": str(uucd_path),
+  282:         "body_index_path": body_result.get("body_index_path"),
+  283:         "bodies_written": body_result.get("bodies_written"),
+  284:         "certification_path": cert_result.get("certification_path"),
+  285:         "certified": cert_result.get("certification", {}).get("certified"),
+  286:         "semantic_ready": cert_result.get("certification", {}).get("semantic_ready"),
+  287:     }
+  288: 
+  289:     write_json(ROOT / "runtime" / "automatic_rebuild_reports" / workspace_id / "automatic_canonical_rebuild_report.json", report)
+  290: 
+  291:     return report
+  292: 
+  293: 
+  294: if __name__ == "__main__":
+  295:     workspace_id = "ws_whattoexpect_com"
+  296:     result = run_automatic_canonical_rebuild(workspace_id)
+  297: 
+  298:     print("AUTOMATIC CANONICAL REBUILD COMPLETE")
+  299:     print("Workspace:", result["workspace_id"])
+  300:     print("Uploaded documents found:", result["uploaded_documents_found"])
+  301:     print("Website documents found:", result["website_documents_found"])
+  302:     print("Total UUCD documents:", result["total_uucd_documents"])
+  303:     print("Bodies written:", result["bodies_written"])
+  304:     print("Certified:", result["certified"])
+  305:     print("Semantic ready:", result["semantic_ready"])
+  306:     print("UUCD path:", result["uucd_path"])
+  307:     print("Body index:", result["body_index_path"])
+  308:     print("Certification:", result["certification_path"])
+
+====================================================================================================
+FILE: backend\server\runtime\canonical_environment_rebuild_manager.py
+====================================================================================================
+    1: ﻿from __future__ import annotations
+    2: 
+    3: import json
+    4: import shutil
+    5: from pathlib import Path
+    6: from typing import Any, Dict, List
+    7: 
+    8: from backend.server.runtime.registry_driven_canonical_rebuild_manager import (
+    9:     build_registry_driven_rebuild,
+   10: )
+   11: 
+   12: ROOT = Path("backend/server/data")
+   13: 
+   14: GENERATED_TARGETS = [
+   15:     ROOT / "uploaded_document_unified_content",
+   16:     ROOT / "universal_unified_content_documents",
+   17:     ROOT / "universal_article_body_store",
+   18:     ROOT / "uucd_body_store_certifications",
+   19:     ROOT / "runtime" / "automatic_rebuild_reports",
+   20: ]
+   21: 
+   22: PRESERVED_TARGETS = [
+   23:     ROOT / "docs",
+   24:     ROOT / "workspaces",
+   25:     ROOT / "raw_website_html",
+   26:     ROOT / "clean_website_html",
+   27:     ROOT / "website_unified_content",
+   28:     ROOT / "site_pages_ws_whattoexpect_com.json",
+   29:     ROOT / "site_sources_ws_whattoexpect_com.json",
+   30:     ROOT / "source_lifecycle_controls",
+   31:     ROOT / "source_asset_versions",
+   32: ]
+   33: 
+   34: 
+   35: def write_json(path: Path, data: Any) -> Path:
+   36:     path.parent.mkdir(parents=True, exist_ok=True)
+   37:     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+   38:     return path
+   39: 
+   40: 
+   41: def clear_generated_environment() -> Dict[str, Any]:
+   42:     cleared = []
+   43:     missing = []
+   44: 
+   45:     for target in GENERATED_TARGETS:
+   46:         if target.exists():
+   47:             if target.is_dir():
+   48:                 shutil.rmtree(target)
+   49:                 target.mkdir(parents=True, exist_ok=True)
+   50:             else:
+   51:                 target.unlink()
+   52:             cleared.append(str(target))
+   53:         else:
+   54:             target.mkdir(parents=True, exist_ok=True)
+   55:             missing.append(str(target))
+   56: 
+   57:     preserved = [str(p) for p in PRESERVED_TARGETS if p.exists()]
+   58: 
+   59:     return {
+   60:         "cleared_generated_targets": cleared,
+   61:         "created_missing_generated_targets": missing,
+   62:         "preserved_authoritative_targets": preserved,
+   63:     }
+   64: 
+   65: 
+   66: def run_canonical_environment_rebuild(workspace_id: str) -> Dict[str, Any]:
+   67:     reset = clear_generated_environment()
+   68: 
+   69:     rebuild = build_registry_driven_rebuild(workspace_id)
+   70: 
+   71:     report = {
+   72:         "schema_version": "canonical_environment_rebuild_manager_v1",
+   73:         "workspace_id": workspace_id,
+   74:         "reset": reset,
+   75:         "rebuild": rebuild,
+   76:         "canonical_environment_ready": bool(
+   77:             rebuild.get("certified") and rebuild.get("semantic_ready")
+   78:         ),
+   79:         "next_stage": (
+   80:             "Phase 4.6.1 Semantic Article Reader"
+   81:             if rebuild.get("semantic_ready")
+   82:             else "Resolve canonical rebuild blockers"
+   83:         ),
+   84:     }
+   85: 
+   86:     report_path = write_json(
+   87:         ROOT / "runtime" / "canonical_environment_rebuild_reports" / workspace_id / "canonical_environment_rebuild_report.json",
+   88:         report,
+   89:     )
+   90: 
+   91:     report["report_path"] = str(report_path)
+   92:     return report
+   93: 
+   94: 
+   95: if __name__ == "__main__":
+   96:     workspace_id = "ws_whattoexpect_com"
+   97:     result = run_canonical_environment_rebuild(workspace_id)
+   98:     rebuild = result["rebuild"]
+   99: 
+  100:     print("CANONICAL ENVIRONMENT REBUILD COMPLETE")
+  101:     print("Workspace:", result["workspace_id"])
+  102:     print("Generated targets cleared:", len(result["reset"]["cleared_generated_targets"]))
+  103:     print("Authoritative targets preserved:", len(result["reset"]["preserved_authoritative_targets"]))
+  104:     print("Website documents found:", rebuild.get("website_documents_found"))
+  105:     print("Uploaded documents found:", rebuild.get("uploaded_documents_found"))
+  106:     print("Total UUCD documents:", rebuild.get("total_uucd_documents"))
+  107:     print("Bodies written:", rebuild.get("bodies_written"))
+  108:     print("Duplicate hashes:", rebuild.get("duplicate_hashes"))
+  109:     print("Certified:", rebuild.get("certified"))
+  110:     print("Semantic ready:", rebuild.get("semantic_ready"))
+  111:     print("Certification level:", rebuild.get("certification_level"))
+  112:     print("Problems:", rebuild.get("certification_problems", [])[:10])
+  113:     print("Next stage:", result["next_stage"])
+  114:     print("Report:", result["report_path"])
+
+====================================================================================================
+FILE: backend\server\runtime\registry_driven_canonical_rebuild_manager.py
+====================================================================================================
+    1: ﻿from __future__ import annotations
+    2: 
+    3: import json
+    4: from pathlib import Path
+    5: from typing import Any, Dict, List
+    6: 
+    7: from backend.server.jobs.universal_knowledge_orchestrator import create_universal_knowledge_job
+    8: from backend.server.stores.universal_article_body_store import build_universal_article_body_store_from_uucd_payload_v2
+    9: from backend.server.stores.uucd_body_store_certification import certify_uucd_body_store_v1
+   10: from backend.server.workers.universal_knowledge_worker import execute_universal_knowledge_job_v1
+   11: 
+   12: 
+   13: ROOT = Path("backend/server/data")
+   14: UUCD_DIR = ROOT / "universal_unified_content_documents"
+   15: 
+   16: 
+   17: def read_json(path: Path, default: Any = None) -> Any:
+   18:     if not path.exists():
+   19:         return default
+   20:     try:
+   21:         return json.loads(path.read_text(encoding="utf-8"))
+   22:     except Exception:
+   23:         return default
+   24: 
+   25: 
+   26: def write_json(path: Path, data: Any) -> Path:
+   27:     path.parent.mkdir(parents=True, exist_ok=True)
+   28:     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+   29:     return path
+   30: 
+   31: 
+   32: def safe_id(value: str, fallback: str = "doc") -> str:
+   33:     raw = str(value or fallback).strip() or fallback
+   34:     return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in raw)[:140]
+   35: 
+   36: 
+   37: def body_value(row: Dict[str, Any]) -> str:
+   38:     return str(
+   39:         row.get("content_body")
+   40:         or row.get("body_text")
+   41:         or row.get("article_text")
+   42:         or row.get("text")
+   43:         or row.get("content")
+   44:         or row.get("body")
+   45:         or ""
+   46:     ).strip()
+   47: 
+   48: 
+   49: def extract_rows(payload: Any) -> List[Dict[str, Any]]:
+   50:     if isinstance(payload, dict):
+   51:         for key in ["documents", "items", "pages", "records", "articles", "bodies"]:
+   52:             if isinstance(payload.get(key), list):
+   53:                 return [x for x in payload[key] if isinstance(x, dict)]
+   54: 
+   55:         # Common dict-of-records format
+   56:         dict_rows = []
+   57:         for v in payload.values():
+   58:             if isinstance(v, dict):
+   59:                 dict_rows.append(v)
+   60:         if dict_rows:
+   61:             return dict_rows
+   62: 
+   63:         if payload:
+   64:             return [payload]
+   65: 
+   66:     if isinstance(payload, list):
+   67:         return [x for x in payload if isinstance(x, dict)]
+   68: 
+   69:     return []
+   70: 
+   71: 
+   72: def normalize_website_doc(row: Dict[str, Any], workspace_id: str, index: int) -> Dict[str, Any] | None:
+   73:     text = body_value(row)
+   74:     if not text:
+   75:         return None
+   76: 
+   77:     url = (
+   78:         row.get("canonical_url")
+   79:         or row.get("url")
+   80:         or row.get("source_url")
+   81:         or row.get("page_url")
+   82:         or row.get("href")
+   83:         or ""
+   84:     )
+   85: 
+   86:     raw_id = (
+   87:         row.get("document_id")
+   88:         or row.get("doc_id")
+   89:         or row.get("page_id")
+   90:         or row.get("id")
+   91:         or url
+   92:         or f"website_doc_{index}"
+   93:     )
+   94: 
+   95:     doc_id = safe_id(str(raw_id), f"website_doc_{index}")
+   96: 
+   97:     return {
+   98:         "schema_version": "universal_unified_content_document_v1",
+   99:         "pipeline_version": "registry_driven_rebuild_manager_v1",
+  100:         "workspace_id": workspace_id,
+  101:         "document_id": doc_id,
+  102:         "source_type": "website",
+  103:         "source_format": "html",
+  104:         "source_identity": {
+  105:             "canonical_url": url,
+  106:             "source": "website_registry",
+  107:         },
+  108:         "title": row.get("title") or row.get("page_title") or row.get("h1") or doc_id,
+  109:         "h1": row.get("h1") or "",
+  110:         "headings": row.get("headings") or [],
+  111:         "canonical_url": url,
+  112:         "content_body": text,
+  113:         "structure": row.get("structure") or {},
+  114:         "metadata": {
+  115:             **(row.get("metadata") or {}),
+  116:             "registry_rebuild": True,
+  117:             "source_registry": "website",
+  118:         },
+  119:     }
+  120: 
+  121: 
+  122: def normalize_upload_doc(row: Dict[str, Any], workspace_id: str, index: int) -> Dict[str, Any] | None:
+  123:     text = body_value(row)
+  124:     if not text:
+  125:         return None
+  126: 
+  127:     filename = (
+  128:         row.get("filename")
+  129:         or row.get("original_filename")
+  130:         or row.get("name")
+  131:         or row.get("title")
+  132:         or f"upload_doc_{index}"
+  133:     )
+  134: 
+  135:     raw_id = (
+  136:         row.get("document_id")
+  137:         or row.get("doc_id")
+  138:         or row.get("id")
+  139:         or filename
+  140:         or f"upload_doc_{index}"
+  141:     )
+  142: 
+  143:     doc_id = safe_id(str(raw_id), f"upload_doc_{index}")
+  144: 
+  145:     forbidden_names = {"index", "work_index"}
+  146:     if doc_id.lower() in forbidden_names:
+  147:         return None
+  148: 
+  149:     return {
+  150:         "schema_version": "universal_unified_content_document_v1",
+  151:         "pipeline_version": "registry_driven_rebuild_manager_v1",
+  152:         "workspace_id": workspace_id,
+  153:         "document_id": doc_id,
+  154:         "source_type": "uploaded_document",
+  155:         "source_format": str(row.get("source_format") or row.get("extension") or Path(str(filename)).suffix.lower().lstrip(".") or "unknown"),
+  156:         "source_identity": {
+  157:             "original_filename": filename,
+  158:             "source": "upload_registry",
+  159:         },
+  160:         "title": row.get("title") or Path(str(filename)).stem,
+  161:         "h1": row.get("h1") or "",
+  162:         "headings": row.get("headings") or [],
+  163:         "content_body": text,
+  164:         "structure": row.get("structure") or {},
+  165:         "metadata": {
+  166:             **(row.get("metadata") or {}),
+  167:             "registry_rebuild": True,
+  168:             "source_registry": "upload",
+  169:         },
+  170:     }
+  171: 
+  172: 
+  173: def collect_website_registry_docs(workspace_id: str) -> List[Dict[str, Any]]:
+  174:     candidates = [
+  175:         ROOT / "website_unified_content" / f"website_unified_content_{workspace_id}.json",
+  176:         ROOT / "clean_website_html" / f"clean_website_html_{workspace_id}.json",
+  177:         ROOT / "raw_website_html" / f"raw_website_html_{workspace_id}.json",
+  178:     ]
+  179: 
+  180:     docs: List[Dict[str, Any]] = []
+  181:     seen_ids = set()
+  182: 
+  183:     for path in candidates:
+  184:         payload = read_json(path)
+  185:         if payload is None:
+  186:             continue
+  187: 
+  188:         rows = extract_rows(payload)
+  189:         for i, row in enumerate(rows, start=1):
+  190:             doc = normalize_website_doc(row, workspace_id, i)
+  191:             if not doc:
+  192:                 continue
+  193:             if doc["document_id"] in seen_ids:
+  194:                 continue
+  195:             seen_ids.add(doc["document_id"])
+  196:             docs.append(doc)
+  197: 
+  198:         if docs:
+  199:             break
+  200: 
+  201:     return docs
+  202: 
+  203: 
+  204: def collect_upload_registry_docs(workspace_id: str) -> List[Dict[str, Any]]:
+  205:     candidates = [
+  206:         ROOT / "workspaces" / workspace_id / "saved_sessions",
+  207:         ROOT / "uploaded_document_unified_content" / workspace_id,
+  208:         ROOT / "docs" / workspace_id,
+  209:     ]
+  210: 
+  211:     docs: List[Dict[str, Any]] = []
+  212:     seen_ids = set()
+  213: 
+  214:     for base in candidates:
+  215:         if not base.exists():
+  216:             continue
+  217: 
+  218:         files = []
+  219:         if base.is_file():
+  220:             files = [base]
+  221:         else:
+  222:             files = list(base.rglob("documents.json")) + list(base.rglob("*.json"))
+  223: 
+  224:         for path in files:
+  225:             if path.name.lower() in {"index.json", "work_index.json"}:
+  226:                 continue
+  227: 
+  228:             payload = read_json(path)
+  229:             rows = extract_rows(payload)
+  230: 
+  231:             for i, row in enumerate(rows, start=1):
+  232:                 doc = normalize_upload_doc(row, workspace_id, len(docs) + i)
+  233:                 if not doc:
+  234:                     continue
+  235:                 if doc["document_id"] in seen_ids:
+  236:                     continue
+  237:                 seen_ids.add(doc["document_id"])
+  238:                 docs.append(doc)
+  239: 
+  240:     return docs
+  241: 
+  242: 
+  243: def execute_rebuild_jobs(workspace_id: str, docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+  244:     results = []
+  245:     for doc in docs:
+  246:         job_type = "article_extraction" if doc["source_type"] == "website" else "upload_document_extraction"
+  247:         job = create_universal_knowledge_job(
+  248:             workspace_id=workspace_id,
+  249:             job_type=job_type,
+  250:             payload={
+  251:                 "document_id": doc["document_id"],
+  252:                 "source_type": doc["source_type"],
+  253:                 "registry_rebuild": True,
+  254:             },
+  255:         )
+  256:         results.append(execute_universal_knowledge_job_v1(job))
+  257:     return results
+  258: 
+  259: 
+  260: def build_registry_driven_rebuild(workspace_id: str) -> Dict[str, Any]:
+  261:     website_docs = collect_website_registry_docs(workspace_id)
+  262:     upload_docs = collect_upload_registry_docs(workspace_id)
+  263: 
+  264:     all_docs = website_docs + upload_docs
+  265: 
+  266:     job_results = execute_rebuild_jobs(workspace_id, all_docs)
+  267: 
+  268:     uucd_payload = {
+  269:         "schema_version": "uucd_collection_v1",
+  270:         "pipeline_version": "registry_driven_rebuild_manager_v1",
+  271:         "workspace_id": workspace_id,
+  272:         "documents": all_docs,
+  273:     }
+  274: 
+  275:     uucd_path = write_json(
+  276:         UUCD_DIR / f"universal_unified_content_documents_{workspace_id}.json",
+  277:         uucd_payload,
+  278:     )
+  279: 
+  280:     body_result = build_universal_article_body_store_from_uucd_payload_v2(
+  281:         workspace_id=workspace_id,
+  282:         uucd_payload=uucd_payload,
+  283:     )
+  284: 
+  285:     lifecycle_registry = {
+  286:         "schema_version": "source_lifecycle_control_v1",
+  287:         "workspace_id": workspace_id,
+  288:         "sources": {},
+  289:         "events": [],
+  290:     }
+  291: 
+  292:     asset_registry = {
+  293:         "schema_version": "source_asset_versions_v1",
+  294:         "workspace_id": workspace_id,
+  295:         "assets": [
+  296:             {
+  297:                 "asset_id": f"asset_{doc['document_id']}",
+  298:                 "document_id": doc["document_id"],
+  299:                 "source_type": doc["source_type"],
+  300:             }
+  301:             for doc in all_docs
+  302:         ],
+  303:     }
+  304: 
+  305:     authorization_payload = {
+  306:         "schema_version": "source_authorization_v1",
+  307:         "workspace_id": workspace_id,
+  308:         "counts": {"unauthorized_documents_quarantined": 0},
+  309:     }
+  310: 
+  311:     cert_result = certify_uucd_body_store_v1(
+  312:         workspace_id=workspace_id,
+  313:         uucd_payload=uucd_payload,
+  314:         body_index=body_result["index"],
+  315:         lifecycle_registry=lifecycle_registry,
+  316:         asset_version_registry=asset_registry,
+  317:         authorization_payload=authorization_payload,
+  318:     )
+  319: 
+  320:     cert = cert_result.get("certification", {})
+  321: 
+  322:     report = {
+  323:         "ok": True,
+  324:         "workspace_id": workspace_id,
+  325:         "website_documents_found": len(website_docs),
+  326:         "uploaded_documents_found": len(upload_docs),
+  327:         "total_uucd_documents": len(all_docs),
+  328:         "jobs_run": len(job_results),
+  329:         "bodies_written": body_result.get("bodies_written"),
+  330:         "duplicate_hashes": body_result.get("duplicate_hashes"),
+  331:         "certified": cert.get("certified"),
+  332:         "semantic_ready": cert.get("semantic_ready"),
+  333:         "certification_level": cert.get("certification_level"),
+  334:         "certification_problems": cert.get("problems", []),
+  335:         "uucd_path": str(uucd_path),
+  336:         "body_index_path": body_result.get("body_index_path"),
+  337:         "certification_path": cert_result.get("certification_path"),
+  338:     }
+  339: 
+  340:     write_json(
+  341:         ROOT / "runtime" / "automatic_rebuild_reports" / workspace_id / "registry_driven_rebuild_report.json",
+  342:         report,
+  343:     )
+  344: 
+  345:     return report
+  346: 
+  347: 
+  348: if __name__ == "__main__":
+  349:     workspace_id = "ws_whattoexpect_com"
+  350:     result = build_registry_driven_rebuild(workspace_id)
+  351: 
+  352:     print("REGISTRY-DRIVEN CANONICAL REBUILD COMPLETE")
+  353:     print("Workspace:", result["workspace_id"])
+  354:     print("Website documents found:", result["website_documents_found"])
+  355:     print("Uploaded documents found:", result["uploaded_documents_found"])
+  356:     print("Total UUCD documents:", result["total_uucd_documents"])
+  357:     print("Jobs run:", result["jobs_run"])
+  358:     print("Bodies written:", result["bodies_written"])
+  359:     print("Duplicate hashes:", result["duplicate_hashes"])
+  360:     print("Certified:", result["certified"])
+  361:     print("Semantic ready:", result["semantic_ready"])
+  362:     print("Certification level:", result["certification_level"])
+  363:     print("Problems:", result["certification_problems"][:10])
+  364:     print("UUCD path:", result["uucd_path"])
+  365:     print("Body index:", result["body_index_path"])
+  366:     print("Certification:", result["certification_path"])

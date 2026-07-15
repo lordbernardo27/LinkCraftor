@@ -1,10 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
+
+from backend.server.stores.universal_content_body_formatter import (
+    format_universal_content_body_v1,
+)
 
 
 DATA_ROOT = Path("backend/server/data")
@@ -30,7 +34,7 @@ def load_website_unified_content_store_v1(workspace_id: str) -> Dict[str, Any]:
 
     if not path.exists():
         return {
-            "version": "website_unified_content_store_v1",
+            "version": "website_unified_content_store_v2",
             "workspace_id": workspace_id,
             "documents": {},
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -40,7 +44,7 @@ def load_website_unified_content_store_v1(workspace_id: str) -> Dict[str, Any]:
         return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {
-            "version": "website_unified_content_store_v1",
+            "version": "website_unified_content_store_v2",
             "workspace_id": workspace_id,
             "documents": {},
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -62,7 +66,6 @@ def upsert_website_unified_content_document_v1(
     title: str = "",
     h1: str = "",
     article_body: str = "",
-    primary_content: str = "",
     headings: list | None = None,
     metadata: Dict[str, Any] | None = None,
     quality: Dict[str, Any] | None = None,
@@ -70,25 +73,46 @@ def upsert_website_unified_content_document_v1(
 ) -> Dict[str, Any]:
     store = load_website_unified_content_store_v1(workspace_id)
 
-    content_text = str(primary_content or article_body or "").strip()
+    formatted_body = format_universal_content_body_v1(
+        text=article_body,
+        headings=headings or [],
+        title=title,
+    )
+
+    content_text = str(
+        formatted_body.get("content_body") or ""
+    ).strip()
     content_id = _content_id_for_url_v1(url)
     now = datetime.now(timezone.utc).isoformat()
 
+    document_metadata = dict(metadata or {})
+
+    document_metadata["content_body_formatting"] = {
+        "formatter": formatted_body.get("formatter"),
+        "format": formatted_body.get("format"),
+        "source_mode": formatted_body.get("source_mode"),
+        "paragraph_count": formatted_body.get("paragraph_count"),
+        "heading_count": formatted_body.get("heading_count"),
+        "word_count": formatted_body.get("word_count"),
+        "content_length": formatted_body.get("content_length"),
+    }
+
+    if h1:
+        document_metadata["source_h1"] = h1
+
+    if semantic_features:
+        document_metadata["semantic_features"] = semantic_features
+
     document = {
         "content_id": content_id,
-        "source_type": "website_crawl",
         "workspace_id": workspace_id,
-        "url": url,
-        "title": title,
-        "h1": h1,
-        "headings": headings or [],
-        "primary_content": content_text,
+        "source_type": "website_crawl",
+        "url": str(url or "").strip(),
+        "title": str(title or h1 or "").strip(),
         "article_body": content_text,
-        "word_count": len(content_text.split()),
-        "content_length": len(content_text),
-        "metadata": metadata or {},
-        "quality": quality or {},
-        "semantic_features": semantic_features or {},
+        "headings": list(headings or []),
+        "metadata": document_metadata,
+        "quality": dict(quality or {}),
         "created_or_updated_at_utc": now,
     }
 

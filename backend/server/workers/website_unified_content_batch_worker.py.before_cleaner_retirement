@@ -1,0 +1,320 @@
+from __future__ import annotations
+
+import json
+import html
+import re
+from pathlib import Path
+from typing import Any, Dict, List
+
+from backend.server.stores.main_content_extraction_engine import (
+    extract_main_content_from_html_v1,
+)
+from backend.server.stores.article_cleaning_pipeline import (
+    build_article_cleaning_pipeline_v1,
+)
+from backend.server.stores.article_validation_engine import (
+    validate_article_v1,
+)
+from backend.server.stores.website_unified_content_store import (
+    upsert_website_unified_content_document_v1,
+)
+from backend.server.stores.universal_unified_content_document_convergence import (
+    build_and_write_uucd_from_wuc_v1,
+)
+
+
+DATA_ROOT = Path("backend/server/data")
+
+
+def _plain_html_text_v1(value: str) -> str:
+    value = re.sub(r"(?is)<[^>]+>", " ", str(value or ""))
+    value = html.unescape(value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def _extract_title_from_html_v1(html_text: str) -> str:
+    match = re.search(
+        r"(?is)<title\b[^>]*>(.*?)</title>",
+        str(html_text or ""),
+    )
+    return _plain_html_text_v1(match.group(1)) if match else ""
+
+
+def _extract_h1_from_html_v1(html_text: str) -> str:
+    match = re.search(
+        r"(?is)<h1\b[^>]*>(.*?)</h1>",
+        str(html_text or ""),
+    )
+    return _plain_html_text_v1(match.group(1)) if match else ""
+
+
+def _safe_workspace_id_v1(workspace_id: str) -> str:
+    return "".join(
+        c if c.isalnum() or c in ("_", "-") else "_"
+        for c in str(workspace_id or "default")
+    )
+
+
+def _clean_store_path_v1(workspace_id: str) -> Path:
+    ws = _safe_workspace_id_v1(workspace_id)
+    return (
+        DATA_ROOT
+        / "clean_website_html"
+        / f"clean_website_html_{ws}.json"
+    )
+
+
+def run_website_unified_content_batch_v1(
+    *,
+    workspace_id: str,
+    assigned_html_ids: List[str],
+    batch_id: str = "",
+    batch_index: int | None = None,
+    batch_count: int | None = None,
+) -> Dict[str, Any]:
+    """
+    Converts assigned Clean HTML records into:
+    - Website Unified Content
+    - UUCD
+
+    Boundary:
+    - Does not crawl.
+    - Does not rewrite Raw HTML Store.
+    - Does not rebuild Clean HTML Store.
+    """
+
+    path = _clean_store_path_v1(workspace_id)
+
+    if not path.exists():
+        raise FileNotFoundError(f"Clean HTML Store not found: {path}")
+
+    clean_store = json.loads(path.read_text(encoding="utf-8"))
+    clean_pages = clean_store.get("pages") or {}
+
+    attempted = 0
+    succeeded = 0
+    failed = 0
+    missing_clean_record = 0
+    extraction_failed = 0
+    article_cleaning_failed = 0
+    website_store_failed = 0
+    uucd_failed = 0
+
+    successes: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for html_id in assigned_html_ids:
+        attempted += 1
+        record = clean_pages.get(html_id)
+
+        if not isinstance(record, dict):
+            missing_clean_record += 1
+            failed += 1
+            errors.append({
+                "html_id": html_id,
+                "error_type": "missing_clean_html_record",
+            })
+            continue
+
+        url = str(record.get("url") or "").strip()
+        cleaned_html = str(record.get("cleaned_html") or "")
+
+        html_title = _extract_title_from_html_v1(cleaned_html)
+        html_h1 = _extract_h1_from_html_v1(cleaned_html)
+
+        title = str(
+            record.get("title")
+            or html_title
+            or html_h1
+            or ""
+        ).strip()
+
+        if not url or not cleaned_html.strip():
+            missing_clean_record += 1
+            failed += 1
+            errors.append({
+                "html_id": html_id,
+                "url": url,
+                "error_type": "empty_clean_html_or_url",
+            })
+            continue
+
+        try:
+            extraction = extract_main_content_from_html_v1(
+                html_text=cleaned_html,
+                url=url,
+                title=title,
+                metadata={
+                    "html_id": html_id,
+                    "source_stage": "clean_website_html_store",
+                    "batch_id": batch_id,
+                    "batch_index": batch_index,
+                    "batch_count": batch_count,
+                },
+            )
+
+            main_content = str(extraction.get("main_content") or "")
+            if not main_content.strip():
+                extraction_failed += 1
+                failed += 1
+                errors.append({
+                    "html_id": html_id,
+                    "url": url,
+                    "error_type": "main_content_empty",
+                })
+                continue
+
+            cleaning = build_article_cleaning_pipeline_v1(
+                raw_main_html=cleaned_html,
+                raw_article_text=main_content,
+                headings=extraction.get("headings", []),
+                title=title or extraction.get("title", ""),
+                url=url,
+                metadata={
+                    "html_id": html_id,
+                    "source_stage": "website_unified_content_batch_worker",
+                    "batch_id": batch_id,
+                    "batch_index": batch_index,
+                    "batch_count": batch_count,
+                },
+            )
+
+            article_text = str(cleaning.get("cleaned_article_text") or "")
+            if not article_text.strip():
+                article_cleaning_failed += 1
+                failed += 1
+                errors.append({
+                    "html_id": html_id,
+                    "url": url,
+                    "error_type": "cleaned_article_text_empty",
+                })
+                continue
+
+            validation = validate_article_v1(
+                cleaned_article_text=article_text,
+                title=title or extraction.get("title", ""),
+                headings=cleaning.get("headings", []),
+                removed_sections=cleaning.get("removed_sections", []),
+                metadata={
+                    "html_id": html_id,
+                    "source_stage": "website_unified_content_batch_worker",
+                    "batch_id": batch_id,
+                    "batch_index": batch_index,
+                    "batch_count": batch_count,
+                },
+            )
+
+            try:
+                website_doc = upsert_website_unified_content_document_v1(
+                    workspace_id=workspace_id,
+                    url=url,
+                    title=title or extraction.get("title", ""),
+                    h1=str(extraction.get("h1") or html_h1 or ""),
+                    article_body=article_text,
+                        headings=cleaning.get("headings", []),
+                    metadata={
+                        "html_id": html_id,
+                        "source_stage": "clean_website_html_store",
+                        "source_pipeline": "website_unified_content_batch_worker_v1",
+                        "batch_id": batch_id,
+                        "batch_index": batch_index,
+                        "batch_count": batch_count,
+                        "extraction": {
+                            "selected_tag": extraction.get("selected_tag"),
+                            "word_count": extraction.get("word_count"),
+                            "content_length": extraction.get("content_length"),
+                            "candidate_count": extraction.get("candidate_count"),
+                        },
+                        "cleaning_statistics": cleaning.get("statistics", {}),
+                        "removed_sections": cleaning.get("removed_sections", []),
+                        "validation": validation,
+                    },
+                    quality={
+                        "validation_passed": validation.get("passed"),
+                        "quality_grade": validation.get("quality_grade"),
+                        "validation_score": validation.get("validation_score"),
+                        "warnings": validation.get("warnings", []),
+                        "rejection_reasons": validation.get("rejection_reasons", []),
+                    },
+                    semantic_features={
+                        "semantic_ready": bool(
+                            validation.get(
+                                "eligible_for_unified_content_document",
+                                False,
+                            )
+                        ),
+                        "source_pipeline": (
+                            "website_unified_content_batch_worker_v1"
+                        ),
+                        "source_type": "website",
+                    },
+                )
+            except Exception as exc:
+                website_store_failed += 1
+                failed += 1
+                errors.append({
+                    "html_id": html_id,
+                    "url": url,
+                    "error_type": "website_store_write_failed",
+                    "error": str(exc),
+                })
+                continue
+
+            try:
+                uucd_result = build_and_write_uucd_from_wuc_v1(website_doc)
+            except Exception as exc:
+                uucd_failed += 1
+                failed += 1
+                errors.append({
+                    "html_id": html_id,
+                    "url": url,
+                    "error_type": "uucd_write_failed",
+                    "error": str(exc),
+                    "website_content_id": website_doc.get("content_id"),
+                })
+                continue
+
+            succeeded += 1
+            successes.append({
+                "html_id": html_id,
+                "url": url,
+                "website_content_id": website_doc.get("content_id"),
+                "uucd_path": uucd_result.get("uucd_path"),
+                "semantic_ready": bool(
+                    website_doc.get("semantic_features", {}).get(
+                        "semantic_ready"
+                    )
+                ),
+            })
+
+        except Exception as exc:
+            failed += 1
+            errors.append({
+                "html_id": html_id,
+                "url": url,
+                "error_type": "unexpected_processing_error",
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+
+    return {
+        "ok": failed == 0,
+        "workspace_id": workspace_id,
+        "stage": "website_unified_content_and_uucd",
+        "batch_id": batch_id,
+        "batch_index": batch_index,
+        "batch_count": batch_count,
+        "processing": {
+            "assigned": len(assigned_html_ids),
+            "attempted": attempted,
+            "succeeded": succeeded,
+            "failed": failed,
+            "missing_clean_record": missing_clean_record,
+            "extraction_failed": extraction_failed,
+            "article_cleaning_failed": article_cleaning_failed,
+            "website_store_failed": website_store_failed,
+            "uucd_failed": uucd_failed,
+        },
+        "success_sample": successes[:10],
+        "error_sample": errors[:25],
+    }
+

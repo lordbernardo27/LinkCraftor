@@ -1,0 +1,980 @@
+from __future__ import annotations
+
+import html
+import re
+from typing import Any, Dict, List, Optional, Set
+
+from bs4 import BeautifulSoup, Tag
+
+
+ENGINE_NAME = "universal_dom_article_reconstruction_engine_v1_1"
+PARSER_NAME = "html5lib"
+
+
+NOISE_TAGS = {
+    "script",
+    "style",
+    "noscript",
+    "template",
+    "svg",
+    "canvas",
+    "iframe",
+    "form",
+    "nav",
+    "footer",
+}
+
+NOISE_SIGNAL_TERMS = {
+    "ads",
+    "advertisement",
+    "ad-container",
+    "ad-wrapper",
+    "ad-slot",
+    "affiliate",
+    "breadcrumb",
+    "breadcrumbs",
+    "cookie",
+    "consent",
+    "footer",
+    "inline-form",
+    "lightbox",
+    "newsletter",
+    "pagination",
+    "promo",
+    "recommended-products",
+    "share",
+    "sharing",
+    "signup",
+    "social",
+    "sponsored",
+    "subscribe",
+    "video-player",
+    "jw-player",
+    "community-discussion",
+    "comments",
+}
+
+CONTENT_SIGNAL_TERMS = {
+    "article",
+    "article-body",
+    "article-content",
+    "body",
+    "content",
+    "copy",
+    "description",
+    "entry-content",
+    "main-content",
+    "post-content",
+    "story",
+    "story-body",
+    "text",
+}
+
+HEADING_SIGNAL_TERMS = {
+    "headline",
+    "heading",
+    "title",
+    "subheading",
+    "subtitle",
+}
+
+METADATA_PATTERNS = [
+    re.compile(
+        r"^\s*medically reviewed(?:\s+by)?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*fact[- ]checked(?:\s+by)?\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*reviewed\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*latest update\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*medical review policy\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*editorial policy\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*we believe you should always know the source\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^\s*learn more about our editorial and medical review policies\b",
+        re.IGNORECASE,
+    ),
+]
+
+UI_PATTERNS = [
+    re.compile(r"^\s*previous item\s*$", re.IGNORECASE),
+    re.compile(r"^\s*next item\s*$", re.IGNORECASE),
+    re.compile(r"^\s*back to top\s*$", re.IGNORECASE),
+    re.compile(r"^\s*see more\s*$", re.IGNORECASE),
+    re.compile(r"^\s*recommended products\s*$", re.IGNORECASE),
+    re.compile(r"^\s*birth month group discussions\s*$", re.IGNORECASE),
+]
+
+
+def _normalize_text(value: Any) -> str:
+    text = html.unescape(str(value or ""))
+    text = text.replace("\u00a0", " ")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\s*\n\s*", " ", text)
+    return text.strip()
+
+
+def _signal_text(node: Tag) -> str:
+    values: List[str] = []
+
+    node_id = node.get("id")
+    if node_id:
+        values.append(str(node_id))
+
+    for value in node.get("class") or []:
+        values.append(str(value))
+
+    for key in (
+        "role",
+        "aria-label",
+        "data-component",
+        "data-module",
+        "data-testid",
+    ):
+        value = node.get(key)
+
+        if value:
+            values.append(str(value))
+
+    return " ".join(values).casefold()
+
+
+def _signal_tokens(node: Tag) -> Set[str]:
+    signal = _signal_text(node)
+
+    return {
+        token
+        for token in re.split(
+            r"[^a-z0-9_-]+",
+            signal,
+        )
+        if token
+    }
+
+
+def _contains_signal(
+    node: Tag,
+    terms: Set[str],
+) -> bool:
+    """
+    Match DOM identifiers safely.
+
+    Exact identifier values are respected, while compound values
+    such as article-content and your-body__body are also separated
+    into meaningful tokens.
+
+    Arbitrary substring matching is intentionally prohibited.
+    """
+
+    signal = _signal_text(node)
+
+    exact_values = {
+        value
+        for value in signal.split()
+        if value
+    }
+
+    signal_tokens = {
+        token
+        for token in re.split(
+            r"[^a-z0-9]+",
+            signal,
+        )
+        if token
+    }
+
+    for raw_term in terms:
+        term = str(raw_term or "").casefold().strip()
+
+        if not term:
+            continue
+
+        if term in exact_values:
+            return True
+
+        term_tokens = [
+            token
+            for token in re.split(
+                r"[^a-z0-9]+",
+                term,
+            )
+            if token
+        ]
+
+        if (
+            term_tokens
+            and all(
+                token in signal_tokens
+                for token in term_tokens
+            )
+        ):
+            return True
+
+    return False
+
+
+def _is_noise_node(node: Tag) -> bool:
+    if not isinstance(node, Tag):
+        return False
+
+    if not node.name:
+        return False
+
+    if str(node.name).lower() in NOISE_TAGS:
+        return True
+
+    return _contains_signal(
+        node,
+        NOISE_SIGNAL_TERMS,
+    )
+
+
+def _remove_noise_nodes(root: Tag) -> int:
+    removed = 0
+
+    for node in list(root.find_all(True)):
+        if not isinstance(node, Tag):
+            continue
+
+        if not node.name:
+            continue
+
+        if _is_noise_node(node):
+            node.decompose()
+            removed += 1
+
+    return removed
+
+
+def _is_metadata_or_ui(text: str) -> bool:
+    normalized = _normalize_text(text)
+
+    if not normalized:
+        return True
+
+    lowered = normalized.casefold()
+
+    if "medical review board includes" in lowered:
+        return True
+
+    if (
+        lowered.startswith("all ")
+        and "medically reviewed by a team" in lowered
+    ):
+        return True
+
+    for pattern in METADATA_PATTERNS:
+        if pattern.search(normalized):
+            return True
+
+    for pattern in UI_PATTERNS:
+        if pattern.fullmatch(normalized):
+            return True
+
+    return False
+
+
+def _word_count(value: str) -> int:
+    return len(
+        re.findall(
+            r"\b[\w’'-]+\b",
+            str(value or ""),
+            flags=re.UNICODE,
+        )
+    )
+
+
+def _link_word_count(node: Tag) -> int:
+    total = 0
+
+    for link in node.find_all("a"):
+        total += _word_count(
+            _normalize_text(
+                link.get_text(" ", strip=True)
+            )
+        )
+
+    return total
+
+
+def _candidate_score(node: Tag) -> Dict[str, Any]:
+    text = _normalize_text(
+        node.get_text(" ", strip=True)
+    )
+
+    words = _word_count(text)
+
+    headings = len(
+        node.find_all(
+            ["h1", "h2", "h3", "h4", "h5", "h6"]
+        )
+    )
+
+    paragraphs = len(node.find_all("p"))
+    list_items = len(node.find_all("li"))
+    blockquotes = len(node.find_all("blockquote"))
+
+    link_words = _link_word_count(node)
+
+    link_density = (
+        link_words / words
+        if words
+        else 1.0
+    )
+
+    tag_name = str(node.name or "").lower()
+    signal = _signal_text(node)
+
+    score = float(words)
+
+    score += headings * 45.0
+    score += paragraphs * 24.0
+    score += list_items * 4.0
+    score += blockquotes * 12.0
+
+    if tag_name == "article":
+        score += 140.0
+    elif tag_name == "main":
+        score += 120.0
+    elif tag_name == "section":
+        score += 25.0
+    elif tag_name == "body":
+        score -= 80.0
+
+    if _contains_signal(
+        node,
+        CONTENT_SIGNAL_TERMS,
+    ):
+        score += 90.0
+
+    score -= (
+        link_density
+        * max(words, 1)
+        * 1.35
+    )
+
+    if words < 100:
+        score -= 500.0
+
+    if headings == 0 and paragraphs == 0:
+        score -= 300.0
+
+    return {
+        "node": node,
+        "tag": tag_name,
+        "signal": signal,
+        "word_count": words,
+        "heading_count": headings,
+        "paragraph_count": paragraphs,
+        "list_item_count": list_items,
+        "blockquote_count": blockquotes,
+        "link_word_count": link_words,
+        "link_density": round(link_density, 4),
+        "score": round(score, 4),
+    }
+
+
+def _collect_root_candidates(
+    soup: BeautifulSoup,
+) -> List[Dict[str, Any]]:
+    nodes: List[Tag] = []
+    seen: Set[int] = set()
+
+    def add(node: Optional[Tag]) -> None:
+        if not isinstance(node, Tag):
+            return
+
+        identity = id(node)
+
+        if identity in seen:
+            return
+
+        seen.add(identity)
+        nodes.append(node)
+
+    add(soup.body)
+
+    for node in soup.find_all(
+        ["main", "article", "section", "div"]
+    ):
+        if not isinstance(node, Tag):
+            continue
+
+        tag_name = str(node.name or "").lower()
+        signal = _signal_text(node)
+
+        heading_count = len(
+            node.find_all(
+                ["h1", "h2", "h3", "h4", "h5", "h6"]
+            )
+        )
+
+        should_consider = (
+            tag_name in {"main", "article"}
+            or heading_count >= 2
+            or _contains_signal(
+                node,
+                CONTENT_SIGNAL_TERMS,
+            )
+        )
+
+        if should_consider:
+            add(node)
+
+    scored = [
+        _candidate_score(node)
+        for node in nodes
+    ]
+
+    scored.sort(
+        key=lambda item: item["score"],
+        reverse=True,
+    )
+
+    return scored
+
+
+def _select_best_root(
+    soup: BeautifulSoup,
+) -> Dict[str, Any]:
+    candidates = _collect_root_candidates(soup)
+
+    eligible = [
+        candidate
+        for candidate in candidates
+        if candidate["word_count"] >= 100
+        and candidate["score"] > 0
+    ]
+
+    if eligible:
+        selected = eligible[0]
+    else:
+        selected_node = soup.body or soup
+
+        selected = _candidate_score(
+            selected_node
+        )
+
+    return {
+        "selected": selected,
+        "candidates": candidates,
+    }
+
+
+def _selected_ancestor(
+    node: Tag,
+    selected_tags: Set[str],
+) -> Optional[Tag]:
+    parent = node.parent
+
+    while isinstance(parent, Tag):
+        parent_name = str(
+            parent.name or ""
+        ).lower()
+
+        if parent_name in selected_tags:
+            return parent
+
+        parent = parent.parent
+
+    return None
+
+
+def _has_substantial_block_descendant(
+    node: Tag,
+) -> bool:
+    """
+    Return True when a generic container contains a more specific
+    descendant block that should be emitted instead of the parent.
+
+    This prevents:
+
+        parent DIV containing three cards
+        child card DIV
+        child body DIV
+
+    from all being written as duplicate article paragraphs.
+    """
+
+    descendant_tags = [
+        "div",
+        "section",
+        "article",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "li",
+        "blockquote",
+    ]
+
+    for descendant in node.find_all(descendant_tags):
+        if not isinstance(descendant, Tag):
+            continue
+
+        text = _normalize_text(
+            descendant.get_text(" ", strip=True)
+        )
+
+        if _word_count(text) >= 3:
+            return True
+
+    return False
+
+
+def _leaf_container_text(
+    node: Tag,
+) -> str:
+    """
+    Extract text only from a leaf-level generic content container.
+
+    Inline descendants such as A, STRONG and SPAN remain part of
+    the paragraph. Nested block containers cause the parent to be
+    skipped so their text is not duplicated.
+    """
+
+    if _has_substantial_block_descendant(node):
+        return ""
+
+    text = _normalize_text(
+        node.get_text(" ", strip=True)
+    )
+
+    words = _word_count(text)
+
+    has_heading_signal = _contains_signal(
+        node,
+        HEADING_SIGNAL_TERMS,
+    )
+
+    if words < 7:
+        if (
+            has_heading_signal
+            and 1 <= words <= 18
+        ):
+            return text
+
+        return ""
+
+    has_content_signal = _contains_signal(
+        node,
+        CONTENT_SIGNAL_TERMS,
+    )
+
+    has_sentence_shape = bool(
+        re.search(
+            r"[.!?](?:\s|$)",
+            text,
+        )
+    )
+
+    if not (
+        has_content_signal
+        or has_sentence_shape
+    ):
+        return ""
+
+    return text
+
+
+def _is_navigation_list_item(
+    node: Tag,
+) -> bool:
+    """
+    Detect linked table-of-contents and tab navigation lists while
+    preserving normal article bullet lists.
+    """
+
+    parent_list = node.find_parent(
+        ["ul", "ol"]
+    )
+
+    if not isinstance(parent_list, Tag):
+        return False
+
+    direct_items = parent_list.find_all(
+        "li",
+        recursive=False,
+    )
+
+    if len(direct_items) < 3:
+        return False
+
+    item_texts = [
+        _normalize_text(
+            item.get_text(" ", strip=True)
+        )
+        for item in direct_items
+        if isinstance(item, Tag)
+    ]
+
+    all_short = (
+        bool(item_texts)
+        and all(
+            1 <= _word_count(text) <= 6
+            for text in item_texts
+        )
+    )
+
+    all_linked = all(
+        item.find("a") is not None
+        for item in direct_items
+        if isinstance(item, Tag)
+    )
+
+    if all_short and all_linked:
+        return True
+
+    navigation_terms = {
+        "nav",
+        "navigation",
+        "menu",
+        "tab",
+        "tabs",
+        "toc",
+        "table-of-contents",
+        "jump",
+        "jump-links",
+        "section-links",
+        "explore",
+    }
+
+    ancestor: Tag | None = parent_list
+    levels_checked = 0
+
+    while (
+        isinstance(ancestor, Tag)
+        and levels_checked < 4
+    ):
+        if _contains_signal(
+            ancestor,
+            navigation_terms,
+        ):
+            return True
+
+        ancestor = ancestor.parent
+        levels_checked += 1
+
+    return False
+
+
+def _extract_ordered_blocks(
+    root: Tag,
+) -> Dict[str, Any]:
+    explicit_tags = {
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "li",
+        "blockquote",
+    }
+
+    generic_tags = {
+        "div",
+        "section",
+        "span",
+    }
+
+    blocks: List[Dict[str, Any]] = []
+    headings: List[Dict[str, Any]] = []
+    paragraphs: List[str] = []
+
+    previous_key = ""
+
+    for node in root.descendants:
+        if not isinstance(node, Tag):
+            continue
+
+        tag_name = str(
+            node.name or ""
+        ).lower()
+
+        if tag_name not in explicit_tags | generic_tags:
+            continue
+
+        if _selected_ancestor(
+            node,
+            explicit_tags,
+        ) is not None:
+            continue
+
+        text = ""
+        block_type = "paragraph"
+        level = None
+
+        if tag_name.startswith("h") and len(tag_name) == 2:
+            text = _normalize_text(
+                node.get_text(" ", strip=True)
+            )
+            block_type = "heading"
+            level = int(tag_name[1])
+
+        elif tag_name in {"p", "blockquote"}:
+            text = _normalize_text(
+                node.get_text(" ", strip=True)
+            )
+
+        elif tag_name == "li":
+            if _is_navigation_list_item(node):
+                continue
+
+            parts = []
+
+            for child in node.contents:
+                if (
+                    isinstance(child, Tag)
+                    and str(child.name or "").lower()
+                    in {"ul", "ol"}
+                ):
+                    continue
+
+                if isinstance(child, Tag):
+                    parts.append(
+                        child.get_text(
+                            " ",
+                            strip=True,
+                        )
+                    )
+                else:
+                    parts.append(str(child))
+
+            text = _normalize_text(
+                " ".join(parts)
+            )
+
+        elif tag_name in generic_tags:
+            text = _leaf_container_text(node)
+
+            if text and _contains_signal(
+                node,
+                HEADING_SIGNAL_TERMS,
+            ):
+                if _word_count(text) <= 18:
+                    block_type = "heading"
+
+        if not text:
+            continue
+
+        if _is_metadata_or_ui(text):
+            continue
+
+        normalized_key = (
+            block_type
+            + ":"
+            + re.sub(
+                r"\s+",
+                " ",
+                text,
+            ).casefold()
+        )
+
+        # Remove only directly repeated UI/DOM duplicates.
+        if normalized_key == previous_key:
+            continue
+
+        previous_key = normalized_key
+
+        block = {
+            "index": len(blocks),
+            "type": block_type,
+            "tag": tag_name,
+            "level": level,
+            "text": text,
+            "word_count": _word_count(text),
+        }
+
+        blocks.append(block)
+
+        if block_type == "heading":
+            headings.append({
+                "level": level,
+                "text": text,
+            })
+        else:
+            paragraphs.append(text)
+
+    article_body = "\n\n".join(
+        block["text"]
+        for block in blocks
+    ).strip()
+
+    return {
+        "blocks": blocks,
+        "headings": headings,
+        "paragraphs": paragraphs,
+        "article_body": article_body,
+    }
+
+
+def reconstruct_universal_dom_article_v1(
+    *,
+    html_text: str,
+    url: str = "",
+    title: str = "",
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    source_html = str(html_text or "")
+
+    soup = BeautifulSoup(
+        source_html,
+        PARSER_NAME,
+    )
+
+    removed_node_count = _remove_noise_nodes(
+        soup
+    )
+
+    root_selection = _select_best_root(
+        soup
+    )
+
+    selected = root_selection["selected"]
+    root = selected["node"]
+
+    extraction = _extract_ordered_blocks(
+        root
+    )
+
+    article_body = str(
+        extraction.get("article_body") or ""
+    ).strip()
+
+    detected_title = _normalize_text(title)
+
+    if not detected_title:
+        title_tag = soup.find("title")
+
+        if isinstance(title_tag, Tag):
+            detected_title = _normalize_text(
+                title_tag.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+    h1 = next(
+        (
+            heading["text"]
+            for heading in extraction["headings"]
+            if heading.get("level") == 1
+        ),
+        "",
+    )
+
+    if not detected_title:
+        detected_title = h1
+
+    candidate_summary = []
+
+    for candidate in root_selection["candidates"][:20]:
+        candidate_summary.append({
+            "tag": candidate["tag"],
+            "signal": candidate["signal"][:250],
+            "word_count": candidate["word_count"],
+            "heading_count": candidate["heading_count"],
+            "paragraph_count": candidate["paragraph_count"],
+            "link_density": candidate["link_density"],
+            "score": candidate["score"],
+        })
+
+    return {
+        "ok": bool(article_body),
+        "engine": ENGINE_NAME,
+        "parser": PARSER_NAME,
+        "url": url,
+        "title": detected_title,
+        "h1": h1,
+        "article_body": article_body,
+        "content_body": article_body,
+        "main_content": article_body,
+        "blocks": extraction["blocks"],
+        "headings": extraction["headings"],
+        "paragraphs": extraction["paragraphs"],
+        "selected_root": {
+            "tag": selected["tag"],
+            "signal": selected["signal"],
+            "word_count": selected["word_count"],
+            "heading_count": selected["heading_count"],
+            "paragraph_count": selected["paragraph_count"],
+            "link_density": selected["link_density"],
+            "score": selected["score"],
+        },
+        "statistics": {
+            "source_html_length": len(source_html),
+            "removed_node_count": removed_node_count,
+            "candidate_count": len(
+                root_selection["candidates"]
+            ),
+            "block_count": len(
+                extraction["blocks"]
+            ),
+            "heading_count": len(
+                extraction["headings"]
+            ),
+            "paragraph_count": len(
+                extraction["paragraphs"]
+            ),
+            "article_word_count": _word_count(
+                article_body
+            ),
+            "article_length": len(article_body),
+        },
+        "candidate_summary": candidate_summary,
+        "metadata": {
+            **(metadata or {}),
+            "article_reconstruction": {
+                "engine": ENGINE_NAME,
+                "parser": PARSER_NAME,
+                "selected_root_tag": selected["tag"],
+                "selected_root_signal": selected["signal"],
+            },
+        },
+    }
+
+
+def explain_universal_dom_article_reconstruction_v1():
+    return {
+        "engine": ENGINE_NAME,
+        "parser": PARSER_NAME,
+        "purpose": (
+            "Reconstruct ordered article headings and paragraphs "
+            "from valid, malformed and component-based HTML."
+        ),
+        "stages": [
+            "browser-tolerant DOM repair",
+            "universal root candidate scoring",
+            "DOM noise removal",
+            "ordered visible content walking",
+            "paragraph and heading reconstruction",
+        ],
+        "does_not": [
+            "write WUC",
+            "write UUCD",
+            "perform semantic interpretation",
+        ],
+    }

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import html
 import re
@@ -20,19 +20,19 @@ UNIVERSAL_BOILERPLATE_PATTERNS_V1 = [
     r"(?is)\bDownload the app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
     r"(?is)\bGet the app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
     r"(?is)\bJoin our community\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-    r"(?is)\bEditorial policy\b.*?$",
-    r"(?is)\bMedical Review Policy\b.*?(?=\bKey Takeaways\b|\bWhat are\b|\bWhat is\b|\bHow many\b|$)",
-    r"(?is)\bFact checked\b.*?$",
+    r"(?im)^\s*Editorial policy[^\r\n]*$",
+    r"(?im)^\s*Medical Review Policy[^\r\n]*$",
+    r"(?im)^\s*Fact[- ]Checked(?:\s+by)?[^\r\n]*$",
 ]
 
 DOMAIN_BOILERPLATE_PATTERNS_V1 = {
     "whattoexpect.com": [
         r"(?is)\bGot more fertility questions\?.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
         r"(?is)\bGo to the What to Expect app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
-        r"(?is)\bFrom the What to Expect editorial team\b.*$",
-        r"(?is)\bWhat to Expect follows strict reporting guidelines\b.*$",
-        r"(?is)\bLearn how we keep our content accurate and up-to-date\b.*$",
-        r"(?is)\bmedical review and editorial policy\b.*?$",
+        r"(?im)^\s*From the What to Expect editorial team[^\r\n]*$",
+        r"(?im)^\s*What to Expect follows strict reporting guidelines[^\r\n]*$",
+        r"(?im)^\s*Learn how we keep our content accurate and up-to-date[^\r\n]*$",
+        r"(?im)^[^\r\n]*medical review and editorial policy[^\r\n]*$",
     ],
 }
 
@@ -69,10 +69,10 @@ EDITORIAL_METADATA_PATTERNS_V1 = [
     r"\bmedically reviewed by\s+[A-Z][A-Za-z .,'-]+",
     r"\breviewed by\s+[A-Z][A-Za-z .,'-]+",
     r"\bfact checked by\s+[A-Z][A-Za-z .,'-]+",
-    r"\bmedical review policy\b.*?(?=After spending|Key Takeaways|Newborn|Baby|$)",
-    r"\beditorial policy\b.*?(?=After spending|Key Takeaways|Newborn|Baby|$)",
-    r"\blearn more about our editorial.*?policies\s*\.?",
-    r"\blatest update:\s*.*?(?=After spending|Key Takeaways|Newborn|Baby|$)",
+    r"(?im)^\s*medical review policy[^\r\n]*$",
+    r"(?im)^\s*editorial policy[^\r\n]*$",
+    r"(?im)^[^\r\n]*learn more about our editorial[^\r\n]*policies[^\r\n]*$",
+    r"(?im)^\s*latest update:\s*[^\r\n]*$",
     r"\|\s*[A-Z][a-z]+ \d{1,2}, \d{4}",
 ]
 
@@ -224,6 +224,8 @@ def clean_crawled_article_body_v1(
         },
         "cleaning_version": "article_body_cleaner_v1_5_layer_boilerplate_intelligence",
     }
+
+
 
 
 

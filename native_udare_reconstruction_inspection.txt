@@ -1,0 +1,3857 @@
+
+====================================================================================================
+FILE INFORMATION
+====================================================================================================
+Path: backend\server\stores\universal_dom_article_reconstruction_engine.py
+Total lines: 1175
+
+====================================================================================================
+IMPORTS
+====================================================================================================
+from __future__ import annotations
+import html
+import re
+from typing import Any, Dict, List, Optional, Set
+from bs4 import BeautifulSoup, NavigableString, Tag
+
+====================================================================================================
+TOP-LEVEL VARIABLES
+====================================================================================================
+Line 10: ENGINE_NAME
+      10: ENGINE_NAME = "universal_dom_article_reconstruction_engine_v1_3"
+
+Line 11: PARSER_NAME
+      11: PARSER_NAME = "html5lib"
+
+Line 14: NOISE_TAGS
+      14: NOISE_TAGS = {
+      15:     "script",
+      16:     "style",
+      17:     "noscript",
+      18:     "template",
+      19:     "svg",
+      20:     "canvas",
+      21:     "iframe",
+      22:     "form",
+      23:     "nav",
+      24:     "footer",
+      25: }
+
+Line 27: NOISE_SIGNAL_TERMS
+      27: NOISE_SIGNAL_TERMS = {
+      28:     "ads",
+      29:     "advertisement",
+      30:     "ad-container",
+      31:     "ad-wrapper",
+      32:     "ad-slot",
+      33:     "affiliate",
+      34:     "breadcrumb",
+      35:     "breadcrumbs",
+      36:     "cookie",
+      37:     "consent",
+      38:     "footer",
+      39:     "inline-form",
+      40:     "lightbox",
+      41:     "newsletter",
+      42:     "pagination",
+      43:     "promo",
+      44:     "recommended-products",
+      45:     "share",
+      46:     "sharing",
+      47:     "signup",
+      48:     "social",
+      49:     "sponsored",
+      50:     "subscribe",
+      51:     "video-player",
+      52:     "jw-player",
+      53:     "community-discussion",
+      54:     "comments",
+      55: }
+
+Line 57: CONTENT_SIGNAL_TERMS
+      57: CONTENT_SIGNAL_TERMS = {
+      58:     "article",
+      59:     "article-body",
+      60:     "article-content",
+      61:     "body",
+      62:     "content",
+      63:     "copy",
+      64:     "description",
+      65:     "entry-content",
+      66:     "main-content",
+      67:     "post-content",
+      68:     "story",
+      69:     "story-body",
+      70:     "text",
+      71: }
+
+Line 73: HEADING_SIGNAL_TERMS
+      73: HEADING_SIGNAL_TERMS = {
+      74:     "headline",
+      75:     "heading",
+      76:     "title",
+      77:     "subheading",
+      78:     "subtitle",
+      79: }
+
+Line 81: METADATA_PATTERNS
+      81: METADATA_PATTERNS = [
+      82:     re.compile(
+      83:         r"^\s*medically reviewed(?:\s+by)?\b",
+      84:         re.IGNORECASE,
+      85:     ),
+      86:     re.compile(
+      87:         r"^\s*fact[- ]checked(?:\s+by)?\b",
+      88:         re.IGNORECASE,
+      89:     ),
+      90:     re.compile(
+      91:         r"^\s*reviewed\s+[A-Za-z]+\s+\d{1,2},\s+\d{4}\s*$",
+      92:         re.IGNORECASE,
+      93:     ),
+      94:     re.compile(
+      95:         r"^\s*latest update\b",
+      96:         re.IGNORECASE,
+      97:     ),
+      98:     re.compile(
+      99:         r"^\s*medical review policy\b",
+     100:         re.IGNORECASE,
+     101:     ),
+     102:     re.compile(
+     103:         r"^\s*editorial policy\b",
+     104:         re.IGNORECASE,
+     105:     ),
+     106:     re.compile(
+     107:         r"^\s*we believe you should always know the source\b",
+     108:         re.IGNORECASE,
+     109:     ),
+     110:     re.compile(
+     111:         r"^\s*learn more about our editorial and medical review policies\b",
+     112:         re.IGNORECASE,
+     113:     ),
+     114: ]
+
+Line 116: UI_PATTERNS
+     116: UI_PATTERNS = [
+     117:     re.compile(r"^\s*previous item\s*$", re.IGNORECASE),
+     118:     re.compile(r"^\s*next item\s*$", re.IGNORECASE),
+     119:     re.compile(r"^\s*back to top\s*$", re.IGNORECASE),
+     120:     re.compile(r"^\s*see more\s*$", re.IGNORECASE),
+     121:     re.compile(r"^\s*recommended products\s*$", re.IGNORECASE),
+     122:     re.compile(r"^\s*birth month group discussions\s*$", re.IGNORECASE),
+     123:     re.compile(
+     124:         r"^\s*explore(?:\s+pregnancy)?(?:\s+week\s+\d+)?\s*$",
+     125:         re.IGNORECASE,
+     126:     ),
+     127:     re.compile(
+     128:         r"^\s*track your symptoms with the my journal tool\b.*$",
+     129:         re.IGNORECASE,
+     130:     ),
+     131: ]
+
+Line 746: TERMINAL_METADATA_PATTERNS
+     746: TERMINAL_METADATA_PATTERNS = [
+     747:     re.compile(
+     748:         r"^\s*from the .{0,120} editorial team\b",
+     749:         re.IGNORECASE,
+     750:     ),
+     751:     re.compile(
+     752:         r"^\s*(?:sources?|references?|bibliography)\s*$",
+     753:         re.IGNORECASE,
+     754:     ),
+     755:     re.compile(
+     756:         r"^\s*about the author\s*$",
+     757:         re.IGNORECASE,
+     758:     ),
+     759:     re.compile(
+     760:         r"^\s*our editorial process\s*$",
+     761:         re.IGNORECASE,
+     762:     ),
+     763:     re.compile(
+     764:         r"^\s*what to expect selects products\b",
+     765:         re.IGNORECASE,
+     766:     ),
+     767:     re.compile(
+     768:         r"^\s*prices and details are accurate\b",
+     769:         re.IGNORECASE,
+     770:     ),
+     771: ]
+
+
+====================================================================================================
+FUNCTION INDEX
+====================================================================================================
+  134 | _normalize_text
+  143 | _node_text
+  179 | _clean_reconstructed_text
+  199 | _signal_text
+  224 | _signal_tokens
+  237 | _contains_signal
+  298 | _is_noise_node
+  314 | _remove_noise_nodes
+  331 | _is_metadata_or_ui
+  359 | _word_count
+  369 | _link_word_count
+  382 | _candidate_score
+  459 | _collect_root_candidates
+  465 | add
+  519 | _select_best_root
+  546 | _selected_ancestor
+  565 | _has_substantial_block_descendant
+  610 | _leaf_container_text
+  665 | _is_navigation_list_item
+  774 | _postprocess_reconstructed_blocks
+  820 | _extract_ordered_blocks
+ 1032 | reconstruct_universal_dom_article_v1
+ 1155 | explain_universal_dom_article_reconstruction_v1
+
+====================================================================================================
+RELEVANT FUNCTION IMPLEMENTATIONS
+====================================================================================================
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _normalize_text
+----------------------------------------------------------------------------------------------------
+     129:         re.IGNORECASE,
+     130:     ),
+     131: ]
+     132: 
+     133: 
+     134: def _normalize_text(value: Any) -> str:
+     135:     text = html.unescape(str(value or ""))
+     136:     text = text.replace("\u00a0", " ")
+     137:     text = text.replace("\r\n", "\n").replace("\r", "\n")
+     138:     text = re.sub(r"[ \t]+", " ", text)
+     139:     text = re.sub(r"\s*\n\s*", " ", text)
+     140:     return text.strip()
+     141: 
+     142: 
+     143: def _node_text(
+     144:     node: Tag,
+     145: ) -> str:
+     146:     """
+     147:     Read text nodes without inserting artificial spaces around
+     148:     inline HTML elements.
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _node_text
+----------------------------------------------------------------------------------------------------
+     138:     text = re.sub(r"[ \t]+", " ", text)
+     139:     text = re.sub(r"\s*\n\s*", " ", text)
+     140:     return text.strip()
+     141: 
+     142: 
+     143: def _node_text(
+     144:     node: Tag,
+     145: ) -> str:
+     146:     """
+     147:     Read text nodes without inserting artificial spaces around
+     148:     inline HTML elements.
+     149: 
+     150:     Examples:
+     151:         M<span>ost</span>       -> Most
+     152:         E<span>njoying</span>   -> Enjoying
+     153:         Journa<span>l</span>    -> Journal
+     154:     """
+     155: 
+     156:     parts: List[str] = []
+     157: 
+     158:     for descendant in node.descendants:
+     159:         if isinstance(
+     160:             descendant,
+     161:             NavigableString,
+     162:         ):
+     163:             parts.append(str(descendant))
+     164:             continue
+     165: 
+     166:         if (
+     167:             isinstance(descendant, Tag)
+     168:             and str(
+     169:                 descendant.name or ""
+     170:             ).lower() == "br"
+     171:         ):
+     172:             parts.append(" ")
+     173: 
+     174:     return _normalize_text(
+     175:         "".join(parts)
+     176:     )
+     177: 
+     178: 
+     179: def _clean_reconstructed_text(
+     180:     value: Any,
+     181: ) -> str:
+     182:     """
+     183:     Remove attached interface labels without changing article
+     184:     wording or paragraph order.
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _clean_reconstructed_text
+----------------------------------------------------------------------------------------------------
+     174:     return _normalize_text(
+     175:         "".join(parts)
+     176:     )
+     177: 
+     178: 
+     179: def _clean_reconstructed_text(
+     180:     value: Any,
+     181: ) -> str:
+     182:     """
+     183:     Remove attached interface labels without changing article
+     184:     wording or paragraph order.
+     185:     """
+     186: 
+     187:     text = _normalize_text(value)
+     188: 
+     189:     text = re.sub(
+     190:         r"(?:\s+(?:Read|Learn|See)\s+More)+[.!]?\s*$",
+     191:         "",
+     192:         text,
+     193:         flags=re.IGNORECASE,
+     194:     ).strip()
+     195: 
+     196:     return text
+     197: 
+     198: 
+     199: def _signal_text(node: Tag) -> str:
+     200:     values: List[str] = []
+     201: 
+     202:     node_id = node.get("id")
+     203:     if node_id:
+     204:         values.append(str(node_id))
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _signal_text
+----------------------------------------------------------------------------------------------------
+     194:     ).strip()
+     195: 
+     196:     return text
+     197: 
+     198: 
+     199: def _signal_text(node: Tag) -> str:
+     200:     values: List[str] = []
+     201: 
+     202:     node_id = node.get("id")
+     203:     if node_id:
+     204:         values.append(str(node_id))
+     205: 
+     206:     for value in node.get("class") or []:
+     207:         values.append(str(value))
+     208: 
+     209:     for key in (
+     210:         "role",
+     211:         "aria-label",
+     212:         "data-component",
+     213:         "data-module",
+     214:         "data-testid",
+     215:     ):
+     216:         value = node.get(key)
+     217: 
+     218:         if value:
+     219:             values.append(str(value))
+     220: 
+     221:     return " ".join(values).casefold()
+     222: 
+     223: 
+     224: def _signal_tokens(node: Tag) -> Set[str]:
+     225:     signal = _signal_text(node)
+     226: 
+     227:     return {
+     228:         token
+     229:         for token in re.split(
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _is_noise_node
+----------------------------------------------------------------------------------------------------
+     293:             return True
+     294: 
+     295:     return False
+     296: 
+     297: 
+     298: def _is_noise_node(node: Tag) -> bool:
+     299:     if not isinstance(node, Tag):
+     300:         return False
+     301: 
+     302:     if not node.name:
+     303:         return False
+     304: 
+     305:     if str(node.name).lower() in NOISE_TAGS:
+     306:         return True
+     307: 
+     308:     return _contains_signal(
+     309:         node,
+     310:         NOISE_SIGNAL_TERMS,
+     311:     )
+     312: 
+     313: 
+     314: def _remove_noise_nodes(root: Tag) -> int:
+     315:     removed = 0
+     316: 
+     317:     for node in list(root.find_all(True)):
+     318:         if not isinstance(node, Tag):
+     319:             continue
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _remove_noise_nodes
+----------------------------------------------------------------------------------------------------
+     309:         node,
+     310:         NOISE_SIGNAL_TERMS,
+     311:     )
+     312: 
+     313: 
+     314: def _remove_noise_nodes(root: Tag) -> int:
+     315:     removed = 0
+     316: 
+     317:     for node in list(root.find_all(True)):
+     318:         if not isinstance(node, Tag):
+     319:             continue
+     320: 
+     321:         if not node.name:
+     322:             continue
+     323: 
+     324:         if _is_noise_node(node):
+     325:             node.decompose()
+     326:             removed += 1
+     327: 
+     328:     return removed
+     329: 
+     330: 
+     331: def _is_metadata_or_ui(text: str) -> bool:
+     332:     normalized = _normalize_text(text)
+     333: 
+     334:     if not normalized:
+     335:         return True
+     336: 
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _candidate_score
+----------------------------------------------------------------------------------------------------
+     377:         )
+     378: 
+     379:     return total
+     380: 
+     381: 
+     382: def _candidate_score(node: Tag) -> Dict[str, Any]:
+     383:     text = _normalize_text(
+     384:         _node_text(node)
+     385:     )
+     386: 
+     387:     words = _word_count(text)
+     388: 
+     389:     headings = len(
+     390:         node.find_all(
+     391:             ["h1", "h2", "h3", "h4", "h5", "h6"]
+     392:         )
+     393:     )
+     394: 
+     395:     paragraphs = len(node.find_all("p"))
+     396:     list_items = len(node.find_all("li"))
+     397:     blockquotes = len(node.find_all("blockquote"))
+     398: 
+     399:     link_words = _link_word_count(node)
+     400: 
+     401:     link_density = (
+     402:         link_words / words
+     403:         if words
+     404:         else 1.0
+     405:     )
+     406: 
+     407:     tag_name = str(node.name or "").lower()
+     408:     signal = _signal_text(node)
+     409: 
+     410:     score = float(words)
+     411: 
+     412:     score += headings * 45.0
+     413:     score += paragraphs * 24.0
+     414:     score += list_items * 4.0
+     415:     score += blockquotes * 12.0
+     416: 
+     417:     if tag_name == "article":
+     418:         score += 140.0
+     419:     elif tag_name == "main":
+     420:         score += 120.0
+     421:     elif tag_name == "section":
+     422:         score += 25.0
+     423:     elif tag_name == "body":
+     424:         score -= 80.0
+     425: 
+     426:     if _contains_signal(
+     427:         node,
+     428:         CONTENT_SIGNAL_TERMS,
+     429:     ):
+     430:         score += 90.0
+     431: 
+     432:     score -= (
+     433:         link_density
+     434:         * max(words, 1)
+     435:         * 1.35
+     436:     )
+     437: 
+     438:     if words < 100:
+     439:         score -= 500.0
+     440: 
+     441:     if headings == 0 and paragraphs == 0:
+     442:         score -= 300.0
+     443: 
+     444:     return {
+     445:         "node": node,
+     446:         "tag": tag_name,
+     447:         "signal": signal,
+     448:         "word_count": words,
+     449:         "heading_count": headings,
+     450:         "paragraph_count": paragraphs,
+     451:         "list_item_count": list_items,
+     452:         "blockquote_count": blockquotes,
+     453:         "link_word_count": link_words,
+     454:         "link_density": round(link_density, 4),
+     455:         "score": round(score, 4),
+     456:     }
+     457: 
+     458: 
+     459: def _collect_root_candidates(
+     460:     soup: BeautifulSoup,
+     461: ) -> List[Dict[str, Any]]:
+     462:     nodes: List[Tag] = []
+     463:     seen: Set[int] = set()
+     464: 
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _collect_root_candidates
+----------------------------------------------------------------------------------------------------
+     454:         "link_density": round(link_density, 4),
+     455:         "score": round(score, 4),
+     456:     }
+     457: 
+     458: 
+     459: def _collect_root_candidates(
+     460:     soup: BeautifulSoup,
+     461: ) -> List[Dict[str, Any]]:
+     462:     nodes: List[Tag] = []
+     463:     seen: Set[int] = set()
+     464: 
+     465:     def add(node: Optional[Tag]) -> None:
+     466:         if not isinstance(node, Tag):
+     467:             return
+     468: 
+     469:         identity = id(node)
+     470: 
+     471:         if identity in seen:
+     472:             return
+     473: 
+     474:         seen.add(identity)
+     475:         nodes.append(node)
+     476: 
+     477:     add(soup.body)
+     478: 
+     479:     for node in soup.find_all(
+     480:         ["main", "article", "section", "div"]
+     481:     ):
+     482:         if not isinstance(node, Tag):
+     483:             continue
+     484: 
+     485:         tag_name = str(node.name or "").lower()
+     486:         signal = _signal_text(node)
+     487: 
+     488:         heading_count = len(
+     489:             node.find_all(
+     490:                 ["h1", "h2", "h3", "h4", "h5", "h6"]
+     491:             )
+     492:         )
+     493: 
+     494:         should_consider = (
+     495:             tag_name in {"main", "article"}
+     496:             or heading_count >= 2
+     497:             or _contains_signal(
+     498:                 node,
+     499:                 CONTENT_SIGNAL_TERMS,
+     500:             )
+     501:         )
+     502: 
+     503:         if should_consider:
+     504:             add(node)
+     505: 
+     506:     scored = [
+     507:         _candidate_score(node)
+     508:         for node in nodes
+     509:     ]
+     510: 
+     511:     scored.sort(
+     512:         key=lambda item: item["score"],
+     513:         reverse=True,
+     514:     )
+     515: 
+     516:     return scored
+     517: 
+     518: 
+     519: def _select_best_root(
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+     522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _select_best_root
+----------------------------------------------------------------------------------------------------
+     514:     )
+     515: 
+     516:     return scored
+     517: 
+     518: 
+     519: def _select_best_root(
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+     522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+     525:         candidate
+     526:         for candidate in candidates
+     527:         if candidate["word_count"] >= 100
+     528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+     531:     if eligible:
+     532:         selected = eligible[0]
+     533:     else:
+     534:         selected_node = soup.body or soup
+     535: 
+     536:         selected = _candidate_score(
+     537:             selected_node
+     538:         )
+     539: 
+     540:     return {
+     541:         "selected": selected,
+     542:         "candidates": candidates,
+     543:     }
+     544: 
+     545: 
+     546: def _selected_ancestor(
+     547:     node: Tag,
+     548:     selected_tags: Set[str],
+     549: ) -> Optional[Tag]:
+     550:     parent = node.parent
+     551: 
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _has_substantial_block_descendant
+----------------------------------------------------------------------------------------------------
+     560:         parent = parent.parent
+     561: 
+     562:     return None
+     563: 
+     564: 
+     565: def _has_substantial_block_descendant(
+     566:     node: Tag,
+     567: ) -> bool:
+     568:     """
+     569:     Return True when a generic container contains a more specific
+     570:     descendant block that should be emitted instead of the parent.
+     571: 
+     572:     This prevents:
+     573: 
+     574:         parent DIV containing three cards
+     575:         child card DIV
+     576:         child body DIV
+     577: 
+     578:     from all being written as duplicate article paragraphs.
+     579:     """
+     580: 
+     581:     descendant_tags = [
+     582:         "div",
+     583:         "section",
+     584:         "article",
+     585:         "h1",
+     586:         "h2",
+     587:         "h3",
+     588:         "h4",
+     589:         "h5",
+     590:         "h6",
+     591:         "p",
+     592:         "li",
+     593:         "blockquote",
+     594:     ]
+     595: 
+     596:     for descendant in node.find_all(descendant_tags):
+     597:         if not isinstance(descendant, Tag):
+     598:             continue
+     599: 
+     600:         text = _normalize_text(
+     601:             _node_text(descendant)
+     602:         )
+     603: 
+     604:         if _word_count(text) >= 3:
+     605:             return True
+     606: 
+     607:     return False
+     608: 
+     609: 
+     610: def _leaf_container_text(
+     611:     node: Tag,
+     612: ) -> str:
+     613:     """
+     614:     Extract text only from a leaf-level generic content container.
+     615: 
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _leaf_container_text
+----------------------------------------------------------------------------------------------------
+     605:             return True
+     606: 
+     607:     return False
+     608: 
+     609: 
+     610: def _leaf_container_text(
+     611:     node: Tag,
+     612: ) -> str:
+     613:     """
+     614:     Extract text only from a leaf-level generic content container.
+     615: 
+     616:     Inline descendants such as A, STRONG and SPAN remain part of
+     617:     the paragraph. Nested block containers cause the parent to be
+     618:     skipped so their text is not duplicated.
+     619:     """
+     620: 
+     621:     if _has_substantial_block_descendant(node):
+     622:         return ""
+     623: 
+     624:     text = _normalize_text(
+     625:         _node_text(node)
+     626:     )
+     627: 
+     628:     words = _word_count(text)
+     629: 
+     630:     has_heading_signal = _contains_signal(
+     631:         node,
+     632:         HEADING_SIGNAL_TERMS,
+     633:     )
+     634: 
+     635:     if words < 7:
+     636:         if (
+     637:             has_heading_signal
+     638:             and 1 <= words <= 18
+     639:         ):
+     640:             return text
+     641: 
+     642:         return ""
+     643: 
+     644:     has_content_signal = _contains_signal(
+     645:         node,
+     646:         CONTENT_SIGNAL_TERMS,
+     647:     )
+     648: 
+     649:     has_sentence_shape = bool(
+     650:         re.search(
+     651:             r"[.!?](?:\s|$)",
+     652:             text,
+     653:         )
+     654:     )
+     655: 
+     656:     if not (
+     657:         has_content_signal
+     658:         or has_sentence_shape
+     659:     ):
+     660:         return ""
+     661: 
+     662:     return text
+     663: 
+     664: 
+     665: def _is_navigation_list_item(
+     666:     node: Tag,
+     667: ) -> bool:
+     668:     """
+     669:     Detect linked table-of-contents and tab navigation lists while
+     670:     preserving normal article bullet lists.
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _postprocess_reconstructed_blocks
+----------------------------------------------------------------------------------------------------
+     769:         re.IGNORECASE,
+     770:     ),
+     771: ]
+     772: 
+     773: 
+     774: def _postprocess_reconstructed_blocks(
+     775:     blocks: List[Dict[str, Any]],
+     776: ) -> List[Dict[str, Any]]:
+     777:     """
+     778:     Clean reconstructed blocks and stop before terminal metadata,
+     779:     source lists or commercial-product disclosures.
+     780:     """
+     781: 
+     782:     retained: List[Dict[str, Any]] = []
+     783: 
+     784:     for original in blocks:
+     785:         block = dict(original)
+     786: 
+     787:         text = _clean_reconstructed_text(
+     788:             block.get("text")
+     789:         )
+     790: 
+     791:         if not text:
+     792:             continue
+     793: 
+     794:         terminal_metadata = any(
+     795:             pattern.search(text)
+     796:             for pattern in TERMINAL_METADATA_PATTERNS
+     797:         )
+     798: 
+     799:         # Do not permit a false terminal match near the beginning.
+     800:         if (
+     801:             terminal_metadata
+     802:             and len(retained) >= 15
+     803:         ):
+     804:             break
+     805: 
+     806:         if _is_metadata_or_ui(text):
+     807:             continue
+     808: 
+     809:         block["text"] = text
+     810:         block["word_count"] = _word_count(text)
+     811: 
+     812:         retained.append(block)
+     813: 
+     814:     for index, block in enumerate(retained):
+     815:         block["index"] = index
+     816: 
+     817:     return retained
+     818: 
+     819: 
+     820: def _extract_ordered_blocks(
+     821:     root: Tag,
+     822: ) -> Dict[str, Any]:
+     823:     explicit_tags = {
+     824:         "h1",
+     825:         "h2",
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: _extract_ordered_blocks
+----------------------------------------------------------------------------------------------------
+     815:         block["index"] = index
+     816: 
+     817:     return retained
+     818: 
+     819: 
+     820: def _extract_ordered_blocks(
+     821:     root: Tag,
+     822: ) -> Dict[str, Any]:
+     823:     explicit_tags = {
+     824:         "h1",
+     825:         "h2",
+     826:         "h3",
+     827:         "h4",
+     828:         "h5",
+     829:         "h6",
+     830:         "p",
+     831:         "li",
+     832:         "blockquote",
+     833:     }
+     834: 
+     835:     generic_tags = {
+     836:         "div",
+     837:         "section",
+     838:         "span",
+     839:     }
+     840: 
+     841:     linked_heading_tags = {
+     842:         "a",
+     843:     }
+     844: 
+     845:     blocks: List[Dict[str, Any]] = []
+     846:     headings: List[Dict[str, Any]] = []
+     847:     paragraphs: List[str] = []
+     848: 
+     849:     previous_key = ""
+     850: 
+     851:     for node in root.descendants:
+     852:         if not isinstance(node, Tag):
+     853:             continue
+     854: 
+     855:         tag_name = str(
+     856:             node.name or ""
+     857:         ).lower()
+     858: 
+     859:         if tag_name not in (
+     860:             explicit_tags
+     861:             | generic_tags
+     862:             | linked_heading_tags
+     863:         ):
+     864:             continue
+     865: 
+     866:         if _selected_ancestor(
+     867:             node,
+     868:             explicit_tags,
+     869:         ) is not None:
+     870:             continue
+     871: 
+     872:         text = ""
+     873:         block_type = "paragraph"
+     874:         level = None
+     875: 
+     876:         if tag_name.startswith("h") and len(tag_name) == 2:
+     877:             text = _normalize_text(
+     878:                 _node_text(node)
+     879:             )
+     880:             block_type = "heading"
+     881:             level = int(tag_name[1])
+     882: 
+     883:         elif tag_name in {"p", "blockquote"}:
+     884:             text = _normalize_text(
+     885:                 _node_text(node)
+     886:             )
+     887: 
+     888:         elif tag_name == "li":
+     889:             if _is_navigation_list_item(node):
+     890:                 continue
+     891: 
+     892:             parts = []
+     893: 
+     894:             for child in node.contents:
+     895:                 if (
+     896:                     isinstance(child, Tag)
+     897:                     and str(child.name or "").lower()
+     898:                     in {"ul", "ol"}
+     899:                 ):
+     900:                     continue
+     901: 
+     902:                 if isinstance(child, Tag):
+     903:                     parts.append(
+     904:                         _node_text(child)
+     905:                     )
+     906:                 else:
+     907:                     parts.append(str(child))
+     908: 
+     909:             text = _normalize_text(
+     910:                 " ".join(parts)
+     911:             )
+     912: 
+     913:         elif tag_name in linked_heading_tags:
+     914:             candidate_text = _normalize_text(
+     915:                 _node_text(node)
+     916:             )
+     917: 
+     918:             candidate_words = _word_count(
+     919:                 candidate_text
+     920:             )
+     921: 
+     922:             has_heading_signal = _contains_signal(
+     923:                 node,
+     924:                 HEADING_SIGNAL_TERMS,
+     925:             )
+     926: 
+     927:             parent = node.parent
+     928: 
+     929:             if (
+     930:                 not has_heading_signal
+     931:                 and isinstance(parent, Tag)
+     932:             ):
+     933:                 has_heading_signal = _contains_signal(
+     934:                     parent,
+     935:                     HEADING_SIGNAL_TERMS,
+     936:                 )
+     937: 
+     938:             if (
+     939:                 has_heading_signal
+     940:                 and 1 <= candidate_words <= 18
+     941:             ):
+     942:                 text = candidate_text
+     943:                 block_type = "heading"
+     944: 
+     945:         elif tag_name in generic_tags:
+     946:             text = _leaf_container_text(node)
+     947: 
+     948:             if text and _contains_signal(
+     949:                 node,
+     950:                 HEADING_SIGNAL_TERMS,
+     951:             ):
+     952:                 if _word_count(text) <= 18:
+     953:                     block_type = "heading"
+     954: 
+     955:         text = _clean_reconstructed_text(
+     956:             text
+     957:         )
+     958: 
+     959:         if not text:
+     960:             continue
+     961: 
+     962:         if _is_metadata_or_ui(text):
+     963:             continue
+     964: 
+     965:         normalized_key = (
+     966:             block_type
+     967:             + ":"
+     968:             + re.sub(
+     969:                 r"\s+",
+     970:                 " ",
+     971:                 text,
+     972:             ).casefold()
+     973:         )
+     974: 
+     975:         # Remove only directly repeated UI/DOM duplicates.
+     976:         if normalized_key == previous_key:
+     977:             continue
+     978: 
+     979:         previous_key = normalized_key
+     980: 
+     981:         block = {
+     982:             "index": len(blocks),
+     983:             "type": block_type,
+     984:             "tag": tag_name,
+     985:             "level": level,
+     986:             "text": text,
+     987:             "word_count": _word_count(text),
+     988:         }
+     989: 
+     990:         blocks.append(block)
+     991: 
+     992:         if block_type == "heading":
+     993:             headings.append({
+     994:                 "level": level,
+     995:                 "text": text,
+     996:             })
+     997:         else:
+     998:             paragraphs.append(text)
+     999: 
+    1000:     blocks = _postprocess_reconstructed_blocks(
+    1001:         blocks
+    1002:     )
+    1003: 
+    1004:     headings = [
+    1005:         {
+    1006:             "level": block.get("level"),
+    1007:             "text": block.get("text"),
+    1008:         }
+    1009:         for block in blocks
+    1010:         if block.get("type") == "heading"
+    1011:     ]
+    1012: 
+    1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+    1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+    1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+    1035:     url: str = "",
+    1036:     title: str = "",
+    1037:     metadata: Dict[str, Any] | None = None,
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: reconstruct_universal_dom_article_v1
+----------------------------------------------------------------------------------------------------
+    1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+    1035:     url: str = "",
+    1036:     title: str = "",
+    1037:     metadata: Dict[str, Any] | None = None,
+    1038: ) -> Dict[str, Any]:
+    1039:     source_html = str(html_text or "")
+    1040: 
+    1041:     soup = BeautifulSoup(
+    1042:         source_html,
+    1043:         PARSER_NAME,
+    1044:     )
+    1045: 
+    1046:     removed_node_count = _remove_noise_nodes(
+    1047:         soup
+    1048:     )
+    1049: 
+    1050:     root_selection = _select_best_root(
+    1051:         soup
+    1052:     )
+    1053: 
+    1054:     selected = root_selection["selected"]
+    1055:     root = selected["node"]
+    1056: 
+    1057:     extraction = _extract_ordered_blocks(
+    1058:         root
+    1059:     )
+    1060: 
+    1061:     article_body = str(
+    1062:         extraction.get("article_body") or ""
+    1063:     ).strip()
+    1064: 
+    1065:     detected_title = _normalize_text(title)
+    1066: 
+    1067:     if not detected_title:
+    1068:         title_tag = soup.find("title")
+    1069: 
+    1070:         if isinstance(title_tag, Tag):
+    1071:             detected_title = _normalize_text(
+    1072:                 _node_text(title_tag)
+    1073:             )
+    1074: 
+    1075:     h1 = next(
+    1076:         (
+    1077:             heading["text"]
+    1078:             for heading in extraction["headings"]
+    1079:             if heading.get("level") == 1
+    1080:         ),
+    1081:         "",
+    1082:     )
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+    1122:         "statistics": {
+    1123:             "source_html_length": len(source_html),
+    1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+    1138:                 article_body
+    1139:             ),
+    1140:             "article_length": len(article_body),
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+    1147:                 "parser": PARSER_NAME,
+    1148:                 "selected_root_tag": selected["tag"],
+    1149:                 "selected_root_signal": selected["signal"],
+    1150:             },
+    1151:         },
+    1152:     }
+    1153: 
+    1154: 
+    1155: def explain_universal_dom_article_reconstruction_v1():
+    1156:     return {
+    1157:         "engine": ENGINE_NAME,
+    1158:         "parser": PARSER_NAME,
+    1159:         "purpose": (
+    1160:             "Reconstruct ordered article headings and paragraphs "
+
+----------------------------------------------------------------------------------------------------
+FUNCTION: explain_universal_dom_article_reconstruction_v1
+----------------------------------------------------------------------------------------------------
+    1150:             },
+    1151:         },
+    1152:     }
+    1153: 
+    1154: 
+    1155: def explain_universal_dom_article_reconstruction_v1():
+    1156:     return {
+    1157:         "engine": ENGINE_NAME,
+    1158:         "parser": PARSER_NAME,
+    1159:         "purpose": (
+    1160:             "Reconstruct ordered article headings and paragraphs "
+    1161:             "from valid, malformed and component-based HTML."
+    1162:         ),
+    1163:         "stages": [
+    1164:             "browser-tolerant DOM repair",
+    1165:             "universal root candidate scoring",
+    1166:             "DOM noise removal",
+    1167:             "ordered visible content walking",
+    1168:             "paragraph and heading reconstruction",
+    1169:         ],
+    1170:         "does_not": [
+    1171:             "write WUC",
+    1172:             "write UUCD",
+    1173:             "perform semantic interpretation",
+    1174:         ],
+    1175:     }
+
+====================================================================================================
+MAIN PUBLIC RECONSTRUCTION FUNCTION
+====================================================================================================
+    1012: 
+    1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+    1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+    1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+    1035:     url: str = "",
+    1036:     title: str = "",
+    1037:     metadata: Dict[str, Any] | None = None,
+    1038: ) -> Dict[str, Any]:
+    1039:     source_html = str(html_text or "")
+    1040: 
+    1041:     soup = BeautifulSoup(
+    1042:         source_html,
+    1043:         PARSER_NAME,
+    1044:     )
+    1045: 
+    1046:     removed_node_count = _remove_noise_nodes(
+    1047:         soup
+    1048:     )
+    1049: 
+    1050:     root_selection = _select_best_root(
+    1051:         soup
+    1052:     )
+    1053: 
+    1054:     selected = root_selection["selected"]
+    1055:     root = selected["node"]
+    1056: 
+    1057:     extraction = _extract_ordered_blocks(
+    1058:         root
+    1059:     )
+    1060: 
+    1061:     article_body = str(
+    1062:         extraction.get("article_body") or ""
+    1063:     ).strip()
+    1064: 
+    1065:     detected_title = _normalize_text(title)
+    1066: 
+    1067:     if not detected_title:
+    1068:         title_tag = soup.find("title")
+    1069: 
+    1070:         if isinstance(title_tag, Tag):
+    1071:             detected_title = _normalize_text(
+    1072:                 _node_text(title_tag)
+    1073:             )
+    1074: 
+    1075:     h1 = next(
+    1076:         (
+    1077:             heading["text"]
+    1078:             for heading in extraction["headings"]
+    1079:             if heading.get("level") == 1
+    1080:         ),
+    1081:         "",
+    1082:     )
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+    1122:         "statistics": {
+    1123:             "source_html_length": len(source_html),
+    1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+    1138:                 article_body
+    1139:             ),
+    1140:             "article_length": len(article_body),
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+    1147:                 "parser": PARSER_NAME,
+    1148:                 "selected_root_tag": selected["tag"],
+    1149:                 "selected_root_signal": selected["signal"],
+    1150:             },
+    1151:         },
+    1152:     }
+    1153: 
+    1154: 
+    1155: def explain_universal_dom_article_reconstruction_v1():
+    1156:     return {
+    1157:         "engine": ENGINE_NAME,
+    1158:         "parser": PARSER_NAME,
+    1159:         "purpose": (
+    1160:             "Reconstruct ordered article headings and paragraphs "
+    1161:             "from valid, malformed and component-based HTML."
+    1162:         ),
+    1163:         "stages": [
+    1164:             "browser-tolerant DOM repair",
+    1165:             "universal root candidate scoring",
+    1166:             "DOM noise removal",
+    1167:             "ordered visible content walking",
+    1168:             "paragraph and heading reconstruction",
+    1169:         ],
+    1170:         "does_not": [
+    1171:             "write WUC",
+    1172:             "write UUCD",
+    1173:             "perform semantic interpretation",
+    1174:         ],
+    1175:     }
+
+====================================================================================================
+HIGH-VALUE TERM CONTEXT
+====================================================================================================
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+       1: from __future__ import annotations
+       2: 
+       3: import html
+       4: import re
+       5: from typing import Any, Dict, List, Optional, Set
+       6: 
+>>     7: from bs4 import BeautifulSoup, NavigableString, Tag
+       8: 
+       9: 
+      10: ENGINE_NAME = "universal_dom_article_reconstruction_engine_v1_3"
+      11: PARSER_NAME = "html5lib"
+      12: 
+      13: 
+      14: NOISE_TAGS = {
+      15:     "script",
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+      15:     "script",
+      16:     "style",
+      17:     "noscript",
+      18:     "template",
+      19:     "svg",
+      20:     "canvas",
+      21:     "iframe",
+      22:     "form",
+>>    23:     "nav",
+      24:     "footer",
+      25: }
+      26: 
+      27: NOISE_SIGNAL_TERMS = {
+      28:     "ads",
+      29:     "advertisement",
+      30:     "ad-container",
+      31:     "ad-wrapper",
+
+Matched: footer
+----------------------------------------------------------------------------------------------------
+      16:     "style",
+      17:     "noscript",
+      18:     "template",
+      19:     "svg",
+      20:     "canvas",
+      21:     "iframe",
+      22:     "form",
+      23:     "nav",
+>>    24:     "footer",
+      25: }
+      26: 
+      27: NOISE_SIGNAL_TERMS = {
+      28:     "ads",
+      29:     "advertisement",
+      30:     "ad-container",
+      31:     "ad-wrapper",
+      32:     "ad-slot",
+
+Matched: footer
+----------------------------------------------------------------------------------------------------
+      30:     "ad-container",
+      31:     "ad-wrapper",
+      32:     "ad-slot",
+      33:     "affiliate",
+      34:     "breadcrumb",
+      35:     "breadcrumbs",
+      36:     "cookie",
+      37:     "consent",
+>>    38:     "footer",
+      39:     "inline-form",
+      40:     "lightbox",
+      41:     "newsletter",
+      42:     "pagination",
+      43:     "promo",
+      44:     "recommended-products",
+      45:     "share",
+      46:     "sharing",
+
+Matched: product
+----------------------------------------------------------------------------------------------------
+      36:     "cookie",
+      37:     "consent",
+      38:     "footer",
+      39:     "inline-form",
+      40:     "lightbox",
+      41:     "newsletter",
+      42:     "pagination",
+      43:     "promo",
+>>    44:     "recommended-products",
+      45:     "share",
+      46:     "sharing",
+      47:     "signup",
+      48:     "social",
+      49:     "sponsored",
+      50:     "subscribe",
+      51:     "video-player",
+      52:     "jw-player",
+
+Matched: source
+----------------------------------------------------------------------------------------------------
+      99:         r"^\s*medical review policy\b",
+     100:         re.IGNORECASE,
+     101:     ),
+     102:     re.compile(
+     103:         r"^\s*editorial policy\b",
+     104:         re.IGNORECASE,
+     105:     ),
+     106:     re.compile(
+>>   107:         r"^\s*we believe you should always know the source\b",
+     108:         re.IGNORECASE,
+     109:     ),
+     110:     re.compile(
+     111:         r"^\s*learn more about our editorial and medical review policies\b",
+     112:         re.IGNORECASE,
+     113:     ),
+     114: ]
+     115: 
+
+Matched: product
+----------------------------------------------------------------------------------------------------
+     113:     ),
+     114: ]
+     115: 
+     116: UI_PATTERNS = [
+     117:     re.compile(r"^\s*previous item\s*$", re.IGNORECASE),
+     118:     re.compile(r"^\s*next item\s*$", re.IGNORECASE),
+     119:     re.compile(r"^\s*back to top\s*$", re.IGNORECASE),
+     120:     re.compile(r"^\s*see more\s*$", re.IGNORECASE),
+>>   121:     re.compile(r"^\s*recommended products\s*$", re.IGNORECASE),
+     122:     re.compile(r"^\s*birth month group discussions\s*$", re.IGNORECASE),
+     123:     re.compile(
+     124:         r"^\s*explore(?:\s+pregnancy)?(?:\s+week\s+\d+)?\s*$",
+     125:         re.IGNORECASE,
+     126:     ),
+     127:     re.compile(
+     128:         r"^\s*track your symptoms with the my journal tool\b.*$",
+     129:         re.IGNORECASE,
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     153:         Journa<span>l</span>    -> Journal
+     154:     """
+     155: 
+     156:     parts: List[str] = []
+     157: 
+     158:     for descendant in node.descendants:
+     159:         if isinstance(
+     160:             descendant,
+>>   161:             NavigableString,
+     162:         ):
+     163:             parts.append(str(descendant))
+     164:             continue
+     165: 
+     166:         if (
+     167:             isinstance(descendant, Tag)
+     168:             and str(
+     169:                 descendant.name or ""
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+     175:         "".join(parts)
+     176:     )
+     177: 
+     178: 
+     179: def _clean_reconstructed_text(
+     180:     value: Any,
+     181: ) -> str:
+     182:     """
+>>   183:     Remove attached interface labels without changing article
+     184:     wording or paragraph order.
+     185:     """
+     186: 
+     187:     text = _normalize_text(value)
+     188: 
+     189:     text = re.sub(
+     190:         r"(?:\s+(?:Read|Learn|See)\s+More)+[.!]?\s*$",
+     191:         "",
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+     306:         return True
+     307: 
+     308:     return _contains_signal(
+     309:         node,
+     310:         NOISE_SIGNAL_TERMS,
+     311:     )
+     312: 
+     313: 
+>>   314: def _remove_noise_nodes(root: Tag) -> int:
+     315:     removed = 0
+     316: 
+     317:     for node in list(root.find_all(True)):
+     318:         if not isinstance(node, Tag):
+     319:             continue
+     320: 
+     321:         if not node.name:
+     322:             continue
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+     307: 
+     308:     return _contains_signal(
+     309:         node,
+     310:         NOISE_SIGNAL_TERMS,
+     311:     )
+     312: 
+     313: 
+     314: def _remove_noise_nodes(root: Tag) -> int:
+>>   315:     removed = 0
+     316: 
+     317:     for node in list(root.find_all(True)):
+     318:         if not isinstance(node, Tag):
+     319:             continue
+     320: 
+     321:         if not node.name:
+     322:             continue
+     323: 
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     309:         node,
+     310:         NOISE_SIGNAL_TERMS,
+     311:     )
+     312: 
+     313: 
+     314: def _remove_noise_nodes(root: Tag) -> int:
+     315:     removed = 0
+     316: 
+>>   317:     for node in list(root.find_all(True)):
+     318:         if not isinstance(node, Tag):
+     319:             continue
+     320: 
+     321:         if not node.name:
+     322:             continue
+     323: 
+     324:         if _is_noise_node(node):
+     325:             node.decompose()
+
+Matched: decompose
+----------------------------------------------------------------------------------------------------
+     317:     for node in list(root.find_all(True)):
+     318:         if not isinstance(node, Tag):
+     319:             continue
+     320: 
+     321:         if not node.name:
+     322:             continue
+     323: 
+     324:         if _is_noise_node(node):
+>>   325:             node.decompose()
+     326:             removed += 1
+     327: 
+     328:     return removed
+     329: 
+     330: 
+     331: def _is_metadata_or_ui(text: str) -> bool:
+     332:     normalized = _normalize_text(text)
+     333: 
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+     318:         if not isinstance(node, Tag):
+     319:             continue
+     320: 
+     321:         if not node.name:
+     322:             continue
+     323: 
+     324:         if _is_noise_node(node):
+     325:             node.decompose()
+>>   326:             removed += 1
+     327: 
+     328:     return removed
+     329: 
+     330: 
+     331: def _is_metadata_or_ui(text: str) -> bool:
+     332:     normalized = _normalize_text(text)
+     333: 
+     334:     if not normalized:
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+     320: 
+     321:         if not node.name:
+     322:             continue
+     323: 
+     324:         if _is_noise_node(node):
+     325:             node.decompose()
+     326:             removed += 1
+     327: 
+>>   328:     return removed
+     329: 
+     330: 
+     331: def _is_metadata_or_ui(text: str) -> bool:
+     332:     normalized = _normalize_text(text)
+     333: 
+     334:     if not normalized:
+     335:         return True
+     336: 
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     364:             flags=re.UNICODE,
+     365:         )
+     366:     )
+     367: 
+     368: 
+     369: def _link_word_count(node: Tag) -> int:
+     370:     total = 0
+     371: 
+>>   372:     for link in node.find_all("a"):
+     373:         total += _word_count(
+     374:             _normalize_text(
+     375:                 _node_text(link)
+     376:             )
+     377:         )
+     378: 
+     379:     return total
+     380: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     374:             _normalize_text(
+     375:                 _node_text(link)
+     376:             )
+     377:         )
+     378: 
+     379:     return total
+     380: 
+     381: 
+>>   382: def _candidate_score(node: Tag) -> Dict[str, Any]:
+     383:     text = _normalize_text(
+     384:         _node_text(node)
+     385:     )
+     386: 
+     387:     words = _word_count(text)
+     388: 
+     389:     headings = len(
+     390:         node.find_all(
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+     381: 
+     382: def _candidate_score(node: Tag) -> Dict[str, Any]:
+     383:     text = _normalize_text(
+     384:         _node_text(node)
+     385:     )
+     386: 
+     387:     words = _word_count(text)
+     388: 
+>>   389:     headings = len(
+     390:         node.find_all(
+     391:             ["h1", "h2", "h3", "h4", "h5", "h6"]
+     392:         )
+     393:     )
+     394: 
+     395:     paragraphs = len(node.find_all("p"))
+     396:     list_items = len(node.find_all("li"))
+     397:     blockquotes = len(node.find_all("blockquote"))
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     382: def _candidate_score(node: Tag) -> Dict[str, Any]:
+     383:     text = _normalize_text(
+     384:         _node_text(node)
+     385:     )
+     386: 
+     387:     words = _word_count(text)
+     388: 
+     389:     headings = len(
+>>   390:         node.find_all(
+     391:             ["h1", "h2", "h3", "h4", "h5", "h6"]
+     392:         )
+     393:     )
+     394: 
+     395:     paragraphs = len(node.find_all("p"))
+     396:     list_items = len(node.find_all("li"))
+     397:     blockquotes = len(node.find_all("blockquote"))
+     398: 
+
+Matched: find_all, paragraphs
+----------------------------------------------------------------------------------------------------
+     387:     words = _word_count(text)
+     388: 
+     389:     headings = len(
+     390:         node.find_all(
+     391:             ["h1", "h2", "h3", "h4", "h5", "h6"]
+     392:         )
+     393:     )
+     394: 
+>>   395:     paragraphs = len(node.find_all("p"))
+     396:     list_items = len(node.find_all("li"))
+     397:     blockquotes = len(node.find_all("blockquote"))
+     398: 
+     399:     link_words = _link_word_count(node)
+     400: 
+     401:     link_density = (
+     402:         link_words / words
+     403:         if words
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     388: 
+     389:     headings = len(
+     390:         node.find_all(
+     391:             ["h1", "h2", "h3", "h4", "h5", "h6"]
+     392:         )
+     393:     )
+     394: 
+     395:     paragraphs = len(node.find_all("p"))
+>>   396:     list_items = len(node.find_all("li"))
+     397:     blockquotes = len(node.find_all("blockquote"))
+     398: 
+     399:     link_words = _link_word_count(node)
+     400: 
+     401:     link_density = (
+     402:         link_words / words
+     403:         if words
+     404:         else 1.0
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     389:     headings = len(
+     390:         node.find_all(
+     391:             ["h1", "h2", "h3", "h4", "h5", "h6"]
+     392:         )
+     393:     )
+     394: 
+     395:     paragraphs = len(node.find_all("p"))
+     396:     list_items = len(node.find_all("li"))
+>>   397:     blockquotes = len(node.find_all("blockquote"))
+     398: 
+     399:     link_words = _link_word_count(node)
+     400: 
+     401:     link_density = (
+     402:         link_words / words
+     403:         if words
+     404:         else 1.0
+     405:     )
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+     404:         else 1.0
+     405:     )
+     406: 
+     407:     tag_name = str(node.name or "").lower()
+     408:     signal = _signal_text(node)
+     409: 
+     410:     score = float(words)
+     411: 
+>>   412:     score += headings * 45.0
+     413:     score += paragraphs * 24.0
+     414:     score += list_items * 4.0
+     415:     score += blockquotes * 12.0
+     416: 
+     417:     if tag_name == "article":
+     418:         score += 140.0
+     419:     elif tag_name == "main":
+     420:         score += 120.0
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+     405:     )
+     406: 
+     407:     tag_name = str(node.name or "").lower()
+     408:     signal = _signal_text(node)
+     409: 
+     410:     score = float(words)
+     411: 
+     412:     score += headings * 45.0
+>>   413:     score += paragraphs * 24.0
+     414:     score += list_items * 4.0
+     415:     score += blockquotes * 12.0
+     416: 
+     417:     if tag_name == "article":
+     418:         score += 140.0
+     419:     elif tag_name == "main":
+     420:         score += 120.0
+     421:     elif tag_name == "section":
+
+Matched: headings, paragraphs
+----------------------------------------------------------------------------------------------------
+     433:         link_density
+     434:         * max(words, 1)
+     435:         * 1.35
+     436:     )
+     437: 
+     438:     if words < 100:
+     439:         score -= 500.0
+     440: 
+>>   441:     if headings == 0 and paragraphs == 0:
+     442:         score -= 300.0
+     443: 
+     444:     return {
+     445:         "node": node,
+     446:         "tag": tag_name,
+     447:         "signal": signal,
+     448:         "word_count": words,
+     449:         "heading_count": headings,
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+     441:     if headings == 0 and paragraphs == 0:
+     442:         score -= 300.0
+     443: 
+     444:     return {
+     445:         "node": node,
+     446:         "tag": tag_name,
+     447:         "signal": signal,
+     448:         "word_count": words,
+>>   449:         "heading_count": headings,
+     450:         "paragraph_count": paragraphs,
+     451:         "list_item_count": list_items,
+     452:         "blockquote_count": blockquotes,
+     453:         "link_word_count": link_words,
+     454:         "link_density": round(link_density, 4),
+     455:         "score": round(score, 4),
+     456:     }
+     457: 
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+     442:         score -= 300.0
+     443: 
+     444:     return {
+     445:         "node": node,
+     446:         "tag": tag_name,
+     447:         "signal": signal,
+     448:         "word_count": words,
+     449:         "heading_count": headings,
+>>   450:         "paragraph_count": paragraphs,
+     451:         "list_item_count": list_items,
+     452:         "blockquote_count": blockquotes,
+     453:         "link_word_count": link_words,
+     454:         "link_density": round(link_density, 4),
+     455:         "score": round(score, 4),
+     456:     }
+     457: 
+     458: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     451:         "list_item_count": list_items,
+     452:         "blockquote_count": blockquotes,
+     453:         "link_word_count": link_words,
+     454:         "link_density": round(link_density, 4),
+     455:         "score": round(score, 4),
+     456:     }
+     457: 
+     458: 
+>>   459: def _collect_root_candidates(
+     460:     soup: BeautifulSoup,
+     461: ) -> List[Dict[str, Any]]:
+     462:     nodes: List[Tag] = []
+     463:     seen: Set[int] = set()
+     464: 
+     465:     def add(node: Optional[Tag]) -> None:
+     466:         if not isinstance(node, Tag):
+     467:             return
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     471:         if identity in seen:
+     472:             return
+     473: 
+     474:         seen.add(identity)
+     475:         nodes.append(node)
+     476: 
+     477:     add(soup.body)
+     478: 
+>>   479:     for node in soup.find_all(
+     480:         ["main", "article", "section", "div"]
+     481:     ):
+     482:         if not isinstance(node, Tag):
+     483:             continue
+     484: 
+     485:         tag_name = str(node.name or "").lower()
+     486:         signal = _signal_text(node)
+     487: 
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     481:     ):
+     482:         if not isinstance(node, Tag):
+     483:             continue
+     484: 
+     485:         tag_name = str(node.name or "").lower()
+     486:         signal = _signal_text(node)
+     487: 
+     488:         heading_count = len(
+>>   489:             node.find_all(
+     490:                 ["h1", "h2", "h3", "h4", "h5", "h6"]
+     491:             )
+     492:         )
+     493: 
+     494:         should_consider = (
+     495:             tag_name in {"main", "article"}
+     496:             or heading_count >= 2
+     497:             or _contains_signal(
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     499:                 CONTENT_SIGNAL_TERMS,
+     500:             )
+     501:         )
+     502: 
+     503:         if should_consider:
+     504:             add(node)
+     505: 
+     506:     scored = [
+>>   507:         _candidate_score(node)
+     508:         for node in nodes
+     509:     ]
+     510: 
+     511:     scored.sort(
+     512:         key=lambda item: item["score"],
+     513:         reverse=True,
+     514:     )
+     515: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     514:     )
+     515: 
+     516:     return scored
+     517: 
+     518: 
+     519: def _select_best_root(
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+>>   522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+     525:         candidate
+     526:         for candidate in candidates
+     527:         if candidate["word_count"] >= 100
+     528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     517: 
+     518: 
+     519: def _select_best_root(
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+     522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+>>   525:         candidate
+     526:         for candidate in candidates
+     527:         if candidate["word_count"] >= 100
+     528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+     531:     if eligible:
+     532:         selected = eligible[0]
+     533:     else:
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     518: 
+     519: def _select_best_root(
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+     522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+     525:         candidate
+>>   526:         for candidate in candidates
+     527:         if candidate["word_count"] >= 100
+     528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+     531:     if eligible:
+     532:         selected = eligible[0]
+     533:     else:
+     534:         selected_node = soup.body or soup
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     519: def _select_best_root(
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+     522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+     525:         candidate
+     526:         for candidate in candidates
+>>   527:         if candidate["word_count"] >= 100
+     528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+     531:     if eligible:
+     532:         selected = eligible[0]
+     533:     else:
+     534:         selected_node = soup.body or soup
+     535: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     520:     soup: BeautifulSoup,
+     521: ) -> Dict[str, Any]:
+     522:     candidates = _collect_root_candidates(soup)
+     523: 
+     524:     eligible = [
+     525:         candidate
+     526:         for candidate in candidates
+     527:         if candidate["word_count"] >= 100
+>>   528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+     531:     if eligible:
+     532:         selected = eligible[0]
+     533:     else:
+     534:         selected_node = soup.body or soup
+     535: 
+     536:         selected = _candidate_score(
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     528:         and candidate["score"] > 0
+     529:     ]
+     530: 
+     531:     if eligible:
+     532:         selected = eligible[0]
+     533:     else:
+     534:         selected_node = soup.body or soup
+     535: 
+>>   536:         selected = _candidate_score(
+     537:             selected_node
+     538:         )
+     539: 
+     540:     return {
+     541:         "selected": selected,
+     542:         "candidates": candidates,
+     543:     }
+     544: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     534:         selected_node = soup.body or soup
+     535: 
+     536:         selected = _candidate_score(
+     537:             selected_node
+     538:         )
+     539: 
+     540:     return {
+     541:         "selected": selected,
+>>   542:         "candidates": candidates,
+     543:     }
+     544: 
+     545: 
+     546: def _selected_ancestor(
+     547:     node: Tag,
+     548:     selected_tags: Set[str],
+     549: ) -> Optional[Tag]:
+     550:     parent = node.parent
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+     570:     descendant block that should be emitted instead of the parent.
+     571: 
+     572:     This prevents:
+     573: 
+     574:         parent DIV containing three cards
+     575:         child card DIV
+     576:         child body DIV
+     577: 
+>>   578:     from all being written as duplicate article paragraphs.
+     579:     """
+     580: 
+     581:     descendant_tags = [
+     582:         "div",
+     583:         "section",
+     584:         "article",
+     585:         "h1",
+     586:         "h2",
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     588:         "h4",
+     589:         "h5",
+     590:         "h6",
+     591:         "p",
+     592:         "li",
+     593:         "blockquote",
+     594:     ]
+     595: 
+>>   596:     for descendant in node.find_all(descendant_tags):
+     597:         if not isinstance(descendant, Tag):
+     598:             continue
+     599: 
+     600:         text = _normalize_text(
+     601:             _node_text(descendant)
+     602:         )
+     603: 
+     604:         if _word_count(text) >= 3:
+
+Matched: skip
+----------------------------------------------------------------------------------------------------
+     610: def _leaf_container_text(
+     611:     node: Tag,
+     612: ) -> str:
+     613:     """
+     614:     Extract text only from a leaf-level generic content container.
+     615: 
+     616:     Inline descendants such as A, STRONG and SPAN remain part of
+     617:     the paragraph. Nested block containers cause the parent to be
+>>   618:     skipped so their text is not duplicated.
+     619:     """
+     620: 
+     621:     if _has_substantial_block_descendant(node):
+     622:         return ""
+     623: 
+     624:     text = _normalize_text(
+     625:         _node_text(node)
+     626:     )
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     657:         has_content_signal
+     658:         or has_sentence_shape
+     659:     ):
+     660:         return ""
+     661: 
+     662:     return text
+     663: 
+     664: 
+>>   665: def _is_navigation_list_item(
+     666:     node: Tag,
+     667: ) -> bool:
+     668:     """
+     669:     Detect linked table-of-contents and tab navigation lists while
+     670:     preserving normal article bullet lists.
+     671:     """
+     672: 
+     673:     parent_list = node.find_parent(
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     661: 
+     662:     return text
+     663: 
+     664: 
+     665: def _is_navigation_list_item(
+     666:     node: Tag,
+     667: ) -> bool:
+     668:     """
+>>   669:     Detect linked table-of-contents and tab navigation lists while
+     670:     preserving normal article bullet lists.
+     671:     """
+     672: 
+     673:     parent_list = node.find_parent(
+     674:         ["ul", "ol"]
+     675:     )
+     676: 
+     677:     if not isinstance(parent_list, Tag):
+
+Matched: find_all
+----------------------------------------------------------------------------------------------------
+     672: 
+     673:     parent_list = node.find_parent(
+     674:         ["ul", "ol"]
+     675:     )
+     676: 
+     677:     if not isinstance(parent_list, Tag):
+     678:         return False
+     679: 
+>>   680:     direct_items = parent_list.find_all(
+     681:         "li",
+     682:         recursive=False,
+     683:     )
+     684: 
+     685:     if len(direct_items) < 3:
+     686:         return False
+     687: 
+     688:     item_texts = [
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     705:         item.find("a") is not None
+     706:         for item in direct_items
+     707:         if isinstance(item, Tag)
+     708:     )
+     709: 
+     710:     if all_short and all_linked:
+     711:         return True
+     712: 
+>>   713:     navigation_terms = {
+     714:         "nav",
+     715:         "navigation",
+     716:         "menu",
+     717:         "tab",
+     718:         "tabs",
+     719:         "toc",
+     720:         "table-of-contents",
+     721:         "jump",
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     706:         for item in direct_items
+     707:         if isinstance(item, Tag)
+     708:     )
+     709: 
+     710:     if all_short and all_linked:
+     711:         return True
+     712: 
+     713:     navigation_terms = {
+>>   714:         "nav",
+     715:         "navigation",
+     716:         "menu",
+     717:         "tab",
+     718:         "tabs",
+     719:         "toc",
+     720:         "table-of-contents",
+     721:         "jump",
+     722:         "jump-links",
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     707:         if isinstance(item, Tag)
+     708:     )
+     709: 
+     710:     if all_short and all_linked:
+     711:         return True
+     712: 
+     713:     navigation_terms = {
+     714:         "nav",
+>>   715:         "navigation",
+     716:         "menu",
+     717:         "tab",
+     718:         "tabs",
+     719:         "toc",
+     720:         "table-of-contents",
+     721:         "jump",
+     722:         "jump-links",
+     723:         "section-links",
+
+Matched: jump
+----------------------------------------------------------------------------------------------------
+     713:     navigation_terms = {
+     714:         "nav",
+     715:         "navigation",
+     716:         "menu",
+     717:         "tab",
+     718:         "tabs",
+     719:         "toc",
+     720:         "table-of-contents",
+>>   721:         "jump",
+     722:         "jump-links",
+     723:         "section-links",
+     724:         "explore",
+     725:     }
+     726: 
+     727:     ancestor: Tag | None = parent_list
+     728:     levels_checked = 0
+     729: 
+
+Matched: jump
+----------------------------------------------------------------------------------------------------
+     714:         "nav",
+     715:         "navigation",
+     716:         "menu",
+     717:         "tab",
+     718:         "tabs",
+     719:         "toc",
+     720:         "table-of-contents",
+     721:         "jump",
+>>   722:         "jump-links",
+     723:         "section-links",
+     724:         "explore",
+     725:     }
+     726: 
+     727:     ancestor: Tag | None = parent_list
+     728:     levels_checked = 0
+     729: 
+     730:     while (
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     728:     levels_checked = 0
+     729: 
+     730:     while (
+     731:         isinstance(ancestor, Tag)
+     732:         and levels_checked < 4
+     733:     ):
+     734:         if _contains_signal(
+     735:             ancestor,
+>>   736:             navigation_terms,
+     737:         ):
+     738:             return True
+     739: 
+     740:         ancestor = ancestor.parent
+     741:         levels_checked += 1
+     742: 
+     743:     return False
+     744: 
+
+Matched: reference, source
+----------------------------------------------------------------------------------------------------
+     744: 
+     745: 
+     746: TERMINAL_METADATA_PATTERNS = [
+     747:     re.compile(
+     748:         r"^\s*from the .{0,120} editorial team\b",
+     749:         re.IGNORECASE,
+     750:     ),
+     751:     re.compile(
+>>   752:         r"^\s*(?:sources?|references?|bibliography)\s*$",
+     753:         re.IGNORECASE,
+     754:     ),
+     755:     re.compile(
+     756:         r"^\s*about the author\s*$",
+     757:         re.IGNORECASE,
+     758:     ),
+     759:     re.compile(
+     760:         r"^\s*our editorial process\s*$",
+
+Matched: product
+----------------------------------------------------------------------------------------------------
+     756:         r"^\s*about the author\s*$",
+     757:         re.IGNORECASE,
+     758:     ),
+     759:     re.compile(
+     760:         r"^\s*our editorial process\s*$",
+     761:         re.IGNORECASE,
+     762:     ),
+     763:     re.compile(
+>>   764:         r"^\s*what to expect selects products\b",
+     765:         re.IGNORECASE,
+     766:     ),
+     767:     re.compile(
+     768:         r"^\s*prices and details are accurate\b",
+     769:         re.IGNORECASE,
+     770:     ),
+     771: ]
+     772: 
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     766:     ),
+     767:     re.compile(
+     768:         r"^\s*prices and details are accurate\b",
+     769:         re.IGNORECASE,
+     770:     ),
+     771: ]
+     772: 
+     773: 
+>>   774: def _postprocess_reconstructed_blocks(
+     775:     blocks: List[Dict[str, Any]],
+     776: ) -> List[Dict[str, Any]]:
+     777:     """
+     778:     Clean reconstructed blocks and stop before terminal metadata,
+     779:     source lists or commercial-product disclosures.
+     780:     """
+     781: 
+     782:     retained: List[Dict[str, Any]] = []
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     767:     re.compile(
+     768:         r"^\s*prices and details are accurate\b",
+     769:         re.IGNORECASE,
+     770:     ),
+     771: ]
+     772: 
+     773: 
+     774: def _postprocess_reconstructed_blocks(
+>>   775:     blocks: List[Dict[str, Any]],
+     776: ) -> List[Dict[str, Any]]:
+     777:     """
+     778:     Clean reconstructed blocks and stop before terminal metadata,
+     779:     source lists or commercial-product disclosures.
+     780:     """
+     781: 
+     782:     retained: List[Dict[str, Any]] = []
+     783: 
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     770:     ),
+     771: ]
+     772: 
+     773: 
+     774: def _postprocess_reconstructed_blocks(
+     775:     blocks: List[Dict[str, Any]],
+     776: ) -> List[Dict[str, Any]]:
+     777:     """
+>>   778:     Clean reconstructed blocks and stop before terminal metadata,
+     779:     source lists or commercial-product disclosures.
+     780:     """
+     781: 
+     782:     retained: List[Dict[str, Any]] = []
+     783: 
+     784:     for original in blocks:
+     785:         block = dict(original)
+     786: 
+
+Matched: product, source
+----------------------------------------------------------------------------------------------------
+     771: ]
+     772: 
+     773: 
+     774: def _postprocess_reconstructed_blocks(
+     775:     blocks: List[Dict[str, Any]],
+     776: ) -> List[Dict[str, Any]]:
+     777:     """
+     778:     Clean reconstructed blocks and stop before terminal metadata,
+>>   779:     source lists or commercial-product disclosures.
+     780:     """
+     781: 
+     782:     retained: List[Dict[str, Any]] = []
+     783: 
+     784:     for original in blocks:
+     785:         block = dict(original)
+     786: 
+     787:         text = _clean_reconstructed_text(
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     776: ) -> List[Dict[str, Any]]:
+     777:     """
+     778:     Clean reconstructed blocks and stop before terminal metadata,
+     779:     source lists or commercial-product disclosures.
+     780:     """
+     781: 
+     782:     retained: List[Dict[str, Any]] = []
+     783: 
+>>   784:     for original in blocks:
+     785:         block = dict(original)
+     786: 
+     787:         text = _clean_reconstructed_text(
+     788:             block.get("text")
+     789:         )
+     790: 
+     791:         if not text:
+     792:             continue
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     812:         retained.append(block)
+     813: 
+     814:     for index, block in enumerate(retained):
+     815:         block["index"] = index
+     816: 
+     817:     return retained
+     818: 
+     819: 
+>>   820: def _extract_ordered_blocks(
+     821:     root: Tag,
+     822: ) -> Dict[str, Any]:
+     823:     explicit_tags = {
+     824:         "h1",
+     825:         "h2",
+     826:         "h3",
+     827:         "h4",
+     828:         "h5",
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     837:         "section",
+     838:         "span",
+     839:     }
+     840: 
+     841:     linked_heading_tags = {
+     842:         "a",
+     843:     }
+     844: 
+>>   845:     blocks: List[Dict[str, Any]] = []
+     846:     headings: List[Dict[str, Any]] = []
+     847:     paragraphs: List[str] = []
+     848: 
+     849:     previous_key = ""
+     850: 
+     851:     for node in root.descendants:
+     852:         if not isinstance(node, Tag):
+     853:             continue
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+     838:         "span",
+     839:     }
+     840: 
+     841:     linked_heading_tags = {
+     842:         "a",
+     843:     }
+     844: 
+     845:     blocks: List[Dict[str, Any]] = []
+>>   846:     headings: List[Dict[str, Any]] = []
+     847:     paragraphs: List[str] = []
+     848: 
+     849:     previous_key = ""
+     850: 
+     851:     for node in root.descendants:
+     852:         if not isinstance(node, Tag):
+     853:             continue
+     854: 
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+     839:     }
+     840: 
+     841:     linked_heading_tags = {
+     842:         "a",
+     843:     }
+     844: 
+     845:     blocks: List[Dict[str, Any]] = []
+     846:     headings: List[Dict[str, Any]] = []
+>>   847:     paragraphs: List[str] = []
+     848: 
+     849:     previous_key = ""
+     850: 
+     851:     for node in root.descendants:
+     852:         if not isinstance(node, Tag):
+     853:             continue
+     854: 
+     855:         tag_name = str(
+
+Matched: nav
+----------------------------------------------------------------------------------------------------
+     881:             level = int(tag_name[1])
+     882: 
+     883:         elif tag_name in {"p", "blockquote"}:
+     884:             text = _normalize_text(
+     885:                 _node_text(node)
+     886:             )
+     887: 
+     888:         elif tag_name == "li":
+>>   889:             if _is_navigation_list_item(node):
+     890:                 continue
+     891: 
+     892:             parts = []
+     893: 
+     894:             for child in node.contents:
+     895:                 if (
+     896:                     isinstance(child, Tag)
+     897:                     and str(child.name or "").lower()
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     906:                 else:
+     907:                     parts.append(str(child))
+     908: 
+     909:             text = _normalize_text(
+     910:                 " ".join(parts)
+     911:             )
+     912: 
+     913:         elif tag_name in linked_heading_tags:
+>>   914:             candidate_text = _normalize_text(
+     915:                 _node_text(node)
+     916:             )
+     917: 
+     918:             candidate_words = _word_count(
+     919:                 candidate_text
+     920:             )
+     921: 
+     922:             has_heading_signal = _contains_signal(
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     910:                 " ".join(parts)
+     911:             )
+     912: 
+     913:         elif tag_name in linked_heading_tags:
+     914:             candidate_text = _normalize_text(
+     915:                 _node_text(node)
+     916:             )
+     917: 
+>>   918:             candidate_words = _word_count(
+     919:                 candidate_text
+     920:             )
+     921: 
+     922:             has_heading_signal = _contains_signal(
+     923:                 node,
+     924:                 HEADING_SIGNAL_TERMS,
+     925:             )
+     926: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     911:             )
+     912: 
+     913:         elif tag_name in linked_heading_tags:
+     914:             candidate_text = _normalize_text(
+     915:                 _node_text(node)
+     916:             )
+     917: 
+     918:             candidate_words = _word_count(
+>>   919:                 candidate_text
+     920:             )
+     921: 
+     922:             has_heading_signal = _contains_signal(
+     923:                 node,
+     924:                 HEADING_SIGNAL_TERMS,
+     925:             )
+     926: 
+     927:             parent = node.parent
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     932:             ):
+     933:                 has_heading_signal = _contains_signal(
+     934:                     parent,
+     935:                     HEADING_SIGNAL_TERMS,
+     936:                 )
+     937: 
+     938:             if (
+     939:                 has_heading_signal
+>>   940:                 and 1 <= candidate_words <= 18
+     941:             ):
+     942:                 text = candidate_text
+     943:                 block_type = "heading"
+     944: 
+     945:         elif tag_name in generic_tags:
+     946:             text = _leaf_container_text(node)
+     947: 
+     948:             if text and _contains_signal(
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+     934:                     parent,
+     935:                     HEADING_SIGNAL_TERMS,
+     936:                 )
+     937: 
+     938:             if (
+     939:                 has_heading_signal
+     940:                 and 1 <= candidate_words <= 18
+     941:             ):
+>>   942:                 text = candidate_text
+     943:                 block_type = "heading"
+     944: 
+     945:         elif tag_name in generic_tags:
+     946:             text = _leaf_container_text(node)
+     947: 
+     948:             if text and _contains_signal(
+     949:                 node,
+     950:                 HEADING_SIGNAL_TERMS,
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+     967:             + ":"
+     968:             + re.sub(
+     969:                 r"\s+",
+     970:                 " ",
+     971:                 text,
+     972:             ).casefold()
+     973:         )
+     974: 
+>>   975:         # Remove only directly repeated UI/DOM duplicates.
+     976:         if normalized_key == previous_key:
+     977:             continue
+     978: 
+     979:         previous_key = normalized_key
+     980: 
+     981:         block = {
+     982:             "index": len(blocks),
+     983:             "type": block_type,
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     974: 
+     975:         # Remove only directly repeated UI/DOM duplicates.
+     976:         if normalized_key == previous_key:
+     977:             continue
+     978: 
+     979:         previous_key = normalized_key
+     980: 
+     981:         block = {
+>>   982:             "index": len(blocks),
+     983:             "type": block_type,
+     984:             "tag": tag_name,
+     985:             "level": level,
+     986:             "text": text,
+     987:             "word_count": _word_count(text),
+     988:         }
+     989: 
+     990:         blocks.append(block)
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     982:             "index": len(blocks),
+     983:             "type": block_type,
+     984:             "tag": tag_name,
+     985:             "level": level,
+     986:             "text": text,
+     987:             "word_count": _word_count(text),
+     988:         }
+     989: 
+>>   990:         blocks.append(block)
+     991: 
+     992:         if block_type == "heading":
+     993:             headings.append({
+     994:                 "level": level,
+     995:                 "text": text,
+     996:             })
+     997:         else:
+     998:             paragraphs.append(text)
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+     985:             "level": level,
+     986:             "text": text,
+     987:             "word_count": _word_count(text),
+     988:         }
+     989: 
+     990:         blocks.append(block)
+     991: 
+     992:         if block_type == "heading":
+>>   993:             headings.append({
+     994:                 "level": level,
+     995:                 "text": text,
+     996:             })
+     997:         else:
+     998:             paragraphs.append(text)
+     999: 
+    1000:     blocks = _postprocess_reconstructed_blocks(
+    1001:         blocks
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+     990:         blocks.append(block)
+     991: 
+     992:         if block_type == "heading":
+     993:             headings.append({
+     994:                 "level": level,
+     995:                 "text": text,
+     996:             })
+     997:         else:
+>>   998:             paragraphs.append(text)
+     999: 
+    1000:     blocks = _postprocess_reconstructed_blocks(
+    1001:         blocks
+    1002:     )
+    1003: 
+    1004:     headings = [
+    1005:         {
+    1006:             "level": block.get("level"),
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     992:         if block_type == "heading":
+     993:             headings.append({
+     994:                 "level": level,
+     995:                 "text": text,
+     996:             })
+     997:         else:
+     998:             paragraphs.append(text)
+     999: 
+>>  1000:     blocks = _postprocess_reconstructed_blocks(
+    1001:         blocks
+    1002:     )
+    1003: 
+    1004:     headings = [
+    1005:         {
+    1006:             "level": block.get("level"),
+    1007:             "text": block.get("text"),
+    1008:         }
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+     993:             headings.append({
+     994:                 "level": level,
+     995:                 "text": text,
+     996:             })
+     997:         else:
+     998:             paragraphs.append(text)
+     999: 
+    1000:     blocks = _postprocess_reconstructed_blocks(
+>>  1001:         blocks
+    1002:     )
+    1003: 
+    1004:     headings = [
+    1005:         {
+    1006:             "level": block.get("level"),
+    1007:             "text": block.get("text"),
+    1008:         }
+    1009:         for block in blocks
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+     996:             })
+     997:         else:
+     998:             paragraphs.append(text)
+     999: 
+    1000:     blocks = _postprocess_reconstructed_blocks(
+    1001:         blocks
+    1002:     )
+    1003: 
+>>  1004:     headings = [
+    1005:         {
+    1006:             "level": block.get("level"),
+    1007:             "text": block.get("text"),
+    1008:         }
+    1009:         for block in blocks
+    1010:         if block.get("type") == "heading"
+    1011:     ]
+    1012: 
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1001:         blocks
+    1002:     )
+    1003: 
+    1004:     headings = [
+    1005:         {
+    1006:             "level": block.get("level"),
+    1007:             "text": block.get("text"),
+    1008:         }
+>>  1009:         for block in blocks
+    1010:         if block.get("type") == "heading"
+    1011:     ]
+    1012: 
+    1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+    1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+    1005:         {
+    1006:             "level": block.get("level"),
+    1007:             "text": block.get("text"),
+    1008:         }
+    1009:         for block in blocks
+    1010:         if block.get("type") == "heading"
+    1011:     ]
+    1012: 
+>>  1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+    1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1007:             "text": block.get("text"),
+    1008:         }
+    1009:         for block in blocks
+    1010:         if block.get("type") == "heading"
+    1011:     ]
+    1012: 
+    1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+>>  1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1011:     ]
+    1012: 
+    1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+    1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+    1018: 
+>>  1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+    1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1013:     paragraphs = [
+    1014:         str(block.get("text") or "")
+    1015:         for block in blocks
+    1016:         if block.get("type") == "paragraph"
+    1017:     ]
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+>>  1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+    1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1017:     ]
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+>>  1025:         "blocks": blocks,
+    1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+    1018: 
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+>>  1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+    1019:     article_body = "\n\n".join(
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+    1026:         "headings": headings,
+>>  1027:         "paragraphs": paragraphs,
+    1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+    1035:     url: str = "",
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1020:         str(block.get("text") or "")
+    1021:         for block in blocks
+    1022:     ).strip()
+    1023: 
+    1024:     return {
+    1025:         "blocks": blocks,
+    1026:         "headings": headings,
+    1027:         "paragraphs": paragraphs,
+>>  1028:         "article_body": article_body,
+    1029:     }
+    1030: 
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+    1035:     url: str = "",
+    1036:     title: str = "",
+
+Matched: source
+----------------------------------------------------------------------------------------------------
+    1031: 
+    1032: def reconstruct_universal_dom_article_v1(
+    1033:     *,
+    1034:     html_text: str,
+    1035:     url: str = "",
+    1036:     title: str = "",
+    1037:     metadata: Dict[str, Any] | None = None,
+    1038: ) -> Dict[str, Any]:
+>>  1039:     source_html = str(html_text or "")
+    1040: 
+    1041:     soup = BeautifulSoup(
+    1042:         source_html,
+    1043:         PARSER_NAME,
+    1044:     )
+    1045: 
+    1046:     removed_node_count = _remove_noise_nodes(
+    1047:         soup
+
+Matched: source
+----------------------------------------------------------------------------------------------------
+    1034:     html_text: str,
+    1035:     url: str = "",
+    1036:     title: str = "",
+    1037:     metadata: Dict[str, Any] | None = None,
+    1038: ) -> Dict[str, Any]:
+    1039:     source_html = str(html_text or "")
+    1040: 
+    1041:     soup = BeautifulSoup(
+>>  1042:         source_html,
+    1043:         PARSER_NAME,
+    1044:     )
+    1045: 
+    1046:     removed_node_count = _remove_noise_nodes(
+    1047:         soup
+    1048:     )
+    1049: 
+    1050:     root_selection = _select_best_root(
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+    1038: ) -> Dict[str, Any]:
+    1039:     source_html = str(html_text or "")
+    1040: 
+    1041:     soup = BeautifulSoup(
+    1042:         source_html,
+    1043:         PARSER_NAME,
+    1044:     )
+    1045: 
+>>  1046:     removed_node_count = _remove_noise_nodes(
+    1047:         soup
+    1048:     )
+    1049: 
+    1050:     root_selection = _select_best_root(
+    1051:         soup
+    1052:     )
+    1053: 
+    1054:     selected = root_selection["selected"]
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1049: 
+    1050:     root_selection = _select_best_root(
+    1051:         soup
+    1052:     )
+    1053: 
+    1054:     selected = root_selection["selected"]
+    1055:     root = selected["node"]
+    1056: 
+>>  1057:     extraction = _extract_ordered_blocks(
+    1058:         root
+    1059:     )
+    1060: 
+    1061:     article_body = str(
+    1062:         extraction.get("article_body") or ""
+    1063:     ).strip()
+    1064: 
+    1065:     detected_title = _normalize_text(title)
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1053: 
+    1054:     selected = root_selection["selected"]
+    1055:     root = selected["node"]
+    1056: 
+    1057:     extraction = _extract_ordered_blocks(
+    1058:         root
+    1059:     )
+    1060: 
+>>  1061:     article_body = str(
+    1062:         extraction.get("article_body") or ""
+    1063:     ).strip()
+    1064: 
+    1065:     detected_title = _normalize_text(title)
+    1066: 
+    1067:     if not detected_title:
+    1068:         title_tag = soup.find("title")
+    1069: 
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1054:     selected = root_selection["selected"]
+    1055:     root = selected["node"]
+    1056: 
+    1057:     extraction = _extract_ordered_blocks(
+    1058:         root
+    1059:     )
+    1060: 
+    1061:     article_body = str(
+>>  1062:         extraction.get("article_body") or ""
+    1063:     ).strip()
+    1064: 
+    1065:     detected_title = _normalize_text(title)
+    1066: 
+    1067:     if not detected_title:
+    1068:         title_tag = soup.find("title")
+    1069: 
+    1070:         if isinstance(title_tag, Tag):
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+    1070:         if isinstance(title_tag, Tag):
+    1071:             detected_title = _normalize_text(
+    1072:                 _node_text(title_tag)
+    1073:             )
+    1074: 
+    1075:     h1 = next(
+    1076:         (
+    1077:             heading["text"]
+>>  1078:             for heading in extraction["headings"]
+    1079:             if heading.get("level") == 1
+    1080:         ),
+    1081:         "",
+    1082:     )
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1079:             if heading.get("level") == 1
+    1080:         ),
+    1081:         "",
+    1082:     )
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+>>  1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1081:         "",
+    1082:     )
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+>>  1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1082:     )
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+>>  1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1083: 
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+>>  1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1084:     if not detected_title:
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+>>  1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1085:         detected_title = h1
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+>>  1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1086: 
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+>>  1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1087:     candidate_summary = []
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+>>  1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1088: 
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+>>  1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1089:     for candidate in root_selection["candidates"][:20]:
+    1090:         candidate_summary.append({
+    1091:             "tag": candidate["tag"],
+    1092:             "signal": candidate["signal"][:250],
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+>>  1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1093:             "word_count": candidate["word_count"],
+    1094:             "heading_count": candidate["heading_count"],
+    1095:             "paragraph_count": candidate["paragraph_count"],
+    1096:             "link_density": candidate["link_density"],
+    1097:             "score": candidate["score"],
+    1098:         })
+    1099: 
+    1100:     return {
+>>  1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1099: 
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+>>  1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1100:     return {
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+>>  1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1101:         "ok": bool(article_body),
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+>>  1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1102:         "engine": ENGINE_NAME,
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+>>  1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+    1103:         "parser": PARSER_NAME,
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+>>  1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+    1104:         "url": url,
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+>>  1112:         "paragraphs": extraction["paragraphs"],
+    1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+
+Matched: selected_root
+----------------------------------------------------------------------------------------------------
+    1105:         "title": detected_title,
+    1106:         "h1": h1,
+    1107:         "article_body": article_body,
+    1108:         "content_body": article_body,
+    1109:         "main_content": article_body,
+    1110:         "blocks": extraction["blocks"],
+    1111:         "headings": extraction["headings"],
+    1112:         "paragraphs": extraction["paragraphs"],
+>>  1113:         "selected_root": {
+    1114:             "tag": selected["tag"],
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+
+Matched: source
+----------------------------------------------------------------------------------------------------
+    1115:             "signal": selected["signal"],
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+    1122:         "statistics": {
+>>  1123:             "source_html_length": len(source_html),
+    1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+
+Matched: remove
+----------------------------------------------------------------------------------------------------
+    1116:             "word_count": selected["word_count"],
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+    1122:         "statistics": {
+    1123:             "source_html_length": len(source_html),
+>>  1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1117:             "heading_count": selected["heading_count"],
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+    1122:         "statistics": {
+    1123:             "source_html_length": len(source_html),
+    1124:             "removed_node_count": removed_node_count,
+>>  1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1118:             "paragraph_count": selected["paragraph_count"],
+    1119:             "link_density": selected["link_density"],
+    1120:             "score": selected["score"],
+    1121:         },
+    1122:         "statistics": {
+    1123:             "source_html_length": len(source_html),
+    1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+>>  1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+
+Matched: blocks
+----------------------------------------------------------------------------------------------------
+    1121:         },
+    1122:         "statistics": {
+    1123:             "source_html_length": len(source_html),
+    1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+>>  1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+
+Matched: headings
+----------------------------------------------------------------------------------------------------
+    1124:             "removed_node_count": removed_node_count,
+    1125:             "candidate_count": len(
+    1126:                 root_selection["candidates"]
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+>>  1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+    1138:                 article_body
+    1139:             ),
+    1140:             "article_length": len(article_body),
+
+Matched: paragraphs
+----------------------------------------------------------------------------------------------------
+    1127:             ),
+    1128:             "block_count": len(
+    1129:                 extraction["blocks"]
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+>>  1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+    1138:                 article_body
+    1139:             ),
+    1140:             "article_length": len(article_body),
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1130:             ),
+    1131:             "heading_count": len(
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+>>  1138:                 article_body
+    1139:             ),
+    1140:             "article_length": len(article_body),
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+
+Matched: article_body
+----------------------------------------------------------------------------------------------------
+    1132:                 extraction["headings"]
+    1133:             ),
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+    1138:                 article_body
+    1139:             ),
+>>  1140:             "article_length": len(article_body),
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+    1147:                 "parser": PARSER_NAME,
+    1148:                 "selected_root_tag": selected["tag"],
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1134:             "paragraph_count": len(
+    1135:                 extraction["paragraphs"]
+    1136:             ),
+    1137:             "article_word_count": _word_count(
+    1138:                 article_body
+    1139:             ),
+    1140:             "article_length": len(article_body),
+    1141:         },
+>>  1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+    1147:                 "parser": PARSER_NAME,
+    1148:                 "selected_root_tag": selected["tag"],
+    1149:                 "selected_root_signal": selected["signal"],
+    1150:             },
+
+Matched: selected_root
+----------------------------------------------------------------------------------------------------
+    1140:             "article_length": len(article_body),
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+    1147:                 "parser": PARSER_NAME,
+>>  1148:                 "selected_root_tag": selected["tag"],
+    1149:                 "selected_root_signal": selected["signal"],
+    1150:             },
+    1151:         },
+    1152:     }
+    1153: 
+    1154: 
+    1155: def explain_universal_dom_article_reconstruction_v1():
+    1156:     return {
+
+Matched: selected_root
+----------------------------------------------------------------------------------------------------
+    1141:         },
+    1142:         "candidate_summary": candidate_summary,
+    1143:         "metadata": {
+    1144:             **(metadata or {}),
+    1145:             "article_reconstruction": {
+    1146:                 "engine": ENGINE_NAME,
+    1147:                 "parser": PARSER_NAME,
+    1148:                 "selected_root_tag": selected["tag"],
+>>  1149:                 "selected_root_signal": selected["signal"],
+    1150:             },
+    1151:         },
+    1152:     }
+    1153: 
+    1154: 
+    1155: def explain_universal_dom_article_reconstruction_v1():
+    1156:     return {
+    1157:         "engine": ENGINE_NAME,
+
+Matched: headings, paragraphs
+----------------------------------------------------------------------------------------------------
+    1152:     }
+    1153: 
+    1154: 
+    1155: def explain_universal_dom_article_reconstruction_v1():
+    1156:     return {
+    1157:         "engine": ENGINE_NAME,
+    1158:         "parser": PARSER_NAME,
+    1159:         "purpose": (
+>>  1160:             "Reconstruct ordered article headings and paragraphs "
+    1161:             "from valid, malformed and component-based HTML."
+    1162:         ),
+    1163:         "stages": [
+    1164:             "browser-tolerant DOM repair",
+    1165:             "universal root candidate scoring",
+    1166:             "DOM noise removal",
+    1167:             "ordered visible content walking",
+    1168:             "paragraph and heading reconstruction",
+
+Matched: candidate
+----------------------------------------------------------------------------------------------------
+    1157:         "engine": ENGINE_NAME,
+    1158:         "parser": PARSER_NAME,
+    1159:         "purpose": (
+    1160:             "Reconstruct ordered article headings and paragraphs "
+    1161:             "from valid, malformed and component-based HTML."
+    1162:         ),
+    1163:         "stages": [
+    1164:             "browser-tolerant DOM repair",
+>>  1165:             "universal root candidate scoring",
+    1166:             "DOM noise removal",
+    1167:             "ordered visible content walking",
+    1168:             "paragraph and heading reconstruction",
+    1169:         ],
+    1170:         "does_not": [
+    1171:             "write WUC",
+    1172:             "write UUCD",
+    1173:             "perform semantic interpretation",
+
+====================================================================================================
+INSPECTION STATUS
+====================================================================================================
+Reconstruction engine modified: False
+Extractor modified: False
+Validator modified: False
+Raw HTML Store modified: False
+Clean HTML Store modified: False
+WUC modified: False

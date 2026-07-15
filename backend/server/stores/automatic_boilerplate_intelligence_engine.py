@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import re
@@ -46,7 +46,7 @@ UNIVERSAL_BOILERPLATE_RULES_V1 = [
     {
         "rule_id": "UNI_EDITORIAL_POLICY",
         "category": "editorial_metadata",
-        "pattern": r"(?is)\b(editorial policy|medical review policy|fact checked|reviewed by)\b.*?(?=\n[A-Z][^\n]{3,120}\n|$)",
+        "pattern": r"(?im)^\s*(?:editorial policy|medical review policy|fact[- ]checked(?:\s+by)?|reviewed by)[^\r\n]*$",
         "confidence": 0.88,
     },
     {
@@ -122,19 +122,19 @@ DOMAIN_EXCEPTION_RULES_V1 = {
         {
             "rule_id": "DOM_WTE_EDITORIAL_FOOTER",
             "category": "domain_editorial_footer",
-            "pattern": r"(?is)\bFrom the What to Expect editorial team\b.*$",
+            "pattern": r"(?im)^\s*From the What to Expect editorial team[^\r\n]*$",
             "confidence": 0.98,
         },
         {
             "rule_id": "DOM_WTE_REPORTING_GUIDELINES",
             "category": "domain_editorial_footer",
-            "pattern": r"(?is)\bWhat to Expect follows strict reporting guidelines\b.*$",
+            "pattern": r"(?im)^\s*What to Expect follows strict reporting guidelines[^\r\n]*$",
             "confidence": 0.98,
         },
         {
             "rule_id": "DOM_WTE_ACCURACY_NOTICE",
             "category": "domain_editorial_footer",
-            "pattern": r"(?is)\bLearn how we keep our content accurate and up-to-date\b.*$",
+            "pattern": r"(?im)^\s*Learn how we keep our content accurate and up-to-date[^\r\n]*$",
             "confidence": 0.98,
         },
     ]

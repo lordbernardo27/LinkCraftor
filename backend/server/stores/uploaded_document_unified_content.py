@@ -9,9 +9,14 @@ from typing import Any, Dict, List, Optional
 
 
 UDUC_SCHEMA_VERSION = "uploaded_document_unified_content_v1"
-UDUC_PIPELINE_VERSION = "verification_6d_uduc_v1"
+UDUC_PIPELINE_VERSION = "verification_6d_uduc_v1_1"
 
-UDUC_OUTPUT_DIR = Path("backend/server/data/uploaded_document_unified_content")
+# FIX: anchored to the package (backend/server), matching files.py, instead
+# of a CWD-relative "backend/server/data/..." string. Previously artifacts
+# landed under whatever directory the server happened to be launched from,
+# and _read_upload_index_hit silently found nothing.
+BASE_DIR = Path(__file__).resolve().parents[1]  # backend/server
+UDUC_OUTPUT_DIR = BASE_DIR / "data" / "uploaded_document_unified_content"
 
 
 @dataclass
@@ -83,8 +88,8 @@ def _as_float(value: Any, default: float = 0.0) -> float:
 
 def _read_upload_index_hit(workspace_id: str, document_id: str) -> Dict[str, Any]:
     candidates = [
-        Path("backend/server/data/docs") / workspace_id / "index.json",
-        Path("backend/server/data/uploads") / workspace_id / "index.json",
+        BASE_DIR / "data" / "docs" / workspace_id / "index.json",
+        BASE_DIR / "data" / "uploads" / workspace_id / "index.json",
     ]
 
     for fp in candidates:
@@ -102,37 +107,76 @@ def _read_upload_index_hit(workspace_id: str, document_id: str) -> Dict[str, Any
             if isinstance(row, dict) and str(row.get("doc_id") or row.get("document_id") or "").strip() == document_id:
                 return row
 
+    # FIX: one debug breadcrumb instead of total silence — the enrichment
+    # path (h1 / stored_name / bytes) being dead in production previously
+    # had zero signal.
+    print(f"[UDUC_INDEX_MISS] workspace={workspace_id} doc={document_id}")
     return {}
 
 
 def _paragraphs_from_content_body(content_body: str) -> List[Dict[str, Any]]:
+    """Split content_body into paragraphs on blank lines.
+
+    Contract with upload_document_extractor: extracted text preserves
+    paragraph boundaries as blank lines ("\\n\\n").
+
+    Each paragraph now also carries start_char/end_char offsets into
+    content_body so downstream consumers can locate paragraphs without
+    re-searching (and so future schema versions can drop the duplicated
+    text in favor of offsets).
+    """
     raw = str(content_body or "")
-    blocks = [b.strip() for b in re.split(r"\n\s*\n+", raw) if b.strip()]
+    paragraphs: List[Dict[str, Any]] = []
 
-    if not blocks and raw.strip():
-        blocks = [raw.strip()]
+    idx = 0
+    for i, m in enumerate(re.finditer(r"[^\n]+(?:\n(?!\n)[^\n]*)*", raw), start=1):
+        block = m.group(0).strip()
+        if not block:
+            continue
+        idx += 1
+        paragraphs.append(
+            {
+                "index": idx,
+                "text": block,
+                "start_char": m.start(),
+                "end_char": m.end(),
+                "char_count": len(block),
+                "word_count": len([w for w in re.split(r"\s+", block) if w.strip()]),
+            }
+        )
 
-    return [
-        {
-            "index": i,
+    if not paragraphs and raw.strip():
+        block = raw.strip()
+        paragraphs = [{
+            "index": 1,
             "text": block,
+            "start_char": 0,
+            "end_char": len(raw),
             "char_count": len(block),
             "word_count": len([w for w in re.split(r"\s+", block) if w.strip()]),
-        }
-        for i, block in enumerate(blocks, start=1)
-    ]
+        }]
+
+    return paragraphs
 
 
 def _build_heading_map(headings: List[str], content_body: str) -> List[Dict[str, Any]]:
     body = str(content_body or "")
     out: List[Dict[str, Any]] = []
 
+    search_from = 0
     for i, heading in enumerate(headings, start=1):
         h = str(heading or "").strip()
         if not h:
             continue
 
-        char_position = body.find(h)
+        # Search forward from the previous heading so repeated headings map
+        # to successive positions instead of all pointing at the first hit.
+        char_position = body.find(h, search_from)
+        if char_position < 0:
+            char_position = body.find(h)
+
+        if char_position >= 0:
+            search_from = char_position + len(h)
 
         out.append(
             {
@@ -150,27 +194,43 @@ def _build_uduc_structure(content_body: str, headings: List[str]) -> Dict[str, A
     paragraphs = _paragraphs_from_content_body(content_body)
     heading_map = _build_heading_map(headings, content_body)
 
-    document_order: List[Dict[str, Any]] = []
+    # FIX: document_order is now actual reading order — headings and
+    # paragraphs interleaved by character position — instead of "all
+    # headings, then all paragraphs", which contradicted the field's name.
+    ordered: List[tuple[int, Dict[str, Any]]] = []
 
     for h in heading_map:
-        document_order.append(
-            {
-                "type": "heading",
-                "index": h.get("index"),
-                "text": h.get("heading"),
-                "char_position": h.get("char_position"),
-            }
+        pos = h.get("char_position")
+        ordered.append(
+            (
+                pos if isinstance(pos, int) else -1,
+                {
+                    "type": "heading",
+                    "index": h.get("index"),
+                    "text": h.get("heading"),
+                    "char_position": h.get("char_position"),
+                },
+            )
         )
 
     for p in paragraphs:
-        document_order.append(
-            {
-                "type": "paragraph",
-                "index": p.get("index"),
-                "text_preview": str(p.get("text") or "")[:160],
-                "word_count": p.get("word_count"),
-            }
+        ordered.append(
+            (
+                int(p.get("start_char") or 0),
+                {
+                    "type": "paragraph",
+                    "index": p.get("index"),
+                    "text_preview": str(p.get("text") or "")[:160],
+                    "start_char": p.get("start_char"),
+                    "word_count": p.get("word_count"),
+                },
+            )
         )
+
+    # Headings sort just before the paragraph that contains them (same
+    # position): stable sort with heading entries added first achieves that.
+    ordered.sort(key=lambda t: t[0])
+    document_order = [item for _, item in ordered]
 
     word_count = len([w for w in re.split(r"\s+", str(content_body or "")) if w.strip()])
 
@@ -188,7 +248,7 @@ def _build_uduc_structure(content_body: str, headings: List[str]) -> Dict[str, A
         "estimated_word_count": word_count,
         "estimated_character_count": len(str(content_body or "")),
 
-        "structure_version": "uduc_structure_v1_1",
+        "structure_version": "uduc_structure_v1_2",
         "boundary": {
             "preserves_content_body": True,
             "modifies_content_body": False,
@@ -295,9 +355,12 @@ def build_uduc_from_upload_extraction_result(
 
     extension = str(meta.get("extension") or Path(original_name).suffix.lower() or "").strip()
 
+    # FIX: file_size falls back to None (was ""), avoiding mixed int/str typing.
+    file_size = src_meta.get("file_size") or src_meta.get("bytes") or index_hit.get("bytes") or None
+
     merged_metadata: Dict[str, Any] = {
         "extension": extension,
-        "file_size": src_meta.get("file_size") or src_meta.get("bytes") or index_hit.get("bytes") or "",
+        "file_size": file_size,
         "extraction_method": meta.get("method") or meta.get("extractor") or "",
         "extraction_timestamp": er.get("created_at") or _now_iso(),
         "paragraph_count": meta.get("paragraph_count"),
@@ -410,6 +473,12 @@ def explain_uploaded_document_unified_content_v1() -> Dict[str, Any]:
         "canonical_content_field": "content_body",
         "input": "UploadExtractionResult",
         "output": "UploadedDocumentUnifiedContent",
+        "contract": {
+            "paragraph_boundaries": "blank lines in content_body (from extractor)",
+            "paragraph_offsets": "start_char/end_char into content_body",
+            "document_order": "true reading order (headings + paragraphs interleaved)",
+            "paths": "anchored to backend/server, not process CWD",
+        },
         "boundary": {
             "performs_extraction": False,
             "performs_cleaning": False,

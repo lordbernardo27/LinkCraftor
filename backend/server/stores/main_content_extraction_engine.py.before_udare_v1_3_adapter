@@ -1,0 +1,161 @@
+from __future__ import annotations
+
+import html
+import re
+from typing import Any, Dict, List, Tuple
+
+
+REMOVE_TAGS_V1 = [
+    "script",
+    "style",
+    "noscript",
+    "svg",
+    "canvas",
+    "iframe",
+    "form",
+    "button",
+]
+
+
+def _strip_removed_tags_v1(markup: str) -> str:
+    text = str(markup or "")
+
+    for tag in REMOVE_TAGS_V1:
+        text = re.sub(
+            rf"<{tag}\b[^>]*>.*?</{tag}>",
+            " ",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    return text
+
+
+def _extract_tag_blocks_v1(markup: str, tag: str) -> List[str]:
+    pattern = rf"<{tag}\b[^>]*>(.*?)</{tag}>"
+    return re.findall(pattern, str(markup or ""), flags=re.IGNORECASE | re.DOTALL)
+
+
+def _html_to_text_v1(markup: str) -> str:
+    text = str(markup or "")
+
+    text = _strip_removed_tags_v1(text)
+
+    text = re.sub(r"</(p|div|section|article|main|h1|h2|h3|h4|li|br)>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+
+    text = html.unescape(text)
+
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n\s+", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def _score_candidate_v1(text: str) -> float:
+    words = str(text or "").split()
+    word_count = len(words)
+
+    if word_count == 0:
+        return 0.0
+
+    sentence_count = len(re.findall(r"[.!?]", text))
+    avg_word_len = sum(len(w) for w in words) / max(word_count, 1)
+
+    boilerplate_penalty = 0
+
+    boilerplate_terms = [
+        "recommended reading",
+        "see all",
+        "get the app",
+        "amazon prime day",
+        "product reviews",
+        "community groups",
+        "tools",
+        "topics",
+    ]
+
+    lower = text.lower()
+
+    for term in boilerplate_terms:
+        if term in lower:
+            boilerplate_penalty += 40
+
+    score = (
+        word_count
+        + (sentence_count * 8)
+        + (avg_word_len * 4)
+        - boilerplate_penalty
+    )
+
+    return round(score, 4)
+
+
+def extract_main_content_from_html_v1(
+    *,
+    html_text: str,
+    url: str = "",
+    title: str = "",
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    raw_html = str(html_text or "")
+    sanitized = _strip_removed_tags_v1(raw_html)
+
+    candidates: List[Tuple[str, str, float]] = []
+
+    for tag in ["article", "main"]:
+        blocks = _extract_tag_blocks_v1(sanitized, tag)
+        for block in blocks:
+            text = _html_to_text_v1(block)
+            if text:
+                candidates.append((tag, text, _score_candidate_v1(text)))
+
+    if not candidates:
+        body_blocks = _extract_tag_blocks_v1(sanitized, "body")
+        for block in body_blocks:
+            text = _html_to_text_v1(block)
+            if text:
+                candidates.append(("body_fallback", text, _score_candidate_v1(text)))
+
+    if not candidates:
+        text = _html_to_text_v1(sanitized)
+        candidates.append(("html_fallback", text, _score_candidate_v1(text)))
+
+    candidates = sorted(candidates, key=lambda item: item[2], reverse=True)
+
+    selected_tag, selected_text, selected_score = candidates[0]
+
+    headings = re.findall(
+        r"<h[1-6]\b[^>]*>(.*?)</h[1-6]>",
+        sanitized,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    clean_headings = [
+        _html_to_text_v1(h)
+        for h in headings
+        if _html_to_text_v1(h)
+    ]
+
+    return {
+        "status": "extracted",
+        "url": url,
+        "title": title,
+        "selected_tag": selected_tag,
+        "candidate_count": len(candidates),
+        "candidate_scores": [
+            {
+                "tag": tag,
+                "word_count": len(text.split()),
+                "score": score,
+            }
+            for tag, text, score in candidates[:10]
+        ],
+        "main_content": selected_text,
+        "word_count": len(selected_text.split()),
+        "content_length": len(selected_text),
+        "headings": clean_headings,
+        "metadata": metadata or {},
+        "extractor_version": "main_content_extractor_v1",
+    }

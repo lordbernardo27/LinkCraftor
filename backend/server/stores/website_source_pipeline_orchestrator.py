@@ -1,15 +1,30 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict
 
-from backend.server.stores.raw_website_html_store import upsert_raw_website_html_v1
-from backend.server.stores.html_cleaning_engine import clean_raw_html_v1
-from backend.server.stores.main_content_extraction_engine import extract_main_content_from_html_v1
-from backend.server.stores.article_cleaning_pipeline import build_article_cleaning_pipeline_v1
-from backend.server.stores.article_validation_engine import validate_article_v1
-from backend.server.stores.validated_article_ucd_bridge import build_ucd_from_validated_article_v1
-from backend.server.stores.website_unified_content_store import upsert_website_unified_content_document_v1
-from backend.server.stores.unified_content_document_convergence import upsert_unified_content_document_v1
+from backend.server.stores.raw_website_html_store import (
+    upsert_raw_website_html_v1,
+)
+from backend.server.stores.main_content_extraction_engine import (
+    extract_main_content_from_html_v1,
+)
+from backend.server.stores.website_article_integrity_validator import (
+    build_website_article_integrity_result_v1,
+)
+from backend.server.stores.article_validation_engine import (
+    validate_article_v1,
+)
+from backend.server.stores.website_unified_content_store import (
+    upsert_website_unified_content_document_v1,
+)
+from backend.server.stores.universal_unified_content_document_convergence import (
+    build_and_write_uucd_from_wuc_v1,
+)
+
+
+PIPELINE_VERSION = (
+    "website_source_pipeline_orchestrator_v2_raw_html_udare"
+)
 
 
 def process_website_html_to_ucd_v1(
@@ -24,214 +39,278 @@ def process_website_html_to_ucd_v1(
     metadata: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """
-    Website-source-only orchestrator.
-
-    This is the permanent website ingestion chain:
+    Canonical website ingestion chain:
 
     Raw HTML Store
-      -> Main Content Extraction
-      -> Article Cleaning + Boilerplate Detection
+      -> UDARE
+      -> Website Article Integrity Validator
       -> Article Validation
-      -> Website Unified Content Store
-      -> Unified Content Document Store
-
-    Upload documents do not enter this pipeline.
+      -> Website Unified Content
+      -> UUCD
     """
 
-    metadata = metadata or {}
+    metadata = dict(metadata or {})
+    raw_html = str(html or "")
 
     raw_record = upsert_raw_website_html_v1(
         workspace_id=workspace_id,
         url=url,
-        html=html,
+        html=raw_html,
         title=title,
         status_code=status_code,
         content_type=content_type,
         metadata={
             **metadata,
-            "source_pipeline": "website_source_pipeline_orchestrator_v1",
-            "stage": "raw_html_store",
-        },
-    )
-
-    html_cleaning = clean_raw_html_v1(
-        raw_html=html,
-        url=url,
-        title=title,
-        metadata={
-            **metadata,
-            "html_id": raw_record.get("html_id"),
-            "source_pipeline": "website_source_pipeline_orchestrator_v1",
-            "stage": "html_cleaner",
+            "source_pipeline": PIPELINE_VERSION,
+            "stage": "raw_website_html_store",
         },
     )
 
     extraction = extract_main_content_from_html_v1(
-        html_text=html_cleaning.get("cleaned_html", ""),
+        html_text=raw_html,
         url=url,
         title=title,
         metadata={
             **metadata,
             "html_id": raw_record.get("html_id"),
-            "html_cleaner": {
-                "engine": html_cleaning.get("engine"),
-                "original_length": html_cleaning.get("original_length"),
-                "cleaned_length": html_cleaning.get("cleaned_length"),
-                "removed_block_count": html_cleaning.get("removed_block_count"),
-            },
-            "source_pipeline": "website_source_pipeline_orchestrator_v1",
-            "stage": "article_extractor",
+            "raw_html_length": raw_record.get("html_length"),
+            "source_pipeline": PIPELINE_VERSION,
+            "source_stage": "raw_website_html_store",
+            "stage": "udare_article_reconstruction",
         },
     )
 
-    cleaning = build_article_cleaning_pipeline_v1(
-        raw_main_html=html,
-        raw_article_text=extraction.get("main_content", ""),
+    article_body = str(
+        extraction.get("article_body")
+        or extraction.get("main_content")
+        or ""
+    )
+
+    integrity = build_website_article_integrity_result_v1(
+        raw_main_html=raw_html,
+        raw_article_text=article_body,
         headings=extraction.get("headings", []),
-        title=title or h1 or extraction.get("title", ""),
+        title=(
+            title
+            or h1
+            or extraction.get("title", "")
+        ),
         url=url,
         metadata={
             **metadata,
             "html_id": raw_record.get("html_id"),
-            "extractor_version": extraction.get("extractor_version"),
-            "source_pipeline": "website_source_pipeline_orchestrator_v1",
-            "stage": "article_cleaning",
+            "source_pipeline": PIPELINE_VERSION,
+            "source_stage": "udare_article_reconstruction",
+            "stage": "website_article_integrity_validation",
         },
     )
 
+    validated_body = str(
+        integrity.get("content_body")
+        or integrity.get("cleaned_article_text")
+        or article_body
+    )
+
     validation = validate_article_v1(
-        cleaned_article_text=cleaning.get("cleaned_article_text", ""),
-        title=title or h1 or extraction.get("title", ""),
-        headings=cleaning.get("headings", []),
-        removed_sections=cleaning.get("removed_sections", []),
+        cleaned_article_text=validated_body,
+        title=(
+            title
+            or h1
+            or extraction.get("title", "")
+        ),
+        headings=integrity.get(
+            "headings",
+            extraction.get("headings", []),
+        ),
+        removed_sections=integrity.get(
+            "removed_sections",
+            [],
+        ),
         metadata={
             **metadata,
             "html_id": raw_record.get("html_id"),
-            "source_pipeline": "website_source_pipeline_orchestrator_v1",
+            "source_pipeline": PIPELINE_VERSION,
             "stage": "article_validation",
         },
     )
 
-    website_doc = upsert_website_unified_content_document_v1(
-        workspace_id=workspace_id,
-        url=url,
-        title=title or h1 or extraction.get("title", ""),
-        h1=h1,
-        article_body=cleaning.get("cleaned_article_text", ""),
-        primary_content=cleaning.get("cleaned_article_text", ""),
-        headings=cleaning.get("headings", []),
-        metadata={
-            **metadata,
-            "html_id": raw_record.get("html_id"),
-            "raw_html_length": raw_record.get("html_length"),
-            "source_pipeline": "website_source_pipeline_orchestrator_v1",
-            "stage": "website_unified_content_store",
-            "html_cleaning": {
-                "engine": html_cleaning.get("engine"),
-                "original_length": html_cleaning.get("original_length"),
-                "cleaned_length": html_cleaning.get("cleaned_length"),
-                "removed_block_count": html_cleaning.get("removed_block_count"),
-            },
-            "extraction": {
-                "selected_tag": extraction.get("selected_tag"),
-                "word_count": extraction.get("word_count"),
-                "content_length": extraction.get("content_length"),
-                "candidate_count": extraction.get("candidate_count"),
-            },
-            "cleaning_statistics": cleaning.get("statistics", {}),
-            "removed_sections": cleaning.get("removed_sections", []),
-            "validation": validation,
-        },
-        quality={
-            "validation_passed": validation.get("passed"),
-            "quality_grade": validation.get("quality_grade"),
-            "validation_score": validation.get("validation_score"),
-            "warnings": validation.get("warnings", []),
-            "rejection_reasons": validation.get("rejection_reasons", []),
-        },
-        semantic_features={
-            "semantic_ready": bool(validation.get("eligible_for_unified_content_document", False)),
-            "source_pipeline": "website_html_to_validated_ucd",
-            "source_type": "website",
-        },
-    )
-
-    ucd_document = None
-    ucd_error = None
-
-    try:
-        ucd_document = build_ucd_from_validated_article_v1(
+    website_doc = (
+        upsert_website_unified_content_document_v1(
             workspace_id=workspace_id,
             url=url,
-            title=title or h1 or extraction.get("title", ""),
-            cleaned_article_text=cleaning.get("cleaned_article_text", ""),
-            headings=cleaning.get("headings", []),
-            cleaning_result=cleaning,
-            validation_result=validation,
+            title=(
+                title
+                or h1
+                or extraction.get("title", "")
+            ),
+            h1=(
+                h1
+                or extraction.get("h1", "")
+            ),
+            article_body=validated_body,
+            headings=integrity.get(
+                "headings",
+                extraction.get("headings", []),
+            ),
             metadata={
                 **metadata,
-                "html_id": raw_record.get("html_id"),
-                "website_content_id": website_doc.get("content_id"),
-                "source_pipeline": "website_source_pipeline_orchestrator_v1",
+                "html_id":
+                    raw_record.get("html_id"),
+                "raw_html_length":
+                    raw_record.get("html_length"),
+                "source_pipeline":
+                    PIPELINE_VERSION,
+                "source_stage":
+                    "raw_website_html_store",
+                "stage":
+                    "website_unified_content_store",
+                "reconstruction": {
+                    "extraction_engine":
+                        extraction.get("engine"),
+                    "reconstruction_engine":
+                        extraction.get(
+                            "reconstruction_engine"
+                        ),
+                    "selected_tag":
+                        extraction.get("selected_tag"),
+                    "word_count":
+                        extraction.get("word_count"),
+                    "content_length":
+                        extraction.get("content_length"),
+                    "candidate_count":
+                        extraction.get("candidate_count"),
+                },
+                "integrity_statistics":
+                    integrity.get("statistics", {}),
+                "removed_sections":
+                    integrity.get(
+                        "removed_sections",
+                        [],
+                    ),
+                "validation":
+                    validation,
+            },
+            quality={
+                "validation_passed":
+                    validation.get("passed"),
+                "quality_grade":
+                    validation.get("quality_grade"),
+                "validation_score":
+                    validation.get(
+                        "validation_score"
+                    ),
+                "warnings":
+                    validation.get("warnings", []),
+                "rejection_reasons":
+                    validation.get(
+                        "rejection_reasons",
+                        [],
+                    ),
+            },
+            semantic_features={
+                "semantic_ready": bool(
+                    validation.get(
+                        "eligible_for_unified_content_document",
+                        False,
+                    )
+                ),
+                "source_pipeline":
+                    PIPELINE_VERSION,
+                "source_type":
+                    "website",
             },
         )
+    )
 
-        upsert_unified_content_document_v1(ucd_document)
+    uucd_document = None
+    uucd_error = None
+
+    try:
+        uucd_result = (
+            build_and_write_uucd_from_wuc_v1(
+                website_doc
+            )
+        )
+
+        uucd_document = (
+            uucd_result.get("uucd")
+        )
 
     except Exception as exc:
-        ucd_error = str(exc)
+        uucd_error = str(exc)
 
     return {
-        "ok": True,
+        "ok": bool(
+            extraction.get("ok")
+            and validated_body.strip()
+        ),
         "workspace_id": workspace_id,
         "url": url,
-        "pipeline": "website_source_pipeline_orchestrator_v1",
+        "pipeline": PIPELINE_VERSION,
         "source_boundary": {
             "source_type": "website",
-            "upload_document_pipeline_used": False,
-            "merges_at": "unified_content_document",
+            "input_store":
+                "raw_website_html_store_v1",
+            "html_cleaner_used": False,
+            "clean_html_store_used": False,
+            "upload_document_pipeline_used":
+                False,
+            "merges_at":
+                "universal_unified_content_document",
         },
         "raw_record": raw_record,
-        "html_cleaning": html_cleaning,
         "extraction": extraction,
-        "cleaning": cleaning,
+        "integrity": integrity,
+        "cleaning": integrity,
         "validation": validation,
-        "website_unified_content_document": website_doc,
-        "unified_content_document": ucd_document,
-        "ucd_error": ucd_error,
+        "website_unified_content_document":
+            website_doc,
+        "universal_unified_content_document":
+            uucd_document,
+        "uucd_error": uucd_error,
         "status": {
             "raw_html_stored": True,
-            "html_cleaned": bool(html_cleaning.get("cleaned_html")),
-            "main_content_extracted": bool(extraction.get("main_content")),
-            "article_cleaned": bool(cleaning.get("cleaned_article_text")),
-            "article_validated": True,
+            "udare_reconstructed":
+                bool(article_body.strip()),
+            "article_integrity_passed":
+                bool(integrity.get("passed")),
+            "article_validated":
+                bool(validation.get("passed")),
             "website_content_stored": True,
-            "ucd_stored": ucd_document is not None and not ucd_error,
+            "uucd_stored":
+                uucd_document is not None
+                and not uucd_error,
         },
     }
 
 
-def explain_website_source_pipeline_orchestrator_v1() -> Dict[str, Any]:
+def explain_website_source_pipeline_orchestrator_v1(
+) -> Dict[str, Any]:
     return {
-        "name": "Website Source Pipeline Orchestrator",
-        "version": "website_source_pipeline_orchestrator_v1",
-        "source_type": "website_only",
+        "name":
+            "Website Source Pipeline Orchestrator",
+        "version":
+            PIPELINE_VERSION,
+        "source_type":
+            "website_only",
         "pipeline": [
             "Raw HTML Store",
-            "HTML Cleaner",
-            "Article Extractor",
-            "Article Cleaning Pipeline",
-            "Boilerplate Detection",
+            "UDARE v1.4",
+            "Website Article Integrity Validator",
             "Article Validation",
             "Website Unified Content Store",
-            "Unified Content Document Store",
+            "Universal Unified Content Document Store",
         ],
+        "html_cleaner":
+            "removed",
+        "clean_html_store":
+            "removed",
         "does_not_process": [
             "uploaded documents",
             "PDF uploads",
             "DOCX uploads",
             "TXT uploads",
         ],
-        "merge_point": "Unified Content Document",
+        "merge_point":
+            "Universal Unified Content Document",
     }
-

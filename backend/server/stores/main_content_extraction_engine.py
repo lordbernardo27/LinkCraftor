@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import html
 import re
@@ -159,3 +159,124 @@ def extract_main_content_from_html_v1(
         "metadata": metadata or {},
         "extractor_version": "main_content_extractor_v1",
     }
+
+# BEGIN UDARE V1.3 MAIN CONTENT ADAPTER
+
+from backend.server.stores.universal_dom_article_reconstruction_engine import (
+    reconstruct_universal_dom_article_v1,
+)
+
+
+def extract_main_content_from_html_v1(
+    *,
+    html_text,
+    url="",
+    title="",
+    metadata=None,
+):
+    """
+    Backward-compatible Main Content Extraction contract powered
+    by Universal DOM Article Reconstruction Engine v1.3.
+    """
+
+    reconstructed = reconstruct_universal_dom_article_v1(
+        html_text=str(html_text or ""),
+        url=str(url or ""),
+        title=str(title or ""),
+        metadata=dict(metadata or {}),
+    )
+
+    article_body = str(
+        reconstructed.get("article_body") or ""
+    )
+
+    structured_headings = list(
+        reconstructed.get("headings") or []
+    )
+
+    heading_texts = [
+        str(item.get("text") or "")
+        for item in structured_headings
+        if isinstance(item, dict)
+        and str(item.get("text") or "").strip()
+    ]
+
+    paragraphs = list(
+        reconstructed.get("paragraphs") or []
+    )
+
+    statistics = dict(
+        reconstructed.get("statistics") or {}
+    )
+
+    selected_root = dict(
+        reconstructed.get("selected_root") or {}
+    )
+
+    return {
+        # Existing extraction contract
+        "status": (
+            "extracted"
+            if reconstructed.get("ok")
+            else "failed"
+        ),
+        "ok": bool(reconstructed.get("ok")),
+        "engine":
+            "main_content_extraction_engine_v2_udare_v1_3",
+        "reconstruction_engine":
+            reconstructed.get("engine"),
+        "parser":
+            reconstructed.get("parser"),
+
+        # Identification
+        "url":
+            reconstructed.get("url") or str(url or ""),
+        "title":
+            reconstructed.get("title") or str(title or ""),
+        "h1":
+            reconstructed.get("h1") or "",
+
+        # Compatible content aliases
+        "main_content": article_body,
+        "main_text": article_body,
+        "article_body": article_body,
+        "content_body": article_body,
+        "content": article_body,
+
+        # Reconstructed structure
+        "headings": heading_texts,
+        "structured_headings": structured_headings,
+        "paragraphs": paragraphs,
+        "blocks": list(
+            reconstructed.get("blocks") or []
+        ),
+
+        # Extraction evidence
+        "selected_tag": (
+            "udare:"
+            + str(
+                selected_root.get("tag")
+                or "unknown"
+            )
+        ),
+        "selected_root": selected_root,
+        "candidate_summary": list(
+            reconstructed.get(
+                "candidate_summary"
+            )
+            or []
+        ),
+        "candidate_count":
+            statistics.get("candidate_count"),
+        "word_count":
+            statistics.get("article_word_count"),
+        "content_length":
+            statistics.get("article_length"),
+        "statistics": statistics,
+        "metadata": dict(
+            reconstructed.get("metadata") or {}
+        ),
+    }
+
+
+# END UDARE V1.3 MAIN CONTENT ADAPTER

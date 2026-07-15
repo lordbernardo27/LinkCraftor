@@ -1,0 +1,231 @@
+from __future__ import annotations
+
+import html
+import re
+from typing import Any, Dict, List
+from backend.server.stores.automatic_boilerplate_intelligence_engine import apply_boilerplate_intelligence_v1
+
+
+UNIVERSAL_BOILERPLATE_PATTERNS_V1 = [
+    r"(?im)^\s*Back to Top\s*$",
+    r"(?im)^\s*In This Article\s*$",
+    r"(?im)^\s*Table of Contents\s*$",
+    r"(?im)^\s*See more\s*$",
+    r"(?im)^\s*Read more\s*$",
+    r"(?im)^\s*Related articles?\s*$",
+    r"(?im)^\s*Recommended reading\s*$",
+    r"(?im)^\s*Subscribe\s*$",
+    r"(?im)^\s*Newsletter\s*$",
+    r"(?im)^\s*Share this article\s*$",
+    r"(?is)\bDownload the app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+    r"(?is)\bGet the app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+    r"(?is)\bJoin our community\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+    r"(?is)\bEditorial policy\b.*?$",
+    r"(?is)\bMedical Review Policy\b.*?(?=\bKey Takeaways\b|\bWhat are\b|\bWhat is\b|\bHow many\b|$)",
+    r"(?is)\bFact checked\b.*?$",
+]
+
+DOMAIN_BOILERPLATE_PATTERNS_V1 = {
+    "whattoexpect.com": [
+        r"(?is)\bGot more fertility questions\?.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+        r"(?is)\bGo to the What to Expect app\b.*?(?=\bWhat is\b|\bHow many\b|\bCan you\b|\bWomen with\b|\bKeep in mind\b|$)",
+        r"(?is)\bFrom the What to Expect editorial team\b.*$",
+        r"(?im)^\s*What to Expect follows strict reporting guidelines[^\r\n]*$",
+        r"(?is)\bLearn how we keep our content accurate and up-to-date\b.*$",
+        r"(?is)\bmedical review and editorial policy\b.*?$",
+    ],
+}
+
+
+def remove_universal_and_domain_boilerplate_v1(text: str, url: str = "") -> str:
+    cleaned = str(text or "")
+    domain_key = str(url or "").lower()
+
+    for pattern in UNIVERSAL_BOILERPLATE_PATTERNS_V1:
+        cleaned = re.sub(pattern, " ", cleaned)
+
+    for domain, patterns in DOMAIN_BOILERPLATE_PATTERNS_V1.items():
+        if domain in domain_key:
+            for pattern in patterns:
+                cleaned = re.sub(pattern, " ", cleaned)
+
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n\s+", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+
+    return cleaned.strip()
+
+
+
+ARTICLE_END_MARKERS_V1 = [
+    "Was this article helpful",
+    "Updates history",
+    "Review this article",
+]
+
+
+EDITORIAL_METADATA_PATTERNS_V1 = [
+    r"\bby\s+[A-Z][A-Za-z .,'-]+",
+    r"\bmedically reviewed by\s+[A-Z][A-Za-z .,'-]+",
+    r"\breviewed by\s+[A-Z][A-Za-z .,'-]+",
+    r"\bfact checked by\s+[A-Z][A-Za-z .,'-]+",
+    r"\bmedical review policy\b.*?(?=After spending|Key Takeaways|Newborn|Baby|$)",
+    r"\beditorial policy\b.*?(?=After spending|Key Takeaways|Newborn|Baby|$)",
+    r"\blearn more about our editorial.*?policies\s*\.?",
+    r"(?im)^\s*latest update:\s*[^\r\n]*$",
+    r"\|\s*[A-Z][a-z]+ \d{1,2}, \d{4}",
+]
+
+
+def decode_html_entities_v1(text: str) -> str:
+    return html.unescape(str(text or ""))
+
+
+def normalize_spacing_v1(text: str) -> str:
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def remove_editorial_metadata_v1(text: str) -> str:
+    cleaned = str(text or "")
+
+    for pattern in EDITORIAL_METADATA_PATTERNS_V1:
+        cleaned = re.sub(
+            pattern,
+            " ",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+
+    return normalize_spacing_v1(cleaned)
+
+
+
+def trim_to_true_article_start_v1(text: str) -> str:
+    markers = [
+        "after spending",
+        "key-takeaways",
+        "key takeaways",
+        "first, the good news",
+        "newborn to 3 months",
+    ]
+
+    lower = str(text or "").lower()
+    candidates = []
+
+    for marker in markers:
+        idx = lower.find(marker)
+        if idx >= 0:
+            candidates.append(idx)
+
+    if not candidates:
+        return normalize_spacing_v1(text)
+
+    start = min(candidates)
+    return normalize_spacing_v1(str(text or "")[start:])
+
+def find_best_article_start_v1(text: str, title: str = "") -> int:
+    lower = text.lower()
+
+    if title:
+        idx = lower.find(str(title).strip().lower())
+        if idx >= 0:
+            return idx
+
+    fallback_markers = [
+        "after spending",
+        "key-takeaways",
+        "key takeaways",
+        "baby sleep patterns by age",
+    ]
+
+    candidates: List[int] = []
+
+    for marker in fallback_markers:
+        idx = lower.find(marker.lower())
+        if idx >= 0:
+            candidates.append(idx)
+
+    return min(candidates) if candidates else 0
+
+
+def find_safe_article_end_v1(text: str) -> int:
+    lower = text.lower()
+    candidates: List[int] = []
+
+    for marker in ARTICLE_END_MARKERS_V1:
+        idx = lower.find(marker.lower())
+        if idx > 0:
+            candidates.append(idx)
+
+    return min(candidates) if candidates else len(text)
+
+
+def clean_crawled_article_body_v1(
+    *,
+    raw_body: str,
+    title: str = "",
+    url: str = "",
+    metadata: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    original = str(raw_body or "")
+    decoded = decode_html_entities_v1(original)
+    normalized = normalize_spacing_v1(decoded)
+
+    start = find_best_article_start_v1(normalized, title=title)
+    sliced = normalized[start:]
+
+    end = find_safe_article_end_v1(sliced)
+    sliced = sliced[:end]
+
+    cleaned = remove_editorial_metadata_v1(sliced)
+    cleaned = trim_to_true_article_start_v1(cleaned)
+
+    boilerplate_result = apply_boilerplate_intelligence_v1(
+        text=cleaned,
+        url=url,
+        learned_rules=None,
+        include_universal=True,
+        include_domain=True,
+        include_learned=True,
+    )
+
+    cleaned = boilerplate_result.get("cleaned_text", cleaned)
+    cleaned = normalize_spacing_v1(cleaned)
+
+    return {
+        "status": "cleaned",
+        "title": title,
+        "url": url,
+        "original_length": len(original),
+        "decoded_length": len(decoded),
+        "cleaned_length": len(cleaned),
+        "original_word_count": len(original.split()),
+        "cleaned_word_count": len(cleaned.split()),
+        "removed_length": max(0, len(original) - len(cleaned)),
+        "start_offset": start,
+        "cleaned_body": cleaned,
+        "metadata": {
+            **(metadata or {}),
+            "boilerplate_intelligence": {
+                "engine": boilerplate_result.get("engine"),
+                "version": boilerplate_result.get("version"),
+                "layers": boilerplate_result.get("layers"),
+                "active_rule_count": boilerplate_result.get("active_rule_count"),
+                "removal_count": boilerplate_result.get("removal_count"),
+                "removed_word_count": boilerplate_result.get("removed_word_count"),
+                "confidence_summary": boilerplate_result.get("confidence_summary"),
+                "removal_ledger": boilerplate_result.get("removal_ledger", []),
+            "diagnostics": boilerplate_result.get("diagnostics", {}),
+            "enterprise_diagnostics": boilerplate_result.get("enterprise_diagnostics", {}),
+            },
+        },
+        "cleaning_version": "article_body_cleaner_v1_5_layer_boilerplate_intelligence",
+    }
+
+
+
+
+

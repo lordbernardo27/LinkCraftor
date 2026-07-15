@@ -128,15 +128,12 @@ def build_uucd_from_website_unified_content_v1(
 
     workspace_id = _safe_id(wuc.get("workspace_id"), "default")
     document_id = _safe_id(
-        wuc.get("document_id") or wuc.get("page_id") or wuc.get("url_hash"),
+        wuc.get("document_id") or wuc.get("content_id") or wuc.get("page_id") or wuc.get("url_hash"),
         "unknown_website_document",
     )
 
     content_body = str(
-        wuc.get("content_body")
-        or wuc.get("body_text")
-        or wuc.get("article_text")
-        or ""
+        wuc.get("content_body") or wuc.get("article_body") or wuc.get("primary_content") or wuc.get("body_text") or wuc.get("article_text") or ""
     )
 
     source_identity = {
@@ -260,4 +257,28 @@ def explain_uucd_convergence_v1() -> Dict[str, Any]:
             "modifies_content_body": False,
         },
         "next_stage": "Phase 4.6.1 Semantic Article Reader",
+    }
+
+
+
+def load_universal_unified_content_document_store_v1(workspace_id: str) -> Dict[str, Any]:
+    ws = _safe_id(workspace_id, "default")
+    root = UUCD_OUTPUT_DIR / ws
+
+    documents = {}
+
+    if root.exists():
+        for path in root.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                document_id = data.get("document_id") or path.stem
+                documents[document_id] = data
+            except Exception:
+                continue
+
+    return {
+        "version": UUCD_SCHEMA_VERSION,
+        "workspace_id": ws,
+        "documents": documents,
+        "document_count": len(documents),
     }

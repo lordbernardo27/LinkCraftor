@@ -13,7 +13,6 @@ from backend.server.workers.universal_knowledge_worker import execute_universal_
 ROOT = Path("backend/server/data")
 DOCS_DIR = ROOT / "docs"
 RAW_HTML_DIR = ROOT / "raw_website_html"
-CLEAN_HTML_DIR = ROOT / "clean_website_html"
 UDUC_DIR = ROOT / "uploaded_document_unified_content"
 UUCD_DIR = ROOT / "universal_unified_content_documents"
 
@@ -81,7 +80,7 @@ def collect_website_documents(workspace_id: str) -> List[Dict[str, Any]]:
 
     candidates = []
 
-    for folder in [CLEAN_HTML_DIR, RAW_HTML_DIR]:
+    for folder in [RAW_HTML_DIR]:
         if folder.exists():
             candidates.extend([p for p in folder.rglob("*") if p.is_file() and p.suffix.lower() in {".html", ".htm", ".txt"}])
 
