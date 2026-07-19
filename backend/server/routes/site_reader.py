@@ -822,8 +822,7 @@ def connect_domain(payload: ConnectDomainPayload):
             "error": f"website_orchestration_failed:{str(e)[:160]}",
         }
 
-return {"ok": False, "error": "invalid_domain"}
-
+    return {"ok": False, "error": "invalid_domain"}
     # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
     requested_workspace_id = str(payload.workspace_id or "").strip()
     workspace_id = requested_workspace_id or _workspace_id_from_domain(domain)
