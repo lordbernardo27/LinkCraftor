@@ -1,4 +1,14 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from backend.server.runtime.universal_runtime_registration import (
+    get_runtime_registration,
+    is_runtime_job_type_registered,
+    list_runtime_registrations,
+    register_runtime_handler,
+    runtime_registration_snapshot,
+    unregister_runtime_handler,
+)
+
 
 import hashlib
 import json
@@ -57,6 +67,7 @@ SUPPORTED_JOB_TYPES = {
     "semantic_relationship_graph",
     "semantic_learning_export",
     "semantic_end_to_end_certification",
+    "udare_reconstruction",
 }
 
 
@@ -136,34 +147,106 @@ def create_universal_knowledge_job(
     workspace_id: str,
     job_type: str,
     payload: Dict[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_ref: str = "",
     priority: int = 5,
     parent_job_id: str = "",
     batch_id: str = "",
+    enqueue: bool = True,
 ) -> Dict[str, Any]:
-    if job_type not in SUPPORTED_JOB_TYPES:
+    if (
+        job_type not in SUPPORTED_JOB_TYPES
+        and not is_runtime_job_type_registered(job_type)
+    ):
         raise ValueError(f"Unsupported universal knowledge job_type: {job_type}")
 
     ws = safe_id(workspace_id)
     payload = payload or {}
+    initial_status = "queued" if enqueue else "registered"
+
+    canonical_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or "system"
+    ).strip() or "system"
+
+    canonical_product_id = str(
+        product_id
+        or payload.get("product_id")
+        or "linkcraftor"
+    ).strip() or "linkcraftor"
+
+    canonical_pipeline = str(
+        pipeline
+        or payload.get("pipeline")
+        or payload.get("pipeline_name")
+        or "universal_knowledge"
+    ).strip() or "universal_knowledge"
+
+    canonical_stage = str(
+        stage
+        or payload.get("stage")
+        or payload.get("stage_name")
+        or job_type
+    ).strip() or job_type
+
+    canonical_payload_ref = str(
+        payload_ref
+        or payload.get("payload_ref")
+        or payload.get("payload_reference")
+        or payload.get("source_record_id")
+        or payload.get("html_id")
+        or ""
+    ).strip()
+
+    initial_progress = {
+        "percent": 0,
+        "message": (
+            "Job queued."
+            if enqueue
+            else "Job registered without queue dispatch."
+        ),
+        "steps": [],
+    }
+
     job_id = make_job_id(ws, job_type, payload)
 
     job = {
         "schema_version": JOB_SCHEMA_VERSION,
         "job_id": job_id,
         "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
         "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
         "priority": int(priority),
-        "status": "queued",
+        "status": initial_status,
         "payload": payload,
         "parent_job_id": parent_job_id,
         "batch_id": batch_id,
         "attempts": 0,
+        "attempt_count": 0,
         "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
         "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
         "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
     }
 
-    append_jsonl(queue_path(ws), job)
+    if enqueue:
+        append_jsonl(queue_path(ws), job)
+
     append_jsonl(job_ledger_path(ws), {"event": "job_created", **job})
 
     write_json(job_status_path(ws, job_id), job)
@@ -173,10 +256,10 @@ def create_universal_knowledge_job(
         "workspace_id": ws,
         "job_id": job_id,
         "job_type": job_type,
-        "status": "queued",
-        "percent": 0,
-        "message": "Job queued.",
-        "steps": [],
+        "status": initial_status,
+        "percent": initial_progress["percent"],
+        "message": initial_progress["message"],
+        "steps": initial_progress["steps"],
         "updated_at": now_iso(),
     })
 
@@ -442,3 +525,98 @@ def explain_universal_knowledge_orchestrator_v1() -> Dict[str, Any]:
         "semantic_gate": "Semantic jobs are created only when certification.semantic_ready is true.",
         "next_stage": "Job Status API + real stage adapters",
     }
+
+def register_universal_runtime_handler(
+    *,
+    job_type: str,
+    handler: Any,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields=None,
+    predecessor_stages=None,
+    successor_stages=None,
+    idempotency_fields=None,
+    retry_policy=None,
+    concurrency_policy=None,
+    metadata=None,
+    replace: bool = False,
+    persist: bool = False,
+) -> Dict[str, Any]:
+    """Register business logic with the Universal Runtime Infrastructure."""
+
+    return register_runtime_handler(
+        job_type=job_type,
+        handler=handler,
+        pipeline=pipeline,
+        stage=stage,
+        description=description,
+        required_payload_fields=required_payload_fields,
+        predecessor_stages=predecessor_stages,
+        successor_stages=successor_stages,
+        idempotency_fields=idempotency_fields,
+        retry_policy=retry_policy,
+        concurrency_policy=concurrency_policy,
+        metadata=metadata,
+        replace=replace,
+        persist=persist,
+    )
+
+
+def unregister_universal_runtime_handler(
+    job_type: str,
+    *,
+    persist: bool = False,
+) -> Dict[str, Any] | None:
+    return unregister_runtime_handler(
+        job_type,
+        persist=persist,
+    )
+
+
+def read_universal_runtime_registration(
+    job_type: str,
+) -> Dict[str, Any] | None:
+    return get_runtime_registration(
+        job_type
+    )
+
+
+def list_universal_runtime_registrations() -> List[
+    Dict[str, Any]
+]:
+    return list_runtime_registrations()
+
+
+def explain_universal_runtime_registration_v1() -> Dict[str, Any]:
+    snapshot = runtime_registration_snapshot()
+
+    return {
+        "schema_version": (
+            "universal_runtime_registration_explanation_v1"
+        ),
+        "static_supported_job_type_count": len(
+            SUPPORTED_JOB_TYPES
+        ),
+        "static_supported_job_types": sorted(
+            SUPPORTED_JOB_TYPES
+        ),
+        "dynamic_registration_count": snapshot[
+            "registration_count"
+        ],
+        "dynamic_registrations": snapshot[
+            "registrations"
+        ],
+        "registry_sha256": snapshot[
+            "registry_sha256"
+        ],
+        "persistent_registry_path": snapshot[
+            "persistent_registry_path"
+        ],
+        "execution_model": (
+            "Registered handlers execute through the existing "
+            "universal worker, queue, job-status, progress and "
+            "failure contracts."
+        ),
+    }
+

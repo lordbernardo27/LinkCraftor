@@ -1,5 +1,7 @@
-﻿# backend/app/routers/site_reader.py
+# backend/app/routers/site_reader.py
 from __future__ import annotations
+
+from fastapi import HTTPException
 
 import gzip
 import json
@@ -796,8 +798,17 @@ def connect_domain(payload: ConnectDomainPayload):
     domain = _normalize_domain(payload.domain)
 
     if not domain:
-        
+        raise HTTPException(
+            status_code=400,
+            detail="A valid domain is required.",
+        )
+
+    workspace_id = _workspace_id_from_domain(
+        domain
+    )
+
     try:
+
         orchestration_result = enqueue_and_run_website_ingestion_job_v1(
             workspace_id=workspace_id,
             domain=domain if "domain" in locals() else "",

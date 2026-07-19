@@ -1,0 +1,1069 @@
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    read_queue,
+)
+
+from backend.server.stores.udare_store import (
+    refresh_udare_store_manifest_v1,
+    verify_udare_store_v1,
+)
+
+from backend.server.stores.udare_store_index_builder import (
+    build_udare_store_index_v1,
+)
+
+from backend.server.workers.universal_knowledge_queue_runner import (
+    run_universal_knowledge_queue_v1,
+)
+
+
+WORKSPACE_ID = "ws_whattoexpect_com"
+JOB_TYPE = "udare_reconstruction"
+
+EXPECTED_FINAL_COUNT = 2225
+EXPECTED_INITIAL_STORE_COUNT = 5
+EXPECTED_INITIAL_QUEUE_COUNT = 2220
+
+BATCH_SIZE = 50
+MAX_BATCHES = 100
+
+STORE_ROOT = Path(
+    "backend/server/data/udare_store"
+) / WORKSPACE_ID
+
+ARTICLES_DIR = (
+    STORE_ROOT
+    / "articles"
+)
+
+REVIEWS_DIR = (
+    STORE_ROOT
+    / "reviews"
+)
+
+METADATA_DIR = (
+    STORE_ROOT
+    / "metadata"
+)
+
+INDEX_PATH = (
+    STORE_ROOT
+    / "index.html"
+)
+
+MANIFEST_PATH = (
+    STORE_ROOT
+    / "manifest.json"
+)
+
+REPORT_DIR = Path(
+    "backend/server/data/runtime/"
+    "udare_phase_4_3b_full_population"
+)
+
+REPORT_PATH = (
+    REPORT_DIR
+    / "phase_4_3b_full_population_report.json"
+)
+
+PROGRESS_PATH = (
+    REPORT_DIR
+    / "phase_4_3b_progress.json"
+)
+
+
+def utc_now() -> str:
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def get_udare_queue() -> List[Dict[str, Any]]:
+    queue = read_queue(
+        WORKSPACE_ID,
+        limit=100000,
+    )
+
+    return [
+        job
+
+        for job
+        in queue
+
+        if str(
+            job.get(
+                "job_type"
+            )
+            or job.get(
+                "stage"
+            )
+            or ""
+        ).strip()
+        == JOB_TYPE
+    ]
+
+
+def count_files(
+    directory: Path,
+    pattern: str,
+) -> int:
+    if not directory.is_dir():
+        return 0
+
+    return len(
+        list(
+            directory.glob(
+                pattern
+            )
+        )
+    )
+
+
+def write_json(
+    path: Path,
+    value: Dict[str, Any],
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    temporary = path.with_name(
+        path.name
+        + ".tmp"
+    )
+
+    temporary.write_text(
+        json.dumps(
+            value,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    temporary.replace(
+        path
+    )
+
+
+REPORT_DIR.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+
+# ---------------------------------------------------------------------
+# Initial gate
+# ---------------------------------------------------------------------
+
+initial_queue = get_udare_queue()
+
+initial_articles = count_files(
+    ARTICLES_DIR,
+    "*.html",
+)
+
+initial_reviews = count_files(
+    REVIEWS_DIR,
+    "*.html",
+)
+
+initial_metadata = count_files(
+    METADATA_DIR,
+    "*.json",
+)
+
+
+initial_checks = {
+    "initial_queue_not_negative":
+        len(
+            initial_queue
+        )
+        >= 0,
+
+    "initial_articles_at_least_5":
+        initial_articles
+        >= EXPECTED_INITIAL_STORE_COUNT,
+
+    "initial_reviews_match_articles":
+        initial_reviews
+        == initial_articles,
+
+    "initial_metadata_matches_articles":
+        initial_metadata
+        == initial_articles,
+
+    "completed_plus_queued_equals_2225":
+        (
+            initial_articles
+            + len(
+                initial_queue
+            )
+        )
+        == EXPECTED_FINAL_COUNT,
+
+    "index_exists":
+        INDEX_PATH.is_file(),
+
+    "manifest_exists":
+        MANIFEST_PATH.is_file(),
+}
+
+
+failed_initial = [
+    name
+
+    for name, passed
+    in initial_checks.items()
+
+    if not passed
+]
+
+
+if failed_initial:
+    raise RuntimeError(
+        "Phase 4.3B initial gate failed: "
+        + ", ".join(
+            failed_initial
+        )
+    )
+
+
+print()
+print("=" * 112)
+print(
+    "PHASE 4.3B — INITIAL STATE"
+)
+print("=" * 112)
+
+print(
+    "Queued UDARE jobs:",
+    len(
+        initial_queue
+    ),
+)
+
+print(
+    "Reader articles:",
+    initial_articles,
+)
+
+print(
+    "Visual reviews:",
+    initial_reviews,
+)
+
+print(
+    "Metadata records:",
+    initial_metadata,
+)
+
+print(
+    "Batch size:",
+    BATCH_SIZE,
+)
+
+
+# ---------------------------------------------------------------------
+# Execute all remaining UDARE jobs
+# ---------------------------------------------------------------------
+
+batch_reports: List[
+    Dict[str, Any]
+] = []
+
+total_executed = 0
+total_successful = 0
+total_failed = 0
+
+
+for batch_number in range(
+    1,
+    MAX_BATCHES + 1,
+):
+    queue_before = get_udare_queue()
+
+    remaining_before = len(
+        queue_before
+    )
+
+    if remaining_before == 0:
+        break
+
+    jobs_to_run = min(
+        BATCH_SIZE,
+        remaining_before,
+    )
+
+    print()
+    print("-" * 112)
+
+    print(
+        f"BATCH {batch_number}"
+    )
+
+    print(
+        "UDARE jobs before:",
+        remaining_before,
+    )
+
+    print(
+        "Executing:",
+        jobs_to_run,
+    )
+
+    result = (
+        run_universal_knowledge_queue_v1(
+            workspace_id=
+                WORKSPACE_ID,
+
+            max_jobs=
+                jobs_to_run,
+
+            job_type=
+                JOB_TYPE,
+
+            order_by_priority=
+                True,
+        )
+    )
+
+    results = (
+        result.get(
+            "results"
+        )
+        or []
+    )
+
+    successful = [
+        item
+
+        for item
+        in results
+
+        if item.get(
+            "ok"
+        )
+        is True
+    ]
+
+    failed = [
+        item
+
+        for item
+        in results
+
+        if item.get(
+            "ok"
+        )
+        is not True
+    ]
+
+    queue_after = get_udare_queue()
+
+    articles_after = count_files(
+        ARTICLES_DIR,
+        "*.html",
+    )
+
+    reviews_after = count_files(
+        REVIEWS_DIR,
+        "*.html",
+    )
+
+    metadata_after = count_files(
+        METADATA_DIR,
+        "*.json",
+    )
+
+    batch_report = {
+        "batch_number":
+            batch_number,
+
+        "requested":
+            jobs_to_run,
+
+        "executed":
+            int(
+                result.get(
+                    "executed_count"
+                )
+                or 0
+            ),
+
+        "successful":
+            len(
+                successful
+            ),
+
+        "failed":
+            len(
+                failed
+            ),
+
+        "queue_before":
+            remaining_before,
+
+        "queue_after":
+            len(
+                queue_after
+            ),
+
+        "reader_articles":
+            articles_after,
+
+        "visual_reviews":
+            reviews_after,
+
+        "metadata_records":
+            metadata_after,
+
+        "failed_results":
+            failed,
+
+        "completed_at_utc":
+            utc_now(),
+    }
+
+    batch_reports.append(
+        batch_report
+    )
+
+    total_executed += int(
+        result.get(
+            "executed_count"
+        )
+        or 0
+    )
+
+    total_successful += len(
+        successful
+    )
+
+    total_failed += len(
+        failed
+    )
+
+    write_json(
+        PROGRESS_PATH,
+        {
+            "schema_version":
+                "udare_phase_4_3b_progress_v1",
+
+            "workspace_id":
+                WORKSPACE_ID,
+
+            "updated_at_utc":
+                utc_now(),
+
+            "batch_size":
+                BATCH_SIZE,
+
+            "batches_completed":
+                len(
+                    batch_reports
+                ),
+
+            "total_executed":
+                total_executed,
+
+            "total_successful":
+                total_successful,
+
+            "total_failed":
+                total_failed,
+
+            "queued_udare_remaining":
+                len(
+                    queue_after
+                ),
+
+            "reader_articles":
+                articles_after,
+
+            "visual_reviews":
+                reviews_after,
+
+            "metadata_records":
+                metadata_after,
+
+            "batches":
+                batch_reports,
+        },
+    )
+
+    print(
+        "Executed:",
+        batch_report[
+            "executed"
+        ],
+    )
+
+    print(
+        "Successful:",
+        batch_report[
+            "successful"
+        ],
+    )
+
+    print(
+        "Failed:",
+        batch_report[
+            "failed"
+        ],
+    )
+
+    print(
+        "UDARE jobs remaining:",
+        batch_report[
+            "queue_after"
+        ],
+    )
+
+    print(
+        "Reader articles:",
+        articles_after,
+    )
+
+    print(
+        "Visual reviews:",
+        reviews_after,
+    )
+
+    print(
+        "Metadata records:",
+        metadata_after,
+    )
+
+    if failed:
+        print()
+        print(
+            "FAILED JOBS"
+        )
+
+        for item in failed:
+            print(
+                "  -",
+                item.get(
+                    "job_id"
+                ),
+                ":",
+                item.get(
+                    "error"
+                )
+                or item.get(
+                    "failure"
+                )
+                or "Unknown failure",
+            )
+
+        raise RuntimeError(
+            "Phase 4.3B stopped because one or more "
+            f"jobs failed in batch {batch_number}."
+        )
+
+    if (
+        batch_report[
+            "executed"
+        ]
+        != jobs_to_run
+    ):
+        raise RuntimeError(
+            "Queue runner executed an unexpected number "
+            f"of jobs in batch {batch_number}: "
+            f"expected {jobs_to_run}, "
+            f"executed {batch_report['executed']}."
+        )
+
+
+# ---------------------------------------------------------------------
+# Final store refresh and verification
+# ---------------------------------------------------------------------
+
+remaining_queue = get_udare_queue()
+
+refresh_udare_store_manifest_v1(
+    WORKSPACE_ID
+)
+
+final_index_result = build_udare_store_index_v1(
+    WORKSPACE_ID
+)
+
+if (
+    not isinstance(
+        final_index_result,
+        dict,
+    )
+    or final_index_result.get(
+        "ok"
+    )
+    is not True
+):
+    raise RuntimeError(
+        "Final UDARE index rebuild failed."
+    )
+
+store_verification = verify_udare_store_v1(
+    WORKSPACE_ID
+)
+
+store_counts = (
+    store_verification.get(
+        "counts"
+    )
+    or {}
+)
+
+final_articles = count_files(
+    ARTICLES_DIR,
+    "*.html",
+)
+
+final_reviews = count_files(
+    REVIEWS_DIR,
+    "*.html",
+)
+
+final_metadata = count_files(
+    METADATA_DIR,
+    "*.json",
+)
+
+
+if not INDEX_PATH.is_file():
+    raise RuntimeError(
+        f"UDARE index is missing: {INDEX_PATH}"
+    )
+
+
+index_text = INDEX_PATH.read_text(
+    encoding="utf-8",
+    errors="strict",
+)
+
+article_links = re.findall(
+    r'class="open-button"\s+href="([^"]+)"',
+    index_text,
+    flags=re.MULTILINE,
+)
+
+review_links = re.findall(
+    r'class="review-button"\s+href="([^"]+)"',
+    index_text,
+    flags=re.MULTILINE,
+)
+
+
+metadata_records: List[
+    Dict[str, Any]
+] = []
+
+for metadata_path in sorted(
+    METADATA_DIR.glob(
+        "*.json"
+    )
+):
+    value = json.loads(
+        metadata_path.read_text(
+            encoding="utf-8",
+            errors="strict",
+        )
+    )
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        raise RuntimeError(
+            "Metadata file is not a JSON object: "
+            f"{metadata_path}"
+        )
+
+    metadata_records.append(
+        value
+    )
+
+
+article_metadata_paths = [
+    str(
+        (
+            record.get(
+                "article_document"
+            )
+            or {}
+        ).get(
+            "relative_path"
+        )
+        or ""
+    )
+
+    for record
+    in metadata_records
+]
+
+review_metadata_paths = [
+    str(
+        (
+            record.get(
+                "review_document"
+            )
+            or {}
+        ).get(
+            "relative_path"
+        )
+        or ""
+    )
+
+    for record
+    in metadata_records
+]
+
+
+final_checks = {
+    "executed_all_jobs_present_at_resume":
+        total_executed
+        == len(
+            initial_queue
+        ),
+
+    "successful_all_jobs_present_at_resume":
+        total_successful
+        == len(
+            initial_queue
+        ),
+
+    "failed_zero":
+        total_failed
+        == 0,
+
+    "queue_remaining_zero":
+        len(
+            remaining_queue
+        )
+        == 0,
+
+    "reader_articles_2225":
+        final_articles
+        == EXPECTED_FINAL_COUNT,
+
+    "visual_reviews_2225":
+        final_reviews
+        == EXPECTED_FINAL_COUNT,
+
+    "metadata_records_2225":
+        final_metadata
+        == EXPECTED_FINAL_COUNT,
+
+    "store_metadata_count_2225":
+        int(
+            store_counts.get(
+                "metadata_records"
+            )
+            or 0
+        )
+        == EXPECTED_FINAL_COUNT,
+
+    "store_article_count_2225":
+        int(
+            store_counts.get(
+                "article_documents"
+            )
+            or 0
+        )
+        == EXPECTED_FINAL_COUNT,
+
+    "index_article_links_2225":
+        len(
+            article_links
+        )
+        == EXPECTED_FINAL_COUNT,
+
+    "index_review_links_2225":
+        len(
+            review_links
+        )
+        == EXPECTED_FINAL_COUNT,
+
+    "all_metadata_has_article_path":
+        len(
+            article_metadata_paths
+        )
+        == EXPECTED_FINAL_COUNT
+        and all(
+            article_metadata_paths
+        ),
+
+    "all_metadata_has_review_path":
+        len(
+            review_metadata_paths
+        )
+        == EXPECTED_FINAL_COUNT
+        and all(
+            review_metadata_paths
+        ),
+
+    "all_article_metadata_paths_exist":
+        all(
+            (
+                STORE_ROOT
+                / Path(
+                    path
+                )
+            ).is_file()
+
+            for path
+            in article_metadata_paths
+        ),
+
+    "all_review_metadata_paths_exist":
+        all(
+            (
+                STORE_ROOT
+                / Path(
+                    path
+                )
+            ).is_file()
+
+            for path
+            in review_metadata_paths
+        ),
+
+    "index_search_present":
+        'id="search-input"'
+        in index_text,
+
+    "index_sort_present":
+        'id="sort-select"'
+        in index_text,
+
+    "manifest_exists":
+        MANIFEST_PATH.is_file(),
+}
+
+
+failed_final = [
+    name
+
+    for name, passed
+    in final_checks.items()
+
+    if not passed
+]
+
+
+report = {
+    "schema_version":
+        "udare_phase_4_3b_full_population_report_v1",
+
+    "workspace_id":
+        WORKSPACE_ID,
+
+    "generated_at_utc":
+        utc_now(),
+
+    "batch_size":
+        BATCH_SIZE,
+
+    "batch_count":
+        len(
+            batch_reports
+        ),
+
+    "initial_state": {
+        "queued_udare_jobs":
+            len(
+                initial_queue
+            ),
+
+        "reader_articles":
+            initial_articles,
+
+        "visual_reviews":
+            initial_reviews,
+
+        "metadata_records":
+            initial_metadata,
+    },
+
+    "execution": {
+        "total_executed":
+            total_executed,
+
+        "total_successful":
+            total_successful,
+
+        "total_failed":
+            total_failed,
+    },
+
+    "final_state": {
+        "queued_udare_jobs":
+            len(
+                remaining_queue
+            ),
+
+        "reader_articles":
+            final_articles,
+
+        "visual_reviews":
+            final_reviews,
+
+        "metadata_records":
+            final_metadata,
+
+        "index_article_links":
+            len(
+                article_links
+            ),
+
+        "index_review_links":
+            len(
+                review_links
+            ),
+    },
+
+    "store_verification":
+        store_verification,
+
+    "final_index_result":
+        final_index_result,
+
+    "checks":
+        final_checks,
+
+    "failed_checks":
+        failed_final,
+
+    "batches":
+        batch_reports,
+
+    "decision":
+        (
+            "FULL_UDARE_STORE_POPULATION_CERTIFIED"
+            if not failed_final
+            else "BLOCKED"
+        ),
+}
+
+
+write_json(
+    REPORT_PATH,
+    report,
+)
+
+
+print()
+print("=" * 112)
+print(
+    "PHASE 4.3B — FINAL UDARE STORE VERIFICATION"
+)
+print("=" * 112)
+
+print(
+    "Batches completed:",
+    len(
+        batch_reports
+    ),
+)
+
+print(
+    "Jobs executed:",
+    total_executed,
+)
+
+print(
+    "Successful:",
+    total_successful,
+)
+
+print(
+    "Failed:",
+    total_failed,
+)
+
+print(
+    "Queued UDARE jobs remaining:",
+    len(
+        remaining_queue
+    ),
+)
+
+print(
+    "Reader articles:",
+    final_articles,
+)
+
+print(
+    "Visual review documents:",
+    final_reviews,
+)
+
+print(
+    "Metadata records:",
+    final_metadata,
+)
+
+print(
+    "Index article links:",
+    len(
+        article_links
+    ),
+)
+
+print(
+    "Index review links:",
+    len(
+        review_links
+    ),
+)
+
+print()
+print("CHECKS")
+
+for name, passed in final_checks.items():
+    print(
+        f"  {name}:",
+        (
+            "PASS"
+            if passed
+            else "FAIL"
+        ),
+    )
+
+print()
+print(
+    "Report:",
+    REPORT_PATH,
+)
+
+print(
+    "Progress report:",
+    PROGRESS_PATH,
+)
+
+print()
+print("=" * 112)
+print(
+    "PHASE 4.3B DECISION:",
+    report[
+        "decision"
+    ],
+)
+print("=" * 112)
+
+raise SystemExit(
+    0
+    if not failed_final
+    else 1
+)

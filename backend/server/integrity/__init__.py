@@ -1,0 +1,1 @@
+﻿"""LinkCraftor integrity validation package."""

@@ -1,0 +1,1294 @@
+from __future__ import annotations
+
+import argparse
+import html
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+from urllib.parse import quote
+
+
+BUILDER_NAME = "udare_store_index_builder_v1"
+STORE_VERSION = "udare_store_v1"
+INDEX_SCHEMA_VERSION = "udare_store_index_v1"
+
+DATA_ROOT = Path(
+    "backend/server/data/udare_store"
+)
+
+
+class UdareStoreIndexError(RuntimeError):
+    pass
+
+
+def _safe_workspace_id(
+    workspace_id: str,
+) -> str:
+    value = str(
+        workspace_id
+        or ""
+    ).strip()
+
+    if not value:
+        raise UdareStoreIndexError(
+            "workspace_id is required."
+        )
+
+    safe = "".join(
+        character
+        if (
+            character.isalnum()
+            or character
+            in {
+                "-",
+                "_",
+                ".",
+            }
+        )
+        else "_"
+
+        for character
+        in value
+    ).strip(
+        "._"
+    )
+
+    if not safe:
+        raise UdareStoreIndexError(
+            "workspace_id contains no usable characters."
+        )
+
+    return safe
+
+
+def _utc_now() -> str:
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def _load_json(
+    path: Path,
+) -> Dict[str, Any]:
+    try:
+        value = json.loads(
+            path.read_text(
+                encoding="utf-8",
+                errors="strict",
+            )
+        )
+
+    except Exception as exc:
+        raise UdareStoreIndexError(
+            f"Could not read metadata file {path}: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        raise UdareStoreIndexError(
+            f"Metadata file is not a JSON object: {path}"
+        )
+
+    return value
+
+
+def _integer(
+    value: Any,
+    default: int = 0,
+) -> int:
+    try:
+        return int(
+            value
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return default
+
+
+def _article_row(
+    *,
+    workspace_root: Path,
+    metadata_path: Path,
+) -> Dict[str, Any]:
+    record = _load_json(
+        metadata_path
+    )
+
+    article_document = (
+        record.get(
+            "article_document"
+        )
+        or {}
+    )
+
+    content_integrity = (
+        record.get(
+            "content_integrity"
+        )
+        or {}
+    )
+
+    if not isinstance(
+        article_document,
+        dict,
+    ):
+        article_document = {}
+
+    if not isinstance(
+        content_integrity,
+        dict,
+    ):
+        content_integrity = {}
+
+    relative_path = str(
+        article_document.get(
+            "relative_path"
+        )
+        or ""
+    ).replace(
+        "\\",
+        "/",
+    ).strip()
+
+    filename = str(
+        article_document.get(
+            "filename"
+        )
+        or ""
+    ).strip()
+
+    if not relative_path and filename:
+        relative_path = (
+            "articles/"
+            + filename
+        )
+
+    if not relative_path:
+        raise UdareStoreIndexError(
+            "Metadata record contains no article path: "
+            f"{metadata_path}"
+        )
+
+    article_path = (
+        workspace_root
+        / Path(
+            relative_path
+        )
+    ).resolve()
+
+    workspace_resolved = (
+        workspace_root.resolve()
+    )
+
+    try:
+        article_path.relative_to(
+            workspace_resolved
+        )
+
+    except ValueError as exc:
+        raise UdareStoreIndexError(
+            "Article path escapes the UDARE workspace: "
+            f"{relative_path}"
+        ) from exc
+
+    if not article_path.is_file():
+        raise UdareStoreIndexError(
+            "Metadata points to a missing HTML article: "
+            f"{article_path}"
+        )
+
+    title = str(
+        record.get(
+            "title"
+        )
+        or record.get(
+            "h1"
+        )
+        or article_path.stem
+    ).strip()
+
+    source_url = str(
+        record.get(
+            "source_url"
+        )
+        or ""
+    ).strip()
+
+    engine = str(
+        record.get(
+            "udare_engine"
+        )
+        or ""
+    ).strip()
+
+    created_at = str(
+        record.get(
+            "created_at_utc"
+        )
+        or record.get(
+            "persisted_at_utc"
+        )
+        or ""
+    ).strip()
+
+    document_id = str(
+        record.get(
+            "document_id"
+        )
+        or record.get(
+            "html_id"
+        )
+        or article_path.stem
+    ).strip()
+
+    word_count = _integer(
+        content_integrity.get(
+            "reader_body_word_count"
+        ),
+        0,
+    )
+
+    byte_length = _integer(
+        article_document.get(
+            "byte_length"
+        ),
+        article_path.stat().st_size,
+    )
+
+    href = quote(
+        relative_path,
+        safe="/._-",
+    )
+
+    review_document = (
+        record.get(
+            "review_document"
+        )
+        or {}
+    )
+
+    if not isinstance(
+        review_document,
+        dict,
+    ):
+        review_document = {}
+
+    review_relative_path = str(
+        review_document.get(
+            "relative_path"
+        )
+        or ""
+    ).replace(
+        "\\",
+        "/",
+    ).strip()
+
+    review_path = (
+        workspace_root
+        / review_relative_path
+        if review_relative_path
+        else None
+    )
+
+    review_href = (
+        quote(
+            review_relative_path,
+            safe="/._-",
+        )
+        if (
+            review_path is not None
+            and review_path.is_file()
+        )
+        else ""
+    )
+
+    return {
+        "document_id":
+            document_id,
+
+        "title":
+            title,
+
+        "source_url":
+            source_url,
+
+        "engine":
+            engine,
+
+        "created_at":
+            created_at,
+
+        "word_count":
+            word_count,
+
+        "byte_length":
+            byte_length,
+
+        "relative_path":
+            relative_path,
+
+        "article_path":
+            str(
+                article_path
+            ),
+
+        "href":
+            href,
+
+        "review_relative_path":
+            review_relative_path,
+
+        "review_href":
+            review_href,
+
+        "metadata_path":
+            str(
+                metadata_path
+            ),
+    }
+
+
+def _render_article_card(
+    article: Dict[str, Any],
+) -> str:
+    title = html.escape(
+        str(
+            article[
+                "title"
+            ]
+        )
+    )
+
+    source_url = html.escape(
+        str(
+            article[
+                "source_url"
+            ]
+        )
+    )
+
+    source_href = html.escape(
+        str(
+            article[
+                "source_url"
+            ]
+        ),
+        quote=True,
+    )
+
+    article_href = html.escape(
+        str(
+            article[
+                "href"
+            ]
+        ),
+        quote=True,
+    )
+
+    review_href = html.escape(
+        str(
+            article.get(
+                "review_href"
+            )
+            or ""
+        ),
+        quote=True,
+    )
+
+    review_button = (
+        f'<a class="review-button" '
+        f'href="{review_href}">'
+        f'Open Review</a>'
+        if review_href
+        else ""
+    )
+
+    engine = html.escape(
+        str(
+            article[
+                "engine"
+            ]
+        )
+    )
+
+    created_at = html.escape(
+        str(
+            article[
+                "created_at"
+            ]
+        )
+    )
+
+    document_id = html.escape(
+        str(
+            article[
+                "document_id"
+            ]
+        )
+    )
+
+    word_count = int(
+        article[
+            "word_count"
+        ]
+    )
+
+    byte_length = int(
+        article[
+            "byte_length"
+        ]
+    )
+
+    search_text = html.escape(
+        " ".join(
+            [
+                str(
+                    article[
+                        "title"
+                    ]
+                ),
+                str(
+                    article[
+                        "source_url"
+                    ]
+                ),
+                str(
+                    article[
+                        "document_id"
+                    ]
+                ),
+            ]
+        ).casefold(),
+        quote=True,
+    )
+
+    source_html = (
+        (
+            f'<a class="source-link" '
+            f'href="{source_href}" '
+            f'target="_blank" '
+            f'rel="noopener noreferrer">'
+            f'{source_url}'
+            f'</a>'
+        )
+        if source_url
+        else '<span class="missing">No source URL</span>'
+    )
+
+    return f"""
+<article
+    class="article-card"
+    data-title="{html.escape(str(article["title"]).casefold(), quote=True)}"
+    data-words="{word_count}"
+    data-created="{created_at}"
+    data-search="{search_text}"
+>
+    <div class="article-main">
+        <h2>
+            <a href="{article_href}">
+                {title}
+            </a>
+        </h2>
+
+        <div class="source">
+            {source_html}
+        </div>
+
+        <div class="meta">
+            <span><strong>Words:</strong> {word_count:,}</span>
+            <span><strong>Bytes:</strong> {byte_length:,}</span>
+            <span><strong>Engine:</strong> {engine}</span>
+            <span><strong>Created:</strong> {created_at}</span>
+            <span><strong>ID:</strong> {document_id}</span>
+        </div>
+    </div>
+
+    <div class="article-action">
+        <a
+            class="open-button"
+            href="{article_href}"
+        >
+            Open Article
+        </a>
+
+        {review_button}
+    </div>
+</article>
+""".strip()
+
+
+def _render_index(
+    *,
+    workspace_id: str,
+    articles: List[Dict[str, Any]],
+    generated_at: str,
+) -> str:
+    article_count = len(
+        articles
+    )
+
+    total_words = sum(
+        int(
+            article[
+                "word_count"
+            ]
+        )
+
+        for article
+        in articles
+    )
+
+    average_words = (
+        round(
+            total_words
+            / article_count
+        )
+        if article_count
+        else 0
+    )
+
+    largest = max(
+        articles,
+        key=lambda article: int(
+            article[
+                "word_count"
+            ]
+        ),
+        default=None,
+    )
+
+    smallest = min(
+        articles,
+        key=lambda article: int(
+            article[
+                "word_count"
+            ]
+        ),
+        default=None,
+    )
+
+    engines = sorted(
+        {
+            str(
+                article[
+                    "engine"
+                ]
+            )
+
+            for article
+            in articles
+
+            if article[
+                "engine"
+            ]
+        }
+    )
+
+    engine_display = (
+        ", ".join(
+            engines
+        )
+        if engines
+        else "Not recorded"
+    )
+
+    largest_display = (
+        f'{html.escape(str(largest["title"]))} '
+        f'({int(largest["word_count"]):,} words)'
+        if largest
+        else "None"
+    )
+
+    smallest_display = (
+        f'{html.escape(str(smallest["title"]))} '
+        f'({int(smallest["word_count"]):,} words)'
+        if smallest
+        else "None"
+    )
+
+    cards = "\n\n".join(
+        _render_article_card(
+            article
+        )
+
+        for article
+        in articles
+    )
+
+    workspace_text = html.escape(
+        workspace_id
+    )
+
+    generated_text = html.escape(
+        generated_at
+    )
+
+    engine_text = html.escape(
+        engine_display
+    )
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta
+    name="viewport"
+    content="width=device-width, initial-scale=1"
+>
+<title>UDARE Article Store — {workspace_text}</title>
+
+<style>
+:root {{
+    color-scheme: light;
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+}}
+
+* {{
+    box-sizing: border-box;
+}}
+
+body {{
+    margin: 0;
+    background: #f4f6fa;
+    color: #182033;
+}}
+
+a {{
+    color: #1858b8;
+}}
+
+.page {{
+    width: min(1440px, calc(100% - 32px));
+    margin: 0 auto;
+    padding: 32px 0 64px;
+}}
+
+.hero {{
+    padding: 30px;
+    border-radius: 20px;
+    background: #17233b;
+    color: #ffffff;
+    box-shadow: 0 16px 40px rgba(20, 32, 55, 0.16);
+}}
+
+.hero h1 {{
+    margin: 0 0 8px;
+    font-size: clamp(28px, 4vw, 46px);
+}}
+
+.hero p {{
+    margin: 5px 0;
+    color: #d7deed;
+}}
+
+.stats {{
+    display: grid;
+    grid-template-columns:
+        repeat(auto-fit, minmax(190px, 1fr));
+    gap: 14px;
+    margin: 22px 0;
+}}
+
+.stat {{
+    padding: 18px;
+    border: 1px solid #dce2ed;
+    border-radius: 15px;
+    background: #ffffff;
+}}
+
+.stat-label {{
+    display: block;
+    margin-bottom: 7px;
+    color: #657087;
+    font-size: 13px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}}
+
+.stat-value {{
+    font-size: 22px;
+    font-weight: 800;
+    overflow-wrap: anywhere;
+}}
+
+.stat-value.small {{
+    font-size: 14px;
+    line-height: 1.45;
+}}
+
+.controls {{
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    display: grid;
+    grid-template-columns:
+        minmax(220px, 1fr)
+        auto
+        auto;
+    gap: 12px;
+    margin: 24px 0;
+    padding: 14px;
+    border: 1px solid #dce2ed;
+    border-radius: 15px;
+    background: rgba(244, 246, 250, 0.96);
+    backdrop-filter: blur(10px);
+}}
+
+.controls input,
+.controls select {{
+    width: 100%;
+    min-height: 44px;
+    padding: 9px 12px;
+    border: 1px solid #bfc8d8;
+    border-radius: 10px;
+    background: #ffffff;
+    color: #182033;
+    font: inherit;
+}}
+
+.visible-count {{
+    display: flex;
+    min-height: 44px;
+    align-items: center;
+    padding: 0 14px;
+    border-radius: 10px;
+    background: #e6ecf7;
+    font-weight: 750;
+    white-space: nowrap;
+}}
+
+.article-list {{
+    display: grid;
+    gap: 14px;
+}}
+
+.article-card {{
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 22px;
+    align-items: center;
+    padding: 22px;
+    border: 1px solid #dce2ed;
+    border-radius: 16px;
+    background: #ffffff;
+    box-shadow: 0 8px 22px rgba(26, 42, 70, 0.06);
+}}
+
+.article-card[hidden] {{
+    display: none;
+}}
+
+.article-card h2 {{
+    margin: 0 0 8px;
+    font-size: 20px;
+    line-height: 1.3;
+}}
+
+.article-card h2 a {{
+    text-decoration: none;
+}}
+
+.article-card h2 a:hover {{
+    text-decoration: underline;
+}}
+
+.source {{
+    margin-bottom: 12px;
+    overflow-wrap: anywhere;
+}}
+
+.source-link {{
+    color: #5b6680;
+    font-size: 13px;
+}}
+
+.meta {{
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 15px;
+    color: #4d5870;
+    font-size: 13px;
+}}
+
+.open-button {{
+    display: inline-flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 15px;
+    border-radius: 10px;
+    background: #1858b8;
+    color: #ffffff;
+    font-weight: 750;
+    text-decoration: none;
+    white-space: nowrap;
+}}
+
+.open-button:hover {{
+    background: #124894;
+}}
+
+.article-action {{
+    display: grid;
+    gap: 9px;
+}}
+
+.review-button {{
+    display: inline-flex;
+    min-height: 42px;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 15px;
+    border: 1px solid #1858b8;
+    border-radius: 10px;
+    background: #ffffff;
+    color: #1858b8;
+    font-weight: 750;
+    text-decoration: none;
+    white-space: nowrap;
+}}
+
+.review-button:hover {{
+    background: #eaf1fb;
+}}
+
+.empty-message {{
+    display: none;
+    padding: 30px;
+    border: 1px dashed #aeb8ca;
+    border-radius: 15px;
+    background: #ffffff;
+    text-align: center;
+}}
+
+footer {{
+    margin-top: 30px;
+    color: #657087;
+    font-size: 13px;
+    text-align: center;
+}}
+
+@media (max-width: 780px) {{
+    .controls {{
+        position: static;
+        grid-template-columns: 1fr;
+    }}
+
+    .article-card {{
+        grid-template-columns: 1fr;
+    }}
+
+    .article-action {{
+        width: 100%;
+    }}
+
+    .open-button {{
+        width: 100%;
+    }}
+}}
+</style>
+</head>
+
+<body>
+<main class="page">
+    <header class="hero">
+        <h1>UDARE Article Store</h1>
+        <p><strong>Workspace:</strong> {workspace_text}</p>
+        <p><strong>Store:</strong> {STORE_VERSION}</p>
+        <p><strong>Engine:</strong> {engine_text}</p>
+        <p><strong>Generated:</strong> {generated_text}</p>
+    </header>
+
+    <section class="stats">
+        <div class="stat">
+            <span class="stat-label">Articles</span>
+            <span class="stat-value">{article_count:,}</span>
+        </div>
+
+        <div class="stat">
+            <span class="stat-label">Total Words</span>
+            <span class="stat-value">{total_words:,}</span>
+        </div>
+
+        <div class="stat">
+            <span class="stat-label">Average Words</span>
+            <span class="stat-value">{average_words:,}</span>
+        </div>
+
+        <div class="stat">
+            <span class="stat-label">Largest Article</span>
+            <span class="stat-value small">{largest_display}</span>
+        </div>
+
+        <div class="stat">
+            <span class="stat-label">Smallest Article</span>
+            <span class="stat-value small">{smallest_display}</span>
+        </div>
+    </section>
+
+    <section class="controls">
+        <input
+            id="search-input"
+            type="search"
+            placeholder="Search title, URL or document ID"
+            autocomplete="off"
+        >
+
+        <select
+            id="sort-select"
+            aria-label="Sort articles"
+        >
+            <option value="title-asc">Title A–Z</option>
+            <option value="title-desc">Title Z–A</option>
+            <option value="words-desc">Most Words</option>
+            <option value="words-asc">Fewest Words</option>
+            <option value="created-desc">Newest</option>
+            <option value="created-asc">Oldest</option>
+        </select>
+
+        <div class="visible-count">
+            Showing
+            <span id="visible-count">{article_count}</span>
+            of {article_count}
+        </div>
+    </section>
+
+    <section
+        id="article-list"
+        class="article-list"
+    >
+        {cards}
+    </section>
+
+    <div
+        id="empty-message"
+        class="empty-message"
+    >
+        No UDARE articles match this search.
+    </div>
+
+    <footer>
+        Generated automatically by
+        {BUILDER_NAME}.
+    </footer>
+</main>
+
+<script>
+(() => {{
+    const searchInput =
+        document.getElementById("search-input");
+
+    const sortSelect =
+        document.getElementById("sort-select");
+
+    const articleList =
+        document.getElementById("article-list");
+
+    const visibleCount =
+        document.getElementById("visible-count");
+
+    const emptyMessage =
+        document.getElementById("empty-message");
+
+    const cards = Array.from(
+        articleList.querySelectorAll(".article-card")
+    );
+
+    function compareValues(a, b, mode) {{
+        const titleA = a.dataset.title || "";
+        const titleB = b.dataset.title || "";
+
+        const wordsA =
+            Number.parseInt(a.dataset.words || "0", 10);
+
+        const wordsB =
+            Number.parseInt(b.dataset.words || "0", 10);
+
+        const createdA =
+            Date.parse(a.dataset.created || "") || 0;
+
+        const createdB =
+            Date.parse(b.dataset.created || "") || 0;
+
+        switch (mode) {{
+            case "title-desc":
+                return titleB.localeCompare(titleA);
+
+            case "words-desc":
+                return wordsB - wordsA;
+
+            case "words-asc":
+                return wordsA - wordsB;
+
+            case "created-desc":
+                return createdB - createdA;
+
+            case "created-asc":
+                return createdA - createdB;
+
+            case "title-asc":
+            default:
+                return titleA.localeCompare(titleB);
+        }}
+    }}
+
+    function applyView() {{
+        const query =
+            searchInput.value.trim().toLocaleLowerCase();
+
+        const mode =
+            sortSelect.value;
+
+        const sortedCards = [
+            ...cards
+        ].sort(
+            (a, b) => compareValues(a, b, mode)
+        );
+
+        let shown = 0;
+
+        for (const card of sortedCards) {{
+            articleList.appendChild(card);
+
+            const searchText =
+                card.dataset.search || "";
+
+            const matches =
+                !query
+                || searchText.includes(query);
+
+            card.hidden =
+                !matches;
+
+            if (matches) {{
+                shown += 1;
+            }}
+        }}
+
+        visibleCount.textContent =
+            String(shown);
+
+        emptyMessage.style.display =
+            shown === 0
+            ? "block"
+            : "none";
+    }}
+
+    searchInput.addEventListener(
+        "input",
+        applyView
+    );
+
+    sortSelect.addEventListener(
+        "change",
+        applyView
+    );
+
+    applyView();
+}})();
+</script>
+</body>
+</html>
+"""
+
+
+def build_udare_store_index(
+    workspace_id: str,
+) -> Dict[str, Any]:
+    workspace = _safe_workspace_id(
+        workspace_id
+    )
+
+    workspace_root = (
+        DATA_ROOT
+        / workspace
+    )
+
+    metadata_dir = (
+        workspace_root
+        / "metadata"
+    )
+
+    articles_dir = (
+        workspace_root
+        / "articles"
+    )
+
+    index_path = (
+        workspace_root
+        / "index.html"
+    )
+
+    if not workspace_root.is_dir():
+        raise UdareStoreIndexError(
+            "UDARE workspace does not exist: "
+            f"{workspace_root}"
+        )
+
+    if not metadata_dir.is_dir():
+        raise UdareStoreIndexError(
+            "UDARE metadata directory does not exist: "
+            f"{metadata_dir}"
+        )
+
+    if not articles_dir.is_dir():
+        raise UdareStoreIndexError(
+            "UDARE articles directory does not exist: "
+            f"{articles_dir}"
+        )
+
+    metadata_files = sorted(
+        metadata_dir.glob(
+            "*.json"
+        )
+    )
+
+    articles = [
+        _article_row(
+            workspace_root=
+                workspace_root,
+
+            metadata_path=
+                metadata_path,
+        )
+
+        for metadata_path
+        in metadata_files
+    ]
+
+    articles.sort(
+        key=lambda article: (
+            str(
+                article[
+                    "title"
+                ]
+            ).casefold(),
+            str(
+                article[
+                    "document_id"
+                ]
+            ),
+        )
+    )
+
+    generated_at = _utc_now()
+
+    index_html = _render_index(
+        workspace_id=
+            workspace,
+
+        articles=
+            articles,
+
+        generated_at=
+            generated_at,
+    )
+
+    temporary_path = index_path.with_name(
+        index_path.name
+        + ".tmp"
+    )
+
+    temporary_path.write_text(
+        index_html,
+        encoding="utf-8",
+    )
+
+    temporary_path.replace(
+        index_path
+    )
+
+    return {
+        "ok":
+            True,
+
+        "schema_version":
+            INDEX_SCHEMA_VERSION,
+
+        "builder":
+            BUILDER_NAME,
+
+        "store_version":
+            STORE_VERSION,
+
+        "workspace_id":
+            workspace,
+
+        "article_count":
+            len(
+                articles
+            ),
+
+        "metadata_count":
+            len(
+                metadata_files
+            ),
+
+        "index_path":
+            str(
+                index_path
+            ),
+
+        "generated_at_utc":
+            generated_at,
+
+        "article_links": [
+            article[
+                "relative_path"
+            ]
+
+            for article
+            in articles
+        ],
+    }
+
+
+def build_udare_store_index_v1(
+    workspace_id: str,
+) -> Dict[str, Any]:
+    return build_udare_store_index(
+        workspace_id
+    )
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build the offline clickable UDARE "
+            "article-store index."
+        )
+    )
+
+    parser.add_argument(
+        "--workspace-id",
+        required=True,
+    )
+
+    arguments = parser.parse_args()
+
+    result = build_udare_store_index(
+        arguments.workspace_id
+    )
+
+    print(
+        json.dumps(
+            result,
+            indent=2,
+            ensure_ascii=False,
+        )
+    )

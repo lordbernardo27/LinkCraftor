@@ -1,0 +1,1610 @@
+﻿from __future__ import annotations
+
+import inspect
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, Mapping
+
+
+UDARE_JOB_TYPE = (
+    "udare_reconstruction"
+)
+
+UDARE_PIPELINE = (
+    "website_reconstruction"
+)
+
+UDARE_ENGINE = (
+    "universal_dom_article_reconstruction_engine_v1_7"
+)
+
+UDARE_SOURCE_STORE = (
+    "raw_website_html_store_v1"
+)
+
+UDARE_TARGET_STORE = (
+    "udare_store_v1"
+)
+
+UDARE_ARTICLE_FORMAT = (
+    "udare_article_reader_document_v1"
+)
+
+WORKER_NAME = (
+    "udare_reconstruction_worker_v1"
+)
+
+
+class UdareWorkerError(
+    RuntimeError
+):
+    """Raised when an authorized UDARE worker job cannot complete."""
+
+
+def _utc_now_v1() -> str:
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def _call_by_signature_v1(
+    function: Callable[..., Any],
+    values: Mapping[str, Any],
+) -> Any:
+    """
+    Invoke a runtime dependency using only parameters accepted by its
+    active signature. This protects the worker from minor interface
+    differences between runtime adapters.
+    """
+
+    signature = inspect.signature(
+        function
+    )
+
+    positional_arguments: list[Any] = []
+    keyword_arguments: Dict[str, Any] = {}
+
+    consumed: set[str] = set()
+    accepts_extra_keywords = False
+
+    for parameter in (
+        signature.parameters.values()
+    ):
+        if (
+            parameter.kind
+            == inspect.Parameter.VAR_POSITIONAL
+        ):
+            continue
+
+        if (
+            parameter.kind
+            == inspect.Parameter.VAR_KEYWORD
+        ):
+            accepts_extra_keywords = True
+            continue
+
+        name = parameter.name
+
+        if name in values:
+            value = values[
+                name
+            ]
+
+            consumed.add(
+                name
+            )
+
+        elif (
+            parameter.default
+            is not inspect.Parameter.empty
+        ):
+            continue
+
+        else:
+            raise UdareWorkerError(
+                "Missing runtime dependency parameter "
+                f"{name!r} for {function!r}."
+            )
+
+        if (
+            parameter.kind
+            == inspect.Parameter.POSITIONAL_ONLY
+        ):
+            positional_arguments.append(
+                value
+            )
+
+        else:
+            keyword_arguments[
+                name
+            ] = value
+
+    if accepts_extra_keywords:
+        for name, value in values.items():
+            if name not in consumed:
+                keyword_arguments[
+                    name
+                ] = value
+
+    return function(
+        *positional_arguments,
+        **keyword_arguments,
+    )
+
+
+def _default_raw_record_loader_v1(
+    *,
+    workspace_id: str,
+    html_id: str,
+) -> Any:
+    from backend.server.stores.raw_website_html_store import (
+        get_raw_website_html_v1,
+    )
+
+    return _call_by_signature_v1(
+        get_raw_website_html_v1,
+        {
+            "workspace_id":
+                workspace_id,
+
+            "tenant_id":
+                workspace_id,
+
+            "html_id":
+                html_id,
+
+            "record_id":
+                html_id,
+
+            "source_record_id":
+                html_id,
+        },
+    )
+
+
+def _default_reconstruction_engine_v1(
+    *,
+    html_text: str,
+    source_url: str,
+    title: str,
+    metadata: Mapping[str, Any],
+) -> Any:
+    from backend.server.stores.universal_dom_article_reconstruction_engine import (
+        reconstruct_universal_dom_article_v1,
+    )
+
+    return reconstruct_universal_dom_article_v1(
+        html_text=
+            html_text,
+
+        url=
+            source_url,
+
+        title=
+            title,
+
+        metadata=
+            dict(
+                metadata
+            ),
+    )
+
+
+def _default_document_builder_v1(
+    *,
+    reconstruction: Mapping[str, Any],
+    source_url: str,
+    document_id: str,
+    html_id: str,
+) -> Any:
+    from backend.server.stores.udare_article_document_builder import (
+        build_udare_article_reader_document_v1,
+    )
+
+    return (
+        build_udare_article_reader_document_v1(
+            reconstruction=
+                reconstruction,
+
+            source_url=
+                source_url,
+
+            document_id=
+                document_id,
+
+            html_id=
+                html_id,
+        )
+    )
+
+
+def _default_store_persister_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.stores.udare_store import (
+        persist_udare_article_document_v1,
+    )
+
+    return _call_by_signature_v1(
+        persist_udare_article_document_v1,
+        values,
+    )
+
+
+def _default_manifest_refresher_v1(
+    *,
+    workspace_id: str,
+) -> Any:
+    from backend.server.stores.udare_store import (
+        refresh_udare_store_manifest_v1,
+    )
+
+    return refresh_udare_store_manifest_v1(
+        workspace_id
+    )
+
+
+def _default_status_updater_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        update_job_status,
+    )
+
+    return _call_by_signature_v1(
+        update_job_status,
+        values,
+    )
+
+
+def _default_progress_updater_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        update_job_progress,
+    )
+
+    return _call_by_signature_v1(
+        update_job_progress,
+        values,
+    )
+
+
+def _default_failure_recorder_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        record_job_failure,
+    )
+
+    return _call_by_signature_v1(
+        record_job_failure,
+        values,
+    )
+
+
+def _default_concurrency_checker_v1(
+    *,
+    workspace_id: str,
+    max_running: int,
+) -> Any:
+    from backend.server.runtime.universal_runtime_infrastructure import (
+        workspace_concurrency_decision,
+    )
+
+    return workspace_concurrency_decision(
+        workspace_id=
+            workspace_id,
+
+        max_running=
+            max_running,
+    )
+
+
+def _as_mapping_v1(
+    value: Any,
+    *,
+    name: str,
+) -> Mapping[str, Any]:
+    if not isinstance(
+        value,
+        Mapping,
+    ):
+        raise UdareWorkerError(
+            f"{name} must be a mapping."
+        )
+
+    return value
+
+
+def _normalize_raw_record_v1(
+    value: Any,
+) -> Mapping[str, Any]:
+    record = _as_mapping_v1(
+        value,
+        name="Raw HTML record",
+    )
+
+    nested_record = record.get(
+        "record"
+    )
+
+    if isinstance(
+        nested_record,
+        Mapping,
+    ):
+        return nested_record
+
+    nested_result = record.get(
+        "result"
+    )
+
+    if isinstance(
+        nested_result,
+        Mapping,
+    ):
+        return nested_result
+
+    return record
+
+
+def _first_non_empty_v1(
+    source: Mapping[str, Any],
+    fields: tuple[str, ...],
+) -> str:
+    for field in fields:
+        value = source.get(
+            field
+        )
+
+        if value is None:
+            continue
+
+        text = str(
+            value
+        )
+
+        if text.strip():
+            return text
+
+    return ""
+
+
+def _heading_values_v1(
+    reconstruction: Mapping[str, Any],
+) -> list[str]:
+    values: list[str] = []
+
+    raw_headings = reconstruction.get(
+        "headings"
+    )
+
+    if not isinstance(
+        raw_headings,
+        list,
+    ):
+        return values
+
+    for heading in raw_headings:
+        if isinstance(
+            heading,
+            Mapping,
+        ):
+            text = str(
+                heading.get(
+                    "text"
+                )
+                or ""
+            ).strip()
+
+        else:
+            text = str(
+                heading or ""
+            ).strip()
+
+        if text:
+            values.append(
+                text
+            )
+
+    return values
+
+
+def _safe_status_update_v1(
+    updater: Callable[..., Any],
+    *,
+    workspace_id: str,
+    job_id: str,
+    status: str,
+    message: str,
+    result: Mapping[str, Any] | None = None,
+    error: str = "",
+) -> Any:
+    return _call_by_signature_v1(
+        updater,
+        {
+            "workspace_id":
+                workspace_id,
+
+            "tenant_id":
+                workspace_id,
+
+            "job_id":
+                job_id,
+
+            "id":
+                job_id,
+
+            "status":
+                status,
+
+            "new_status":
+                status,
+
+            "state":
+                status,
+
+            "message":
+                message,
+
+            "result":
+                dict(
+                    result
+                    or {}
+                ),
+
+            "error":
+                error,
+
+            "error_info":
+                error,
+        },
+    )
+
+
+def _safe_progress_update_v1(
+    updater: Callable[..., Any],
+    *,
+    workspace_id: str,
+    job_id: str,
+    percent: int,
+    message: str,
+    step: str,
+) -> Any:
+    return _call_by_signature_v1(
+        updater,
+        {
+            "workspace_id":
+                workspace_id,
+
+            "tenant_id":
+                workspace_id,
+
+            "job_id":
+                job_id,
+
+            "id":
+                job_id,
+
+            "percent":
+                percent,
+
+            "progress":
+                percent,
+
+            "message":
+                message,
+
+            "step":
+                step,
+        },
+    )
+
+
+def run_udare_reconstruction_job_v1(
+    *,
+    job: Mapping[str, Any],
+    raw_record_loader: Callable[..., Any] | None = None,
+    reconstruction_engine: Callable[..., Any] | None = None,
+    document_builder: Callable[..., Any] | None = None,
+    store_persister: Callable[..., Any] | None = None,
+    manifest_refresher: Callable[..., Any] | None = None,
+    status_updater: Callable[..., Any] | None = None,
+    progress_updater: Callable[..., Any] | None = None,
+    failure_recorder: Callable[..., Any] | None = None,
+    concurrency_checker: Callable[..., Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    Execute exactly one authorized UDARE reconstruction job.
+
+    The handler reads one Raw HTML record, reconstructs it once,
+    builds one complete HTML reader document, and persists that
+    document to the UDARE Store.
+
+    Batch population and queue creation are outside this function.
+    """
+
+    job_mapping = _as_mapping_v1(
+        job,
+        name="job",
+    )
+
+    job_type = str(
+        job_mapping.get(
+            "job_type"
+        )
+        or job_mapping.get(
+            "stage"
+        )
+        or ""
+    ).strip()
+
+    if job_type != UDARE_JOB_TYPE:
+        raise UdareWorkerError(
+            "The UDARE worker received an unsupported job type: "
+            + repr(
+                job_type
+            )
+        )
+
+    payload = _as_mapping_v1(
+        job_mapping.get(
+            "payload"
+        )
+        or {},
+        name="job payload",
+    )
+
+    workspace_id = str(
+        job_mapping.get(
+            "workspace_id"
+        )
+        or payload.get(
+            "workspace_id"
+        )
+        or ""
+    ).strip()
+
+    job_id = str(
+        job_mapping.get(
+            "job_id"
+        )
+        or ""
+    ).strip()
+
+    source_record_id = str(
+        payload.get(
+            "source_record_id"
+        )
+        or ""
+    ).strip()
+
+    html_id = str(
+        payload.get(
+            "html_id"
+        )
+        or ""
+    ).strip()
+
+    payload_source_url = str(
+        payload.get(
+            "source_url"
+        )
+        or ""
+    ).strip()
+
+    required_identity = {
+        "workspace_id":
+            workspace_id,
+
+        "job_id":
+            job_id,
+
+        "source_record_id":
+            source_record_id,
+
+        "html_id":
+            html_id,
+
+        "source_url":
+            payload_source_url,
+    }
+
+    missing_identity = [
+        name
+
+        for name, value
+        in required_identity.items()
+
+        if not value
+    ]
+
+    if missing_identity:
+        raise UdareWorkerError(
+            "Incomplete UDARE job identity: "
+            + ", ".join(
+                missing_identity
+            )
+        )
+
+    expected_values = {
+        "pipeline": (
+            str(
+                job_mapping.get(
+                    "pipeline"
+                )
+                or payload.get(
+                    "pipeline"
+                )
+                or UDARE_PIPELINE
+            )
+        ),
+
+        "stage": (
+            str(
+                job_mapping.get(
+                    "stage"
+                )
+                or job_type
+            )
+        ),
+
+        "source_store_version": (
+            str(
+                payload.get(
+                    "source_store_version"
+                )
+                or ""
+            )
+        ),
+
+        "udare_engine": (
+            str(
+                payload.get(
+                    "udare_engine"
+                )
+                or ""
+            )
+        ),
+
+        "target_store": (
+            str(
+                payload.get(
+                    "target_store"
+                )
+                or ""
+            )
+        ),
+
+        "article_document_format": (
+            str(
+                payload.get(
+                    "article_document_format"
+                )
+                or ""
+            )
+        ),
+    }
+
+    exact_contract = {
+        "pipeline":
+            UDARE_PIPELINE,
+
+        "stage":
+            UDARE_JOB_TYPE,
+
+        "source_store_version":
+            UDARE_SOURCE_STORE,
+
+        "udare_engine":
+            UDARE_ENGINE,
+
+        "target_store":
+            UDARE_TARGET_STORE,
+
+        "article_document_format":
+            UDARE_ARTICLE_FORMAT,
+    }
+
+    mismatches = [
+        (
+            f"{name}={expected_values[name]!r}; "
+            f"expected {expected!r}"
+        )
+
+        for name, expected
+        in exact_contract.items()
+
+        if expected_values[
+            name
+        ]
+        != expected
+    ]
+
+    if mismatches:
+        raise UdareWorkerError(
+            "UDARE job contract mismatch: "
+            + "; ".join(
+                mismatches
+            )
+        )
+
+    execution_controls = payload.get(
+        "execution_controls"
+    )
+
+    if not isinstance(
+        execution_controls,
+        Mapping,
+    ):
+        raise UdareWorkerError(
+            "UDARE execution_controls are missing."
+        )
+
+    if (
+        execution_controls.get(
+            "execute_now"
+        )
+        is not True
+    ):
+        raise UdareWorkerError(
+            "UDARE execution is not authorized for this job."
+        )
+
+    if (
+        execution_controls.get(
+            "store_population_allowed"
+        )
+        is not True
+    ):
+        raise UdareWorkerError(
+            "UDARE Store population is not authorized for this job."
+        )
+
+    raw_record_loader = (
+        raw_record_loader
+        or _default_raw_record_loader_v1
+    )
+
+    reconstruction_engine = (
+        reconstruction_engine
+        or _default_reconstruction_engine_v1
+    )
+
+    document_builder = (
+        document_builder
+        or _default_document_builder_v1
+    )
+
+    store_persister = (
+        store_persister
+        or _default_store_persister_v1
+    )
+
+    manifest_refresher = (
+        manifest_refresher
+        or _default_manifest_refresher_v1
+    )
+
+    status_updater = (
+        status_updater
+        or _default_status_updater_v1
+    )
+
+    progress_updater = (
+        progress_updater
+        or _default_progress_updater_v1
+    )
+
+    failure_recorder = (
+        failure_recorder
+        or _default_failure_recorder_v1
+    )
+
+    concurrency_checker = (
+        concurrency_checker
+        or _default_concurrency_checker_v1
+    )
+
+    max_running = int(
+        execution_controls.get(
+            "workspace_max_running"
+        )
+        or 5
+    )
+
+    attempt = int(
+        job_mapping.get(
+            "attempt_count"
+        )
+        or job_mapping.get(
+            "attempts"
+        )
+        or 0
+    )
+
+    batch_id = str(
+        job_mapping.get(
+            "batch_id"
+        )
+        or ""
+    )
+
+    try:
+        concurrency = _call_by_signature_v1(
+            concurrency_checker,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "tenant_id":
+                    workspace_id,
+
+                "max_running":
+                    max_running,
+
+                "limit":
+                    max_running,
+            },
+        )
+
+        concurrency_mapping = (
+            concurrency
+            if isinstance(
+                concurrency,
+                Mapping,
+            )
+            else {}
+        )
+
+        if (
+            concurrency_mapping.get(
+                "can_start_new_job"
+            )
+            is False
+        ):
+            return {
+                "ok":
+                    False,
+
+                "status":
+                    "throttled",
+
+                "worker":
+                    WORKER_NAME,
+
+                "workspace_id":
+                    workspace_id,
+
+                "job_id":
+                    job_id,
+
+                "concurrency":
+                    dict(
+                        concurrency_mapping
+                    ),
+            }
+
+        _safe_status_update_v1(
+            status_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            status=
+                "running",
+
+            message=
+                "UDARE reconstruction worker started.",
+        )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                10,
+
+            message=
+                "Loading Raw HTML record.",
+
+            step=
+                "load_raw_html",
+        )
+
+        raw_result = _call_by_signature_v1(
+            raw_record_loader,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "tenant_id":
+                    workspace_id,
+
+                "html_id":
+                    html_id,
+
+                "record_id":
+                    source_record_id,
+
+                "source_record_id":
+                    source_record_id,
+            },
+        )
+
+        if raw_result is None:
+            raise UdareWorkerError(
+                "Raw HTML record was not found: "
+                + source_record_id
+            )
+
+        raw_record = _normalize_raw_record_v1(
+            raw_result
+        )
+
+        raw_html = _first_non_empty_v1(
+            raw_record,
+            (
+                "raw_html",
+                "html",
+                "html_text",
+                "source_html",
+                "content",
+            ),
+        )
+
+        if not raw_html:
+            raise UdareWorkerError(
+                "Raw HTML record contains no HTML document."
+            )
+
+        record_url = _first_non_empty_v1(
+            raw_record,
+            (
+                "source_url",
+                "url",
+                "canonical_url",
+                "final_url",
+            ),
+        )
+
+        source_url = (
+            record_url
+            or payload_source_url
+        )
+
+        if (
+            record_url
+            and payload_source_url
+            and record_url
+            != payload_source_url
+        ):
+            raise UdareWorkerError(
+                "Raw HTML record URL does not match "
+                "the queued UDARE payload URL."
+            )
+
+        source_title = _first_non_empty_v1(
+            raw_record,
+            (
+                "title",
+                "page_title",
+                "source_title",
+            ),
+        )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                35,
+
+            message=
+                "Running UDARE v1.7 reconstruction.",
+
+            step=
+                "reconstruct_article",
+        )
+
+        reconstruction_result = (
+            _call_by_signature_v1(
+                reconstruction_engine,
+                {
+                    "html_text":
+                        raw_html,
+
+                    "raw_html":
+                        raw_html,
+
+                    "source_html":
+                        raw_html,
+
+                    "source_url":
+                        source_url,
+
+                    "url":
+                        source_url,
+
+                    "title":
+                        source_title,
+
+                    "metadata": {
+                        "workspace_id":
+                            workspace_id,
+
+                        "job_id":
+                            job_id,
+
+                        "source_record_id":
+                            source_record_id,
+
+                        "html_id":
+                            html_id,
+
+                        "correlation_id":
+                            str(
+                                payload.get(
+                                    "correlation_id"
+                                )
+                                or ""
+                            ),
+                    },
+                },
+            )
+        )
+
+        reconstruction = _as_mapping_v1(
+            reconstruction_result,
+            name="UDARE reconstruction result",
+        )
+
+        if reconstruction.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE reconstruction returned ok=False."
+            )
+
+        if (
+            str(
+                reconstruction.get(
+                    "engine"
+                )
+                or ""
+            )
+            != UDARE_ENGINE
+        ):
+            raise UdareWorkerError(
+                "UDARE reconstruction returned an "
+                "unexpected engine version."
+            )
+
+        document_id = (
+            source_record_id
+            or html_id
+        )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                60,
+
+            message=
+                "Building complete UDARE article document.",
+
+            step=
+                "build_article_document",
+        )
+
+        builder_result = _call_by_signature_v1(
+            document_builder,
+            {
+                "reconstruction":
+                    reconstruction,
+
+                "source_url":
+                    source_url,
+
+                "url":
+                    source_url,
+
+                "document_id":
+                    document_id,
+
+                "html_id":
+                    html_id,
+            },
+        )
+
+        built_document = _as_mapping_v1(
+            builder_result,
+            name="UDARE article-document result",
+        )
+
+        if built_document.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE article-document builder returned ok=False."
+            )
+
+        if (
+            str(
+                built_document.get(
+                    "article_document_format"
+                )
+                or ""
+            )
+            != UDARE_ARTICLE_FORMAT
+        ):
+            raise UdareWorkerError(
+                "UDARE article-document format mismatch."
+            )
+
+        article_document = built_document.get(
+            "article_document_bytes"
+        )
+
+        if article_document is None:
+            article_document = built_document.get(
+                "article_document"
+            )
+
+        if article_document is None:
+            raise UdareWorkerError(
+                "The UDARE builder returned no article document."
+            )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                80,
+
+            message=
+                "Persisting article in the UDARE Store.",
+
+            step=
+                "persist_udare_article",
+        )
+
+        selected_root = reconstruction.get(
+            "selected_root"
+        )
+
+        selected_tag = (
+            str(
+                selected_root.get(
+                    "tag"
+                )
+                or ""
+            )
+            if isinstance(
+                selected_root,
+                Mapping,
+            )
+            else ""
+        )
+
+        persistence_result = _call_by_signature_v1(
+            store_persister,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "document_id":
+                    document_id,
+
+                "html_id":
+                    html_id,
+
+                "source_url":
+                    source_url,
+
+                "title":
+                    str(
+                        reconstruction.get(
+                            "title"
+                        )
+                        or built_document.get(
+                            "title"
+                        )
+                        or source_title
+                        or ""
+                    ),
+
+                "h1":
+                    str(
+                        reconstruction.get(
+                            "h1"
+                        )
+                        or built_document.get(
+                            "h1"
+                        )
+                        or ""
+                    ),
+
+                "headings":
+                    _heading_values_v1(
+                        reconstruction
+                    ),
+
+                "article_document":
+                    article_document,
+
+                "udare_engine":
+                    UDARE_ENGINE,
+
+                "source_store_version":
+                    UDARE_SOURCE_STORE,
+
+                "source_record_id":
+                    source_record_id,
+
+                "reconstruction_status":
+                    "completed",
+
+                "selected_tag":
+                    selected_tag,
+
+                "udare_article_body_sha256":
+                    str(
+                        built_document.get(
+                            "article_body_sha256"
+                        )
+                        or ""
+                    ),
+
+                "content_block_count":
+                    int(
+                        built_document.get(
+                            "content_block_count"
+                        )
+                        or len(
+                            reconstruction.get(
+                                "content_blocks"
+                            )
+                            or []
+                        )
+                    ),
+
+                "job_id":
+                    job_id,
+
+                "batch_id":
+                    batch_id,
+
+                "attempt":
+                    attempt,
+
+                "operational_metadata": {
+                    "worker":
+                        WORKER_NAME,
+
+                    "pipeline":
+                        UDARE_PIPELINE,
+
+                    "stage":
+                        UDARE_JOB_TYPE,
+
+                    "builder":
+                        str(
+                            built_document.get(
+                                "builder"
+                            )
+                            or ""
+                        ),
+
+                    "correlation_id":
+                        str(
+                            payload.get(
+                                "correlation_id"
+                            )
+                            or ""
+                        ),
+                },
+
+                "expected_document_sha256":
+                    str(
+                        built_document.get(
+                            "article_document_sha256"
+                        )
+                        or ""
+                    ),
+
+                "allow_replace":
+                    False,
+            },
+        )
+
+        persisted = _as_mapping_v1(
+            persistence_result,
+            name="UDARE persistence result",
+        )
+
+        if persisted.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE Store persistence returned ok=False."
+            )
+
+        manifest_result = _call_by_signature_v1(
+            manifest_refresher,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "tenant_id":
+                    workspace_id,
+            },
+        )
+
+        manifest = _as_mapping_v1(
+            manifest_result,
+            name="UDARE manifest refresh result",
+        )
+
+        if manifest.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE Store manifest refresh failed."
+            )
+
+        result_summary = {
+            "ok":
+                True,
+
+            "status":
+                "completed",
+
+            "worker":
+                WORKER_NAME,
+
+            "pipeline":
+                UDARE_PIPELINE,
+
+            "stage":
+                UDARE_JOB_TYPE,
+
+            "workspace_id":
+                workspace_id,
+
+            "job_id":
+                job_id,
+
+            "document_id":
+                document_id,
+
+            "html_id":
+                html_id,
+
+            "source_record_id":
+                source_record_id,
+
+            "source_url":
+                source_url,
+
+            "udare_engine":
+                UDARE_ENGINE,
+
+            "article_document_format":
+                UDARE_ARTICLE_FORMAT,
+
+            "article_document_sha256":
+                str(
+                    persisted.get(
+                        "document_sha256"
+                    )
+                    or built_document.get(
+                        "article_document_sha256"
+                    )
+                    or ""
+                ),
+
+            "article_path":
+                str(
+                    persisted.get(
+                        "article_path"
+                    )
+                    or ""
+                ),
+
+            "metadata_path":
+                str(
+                    persisted.get(
+                        "metadata_path"
+                    )
+                    or ""
+                ),
+
+            "persistence_status":
+                str(
+                    persisted.get(
+                        "status"
+                    )
+                    or ""
+                ),
+
+            "content_block_count":
+                int(
+                    built_document.get(
+                        "content_block_count"
+                    )
+                    or 0
+                ),
+
+            "manifest_record_count":
+                int(
+                    manifest.get(
+                        "record_count"
+                    )
+                    or 0
+                ),
+
+            "completed_at":
+                _utc_now_v1(),
+        }
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                100,
+
+            message=
+                "UDARE reconstruction job completed.",
+
+            step=
+                "completed",
+        )
+
+        _safe_status_update_v1(
+            status_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            status=
+                "completed",
+
+            message=
+                "UDARE reconstruction job completed.",
+
+            result=
+                result_summary,
+        )
+
+        return result_summary
+
+    except Exception as exc:
+        error_message = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        try:
+            _call_by_signature_v1(
+                failure_recorder,
+                {
+                    "workspace_id":
+                        workspace_id,
+
+                    "tenant_id":
+                        workspace_id,
+
+                    "job_id":
+                        job_id,
+
+                    "id":
+                        job_id,
+
+                    "job_type":
+                        UDARE_JOB_TYPE,
+
+                    "stage":
+                        UDARE_JOB_TYPE,
+
+                    "error":
+                        error_message,
+
+                    "error_info":
+                        error_message,
+
+                    "payload":
+                        dict(
+                            payload
+                        ),
+                },
+            )
+
+        except Exception:
+            try:
+                _safe_status_update_v1(
+                    status_updater,
+                    workspace_id=
+                        workspace_id,
+
+                    job_id=
+                        job_id,
+
+                    status=
+                        "failed",
+
+                    message=
+                        "UDARE reconstruction job failed.",
+
+                    error=
+                        error_message,
+                )
+
+            except Exception:
+                pass
+
+        raise
+
+
+def explain_udare_reconstruction_worker_v1(
+) -> Dict[str, Any]:
+    return {
+        "worker":
+            WORKER_NAME,
+
+        "job_type":
+            UDARE_JOB_TYPE,
+
+        "pipeline":
+            UDARE_PIPELINE,
+
+        "source_store":
+            UDARE_SOURCE_STORE,
+
+        "engine":
+            UDARE_ENGINE,
+
+        "article_document_format":
+            UDARE_ARTICLE_FORMAT,
+
+        "target_store":
+            UDARE_TARGET_STORE,
+
+        "requires_explicit_execution_authorization":
+            True,
+
+        "requires_explicit_store_authorization":
+            True,
+
+        "reconstructs_each_job_once":
+            True,
+
+        "batch_population_created":
+            False,
+    }

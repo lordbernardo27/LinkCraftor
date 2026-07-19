@@ -49,13 +49,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
 from typing import Any
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 
-ENGINE_NAME = "universal_dom_article_reconstruction_engine_v1_5"
+ENGINE_NAME = "universal_dom_article_reconstruction_engine_v1_8"
 PARSER_NAME = "html5lib"
 
 
@@ -415,6 +415,33 @@ def _resolve_rules(
 # ---------------------------------------------------------------------------
 # Text utilities
 # ---------------------------------------------------------------------------
+
+
+def _normalize_href_v1_7(
+    href: Any,
+) -> str:
+    """
+    Normalize obvious malformed URLs before preserving them.
+    """
+
+    value = str(
+        href or ""
+    ).strip()
+
+    if not value:
+        return ""
+
+    if value.startswith("ttps://"):
+        value = "h" + value
+
+    elif value.startswith("ttp://"):
+        value = "h" + value
+
+    elif value.startswith("//"):
+        value = "https:" + value
+
+    return value
+
 
 def _normalize_text(value: Any) -> str:
     # NOTE: no html.unescape here. BeautifulSoup already decodes
@@ -1929,6 +1956,2111 @@ def _extract_ordered_blocks(
             ],
     }
 
+# ===========================================================================
+# UDARE V1.6 ? MEDIA, IMAGE-NOISE AND INLINE-LINK PRESERVATION
+# ===========================================================================
+
+_UDARE_V16_NOISY_IMAGE_PATTERN = re.compile(
+    r"(?:"
+    r"logo|favicon|sprite|icon|avatar|badge|tracking|pixel|"
+    r"spacer|loader|spinner|advert|advertisement|promo|"
+    r"newsletter|social|facebook|twitter|instagram|pinterest|"
+    r"recommend|related|thumbnail|nav|menu|footer|header|"
+    r"author[-_]?photo|profile[-_]?photo"
+    r")",
+    flags=re.IGNORECASE,
+)
+
+
+def _udare_v16_absolute_url(
+    value: Any,
+    page_url: str,
+) -> str:
+    value = str(
+        value or ""
+    ).strip()
+
+    if not value:
+        return ""
+
+    if value.casefold().startswith(
+        (
+            "data:",
+            "javascript:",
+            "mailto:",
+            "tel:",
+        )
+    ):
+        return ""
+
+    return urljoin(
+        str(page_url or ""),
+        value,
+    )
+
+
+def _udare_v16_first_srcset_url(
+    value: Any,
+) -> str:
+    value = str(
+        value or ""
+    ).strip()
+
+    if not value:
+        return ""
+
+    candidates = []
+
+    for candidate in value.split(","):
+        candidate = candidate.strip()
+
+        if not candidate:
+            continue
+
+        url_part = candidate.split()[0]
+
+        descriptor = (
+            candidate.split()[1]
+            if len(candidate.split()) > 1
+            else ""
+        )
+
+        score = 0
+
+        match = re.fullmatch(
+            r"(\d+)w",
+            descriptor,
+        )
+
+        if match:
+            score = int(
+                match.group(1)
+            )
+
+        candidates.append(
+            (
+                score,
+                url_part,
+            )
+        )
+
+    if not candidates:
+        return ""
+
+    candidates.sort(
+        key=lambda item: item[0],
+        reverse=True,
+    )
+
+    return candidates[0][1]
+
+
+def _udare_v16_numeric_dimension(
+    value: Any,
+) -> int | None:
+    text = str(
+        value or ""
+    ).strip()
+
+    match = re.match(
+        r"^(\d+)",
+        text,
+    )
+
+    if not match:
+        return None
+
+    return int(
+        match.group(1)
+    )
+
+
+def _udare_v16_is_noisy_image(
+    node: Tag,
+    src: str,
+    alt: str,
+    title: str,
+) -> bool:
+    width = _udare_v16_numeric_dimension(
+        node.get("width")
+    )
+
+    height = _udare_v16_numeric_dimension(
+        node.get("height")
+    )
+
+    if (
+        width is not None
+        and height is not None
+        and (
+            width <= 48
+            or height <= 48
+        )
+    ):
+        return True
+
+    combined = " ".join([
+        src,
+        alt,
+        title,
+        str(node.get("class") or ""),
+        str(node.get("id") or ""),
+        str(node.get("role") or ""),
+        str(node.get("aria-label") or ""),
+    ])
+
+    if _UDARE_V16_NOISY_IMAGE_PATTERN.search(
+        combined
+    ):
+        return True
+
+    if src.casefold().endswith(
+        (
+            ".svg",
+            ".ico",
+        )
+    ):
+        return True
+
+    if re.search(
+        r"(?:^|[/_.-])(?:1x1|pixel|spacer)(?:[/_.-]|$)",
+        src,
+        flags=re.IGNORECASE,
+    ):
+        return True
+
+    parent = node.parent
+
+    depth = 0
+
+    while isinstance(parent, Tag) and depth < 4:
+        parent_signal = " ".join([
+            str(parent.get("class") or ""),
+            str(parent.get("id") or ""),
+            str(parent.get("role") or ""),
+            str(parent.get("aria-label") or ""),
+        ])
+
+        if _UDARE_V16_NOISY_IMAGE_PATTERN.search(
+            parent_signal
+        ):
+            return True
+
+        parent = parent.parent
+        depth += 1
+
+    return False
+
+
+def _udare_v16_extract_image(
+    node: Tag,
+    page_url: str,
+) -> dict[str, Any] | None:
+    raw_src = (
+        node.get("src")
+        or node.get("data-src")
+        or node.get("data-lazy-src")
+        or node.get("data-original")
+        or node.get("data-image-src")
+        or ""
+    )
+
+    raw_srcset = (
+        node.get("srcset")
+        or node.get("data-srcset")
+        or node.get("data-lazy-srcset")
+        or ""
+    )
+
+    if not raw_src:
+        raw_src = _udare_v16_first_srcset_url(
+            raw_srcset
+        )
+
+    src = _udare_v16_absolute_url(
+        raw_src,
+        page_url,
+    )
+
+    srcset_urls = []
+
+    for candidate in str(
+        raw_srcset or ""
+    ).split(","):
+        candidate = candidate.strip()
+
+        if not candidate:
+            continue
+
+        candidate_url = (
+            candidate.split()[0]
+        )
+
+        absolute = _udare_v16_absolute_url(
+            candidate_url,
+            page_url,
+        )
+
+        if absolute:
+            srcset_urls.append(
+                absolute
+            )
+
+    alt = _normalize_text(
+        node.get("alt")
+        or ""
+    )
+
+    title = _normalize_text(
+        node.get("title")
+        or ""
+    )
+
+    if not src and not srcset_urls:
+        return None
+
+    if _udare_v16_is_noisy_image(
+        node,
+        src,
+        alt,
+        title,
+    ):
+        return None
+
+    return {
+        "type": "image",
+        "tag": "img",
+        "text": alt or title,
+        "src": src,
+        "srcset": srcset_urls,
+        "alt": alt,
+        "title": title,
+        "width":
+            _udare_v16_numeric_dimension(
+                node.get("width")
+            ),
+        "height":
+            _udare_v16_numeric_dimension(
+                node.get("height")
+            ),
+    }
+
+
+def _udare_v16_inline_content(
+    node: Tag,
+    page_url: str,
+) -> list[dict[str, Any]]:
+    segments: list[
+        dict[str, Any]
+    ] = []
+
+    def add_text(
+        value: Any,
+    ) -> None:
+        text = _normalize_text(
+            value
+        )
+
+        if not text:
+            return
+
+        if (
+            segments
+            and segments[-1].get("type")
+            == "text"
+        ):
+            segments[-1]["text"] = (
+                _normalize_text(
+                    str(
+                        segments[-1].get(
+                            "text"
+                        )
+                        or ""
+                    )
+                    + " "
+                    + text
+                )
+            )
+
+        else:
+            segments.append({
+                "type": "text",
+                "text": text,
+            })
+
+    def walk(
+        current: Any,
+    ) -> None:
+        if isinstance(
+            current,
+            NavigableString,
+        ):
+            add_text(
+                str(current)
+            )
+            return
+
+        if not isinstance(
+            current,
+            Tag,
+        ):
+            return
+
+        tag_name = str(
+            current.name or ""
+        ).casefold()
+
+        if tag_name == "a":
+            link_text = _normalize_text(
+                current.get_text(
+                    " ",
+                    strip=True,
+                )
+            )
+
+            href = _normalize_href_v1_7(
+                _udare_v16_absolute_url(
+                    current.get("href"),
+                    page_url,
+                )
+            )
+
+            if link_text and href:
+                segments.append({
+                    "type": "link",
+                    "text": link_text,
+                    "href": href,
+                    "title":
+                        _normalize_text(
+                            current.get("title")
+                            or ""
+                        ),
+                    "rel": [
+                        str(value)
+                        for value in (
+                            current.get("rel")
+                            or []
+                        )
+                    ],
+                })
+
+            elif link_text:
+                add_text(link_text)
+
+            return
+
+        if tag_name in {
+            "script",
+            "style",
+            "noscript",
+            "svg",
+        }:
+            return
+
+        for child in current.children:
+            walk(child)
+
+    walk(node)
+
+    cleaned = []
+
+    for segment in segments:
+        text = _normalize_text(
+            segment.get("text")
+        )
+
+        if not text:
+            continue
+
+        segment = dict(segment)
+        segment["text"] = text
+        cleaned.append(segment)
+
+    return cleaned
+
+
+def _udare_v16_rich_list_items(
+    node: Tag,
+    page_url: str,
+    cache: dict[int, str],
+) -> tuple[
+    list[str],
+    list[list[dict[str, Any]]],
+]:
+    text_items: list[str] = []
+    inline_items: list[
+        list[dict[str, Any]]
+    ] = []
+
+    for item in node.find_all(
+        "li",
+        recursive=False,
+    ):
+        if not isinstance(item, Tag):
+            continue
+
+        text = _direct_text_without_nested_structures(
+            item,
+            cache,
+        )
+
+        text = _clean_reconstructed_text(
+            text
+        )
+
+        if (
+            not text
+            or _is_navigation_list_item(
+                item,
+                cache,
+            )
+        ):
+            continue
+
+        text_items.append(text)
+
+        inline_items.append(
+            _udare_v16_inline_content(
+                item,
+                page_url,
+            )
+        )
+
+    return (
+        text_items,
+        inline_items,
+    )
+
+
+def _udare_v16_media(
+    node: Tag,
+    page_url: str,
+) -> dict[str, Any] | None:
+    tag_name = str(
+        node.name or ""
+    ).casefold()
+
+    src = _udare_v16_absolute_url(
+        node.get("src")
+        or node.get("data-src"),
+        page_url,
+    )
+
+    sources = []
+
+    for source_node in node.find_all(
+        "source",
+    ):
+        if not isinstance(
+            source_node,
+            Tag,
+        ):
+            continue
+
+        raw_value = (
+            source_node.get("src")
+            or source_node.get("srcset")
+            or ""
+        )
+
+        resolved = _udare_v16_absolute_url(
+            str(raw_value).split()[0],
+            page_url,
+        )
+
+        if resolved:
+            sources.append(resolved)
+
+    title = _normalize_text(
+        node.get("title")
+        or node.get("aria-label")
+        or ""
+    )
+
+    if not src and not sources and not title:
+        return None
+
+    return {
+        "type": "media",
+        "tag": tag_name,
+        "media_type": tag_name,
+        "text": title,
+        "src": src,
+        "sources": sources,
+        "title": title,
+    }
+
+
+
+_UDARE_V17_LINK_GROUP_HEADING_PATTERN = re.compile(
+    r"^(?:"
+    r"references?|sources?|what\s+to\s+read\s+next|"
+    r"related\s+reading|further\s+reading|"
+    r"recommended\s+(?:articles?|reading)|"
+    r"additional\s+(?:resources?|reading)|"
+    r"learn\s+more"
+    r")$",
+    flags=re.IGNORECASE,
+)
+
+
+
+
+def _udare_v17_is_link_group_heading(
+    value: Any,
+) -> bool:
+    """Recognize evidence and citation link-group headings only.
+
+    Related-reading and recommendation headings are deliberately
+    excluded from this matcher.
+    """
+
+    text = _normalize_text(
+        value
+    ).casefold()
+
+    # Normalize punctuation and separators.
+    text = text.replace(
+        "&",
+        " and ",
+    )
+
+    text = text.replace(
+        "?",
+        "'",
+    )
+
+    text = re.sub(
+        r"[^a-z0-9']+",
+        " ",
+        text,
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip()
+
+    accepted_headings = {
+        "reference",
+        "references",
+        "source",
+        "sources",
+        "sources and references",
+        "references and sources",
+        "citation",
+        "citations",
+        "works cited",
+        "bibliography",
+        "external sources",
+        "supporting sources",
+        "research sources",
+        "scientific sources",
+        "medical sources",
+        "evidence",
+        "evidence sources",
+        "study",
+        "studies",
+        "research",
+        "research studies",
+        "research references",
+        "clinical references",
+        "academic references",
+        "footnote",
+        "footnotes",
+        "endnote",
+        "endnotes",
+        "notes",
+        "resources",
+        "additional resources",
+        "useful resources",
+        "helpful resources",
+    }
+
+    return text in accepted_headings
+
+
+def _udare_v17_extract_links_from_node(
+    node: Tag,
+    page_url: str,
+) -> list[dict[str, Any]]:
+    links: list[
+        dict[str, Any]
+    ] = []
+
+    seen: set[
+        tuple[str, str]
+    ] = set()
+
+    for anchor in node.find_all(
+        "a",
+        href=True,
+    ):
+        if not isinstance(
+            anchor,
+            Tag,
+        ):
+            continue
+
+        text = _normalize_text(
+            anchor.get_text(
+                " ",
+                strip=True,
+            )
+        )
+
+        href = _normalize_href_v1_7(
+            _udare_v16_absolute_url(
+                anchor.get("href"),
+                page_url,
+            )
+        )
+
+        if not text or not href:
+            continue
+
+        if href.casefold().startswith(
+            (
+                "javascript:",
+                "mailto:",
+                "tel:",
+            )
+        ):
+            continue
+
+        key = (
+            text.casefold(),
+            href,
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+
+        links.append({
+            "text":
+                text,
+            "href":
+                href,
+            "title":
+                _normalize_text(
+                    anchor.get("title")
+                    or ""
+                ),
+            "rel": [
+                str(value)
+                for value in (
+                    anchor.get("rel")
+                    or []
+                )
+            ],
+        })
+
+    return links
+
+
+
+def _udare_v17_find_link_group_container(
+    heading_node: Tag,
+) -> Tag | None:
+    """Collect content after References until the next heading."""
+
+    wrapper_soup = BeautifulSoup(
+        "<div></div>",
+        "html.parser",
+    )
+
+    wrapper = wrapper_soup.div
+
+    if wrapper is None:
+        return None
+
+    sibling = heading_node.next_sibling
+    found_content = False
+
+    while sibling is not None:
+        next_sibling = sibling.next_sibling
+
+        if (
+            isinstance(
+                sibling,
+                Tag,
+            )
+            and str(
+                sibling.name
+                or ""
+            ).casefold()
+            in HEADING_TAG_NAMES
+        ):
+            break
+
+        if isinstance(
+            sibling,
+            Tag,
+        ):
+            wrapper.append(
+                sibling.__copy__()
+            )
+
+            found_content = True
+
+        sibling = next_sibling
+
+    if not found_content:
+        return None
+
+    if not wrapper.find(
+        "a",
+        href=True,
+    ):
+        return None
+
+    return wrapper
+
+
+def _udare_v17_build_link_group(
+    heading_node: Tag,
+    page_url: str,
+) -> dict[str, Any] | None:
+    heading_text = _normalize_text(
+        heading_node.get_text(
+            " ",
+            strip=True,
+        )
+    )
+
+    if not _udare_v17_is_link_group_heading(
+        heading_text
+    ):
+        return None
+
+    container = (
+        _udare_v17_find_link_group_container(
+            heading_node
+        )
+    )
+
+    if not isinstance(
+        container,
+        Tag,
+    ):
+        return None
+
+    links = (
+        _udare_v17_extract_links_from_node(
+            container,
+            page_url,
+        )
+    )
+
+    if not links:
+        return None
+
+    return {
+        "type":
+            "link_group",
+        "tag":
+            str(
+                heading_node.name
+                or "section"
+            ).casefold(),
+        "level":
+            (
+                int(
+                    str(
+                        heading_node.name
+                    )[1]
+                )
+                if str(
+                    heading_node.name
+                    or ""
+                ).casefold()
+                in HEADING_TAG_NAMES
+                else None
+            ),
+        "heading":
+            heading_text,
+        "text":
+            heading_text
+            + "\n"
+            + "\n".join(
+                link["text"]
+                for link in links
+            ),
+        "links":
+            links,
+    }
+
+
+def _extract_ordered_blocks_v1_6(
+    root: Tag,
+    rules: _ResolvedRules,
+    cache: dict[int, str],
+    page_url: str,
+) -> dict[str, Any]:
+    """UDARE v1.6 canonical structured reconstruction.
+
+    Preserves:
+    - exact block order,
+    - filtered absolute article images,
+    - clickable inline links,
+    - lists, tables, quotes, figures and media.
+    """
+
+    content_blocks: list[
+        dict[str, Any]
+    ] = []
+
+    seen_text_keys: set[str] = set()
+    consumed_nodes: set[int] = set()
+
+    structural_tags = {
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "blockquote",
+        "ul",
+        "ol",
+        "table",
+        "figure",
+        "img",
+        "figcaption",
+        "pre",
+        "code",
+        "video",
+        "audio",
+        "iframe",
+        "div",
+        "section",
+        "span",
+        "a",
+        "dt",
+        "dd",
+    }
+
+    def append_block(
+        block: dict[str, Any],
+    ) -> bool:
+        text = _clean_reconstructed_text(
+            block.get("text")
+        )
+
+        block_type = str(
+            block.get("type")
+            or ""
+        )
+
+        if (
+            text
+            and _is_metadata_or_ui(
+                text,
+                rules,
+            )
+        ):
+            return False
+
+        terminal_metadata = (
+            bool(text)
+            and any(
+                pattern.search(text)
+                for pattern
+                in rules.terminal_metadata_patterns
+            )
+        )
+
+        if terminal_metadata:
+            return (
+                len(content_blocks)
+                >= MIN_TERMINAL_METADATA_INDEX
+            )
+
+        if text:
+            normalized_key = (
+                block_type
+                + ":"
+                + re.sub(
+                    r"\s+",
+                    " ",
+                    text,
+                ).casefold()
+            )
+
+            deduplicate = (
+                block_type
+                in {
+                    "paragraph",
+                    "heading",
+                    "blockquote",
+                    "caption",
+                }
+                and _word_count(text)
+                >= 8
+            )
+
+            if (
+                deduplicate
+                and normalized_key
+                in seen_text_keys
+            ):
+                return False
+
+            if deduplicate:
+                seen_text_keys.add(
+                    normalized_key
+                )
+
+        block = dict(block)
+
+        block["index"] = len(
+            content_blocks
+        )
+
+        block["text"] = text
+
+        block["word_count"] = (
+            _word_count(text)
+            if text
+            else 0
+        )
+
+        content_blocks.append(block)
+
+        return False
+
+    stop = False
+
+    for node in root.descendants:
+        if stop:
+            break
+
+        if not isinstance(node, Tag):
+            continue
+
+        if id(node) in consumed_nodes:
+            continue
+
+        tag_name = str(
+            node.name or ""
+        ).casefold()
+
+        if tag_name not in structural_tags:
+            continue
+
+        parent = node.parent
+        consumed_parent = False
+
+        while isinstance(parent, Tag):
+            if id(parent) in consumed_nodes:
+                consumed_parent = True
+                break
+
+            parent = parent.parent
+
+        if consumed_parent:
+            continue
+
+        block = None
+
+        if tag_name in HEADING_TAG_NAMES:
+            text = _node_text(
+                node,
+                cache,
+            )
+
+            block = {
+                "type": "heading",
+                "tag": tag_name,
+                "level": int(
+                    tag_name[1]
+                ),
+                "text": text,
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "p":
+            block = {
+                "type": "paragraph",
+                "tag": "p",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "blockquote":
+            consumed_nodes.update(
+                id(child)
+                for child in node.find_all(
+                    True,
+                )
+            )
+
+            block = {
+                "type": "blockquote",
+                "tag": "blockquote",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name in {
+            "ul",
+            "ol",
+        }:
+            (
+                items,
+                item_inline_content,
+            ) = _udare_v16_rich_list_items(
+                node,
+                page_url,
+                cache,
+            )
+
+            if not items:
+                continue
+
+            consumed_nodes.update(
+                id(child)
+                for child in node.find_all(
+                    True,
+                )
+            )
+
+            block = {
+                "type": (
+                    "ordered_list"
+                    if tag_name == "ol"
+                    else "unordered_list"
+                ),
+                "tag": tag_name,
+                "level": None,
+                "items": items,
+                "item_inline_content":
+                    item_inline_content,
+                "text":
+                    "\n".join(items),
+            }
+
+        elif tag_name == "table":
+            block = _extract_table_block(
+                node,
+                cache,
+            )
+
+            if block is not None:
+                consumed_nodes.update(
+                    id(child)
+                    for child in node.find_all(
+                        True,
+                    )
+                )
+
+        elif tag_name == "figure":
+            image_node = node.find("img")
+
+            image_data = (
+                _udare_v16_extract_image(
+                    image_node,
+                    page_url,
+                )
+                if isinstance(
+                    image_node,
+                    Tag,
+                )
+                else None
+            )
+
+            caption_node = node.find(
+                "figcaption"
+            )
+
+            caption = (
+                _clean_reconstructed_text(
+                    _node_text(
+                        caption_node,
+                        cache,
+                    )
+                )
+                if isinstance(
+                    caption_node,
+                    Tag,
+                )
+                else ""
+            )
+
+            if image_data or caption:
+                block = {
+                    "type": "figure",
+                    "tag": "figure",
+                    "level": None,
+                    "text":
+                        (
+                            caption
+                            or str(
+                                (
+                                    image_data
+                                    or {}
+                                ).get("alt")
+                                or ""
+                            )
+                        ),
+                    "image": image_data,
+                    "caption": caption,
+                    "caption_inline_content":
+                        (
+                            _udare_v16_inline_content(
+                                caption_node,
+                                page_url,
+                            )
+                            if isinstance(
+                                caption_node,
+                                Tag,
+                            )
+                            else []
+                        ),
+                }
+
+                consumed_nodes.update(
+                    id(child)
+                    for child in node.find_all(
+                        True,
+                    )
+                )
+
+        elif tag_name == "img":
+            image_data = (
+                _udare_v16_extract_image(
+                    node,
+                    page_url,
+                )
+            )
+
+            if image_data:
+                block = {
+                    **image_data,
+                    "level": None,
+                }
+
+        elif tag_name == "figcaption":
+            block = {
+                "type": "caption",
+                "tag": "figcaption",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "pre":
+            text = str(
+                node.get_text(
+                    "\n",
+                    strip=False,
+                )
+            ).replace(
+                "\r\n",
+                "\n",
+            ).replace(
+                "\r",
+                "\n",
+            ).strip()
+
+            consumed_nodes.update(
+                id(child)
+                for child in node.find_all(
+                    True,
+                )
+            )
+
+            block = {
+                "type": "preformatted",
+                "tag": "pre",
+                "level": None,
+                "text": text,
+            }
+
+        elif tag_name == "code":
+            if node.find_parent("pre"):
+                continue
+
+            block = {
+                "type": "code",
+                "tag": "code",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+            }
+
+        elif tag_name in {
+            "video",
+            "audio",
+            "iframe",
+        }:
+            media_data = _udare_v16_media(
+                node,
+                page_url,
+            )
+
+            if media_data:
+                block = {
+                    **media_data,
+                    "level": None,
+                }
+
+                consumed_nodes.update(
+                    id(child)
+                    for child in node.find_all(
+                        True,
+                    )
+                )
+
+        elif tag_name in {
+            "dt",
+            "dd",
+        }:
+            block = {
+                "type": "paragraph",
+                "tag": tag_name,
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "a":
+            candidate_text = _node_text(
+                node,
+                cache,
+            )
+
+            candidate_words = _word_count(
+                candidate_text
+            )
+
+            heading_signal = (
+                _contains_signal(
+                    node,
+                    HEADING_SIGNAL_TERMS,
+                )
+            )
+
+            if (
+                not heading_signal
+                and isinstance(
+                    node.parent,
+                    Tag,
+                )
+            ):
+                heading_signal = (
+                    _contains_signal(
+                        node.parent,
+                        HEADING_SIGNAL_TERMS,
+                    )
+                )
+
+            if (
+                heading_signal
+                and MIN_SIGNAL_HEADING_WORDS
+                <= candidate_words
+                <= MAX_SIGNAL_HEADING_WORDS
+            ):
+                block = {
+                    "type": "heading",
+                    "tag": "a",
+                    "level": None,
+                    "text": candidate_text,
+                    "inline_content":
+                        _udare_v16_inline_content(
+                            node,
+                            page_url,
+                        ),
+                }
+
+        elif tag_name in GENERIC_CONTAINER_TAGS:
+            text = _leaf_container_text(
+                node,
+                cache,
+            )
+
+            if text:
+                consumed_nodes.add(
+                    id(node)
+                )
+
+                block_type = "paragraph"
+
+                if (
+                    _contains_signal(
+                        node,
+                        HEADING_SIGNAL_TERMS,
+                    )
+                    and _word_count(text)
+                    <= MAX_SIGNAL_HEADING_WORDS
+                ):
+                    block_type = "heading"
+
+                block = {
+                    "type": block_type,
+                    "tag": tag_name,
+                    "level": None,
+                    "text": text,
+                    "inline_content":
+                        _udare_v16_inline_content(
+                            node,
+                            page_url,
+                        ),
+                }
+
+        if block is None:
+            continue
+
+        stop = append_block(block)
+
+    for index, block in enumerate(
+        content_blocks
+    ):
+        block["index"] = index
+
+    compatibility = (
+        _derive_compatibility_views(
+            content_blocks
+        )
+    )
+
+    return {
+        "content_blocks":
+            content_blocks,
+        "blocks":
+            content_blocks,
+        "headings":
+            compatibility[
+                "headings"
+            ],
+        "paragraphs":
+            compatibility[
+                "paragraphs"
+            ],
+        "article_body":
+            compatibility[
+                "article_body"
+            ],
+    }
+
+
+
+def _udare_v18_duplicate_text_key(
+    value: Any,
+) -> str:
+    """Build the canonical mirrored-prose comparison key.
+
+    Only the duplicate-comparison key is normalized. The retained
+    content-block text, inline content and article body are preserved.
+
+    Mirrored responsive components may expose the same prose through
+    a quoted paragraph and an unquoted span. Edge punctuation is
+    therefore excluded from duplicate identity, matching the
+    downstream structured integrity contract.
+    """
+
+    text = str(
+        value or ""
+    ).casefold()
+
+    text = text.replace(
+        "\u2018",
+        "'",
+    ).replace(
+        "\u2019",
+        "'",
+    ).replace(
+        "\u201b",
+        "'",
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip()
+
+    text = re.sub(
+        r"^[\W_]+|[\W_]+$",
+        "",
+        text,
+    )
+
+    return text
+
+
+def _extract_ordered_blocks_v1_8(
+    root: Tag,
+    rules: _ResolvedRules,
+    cache: dict[int, str],
+    page_url: str,
+) -> dict[str, Any]:
+    """UDARE v1.6 canonical structured reconstruction.
+
+    Preserves:
+    - exact block order,
+    - filtered absolute article images,
+    - clickable inline links,
+    - lists, tables, quotes, figures and media.
+    """
+
+    content_blocks: list[
+        dict[str, Any]
+    ] = []
+
+    seen_text_keys: set[str] = set()
+    consumed_nodes: set[int] = set()
+
+    structural_tags = {
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "p",
+        "blockquote",
+        "ul",
+        "ol",
+        "table",
+        "figure",
+        "img",
+        "figcaption",
+        "pre",
+        "code",
+        "video",
+        "audio",
+        "iframe",
+        "div",
+        "section",
+        "span",
+        "a",
+        "dt",
+        "dd",
+    }
+
+    def append_block(
+        block: dict[str, Any],
+    ) -> bool:
+        text = _clean_reconstructed_text(
+            block.get("text")
+        )
+
+        block_type = str(
+            block.get("type")
+            or ""
+        )
+
+        if (
+            text
+            and _is_metadata_or_ui(
+                text,
+                rules,
+            )
+        ):
+            return False
+
+        terminal_metadata = (
+            bool(text)
+            and any(
+                pattern.search(text)
+                for pattern
+                in rules.terminal_metadata_patterns
+            )
+        )
+
+        if terminal_metadata:
+            return (
+                len(content_blocks)
+                >= MIN_TERMINAL_METADATA_INDEX
+            )
+
+        if text:
+            normalized_key = (
+                block_type
+                + ":"
+                + _udare_v18_duplicate_text_key(
+                    text
+                )
+            )
+
+            deduplicate = (
+                block_type
+                in {
+                    "paragraph",
+                    "heading",
+                    "blockquote",
+                    "caption",
+                }
+                and _word_count(text)
+                >= 8
+            )
+
+            if (
+                deduplicate
+                and normalized_key
+                in seen_text_keys
+            ):
+                return False
+
+            if deduplicate:
+                seen_text_keys.add(
+                    normalized_key
+                )
+
+        block = dict(block)
+
+        block["index"] = len(
+            content_blocks
+        )
+
+        block["text"] = text
+
+        block["word_count"] = (
+            _word_count(text)
+            if text
+            else 0
+        )
+
+        content_blocks.append(block)
+
+        return False
+
+    stop = False
+
+    for node in root.descendants:
+        if stop:
+            break
+
+        if not isinstance(node, Tag):
+            continue
+
+        if id(node) in consumed_nodes:
+            continue
+
+        tag_name = str(
+            node.name or ""
+        ).casefold()
+
+        if tag_name not in structural_tags:
+            continue
+
+        parent = node.parent
+        consumed_parent = False
+
+        while isinstance(parent, Tag):
+            if id(parent) in consumed_nodes:
+                consumed_parent = True
+                break
+
+            parent = parent.parent
+
+        if consumed_parent:
+            continue
+
+        block = None
+
+        if (
+            tag_name in HEADING_TAG_NAMES
+            and _udare_v17_is_link_group_heading(
+                _node_text(
+                    node,
+                    cache,
+                )
+            )
+        ):
+            block = (
+                _udare_v17_build_link_group(
+                    node,
+                    page_url,
+                )
+            )
+
+            if block is not None:
+                container = (
+                    _udare_v17_find_link_group_container(
+                        node
+                    )
+                )
+
+                if isinstance(
+                    container,
+                    Tag,
+                ):
+                    consumed_nodes.update(
+                        id(child)
+                        for child in container.find_all(
+                            True,
+                        )
+                    )
+
+        elif tag_name in HEADING_TAG_NAMES:
+            text = _node_text(
+                node,
+                cache,
+            )
+
+            block = {
+                "type": "heading",
+                "tag": tag_name,
+                "level": int(
+                    tag_name[1]
+                ),
+                "text": text,
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "p":
+            block = {
+                "type": "paragraph",
+                "tag": "p",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "blockquote":
+            consumed_nodes.update(
+                id(child)
+                for child in node.find_all(
+                    True,
+                )
+            )
+
+            block = {
+                "type": "blockquote",
+                "tag": "blockquote",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name in {
+            "ul",
+            "ol",
+        }:
+            (
+                items,
+                item_inline_content,
+            ) = _udare_v16_rich_list_items(
+                node,
+                page_url,
+                cache,
+            )
+
+            if not items:
+                continue
+
+            consumed_nodes.update(
+                id(child)
+                for child in node.find_all(
+                    True,
+                )
+            )
+
+            block = {
+                "type": (
+                    "ordered_list"
+                    if tag_name == "ol"
+                    else "unordered_list"
+                ),
+                "tag": tag_name,
+                "level": None,
+                "items": items,
+                "item_inline_content":
+                    item_inline_content,
+                "text":
+                    "\n".join(items),
+            }
+
+        elif tag_name == "table":
+            block = _extract_table_block(
+                node,
+                cache,
+            )
+
+            if block is not None:
+                consumed_nodes.update(
+                    id(child)
+                    for child in node.find_all(
+                        True,
+                    )
+                )
+
+        elif tag_name == "figure":
+            image_node = node.find("img")
+
+            image_data = (
+                _udare_v16_extract_image(
+                    image_node,
+                    page_url,
+                )
+                if isinstance(
+                    image_node,
+                    Tag,
+                )
+                else None
+            )
+
+            caption_node = node.find(
+                "figcaption"
+            )
+
+            caption = (
+                _clean_reconstructed_text(
+                    _node_text(
+                        caption_node,
+                        cache,
+                    )
+                )
+                if isinstance(
+                    caption_node,
+                    Tag,
+                )
+                else ""
+            )
+
+            if image_data or caption:
+                block = {
+                    "type": "figure",
+                    "tag": "figure",
+                    "level": None,
+                    "text":
+                        (
+                            caption
+                            or str(
+                                (
+                                    image_data
+                                    or {}
+                                ).get("alt")
+                                or ""
+                            )
+                        ),
+                    "image": image_data,
+                    "caption": caption,
+                    "caption_inline_content":
+                        (
+                            _udare_v16_inline_content(
+                                caption_node,
+                                page_url,
+                            )
+                            if isinstance(
+                                caption_node,
+                                Tag,
+                            )
+                            else []
+                        ),
+                }
+
+                consumed_nodes.update(
+                    id(child)
+                    for child in node.find_all(
+                        True,
+                    )
+                )
+
+        elif tag_name == "img":
+            image_data = (
+                _udare_v16_extract_image(
+                    node,
+                    page_url,
+                )
+            )
+
+            if image_data:
+                block = {
+                    **image_data,
+                    "level": None,
+                }
+
+        elif tag_name == "figcaption":
+            block = {
+                "type": "caption",
+                "tag": "figcaption",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "pre":
+            text = str(
+                node.get_text(
+                    "\n",
+                    strip=False,
+                )
+            ).replace(
+                "\r\n",
+                "\n",
+            ).replace(
+                "\r",
+                "\n",
+            ).strip()
+
+            consumed_nodes.update(
+                id(child)
+                for child in node.find_all(
+                    True,
+                )
+            )
+
+            block = {
+                "type": "preformatted",
+                "tag": "pre",
+                "level": None,
+                "text": text,
+            }
+
+        elif tag_name == "code":
+            if node.find_parent("pre"):
+                continue
+
+            block = {
+                "type": "code",
+                "tag": "code",
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+            }
+
+        elif tag_name in {
+            "video",
+            "audio",
+            "iframe",
+        }:
+            media_data = _udare_v16_media(
+                node,
+                page_url,
+            )
+
+            if media_data:
+                block = {
+                    **media_data,
+                    "level": None,
+                }
+
+                consumed_nodes.update(
+                    id(child)
+                    for child in node.find_all(
+                        True,
+                    )
+                )
+
+        elif tag_name in {
+            "dt",
+            "dd",
+        }:
+            block = {
+                "type": "paragraph",
+                "tag": tag_name,
+                "level": None,
+                "text":
+                    _node_text(
+                        node,
+                        cache,
+                    ),
+                "inline_content":
+                    _udare_v16_inline_content(
+                        node,
+                        page_url,
+                    ),
+            }
+
+        elif tag_name == "a":
+            candidate_text = _node_text(
+                node,
+                cache,
+            )
+
+            candidate_words = _word_count(
+                candidate_text
+            )
+
+            heading_signal = (
+                _contains_signal(
+                    node,
+                    HEADING_SIGNAL_TERMS,
+                )
+            )
+
+            if (
+                not heading_signal
+                and isinstance(
+                    node.parent,
+                    Tag,
+                )
+            ):
+                heading_signal = (
+                    _contains_signal(
+                        node.parent,
+                        HEADING_SIGNAL_TERMS,
+                    )
+                )
+
+            if (
+                heading_signal
+                and MIN_SIGNAL_HEADING_WORDS
+                <= candidate_words
+                <= MAX_SIGNAL_HEADING_WORDS
+            ):
+                block = {
+                    "type": "heading",
+                    "tag": "a",
+                    "level": None,
+                    "text": candidate_text,
+                    "inline_content":
+                        _udare_v16_inline_content(
+                            node,
+                            page_url,
+                        ),
+                }
+
+        elif tag_name in GENERIC_CONTAINER_TAGS:
+            text = _leaf_container_text(
+                node,
+                cache,
+            )
+
+            if text:
+                consumed_nodes.add(
+                    id(node)
+                )
+
+                block_type = "paragraph"
+
+                if (
+                    _contains_signal(
+                        node,
+                        HEADING_SIGNAL_TERMS,
+                    )
+                    and _word_count(text)
+                    <= MAX_SIGNAL_HEADING_WORDS
+                ):
+                    block_type = "heading"
+
+                block = {
+                    "type": block_type,
+                    "tag": tag_name,
+                    "level": None,
+                    "text": text,
+                    "inline_content":
+                        _udare_v16_inline_content(
+                            node,
+                            page_url,
+                        ),
+                }
+
+        if block is None:
+            continue
+
+        stop = append_block(block)
+
+    for index, block in enumerate(
+        content_blocks
+    ):
+        block["index"] = index
+
+    compatibility = (
+        _derive_compatibility_views(
+            content_blocks
+        )
+    )
+
+    return {
+        "content_blocks":
+            content_blocks,
+        "blocks":
+            content_blocks,
+        "headings":
+            compatibility[
+                "headings"
+            ],
+        "paragraphs":
+            compatibility[
+                "paragraphs"
+            ],
+        "article_body":
+            compatibility[
+                "article_body"
+            ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -1966,7 +4098,12 @@ def reconstruct_universal_dom_article_v1(
     selected = root_selection["selected"]
     root = selected["node"]
 
-    extraction = _extract_ordered_blocks(root, rules, cache)
+    extraction = _extract_ordered_blocks_v1_8(
+        root,
+        rules,
+        cache,
+        page_url=url,
+    )
 
     article_body = str(
         extraction.get("article_body") or ""

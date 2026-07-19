@@ -1,7 +1,10 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
+import os
+import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict
@@ -39,16 +42,51 @@ def load_raw_website_html_store_v1(workspace_id: str) -> Dict[str, Any]:
             "updated_at_utc": datetime.now(timezone.utc).isoformat(),
         }
 
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {
-            "version": "raw_website_html_store_v1",
-            "workspace_id": workspace_id,
-            "pages": {},
-            "updated_at_utc": datetime.now(timezone.utc).isoformat(),
-            "recovered_from_error": True,
-        }
+    last_error: Exception | None = None
+
+    for attempt in range(1, 4):
+        try:
+            raw_text = path.read_text(
+                encoding="utf-8"
+            )
+
+            store = json.loads(
+                raw_text
+            )
+
+            if not isinstance(store, dict):
+                raise ValueError(
+                    "Raw HTML store root must be a JSON object."
+                )
+
+            pages = store.get("pages")
+
+            if not isinstance(pages, dict):
+                raise ValueError(
+                    "Raw HTML store pages field must be a JSON object."
+                )
+
+            return store
+
+        except (
+            OSError,
+            UnicodeError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            last_error = exc
+
+            if attempt < 3:
+                time.sleep(
+                    0.05 * attempt
+                )
+
+    raise RuntimeError(
+        "Unable to read a valid Raw HTML store after "
+        f"3 attempts: {path}. "
+        f"Underlying error: "
+        f"{type(last_error).__name__}: {last_error}"
+    ) from last_error
 
 
 def save_raw_website_html_store_v1(
@@ -56,8 +94,58 @@ def save_raw_website_html_store_v1(
     store: Dict[str, Any],
 ) -> Path:
     path = _store_path_v1(workspace_id)
-    store["updated_at_utc"] = datetime.now(timezone.utc).isoformat()
-    path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    store["updated_at_utc"] = (
+        datetime.now(
+            timezone.utc
+        ).isoformat()
+    )
+
+    serialized = json.dumps(
+        store,
+        indent=2,
+        ensure_ascii=False,
+    )
+
+    temporary_path: Path | None = None
+
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(path.parent),
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary_file:
+            temporary_file.write(
+                serialized
+            )
+            temporary_file.flush()
+            os.fsync(
+                temporary_file.fileno()
+            )
+
+            temporary_path = Path(
+                temporary_file.name
+            )
+
+        os.replace(
+            temporary_path,
+            path,
+        )
+
+    except Exception:
+        if (
+            temporary_path is not None
+            and temporary_path.exists()
+        ):
+            temporary_path.unlink(
+                missing_ok=True
+            )
+
+        raise
+
     return path
 
 

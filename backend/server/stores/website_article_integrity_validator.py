@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 
 
 ENGINE_NAME = (
-    "website_article_integrity_validator_v1_non_mutating"
+    "website_article_integrity_validator_v1_1_structured_non_mutating"
 )
 
 
@@ -121,6 +121,340 @@ def _stable_hash_v1(
     ).hexdigest()
 
 
+
+# ===========================================================================
+# WEBSITE ARTICLE INTEGRITY VALIDATOR V1.1
+# Structured narrative duplicate analysis
+# ===========================================================================
+
+_STRUCTURED_DUPLICATE_NARRATIVE_TYPES_V1_1 = {
+    "paragraph",
+    "blockquote",
+}
+
+_STRUCTURED_DUPLICATE_IGNORED_TYPES_V1_1 = {
+    "heading",
+    "image",
+    "figure",
+    "caption",
+    "table",
+    "media",
+    "code",
+    "preformatted",
+    "link_group",
+}
+
+_STRUCTURED_DUPLICATE_COMMON_TEXT_V1_1 = {
+    "read more",
+    "learn more",
+    "shop now",
+    "see more",
+    "view more",
+    "find out more",
+    "sources",
+    "references",
+    "evidence",
+}
+
+
+def _normalize_structured_duplicate_text_v1_1(
+    value: Any,
+) -> str:
+    text = str(
+        value or ""
+    ).casefold()
+
+    text = text.replace(
+        "?",
+        "'",
+    )
+
+    text = re.sub(
+        r"\s+",
+        " ",
+        text,
+    ).strip()
+
+    text = re.sub(
+        r"^[\W_]+|[\W_]+$",
+        "",
+        text,
+    )
+
+    return text
+
+
+def _structured_duplicate_word_count_v1_1(
+    value: Any,
+) -> int:
+    return len(
+        re.findall(
+            r"\b[\w'-]+\b",
+            str(value or ""),
+            flags=re.UNICODE,
+        )
+    )
+
+
+def _eligible_structured_narrative_blocks_v1_1(
+    content_blocks: Any,
+) -> list[dict[str, Any]]:
+    """Return only blocks capable of representing duplicated prose.
+
+    Structural repetition is deliberately excluded. Long list items are
+    examined individually because they may contain genuine narrative prose.
+    """
+
+    if not isinstance(
+        content_blocks,
+        list,
+    ):
+        return []
+
+    eligible: list[
+        dict[str, Any]
+    ] = []
+
+    for block_index, block in enumerate(
+        content_blocks
+    ):
+        if not isinstance(
+            block,
+            dict,
+        ):
+            continue
+
+        block_type = str(
+            block.get("type")
+            or ""
+        ).strip().casefold()
+
+        if block_type in (
+            _STRUCTURED_DUPLICATE_IGNORED_TYPES_V1_1
+        ):
+            continue
+
+        if block_type in (
+            _STRUCTURED_DUPLICATE_NARRATIVE_TYPES_V1_1
+        ):
+            text = _normalize_structured_duplicate_text_v1_1(
+                block.get("text")
+            )
+
+            words = (
+                _structured_duplicate_word_count_v1_1(
+                    text
+                )
+            )
+
+            # Very short repeated phrases are usually labels,
+            # UI fragments, headings or intentional templates.
+            if words < 12:
+                continue
+
+            if text in (
+                _STRUCTURED_DUPLICATE_COMMON_TEXT_V1_1
+            ):
+                continue
+
+            eligible.append({
+                "source_block_index":
+                    block_index,
+                "source_block_type":
+                    block_type,
+                "text":
+                    text,
+                "word_count":
+                    words,
+            })
+
+            continue
+
+        if block_type in {
+            "unordered_list",
+            "ordered_list",
+        }:
+            items = (
+                block.get("items")
+                or []
+            )
+
+            if not isinstance(
+                items,
+                list,
+            ):
+                continue
+
+            for item_index, item in enumerate(
+                items
+            ):
+                text = (
+                    _normalize_structured_duplicate_text_v1_1(
+                        item
+                    )
+                )
+
+                words = (
+                    _structured_duplicate_word_count_v1_1(
+                        text
+                    )
+                )
+
+                # List labels and short recipe/product fields often repeat
+                # legitimately. Only substantial prose-like items qualify.
+                if words < 25:
+                    continue
+
+                if text in (
+                    _STRUCTURED_DUPLICATE_COMMON_TEXT_V1_1
+                ):
+                    continue
+
+                eligible.append({
+                    "source_block_index":
+                        block_index,
+                    "source_item_index":
+                        item_index,
+                    "source_block_type":
+                        block_type,
+                    "text":
+                        text,
+                    "word_count":
+                        words,
+                })
+
+    return eligible
+
+
+def _structured_duplicate_analysis_v1_1(
+    *,
+    content_blocks: Any,
+    raw_article_text: str,
+) -> dict[str, Any]:
+    eligible = (
+        _eligible_structured_narrative_blocks_v1_1(
+            content_blocks
+        )
+    )
+
+    # Backward-compatible fallback for old callers that do not yet
+    # provide UDARE structured blocks.
+    if not eligible:
+        fallback_ratio = (
+            _duplicate_block_ratio_v1(
+                raw_article_text
+            )
+        )
+
+        return {
+            "mode":
+                "flat_text_fallback",
+            "eligible_narrative_block_count":
+                0,
+            "unique_narrative_block_count":
+                0,
+            "duplicate_occurrence_count":
+                0,
+            "duplicate_group_count":
+                0,
+            "duplicate_block_ratio":
+                fallback_ratio,
+            "duplicate_groups":
+                [],
+        }
+
+    groups: dict[
+        str,
+        list[dict[str, Any]]
+    ] = {}
+
+    for candidate in eligible:
+        groups.setdefault(
+            candidate["text"],
+            [],
+        ).append(candidate)
+
+    duplicate_groups = []
+
+    duplicate_occurrence_count = 0
+
+    for text, occurrences in groups.items():
+        if len(occurrences) <= 1:
+            continue
+
+        duplicate_occurrences = (
+            len(occurrences) - 1
+        )
+
+        duplicate_occurrence_count += (
+            duplicate_occurrences
+        )
+
+        duplicate_groups.append({
+            "text":
+                text,
+            "occurrence_count":
+                len(occurrences),
+            "duplicate_occurrence_count":
+                duplicate_occurrences,
+            "locations":
+                occurrences,
+        })
+
+    eligible_count = len(
+        eligible
+    )
+
+    ratio = (
+        duplicate_occurrence_count
+        / eligible_count
+        if eligible_count
+        else 0.0
+    )
+
+    return {
+        "mode":
+            "structured_content_blocks",
+        "eligible_narrative_block_count":
+            eligible_count,
+        "unique_narrative_block_count":
+            len(groups),
+        "duplicate_occurrence_count":
+            duplicate_occurrence_count,
+        "duplicate_group_count":
+            len(duplicate_groups),
+        "duplicate_block_ratio":
+            round(
+                ratio,
+                6,
+            ),
+        "duplicate_groups":
+            duplicate_groups,
+    }
+
+
+def _structured_duplicate_block_ratio_v1_1(
+    *,
+    content_blocks: Any,
+    raw_article_text: str,
+) -> float:
+    analysis = (
+        _structured_duplicate_analysis_v1_1(
+            content_blocks=
+                content_blocks,
+            raw_article_text=
+                raw_article_text,
+        )
+    )
+
+    return float(
+        analysis.get(
+            "duplicate_block_ratio"
+        )
+        or 0.0
+    )
+
+
 def build_website_article_integrity_result_v1(
     *,
     raw_main_html: str,
@@ -129,7 +463,8 @@ def build_website_article_integrity_result_v1(
     title: str = "",
     url: str = "",
     metadata: Dict[str, Any] | None = None,
-) -> Dict[str, Any]:
+
+    content_blocks: 'List[Dict[str, Any]] | None' = None,) -> Dict[str, Any]:
     """
     Validate an already-reconstructed UDARE article without editing it.
 
@@ -184,9 +519,10 @@ def build_website_article_integrity_result_v1(
     )
 
     duplicate_ratio = (
-        _duplicate_block_ratio_v1(
-            blocks
-        )
+        _structured_duplicate_block_ratio_v1_1(
+        content_blocks=content_blocks,
+        raw_article_text=raw_article_text,
+    )
     )
 
     html_leakage = (

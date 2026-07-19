@@ -1,0 +1,514 @@
+from __future__ import annotations
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+JOB_SCHEMA_VERSION = "universal_knowledge_job_v1"
+
+DATA_ROOT = Path("backend/server/data")
+QUEUE_DIR = DATA_ROOT / "queues" / "universal_knowledge"
+JOB_STATUS_DIR = DATA_ROOT / "job_status" / "universal_knowledge"
+PROGRESS_DIR = DATA_ROOT / "progress" / "universal_knowledge"
+FAILURE_DIR = DATA_ROOT / "failure_registry" / "universal_knowledge"
+JOB_LEDGER_DIR = DATA_ROOT / "jobs" / "universal_knowledge"
+
+
+SUPPORTED_JOB_TYPES = {
+    # Upload arm
+    "upload_document_batch",
+    "upload_file_route_validation",
+    "format_detection",
+    "format_router",
+    "upload_document_extraction",
+    "build_uduc",
+    "build_uucd_from_uduc",
+
+    # Website arm
+    "website_connection_batch",
+    "website_crawl_batch",
+    "site_page_discovery",
+    "raw_html_acquisition",
+    "html_cleaning",
+    "article_extraction",
+    "content_normalization",
+    "build_website_unified_content",
+    "build_uucd_from_website",
+
+    # Universal canonical layer
+    "build_uucd",
+    "source_authorization",
+    "source_lifecycle",
+    "source_asset_versioning",
+    "build_body_store",
+    "verify_body_store",
+    "certify_uucd_body_store",
+
+    # Semantic pipeline 4.6.1–4.6.9
+    "semantic_article_reader",
+    "semantic_context_builder",
+    "entity_concept_extraction",
+    "phrase_neighborhood_intelligence",
+    "topic_intent_intelligence",
+    "section_evidence_builder",
+    "semantic_relationship_graph",
+    "semantic_learning_export",
+    "semantic_end_to_end_certification",
+    "udare_reconstruction",
+}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_id(value: str | None, fallback: str = "default") -> str:
+    raw = str(value or fallback).strip() or fallback
+    return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in raw)[:160]
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def make_job_id(workspace_id: str, job_type: str, payload: Dict[str, Any]) -> str:
+    raw = json.dumps(
+        {
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "payload": payload,
+            "created_at": now_iso(),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return "ukj_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def queue_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return QUEUE_DIR / ws / f"queue_{ws}.jsonl"
+
+
+def job_status_path(workspace_id: str, job_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return JOB_STATUS_DIR / ws / f"{safe_id(job_id)}.json"
+
+
+def progress_path(workspace_id: str, job_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return PROGRESS_DIR / ws / f"{safe_id(job_id)}.json"
+
+
+def failure_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return FAILURE_DIR / ws / f"failure_registry_{ws}.jsonl"
+
+
+def job_ledger_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return JOB_LEDGER_DIR / ws / f"job_ledger_{ws}.jsonl"
+
+
+def append_jsonl(path: Path, row: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def create_universal_knowledge_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Dict[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_ref: str = "",
+    priority: int = 5,
+    parent_job_id: str = "",
+    batch_id: str = "",
+    enqueue: bool = True,
+) -> Dict[str, Any]:
+    if job_type not in SUPPORTED_JOB_TYPES:
+        raise ValueError(f"Unsupported universal knowledge job_type: {job_type}")
+
+    ws = safe_id(workspace_id)
+    payload = payload or {}
+    initial_status = "queued" if enqueue else "registered"
+
+    canonical_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or "system"
+    ).strip() or "system"
+
+    canonical_product_id = str(
+        product_id
+        or payload.get("product_id")
+        or "linkcraftor"
+    ).strip() or "linkcraftor"
+
+    canonical_pipeline = str(
+        pipeline
+        or payload.get("pipeline")
+        or payload.get("pipeline_name")
+        or "universal_knowledge"
+    ).strip() or "universal_knowledge"
+
+    canonical_stage = str(
+        stage
+        or payload.get("stage")
+        or payload.get("stage_name")
+        or job_type
+    ).strip() or job_type
+
+    canonical_payload_ref = str(
+        payload_ref
+        or payload.get("payload_ref")
+        or payload.get("payload_reference")
+        or payload.get("source_record_id")
+        or payload.get("html_id")
+        or ""
+    ).strip()
+
+    initial_progress = {
+        "percent": 0,
+        "message": (
+            "Job queued."
+            if enqueue
+            else "Job registered without queue dispatch."
+        ),
+        "steps": [],
+    }
+
+    job_id = make_job_id(ws, job_type, payload)
+
+    job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+    if enqueue:
+        append_jsonl(queue_path(ws), job)
+
+    append_jsonl(job_ledger_path(ws), {"event": "job_created", **job})
+
+    write_json(job_status_path(ws, job_id), job)
+
+    write_json(progress_path(ws, job_id), {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "status": initial_status,
+        "percent": initial_progress["percent"],
+        "message": initial_progress["message"],
+        "steps": initial_progress["steps"],
+        "updated_at": now_iso(),
+    })
+
+    return job
+
+
+def update_job_status(
+    *,
+    workspace_id: str,
+    job_id: str,
+    status: str,
+    message: str = "",
+    result: Dict[str, Any] | None = None,
+    error: str = "",
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    path = job_status_path(ws, job_id)
+    job = read_json(path, {})
+
+    job.update({
+        "workspace_id": ws,
+        "job_id": job_id,
+        "status": status,
+        "message": message,
+        "result": result or job.get("result") or {},
+        "error": error,
+        "updated_at": now_iso(),
+    })
+
+    write_json(path, job)
+    append_jsonl(job_ledger_path(ws), {"event": "job_status_updated", **job})
+
+    return job
+
+
+def update_job_progress(
+    *,
+    workspace_id: str,
+    job_id: str,
+    percent: int,
+    message: str,
+    step: str = "",
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    path = progress_path(ws, job_id)
+    progress = read_json(path, {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "status": "running",
+        "percent": 0,
+        "message": "",
+        "steps": [],
+    })
+
+    progress["percent"] = max(0, min(int(percent), 100))
+    progress["message"] = message
+    progress["updated_at"] = now_iso()
+
+    if step:
+        progress.setdefault("steps", []).append({
+            "step": step,
+            "percent": progress["percent"],
+            "message": message,
+            "created_at": now_iso(),
+        })
+
+    write_json(path, progress)
+    return progress
+
+
+def record_job_failure(
+    *,
+    workspace_id: str,
+    job_id: str,
+    job_type: str,
+    error: str,
+    payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    failure = {
+        "schema_version": "universal_knowledge_failure_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "error": error,
+        "payload": payload or {},
+        "created_at": now_iso(),
+    }
+
+    append_jsonl(failure_path(ws), failure)
+    update_job_status(
+        workspace_id=ws,
+        job_id=job_id,
+        status="failed",
+        message="Job failed.",
+        error=error,
+    )
+
+    return failure
+
+
+def read_job_status(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    return read_json(job_status_path(workspace_id, job_id), {})
+
+
+def read_job_progress(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    return read_json(progress_path(workspace_id, job_id), {})
+
+
+def read_queue(workspace_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+    path = queue_path(workspace_id)
+    if not path.exists():
+        return []
+
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+
+    return rows
+
+
+
+PIPELINE_JOB_CHAIN = {
+    "upload_document_batch": [
+        "upload_file_route_validation",
+        "format_detection",
+        "format_router",
+        "upload_document_extraction",
+        "build_uduc",
+        "build_uucd_from_uduc",
+        "source_authorization",
+        "source_lifecycle",
+        "source_asset_versioning",
+        "build_body_store",
+        "verify_body_store",
+        "certify_uucd_body_store",
+    ],
+    "website_connection_batch": [
+        "site_page_discovery",
+        "raw_html_acquisition",
+        "html_cleaning",
+        "article_extraction",
+        "content_normalization",
+        "build_website_unified_content",
+        "build_uucd_from_website",
+        "source_authorization",
+        "source_lifecycle",
+        "source_asset_versioning",
+        "build_body_store",
+        "verify_body_store",
+        "certify_uucd_body_store",
+    ],
+    "semantic_pipeline": [
+        "semantic_article_reader",
+        "semantic_context_builder",
+        "entity_concept_extraction",
+        "phrase_neighborhood_intelligence",
+        "topic_intent_intelligence",
+        "section_evidence_builder",
+        "semantic_relationship_graph",
+        "semantic_learning_export",
+        "semantic_end_to_end_certification",
+    ],
+}
+
+
+def get_pipeline_job_chain_v1(chain_name: str) -> List[str]:
+    return list(PIPELINE_JOB_CHAIN.get(chain_name, []))
+
+
+def create_pipeline_batch_jobs_v1(
+    *,
+    workspace_id: str,
+    chain_name: str,
+    payload: Dict[str, Any] | None = None,
+    parent_job_id: str = "",
+    batch_id: str = "",
+) -> List[Dict[str, Any]]:
+    jobs: List[Dict[str, Any]] = []
+    chain = get_pipeline_job_chain_v1(chain_name)
+
+    if not chain:
+        raise ValueError(f"Unknown pipeline chain: {chain_name}")
+
+    for idx, job_type in enumerate(chain, start=1):
+        stage_payload = {
+            **(payload or {}),
+            "chain_name": chain_name,
+            "stage_index": idx,
+            "stage_count": len(chain),
+            "requires_previous_stage": idx > 1,
+        }
+
+        job = create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=stage_payload,
+            parent_job_id=parent_job_id,
+            batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}",
+        )
+
+        jobs.append(job)
+
+    return jobs
+
+
+def create_semantic_pipeline_jobs_if_certified_v1(
+    *,
+    workspace_id: str,
+    certification: Dict[str, Any],
+    payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    if certification.get("semantic_ready") is not True:
+        return {
+            "ok": False,
+            "semantic_ready": False,
+            "jobs": [],
+            "reason": "Certification is not semantic_ready=true.",
+        }
+
+    jobs = create_pipeline_batch_jobs_v1(
+        workspace_id=workspace_id,
+        chain_name="semantic_pipeline",
+        payload=payload or {},
+        batch_id=f"{safe_id(workspace_id)}_semantic_pipeline",
+    )
+
+    return {
+        "ok": True,
+        "semantic_ready": True,
+        "jobs": jobs,
+        "job_count": len(jobs),
+    }
+
+
+def explain_universal_knowledge_orchestrator_v1() -> Dict[str, Any]:
+    return {
+        "phase": "Phase 4.5A",
+        "component": "Universal Knowledge Processing Infrastructure",
+        "schema_version": JOB_SCHEMA_VERSION,
+        "supported_job_types": sorted(SUPPORTED_JOB_TYPES),
+        "responsibilities": [
+            "job creation",
+            "queue storage",
+            "worker execution contract",
+            "progress tracking",
+            "failure registry",
+            "per-workspace isolation",
+            "canonical pipeline orchestration",
+        ],
+        "scaling_rule": "API creates jobs; workers process jobs asynchronously.",
+        "pipeline_chains": {
+            "upload_document_batch": get_pipeline_job_chain_v1("upload_document_batch"),
+            "website_connection_batch": get_pipeline_job_chain_v1("website_connection_batch"),
+            "semantic_pipeline": get_pipeline_job_chain_v1("semantic_pipeline"),
+        },
+        "semantic_gate": "Semantic jobs are created only when certification.semantic_ready is true.",
+        "next_stage": "Job Status API + real stage adapters",
+    }

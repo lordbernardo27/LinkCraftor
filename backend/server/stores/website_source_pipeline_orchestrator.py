@@ -103,6 +103,8 @@ def process_website_html_to_ucd_v1(
             "source_stage": "udare_article_reconstruction",
             "stage": "website_article_integrity_validation",
         },
+    
+        content_blocks=extraction.get("content_blocks", []),
     )
 
     validated_body = str(
@@ -131,6 +133,10 @@ def process_website_html_to_ucd_v1(
             "html_id": raw_record.get("html_id"),
             "source_pipeline": PIPELINE_VERSION,
             "stage": "article_validation",
+            "integrity_passed":
+                bool(
+                    integrity.get("passed")
+                ),
         },
     )
 

@@ -1,0 +1,4172 @@
+{
+  "generated_at_utc": "2026-07-16T01:26:45.671711+00:00",
+  "workspace_id": "ws_whattoexpect_com",
+  "operation": "read_only_udare_store_runtime_architecture_scan",
+  "modified": false,
+  "python_files_scanned": 170,
+  "candidate_files_inspected": 36,
+  "candidate_files": [
+    "backend\\server\\routes\\external\\runtime.py",
+    "backend\\server\\routes\\site_workspace.py",
+    "backend\\server\\runtime\\automatic_canonical_rebuild_runner.py",
+    "backend\\server\\runtime\\live_route_orchestration_hooks.py",
+    "backend\\server\\runtime\\registry_driven_canonical_rebuild_manager.py",
+    "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+    "backend\\server\\stores\\active_phrase_set_store.py",
+    "backend\\server\\stores\\article_validation_store.py",
+    "backend\\server\\stores\\certified_website_article_store.py",
+    "backend\\server\\stores\\dis_rejection_pattern_store.py",
+    "backend\\server\\stores\\draft_pool_store.py",
+    "backend\\server\\stores\\enterprise_raw_html_acquisition_engine.py",
+    "backend\\server\\stores\\link_decision_store.py",
+    "backend\\server\\stores\\main_content_extraction_engine.py",
+    "backend\\server\\stores\\raw_website_html_fetch_runner.py",
+    "backend\\server\\stores\\raw_website_html_store.py",
+    "backend\\server\\stores\\semantic_runtime_candidate_fusion.py",
+    "backend\\server\\stores\\semantic_runtime_foundation.py",
+    "backend\\server\\stores\\universal_article_body_store.py",
+    "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+    "backend\\server\\stores\\upload_intel_store_old.py",
+    "backend\\server\\stores\\upload_intel_store_v2.py",
+    "backend\\server\\stores\\uucd_body_store_certification.py",
+    "backend\\server\\stores\\website_unified_content_builder_v2.py",
+    "backend\\server\\stores\\website_unified_content_certifier_v2.py",
+    "backend\\server\\stores\\website_unified_content_store.py",
+    "backend\\server\\stores\\website_unified_content_verifier_v2.py",
+    "backend\\server\\stores\\workspace_profile_store.py",
+    "backend\\server\\stores\\workspace_session_store.py",
+    "backend\\server\\workers\\certified_website_article_batch_worker.py",
+    "backend\\server\\workers\\universal_knowledge_queue_runner.py",
+    "backend\\server\\workers\\universal_knowledge_worker.py",
+    "backend\\server\\workers\\website_raw_html_acquisition_orchestrator.py",
+    "backend\\server\\workers\\website_unified_content_batch_worker.py",
+    "backend\\server\\workers\\website_unified_content_batch_worker_v2.py",
+    "backend\\server\\workers\\website_unified_content_orchestrator.py"
+  ],
+  "important_function_matches": [
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "inspect_queue",
+      "line": 83,
+      "source": "   78:         \"eta_seconds\": None,\n   79:         \"generated_at\": now_iso(),\n   80:     }\n   81: \n   82: \n   83: def inspect_queue(workspace_id: str) -> Dict[str, Any]:\n   84:     queue = read_queue(workspace_id, limit=10000)\n   85:     job_ids = [j.get(\"job_id\") for j in queue if j.get(\"job_id\")]\n   86:     duplicate_job_ids = [j for j, c in Counter(job_ids).items() if c > 1]\n   87: \n   88:     return {\n   89:         \"workspace_id\": safe_id(workspace_id),\n   90:         \"queue_size\": len(queue),\n   91:         \"oldest_job\": queue[0] if queue else {},\n   92:         \"newest_job\": queue[-1] if queue else {},\n   93:         \"duplicate_job_ids\": duplicate_job_ids,\n   94:         \"healthy\": len(duplicate_job_ids) == 0,\n   95:         \"generated_at\": now_iso(),\n   96:     }\n   97: \n   98: \n   99: def worker_heartbeat(workspace_id: str, worker_id: str, state: str = \"idle\", current_job_id: str = \"\") -> Dict[str, Any]:\n  100:     ws = safe_id(workspace_id)\n  101:     payload = {\n  102:         \"workspace_id\": ws,\n  103:         \"worker_id\": safe_id(worker_id),\n  104:         \"state\": state,"
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "inspect_workers",
+      "line": 112,
+      "source": "  107:     }\n  108:     write_json(WORKER_DIR / ws / f\"{safe_id(worker_id)}.json\", payload)\n  109:     return payload\n  110: \n  111: \n  112: def inspect_workers(workspace_id: str) -> Dict[str, Any]:\n  113:     ws = safe_id(workspace_id)\n  114:     root = WORKER_DIR / ws\n  115:     workers = []\n  116: \n  117:     if root.exists():\n  118:         for p in root.glob(\"*.json\"):\n  119:             workers.append(read_json(p, {}))\n  120: \n  121:     states = Counter(w.get(\"state\", \"unknown\") for w in workers)\n  122: \n  123:     return {\n  124:         \"workspace_id\": ws,\n  125:         \"worker_count\": len(workers),\n  126:         \"idle_workers\": states.get(\"idle\", 0),\n  127:         \"busy_workers\": states.get(\"busy\", 0),\n  128:         \"workers\": workers,\n  129:         \"generated_at\": now_iso(),\n  130:     }\n  131: \n  132: \n  133: def move_to_dead_letter(workspace_id: str, job: Dict[str, Any], reason: str) -> Dict[str, Any]:\n  134:     ws = safe_id(workspace_id)\n  135:     row = {\n  136:         \"workspace_id\": ws,\n  137:         \"job\": job,\n  138:         \"reason\": reason,"
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "move_to_dead_letter",
+      "line": 133,
+      "source": "  128:         \"workers\": workers,\n  129:         \"generated_at\": now_iso(),\n  130:     }\n  131: \n  132: \n  133: def move_to_dead_letter(workspace_id: str, job: Dict[str, Any], reason: str) -> Dict[str, Any]:\n  134:     ws = safe_id(workspace_id)\n  135:     row = {\n  136:         \"workspace_id\": ws,\n  137:         \"job\": job,\n  138:         \"reason\": reason,\n  139:         \"moved_at\": now_iso(),\n  140:     }\n  141:     path = DEAD_LETTER_DIR / ws / f\"{safe_id(job.get('job_id'))}.json\"\n  142:     write_json(path, row)\n  143:     update_job_status(\n  144:         workspace_id=ws,\n  145:         job_id=job.get(\"job_id\", \"\"),\n  146:         status=\"dead_letter\",\n  147:         message=\"Job moved to dead letter queue.\",\n  148:         error=reason,\n  149:     )\n  150:     return row\n  151: \n  152: \n  153: def retry_job(workspace_id: str, job: Dict[str, Any]) -> Dict[str, Any]:\n  154:     attempts = int(job.get(\"attempts\") or 0) + 1\n  155:     max_attempts = int(job.get(\"max_attempts\") or 3)\n  156: \n  157:     if attempts > max_attempts:\n  158:         return {"
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "retry_job",
+      "line": 153,
+      "source": "  148:         error=reason,\n  149:     )\n  150:     return row\n  151: \n  152: \n  153: def retry_job(workspace_id: str, job: Dict[str, Any]) -> Dict[str, Any]:\n  154:     attempts = int(job.get(\"attempts\") or 0) + 1\n  155:     max_attempts = int(job.get(\"max_attempts\") or 3)\n  156: \n  157:     if attempts > max_attempts:\n  158:         return {\n  159:             \"ok\": False,\n  160:             \"dead_letter\": move_to_dead_letter(workspace_id, job, \"Retry ceiling reached.\"),\n  161:         }\n  162: \n  163:     payload = dict(job.get(\"payload\") or {})\n  164:     payload[\"retry_of\"] = job.get(\"job_id\")\n  165:     payload[\"retry_attempt\"] = attempts\n  166: \n  167:     retry = create_universal_knowledge_job(\n  168:         workspace_id=workspace_id,\n  169:         job_type=job.get(\"job_type\"),\n  170:         payload=payload,\n  171:         priority=job.get(\"priority\", 5),\n  172:         parent_job_id=job.get(\"job_id\", \"\"),\n  173:         batch_id=job.get(\"batch_id\", \"\"),\n  174:     )\n  175: \n  176:     retry[\"attempts\"] = attempts\n  177: \n  178:     return {\"ok\": True, \"retry_job\": retry}\n  179: \n  180: \n  181: def create_batch(workspace_id: str, batch_id: str, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:\n  182:     ws = safe_id(workspace_id)\n  183:     payload = {\n  184:         \"workspace_id\": ws,\n  185:         \"batch_id\": safe_id(batch_id),\n  186:         \"job_ids\": [j.get(\"job_id\") for j in jobs],"
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "create_batch",
+      "line": 181,
+      "source": "  176:     retry[\"attempts\"] = attempts\n  177: \n  178:     return {\"ok\": True, \"retry_job\": retry}\n  179: \n  180: \n  181: def create_batch(workspace_id: str, batch_id: str, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:\n  182:     ws = safe_id(workspace_id)\n  183:     payload = {\n  184:         \"workspace_id\": ws,\n  185:         \"batch_id\": safe_id(batch_id),\n  186:         \"job_ids\": [j.get(\"job_id\") for j in jobs],\n  187:         \"job_count\": len(jobs),\n  188:         \"status\": \"created\",\n  189:         \"created_at\": now_iso(),\n  190:         \"updated_at\": now_iso(),\n  191:     }\n  192:     write_json(BATCH_DIR / ws / f\"{safe_id(batch_id)}.json\", payload)\n  193:     return payload\n  194: \n  195: \n  196: def inspect_batch(workspace_id: str, batch_id: str) -> Dict[str, Any]:\n  197:     ws = safe_id(workspace_id)\n  198:     batch = read_json(BATCH_DIR / ws / f\"{safe_id(batch_id)}.json\", {})\n  199:     statuses = [read_job_status(ws, j) for j in batch.get(\"job_ids\", [])]\n  200:     counts = Counter(s.get(\"status\", \"unknown\") for s in statuses if s)\n  201: "
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "inspect_batch",
+      "line": 196,
+      "source": "  191:     }\n  192:     write_json(BATCH_DIR / ws / f\"{safe_id(batch_id)}.json\", payload)\n  193:     return payload\n  194: \n  195: \n  196: def inspect_batch(workspace_id: str, batch_id: str) -> Dict[str, Any]:\n  197:     ws = safe_id(workspace_id)\n  198:     batch = read_json(BATCH_DIR / ws / f\"{safe_id(batch_id)}.json\", {})\n  199:     statuses = [read_job_status(ws, j) for j in batch.get(\"job_ids\", [])]\n  200:     counts = Counter(s.get(\"status\", \"unknown\") for s in statuses if s)\n  201: \n  202:     batch[\"status_counts\"] = dict(counts)\n  203:     batch[\"completed\"] = counts.get(\"completed\", 0)\n  204:     batch[\"failed\"] = counts.get(\"failed\", 0)\n  205:     batch[\"generated_at\"] = now_iso()\n  206:     return batch\n  207: \n  208: \n  209: def workspace_concurrency_decision(workspace_id: str, max_running: int = 5) -> Dict[str, Any]:\n  210:     summary = runtime_job_summary(workspace_id)\n  211:     running = int(summary.get(\"by_status\", {}).get(\"running\", 0))\n  212:     allowed = running < max_running\n  213: \n  214:     return {"
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "name": "workspace_concurrency_decision",
+      "line": 209,
+      "source": "  204:     batch[\"failed\"] = counts.get(\"failed\", 0)\n  205:     batch[\"generated_at\"] = now_iso()\n  206:     return batch\n  207: \n  208: \n  209: def workspace_concurrency_decision(workspace_id: str, max_running: int = 5) -> Dict[str, Any]:\n  210:     summary = runtime_job_summary(workspace_id)\n  211:     running = int(summary.get(\"by_status\", {}).get(\"running\", 0))\n  212:     allowed = running < max_running\n  213: \n  214:     return {\n  215:         \"workspace_id\": safe_id(workspace_id),\n  216:         \"running_jobs\": running,\n  217:         \"max_running\": max_running,\n  218:         \"can_start_new_job\": allowed,\n  219:         \"decision\": \"allow\" if allowed else \"throttle\",\n  220:         \"generated_at\": now_iso(),\n  221:     }\n  222: \n  223: \n  224: def runtime_metrics(workspace_id: str) -> Dict[str, Any]:\n  225:     summary = runtime_job_summary(workspace_id)\n  226:     total = summary.get(\"total_jobs\", 0)\n  227:     completed = summary.get(\"by_status\", {}).get(\"completed\", 0)\n  228:     failed = summary.get(\"by_status\", {}).get(\"failed\", 0)\n  229:     dead = summary.get(\"by_status\", {}).get(\"dead_letter\", 0)"
+    },
+    {
+      "path": "backend\\server\\stores\\enterprise_raw_html_acquisition_engine.py",
+      "name": "_load_raw_html_store_v1",
+      "line": 103,
+      "source": "   98:         or page.get(\"source_url\")\n   99:         or \"\"\n  100:     ).strip()\n  101: \n  102: \n  103: def _load_raw_html_store_v1(workspace_id: str) -> Dict[str, Any]:\n  104:     path = _raw_html_store_path_v1(workspace_id)\n  105:     return _load_json_v1(\n  106:         path,\n  107:         {\n  108:             \"version\": \"raw_website_html_store_v1\",\n  109:             \"workspace_id\": workspace_id,\n  110:             \"pages\": {},\n  111:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n  112:         },\n  113:     )\n  114: \n  115: \n  116: def _save_raw_html_store_v1(workspace_id: str, store: Dict[str, Any]) -> None:\n  117:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()\n  118:     _write_json_v1(_raw_html_store_path_v1(workspace_id), store)\n  119: \n  120: \n  121: def _decode_html_bytes_v1(content: bytes, content_type: str = \"\") -> str:"
+    },
+    {
+      "path": "backend\\server\\stores\\enterprise_raw_html_acquisition_engine.py",
+      "name": "_save_raw_html_store_v1",
+      "line": 116,
+      "source": "  111:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n  112:         },\n  113:     )\n  114: \n  115: \n  116: def _save_raw_html_store_v1(workspace_id: str, store: Dict[str, Any]) -> None:\n  117:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()\n  118:     _write_json_v1(_raw_html_store_path_v1(workspace_id), store)\n  119: \n  120: \n  121: def _decode_html_bytes_v1(content: bytes, content_type: str = \"\") -> str:\n  122:     if not isinstance(content, (bytes, bytearray)):\n  123:         return \"\"\n  124: \n  125:     if len(content) > MAX_HTML_BYTES:\n  126:         content = content[:MAX_HTML_BYTES]"
+    },
+    {
+      "path": "backend\\server\\stores\\raw_website_html_store.py",
+      "name": "load_raw_website_html_store_v1",
+      "line": 31,
+      "source": "   26: def _store_path_v1(workspace_id: str) -> Path:\n   27:     STORE_DIR.mkdir(parents=True, exist_ok=True)\n   28:     return STORE_DIR / f\"raw_website_html_{_safe_workspace_id_v1(workspace_id)}.json\"\n   29: \n   30: \n   31: def load_raw_website_html_store_v1(workspace_id: str) -> Dict[str, Any]:\n   32:     path = _store_path_v1(workspace_id)\n   33: \n   34:     if not path.exists():\n   35:         return {\n   36:             \"version\": \"raw_website_html_store_v1\",\n   37:             \"workspace_id\": workspace_id,\n   38:             \"pages\": {},\n   39:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n   40:         }\n   41: \n   42:     try:\n   43:         return json.loads(path.read_text(encoding=\"utf-8\"))\n   44:     except Exception:\n   45:         return {\n   46:             \"version\": \"raw_website_html_store_v1\",\n   47:             \"workspace_id\": workspace_id,\n   48:             \"pages\": {},\n   49:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n   50:             \"recovered_from_error\": True,\n   51:         }\n   52: \n   53: \n   54: def save_raw_website_html_store_v1(\n   55:     workspace_id: str,\n   56:     store: Dict[str, Any],\n   57: ) -> Path:\n   58:     path = _store_path_v1(workspace_id)\n   59:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()"
+    },
+    {
+      "path": "backend\\server\\stores\\raw_website_html_store.py",
+      "name": "save_raw_website_html_store_v1",
+      "line": 54,
+      "source": "   49:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n   50:             \"recovered_from_error\": True,\n   51:         }\n   52: \n   53: \n   54: def save_raw_website_html_store_v1(\n   55:     workspace_id: str,\n   56:     store: Dict[str, Any],\n   57: ) -> Path:\n   58:     path = _store_path_v1(workspace_id)\n   59:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()\n   60:     path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding=\"utf-8\")\n   61:     return path\n   62: \n   63: \n   64: def upsert_raw_website_html_v1(\n   65:     *,\n   66:     workspace_id: str,\n   67:     url: str,\n   68:     html: str,\n   69:     title: str = \"\","
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "name": "reconstruct_universal_dom_article_v1",
+      "line": 4068,
+      "source": " 4063: \n 4064: # ---------------------------------------------------------------------------\n 4065: # Public API\n 4066: # ---------------------------------------------------------------------------\n 4067: \n 4068: def reconstruct_universal_dom_article_v1(\n 4069:     *,\n 4070:     html_text: str,\n 4071:     url: str = \"\",\n 4072:     title: str = \"\",\n 4073:     metadata: dict[str, Any] | None = None,\n 4074:     profile: ReconstructionProfile | None = None,\n 4075: ) -> dict[str, Any]:\n 4076:     resolved_profile = _resolve_profile_for_url(\n 4077:         url,\n 4078:         profile,\n 4079:     )\n 4080:     rules = _resolve_rules(resolved_profile)\n 4081: \n 4082:     source_html = str(html_text or \"\")\n 4083: \n 4084:     soup = BeautifulSoup(source_html, PARSER_NAME)\n 4085: \n 4086:     removed_node_count = _remove_noise_nodes(\n 4087:         soup,\n 4088:         rules.noise_signal_terms,\n 4089:     )\n 4090: \n 4091:     # Subtree-text memoization. Built after noise removal so cached\n 4092:     # text never includes decomposed content; the tree is not\n 4093:     # mutated again after this point.\n 4094:     cache: dict[int, str] = {}\n 4095: \n 4096:     root_selection = _select_best_root(soup, cache)\n 4097: \n 4098:     selected = root_selection[\"selected\"]\n 4099:     root = selected[\"node\"]\n 4100: \n 4101:     extraction = _extract_ordered_blocks_v1_8(\n 4102:         root,\n 4103:         rules,\n 4104:         cache,\n 4105:         page_url=url,\n 4106:     )\n 4107: \n 4108:     article_body = str(\n 4109:         extraction.get(\"article_body\") or \"\"\n 4110:     ).strip()\n 4111: \n 4112:     detected_title = _normalize_text(title)\n 4113: \n 4114:     if not detected_title:\n 4115:         title_tag = soup.find(\"title\")\n 4116: \n 4117:         if isinstance(title_tag, Tag):\n 4118:             detected_title = _node_text(title_tag, cache)\n 4119: \n 4120:     h1 = next(\n 4121:         (\n 4122:             heading[\"text\"]\n 4123:             for heading in extraction[\"headings\"]\n 4124:             if heading.get(\"level\") == 1\n 4125:         ),\n 4126:         \"\",\n 4127:     )\n 4128: \n 4129:     if not detected_title:\n 4130:         detected_title = h1\n 4131: \n 4132:     candidate_summary = []\n 4133: \n 4134:     for candidate in root_selection[\"candidates\"][:20]:\n 4135:         candidate_summary.append({\n 4136:             \"tag\": candidate[\"tag\"],\n 4137:             \"signal\": candidate[\"signal\"][:250],\n 4138:             \"word_count\": candidate[\"word_count\"],\n 4139:             \"heading_count\": candidate[\"heading_count\"],\n 4140:             \"paragraph_count\": candidate[\"paragraph_count\"],\n 4141:             \"link_density\": candidate[\"link_density\"],\n 4142:             \"score\": candidate[\"score\"],\n 4143:         })\n 4144: \n 4145:     return {\n 4146:         \"ok\": bool(article_body),\n 4147:         \"engine\": ENGINE_NAME,\n 4148:         \"parser\": PARSER_NAME,\n 4149:         \"url\": url,\n 4150:         \"title\": detected_title,\n 4151:         \"h1\": h1,\n 4152:         \"article_body\": article_body,\n 4153:         # Compatibility aliases for downstream consumers that read\n 4154:         # different keys; all three are the same string.\n 4155:         \"content_body\": article_body,\n 4156:         \"main_content\": article_body,\n 4157:         # Canonical structured reconstruction.\n 4158:         \"content_blocks\": extraction[\"content_blocks\"],\n 4159:         # Compatibility alias for existing downstream consumers.\n 4160:         \"blocks\": extraction[\"content_blocks\"],\n 4161:         \"headings\": extraction[\"headings\"],\n 4162:         \"paragraphs\": extraction[\"paragraphs\"],\n 4163:         \"selected_root\": {\n 4164:             \"tag\": selected[\"tag\"],\n 4165:             \"signal\": selected[\"signal\"],\n 4166:             \"word_count\": selected[\"word_count\"],\n 4167:             \"heading_count\": selected[\"heading_count\"],\n 4168:             \"paragraph_count\": selected[\"paragraph_count\"],\n 4169:             \"link_density\": selected[\"link_density\"],\n 4170:             \"score\": selected[\"score\"],\n 4171:         },\n 4172:         \"statistics\": {\n 4173:             \"source_html_length\": len(source_html),\n 4174:             \"removed_node_count\": removed_node_count,\n 4175:             \"candidate_count\": len(root_selection[\"candidates\"]),\n 4176:             \"block_count\": len(\n 4177:                 extraction[\"content_blocks\"]\n 4178:             ),\n 4179:             \"heading_count\": len(\n 4180:                 extraction[\"headings\"]\n 4181:             ),\n 4182:             \"paragraph_count\": len(\n 4183:                 extraction[\"paragraphs\"]\n 4184:             ),\n 4185:             \"block_type_counts\": {\n 4186:                 block_type: sum(\n 4187:                     1\n 4188:                     for block in extraction[\"content_blocks\"]\n 4189:                     if str(block.get(\"type\") or \"\")\n 4190:                     == block_type\n 4191:                 )\n 4192:                 for block_type in sorted({\n 4193:                     str(block.get(\"type\") or \"\")\n 4194:                     for block in extraction[\"content_blocks\"]\n 4195:                     if str(block.get(\"type\") or \"\")\n 4196:                 })\n 4197:             },\n 4198:             \"article_word_count\": _word_count(article_body),\n 4199:             \"article_length\": len(article_body),\n 4200:         },\n 4201:         \"candidate_summary\": candidate_summary,\n 4202:         \"metadata\": {\n 4203:             **(metadata or {}),\n 4204:             \"article_reconstruction\": {\n 4205:                 \"engine\": ENGINE_NAME,\n 4206:                 \"parser\": PARSER_NAME,\n 4207:                 \"profile\": resolved_profile.name,\n 4208:                 \"selected_root_tag\": selected[\"tag\"],\n 4209:                 \"selected_root_signal\": selected[\"signal\"],\n 4210:             },\n 4211:         },\n 4212:     }\n 4213: \n 4214: \n 4215: def explain_universal_dom_article_reconstruction_v1() -> dict[str, Any]:\n 4216:     return {\n 4217:         \"engine\": ENGINE_NAME,\n 4218:         \"parser\": PARSER_NAME,\n 4219:         \"purpose\": (\n 4220:             \"Reconstruct ordered rich article content blocks \""
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_store.py",
+      "name": "load_website_unified_content_store_v1",
+      "line": 32,
+      "source": "   27: def _store_path_v1(workspace_id: str) -> Path:\n   28:     STORE_DIR.mkdir(parents=True, exist_ok=True)\n   29:     return STORE_DIR / f\"website_unified_content_{_safe_workspace_id_v1(workspace_id)}.json\"\n   30: \n   31: \n   32: def load_website_unified_content_store_v1(workspace_id: str) -> Dict[str, Any]:\n   33:     path = _store_path_v1(workspace_id)\n   34: \n   35:     if not path.exists():\n   36:         return {\n   37:             \"version\": \"website_unified_content_store_v2\",\n   38:             \"workspace_id\": workspace_id,\n   39:             \"documents\": {},\n   40:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n   41:         }\n   42: \n   43:     try:\n   44:         return json.loads(path.read_text(encoding=\"utf-8\"))\n   45:     except Exception:\n   46:         return {\n   47:             \"version\": \"website_unified_content_store_v2\",\n   48:             \"workspace_id\": workspace_id,\n   49:             \"documents\": {},\n   50:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n   51:             \"recovered_from_error\": True,\n   52:         }\n   53: \n   54: \n   55: def save_website_unified_content_store_v1(workspace_id: str, store: Dict[str, Any]) -> Path:\n   56:     path = _store_path_v1(workspace_id)\n   57:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()\n   58:     path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding=\"utf-8\")\n   59:     return path\n   60: "
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_store.py",
+      "name": "save_website_unified_content_store_v1",
+      "line": 55,
+      "source": "   50:             \"updated_at_utc\": datetime.now(timezone.utc).isoformat(),\n   51:             \"recovered_from_error\": True,\n   52:         }\n   53: \n   54: \n   55: def save_website_unified_content_store_v1(workspace_id: str, store: Dict[str, Any]) -> Path:\n   56:     path = _store_path_v1(workspace_id)\n   57:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()\n   58:     path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding=\"utf-8\")\n   59:     return path\n   60: \n   61: \n   62: def upsert_website_unified_content_document_v1(\n   63:     *,\n   64:     workspace_id: str,\n   65:     url: str,\n   66:     title: str = \"\",\n   67:     h1: str = \"\","
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_store.py",
+      "name": "upsert_website_unified_content_document_v1",
+      "line": 62,
+      "source": "   57:     store[\"updated_at_utc\"] = datetime.now(timezone.utc).isoformat()\n   58:     path.write_text(json.dumps(store, indent=2, ensure_ascii=False), encoding=\"utf-8\")\n   59:     return path\n   60: \n   61: \n   62: def upsert_website_unified_content_document_v1(\n   63:     *,\n   64:     workspace_id: str,\n   65:     url: str,\n   66:     title: str = \"\",\n   67:     h1: str = \"\",\n   68:     article_body: str = \"\",\n   69:     headings: list | None = None,\n   70:     metadata: Dict[str, Any] | None = None,\n   71:     quality: Dict[str, Any] | None = None,\n   72:     semantic_features: Dict[str, Any] | None = None,\n   73: ) -> Dict[str, Any]:\n   74:     store = load_website_unified_content_store_v1(workspace_id)\n   75: \n   76:     formatted_body = format_universal_content_body_v1(\n   77:         text=article_body,\n   78:         headings=headings or [],\n   79:         title=title,\n   80:     )\n   81: \n   82:     content_text = str(\n   83:         formatted_body.get(\"content_body\") or \"\"\n   84:     ).strip()\n   85:     content_id = _content_id_for_url_v1(url)\n   86:     now = datetime.now(timezone.utc).isoformat()\n   87: \n   88:     document_metadata = dict(metadata or {})\n   89: \n   90:     document_metadata[\"content_body_formatting\"] = {\n   91:         \"formatter\": formatted_body.get(\"formatter\"),\n   92:         \"format\": formatted_body.get(\"format\"),\n   93:         \"source_mode\": formatted_body.get(\"source_mode\"),\n   94:         \"paragraph_count\": formatted_body.get(\"paragraph_count\"),\n   95:         \"heading_count\": formatted_body.get(\"heading_count\"),\n   96:         \"word_count\": formatted_body.get(\"word_count\"),\n   97:         \"content_length\": formatted_body.get(\"content_length\"),\n   98:     }\n   99: \n  100:     if h1:\n  101:         document_metadata[\"source_h1\"] = h1\n  102: \n  103:     if semantic_features:\n  104:         document_metadata[\"semantic_features\"] = semantic_features\n  105: \n  106:     document = {\n  107:         \"content_id\": content_id,\n  108:         \"workspace_id\": workspace_id,\n  109:         \"source_type\": \"website_crawl\",\n  110:         \"url\": str(url or \"\").strip(),\n  111:         \"title\": str(title or h1 or \"\").strip(),\n  112:         \"article_body\": content_text,\n  113:         \"headings\": list(headings or []),\n  114:         \"metadata\": document_metadata,\n  115:         \"quality\": dict(quality or {}),\n  116:         \"created_or_updated_at_utc\": now,\n  117:     }\n  118: \n  119:     store.setdefault(\"documents\", {})\n  120:     store[\"documents\"][content_id] = document\n  121: \n  122:     save_website_unified_content_store_v1(workspace_id, store)\n  123: \n  124:     return document\n  125: \n  126: \n  127: def get_website_unified_content_document_v1(\n  128:     *,\n  129:     workspace_id: str,\n  130:     url: str | None = None,\n  131:     content_id: str | None = None,\n  132: ) -> Dict[str, Any] | None:"
+    },
+    {
+      "path": "backend\\server\\workers\\universal_knowledge_queue_runner.py",
+      "name": "_write_remaining_queue_v1",
+      "line": 15,
+      "source": "   10:     safe_id,\n   11: )\n   12: from backend.server.workers.universal_knowledge_worker import execute_universal_knowledge_job_v1\n   13: \n   14: \n   15: def _write_remaining_queue_v1(workspace_id: str, jobs: List[Dict[str, Any]]) -> None:\n   16:     path = queue_path(workspace_id)\n   17:     path.parent.mkdir(parents=True, exist_ok=True)\n   18:     path.write_text(\n   19:         \"\\n\".join(json.dumps(job, ensure_ascii=False) for job in jobs) + (\"\\n\" if jobs else \"\"),\n   20:         encoding=\"utf-8\",\n   21:     )\n   22: \n   23: \n   24: def run_universal_knowledge_queue_v1(\n   25:     *,\n   26:     workspace_id: str,\n   27:     max_jobs: int = 20,\n   28:     job_type: str | None = None,\n   29: ) -> Dict[str, Any]:"
+    },
+    {
+      "path": "backend\\server\\workers\\universal_knowledge_queue_runner.py",
+      "name": "run_universal_knowledge_queue_v1",
+      "line": 24,
+      "source": "   19:         \"\\n\".join(json.dumps(job, ensure_ascii=False) for job in jobs) + (\"\\n\" if jobs else \"\"),\n   20:         encoding=\"utf-8\",\n   21:     )\n   22: \n   23: \n   24: def run_universal_knowledge_queue_v1(\n   25:     *,\n   26:     workspace_id: str,\n   27:     max_jobs: int = 20,\n   28:     job_type: str | None = None,\n   29: ) -> Dict[str, Any]:\n   30:     ws = safe_id(workspace_id)\n   31:     queued = read_queue(ws, limit=10000)\n   32: \n   33:     pending = []\n   34:     remaining = []\n   35: \n   36:     for job in queued:\n   37:         if job.get(\"status\") != \"queued\":\n   38:             remaining.append(job)\n   39:             continue\n   40: \n   41:         if job_type and job.get(\"job_type\") != job_type:\n   42:             remaining.append(job)\n   43:             continue\n   44: \n   45:         if len(pending) < int(max_jobs):\n   46:             pending.append(job)\n   47:         else:\n   48:             remaining.append(job)\n   49: \n   50:     results = []\n   51: \n   52:     for job in pending:\n   53:         result = execute_universal_knowledge_job_v1(job)\n   54:         results.append(result)\n   55: \n   56:     _write_remaining_queue_v1(ws, remaining)\n   57: \n   58:     return {\n   59:         \"ok\": True,\n   60:         \"workspace_id\": ws,\n   61:         \"max_jobs\": int(max_jobs),\n   62:         \"job_type_filter\": job_type,\n   63:         \"executed_count\": len(results),\n   64:         \"remaining_count\": len(remaining),\n   65:         \"results\": results,\n   66:     }\n   67: \n   68: \n   69: if __name__ == \"__main__\":\n   70:     import argparse\n   71: \n   72:     parser = argparse.ArgumentParser()\n   73:     parser.add_argument(\"--workspace-id\", required=True)\n   74:     parser.add_argument(\"--max-jobs\", type=int, default=20)"
+    },
+    {
+      "path": "backend\\server\\workers\\universal_knowledge_worker.py",
+      "name": "execute_universal_knowledge_job_v1",
+      "line": 21,
+      "source": "   16:     update_job_progress,\n   17:     update_job_status,\n   18: )\n   19: \n   20: \n   21: def execute_universal_knowledge_job_v1(job: Dict[str, Any]) -> Dict[str, Any]:\n   22:     \"\"\"\n   23:     Local worker execution contract.\n   24: \n   25:     This is the first local worker foundation. In production, this same job\n   26:     contract can be executed by Celery/RQ/SQS/Lambda/App Runner workers.\n   27:     \"\"\"\n   28: \n   29:     workspace_id = job.get(\"workspace_id\") or \"default\"\n   30:     job_id = job.get(\"job_id\") or \"\"\n   31:     job_type = job.get(\"job_type\") or \"\"\n   32:     payload = job.get(\"payload\") or {}\n   33: \n   34:     try:\n   35:         update_job_status(\n   36:             workspace_id=workspace_id,\n   37:             job_id=job_id,\n   38:             status=\"running\",\n   39:             message=f\"Running {job_type}.\",\n   40:         )\n   41:         update_job_progress(\n   42:             workspace_id=workspace_id,\n   43:             job_id=job_id,\n   44:             percent=10,\n   45:             message=\"Worker accepted job.\",\n   46:             step=\"worker_accepted\",\n   47:         )\n   48: \n   49:         stage_groups = {\n   50:             \"upload_arm\": {\n   51:                 \"upload_document_batch\",\n   52:                 \"upload_file_route_validation\",\n   53:                 \"format_detection\",\n   54:                 \"format_router\",\n   55:                 \"upload_document_extraction\",\n   56:                 \"build_uduc\",\n   57:                 \"build_uucd_from_uduc\",\n   58:             },\n   59:             \"website_arm\": {\n   60:                 \"website_connection_batch\",\n   61:                 \"website_crawl_batch\",\n   62:                 \"site_page_discovery\",\n   63:                 \"raw_html_acquisition\",\n   64:                 \"html_cleaning\",\n   65:                 \"article_extraction\",\n   66:                 \"content_normalization\",\n   67:                 \"build_website_unified_content\",\n   68:                 \"build_uucd_from_website\",\n   69:             },\n   70:             \"canonical\": {\n   71:                 \"build_uucd\",\n   72:                 \"source_authorization\",\n   73:                 \"source_lifecycle\",\n   74:                 \"source_asset_versioning\",\n   75:                 \"build_body_store\",\n   76:                 \"verify_body_store\",\n   77:                 \"certify_uucd_body_store\",\n   78:             },\n   79:             \"semantic\": {\n   80:                 \"semantic_article_reader\",\n   81:                 \"semantic_context_builder\",\n   82:                 \"entity_concept_extraction\",\n   83:                 \"phrase_neighborhood_intelligence\",\n   84:                 \"topic_intent_intelligence\",\n   85:                 \"section_evidence_builder\",\n   86:                 \"semantic_relationship_graph\",\n   87:                 \"semantic_learning_export\",\n   88:                 \"semantic_end_to_end_certification\",\n   89:             },\n   90:         }\n   91: \n   92:         group = \"\"\n   93:         for group_name, job_types in stage_groups.items():\n   94:             if job_type in job_types:\n   95:                 group = group_name\n   96:                 break\n   97: \n   98:         if not group:\n   99:             raise ValueError(f\"Unsupported worker job_type: {job_type}\")\n  100: \n  101:         if group == \"semantic\" and payload.get(\"semantic_ready\") is not True:\n  102:             raise ValueError(\"Semantic job blocked because semantic_ready is not true.\")\n  103: \n  104:         result = {\n  105:             \"handled\": True,\n  106:             \"job_type\": job_type,\n  107:             \"stage_group\": group,\n  108:             \"workspace_id\": workspace_id,\n  109:             \"stage_index\": payload.get(\"stage_index\"),\n  110:             \"stage_count\": payload.get(\"stage_count\"),\n  111:             \"note\": \"Stage accepted by full pipeline worker contract.\",\n  112:         }\n  113: \n  114:         if job_type == \"upload_document_batch\":\n  115:             result[\"document_count\"] = len(payload.get(\"documents\") or [])\n  116:             result[\"uduc_write_results\"] = _write_uduc_for_upload_batch_job(job)\n  117: \n  118:         if job_type in {\"website_connection_batch\", \"website_crawl_batch\", \"raw_html_acquisition\"}:\n  119:             result[\"website_acquisition\"] = _run_website_raw_html_acquisition_job(job)\n  120: \n  121:         if job_type == \"build_website_unified_content\":\n  122:             result[\"website_unified_content\"] = run_website_unified_content_batch_v1(\n  123:                 workspace_id=workspace_id,\n  124:                 assigned_html_ids=payload.get(\"assigned_html_ids\") or [],\n  125:                 batch_id=payload.get(\"batch_id\") or job.get(\"batch_id\") or \"\",\n  126:                 batch_index=payload.get(\"batch_index\"),\n  127:                 batch_count=payload.get(\"batch_count\"),\n  128:             )\n  129: \n  130:         update_job_progress(\n  131:             workspace_id=workspace_id,\n  132:             job_id=job_id,\n  133:             percent=100,\n  134:             message=\"Job completed.\",\n  135:             step=\"job_completed\",\n  136:         )\n  137: \n  138:         update_job_status(\n  139:             workspace_id=workspace_id,\n  140:             job_id=job_id,\n  141:             status=\"completed\",\n  142:             message=\"Job completed.\",\n  143:             result=result,\n  144:         )\n  145: \n  146:         return {\n  147:             \"ok\": True,\n  148:             \"job_id\": job_id,\n  149:             \"workspace_id\": workspace_id,\n  150:             \"job_type\": job_type,\n  151:             \"result\": result,\n  152:         }\n  153: \n  154:     except Exception as e:\n  155:         failure = record_job_failure(\n  156:             workspace_id=workspace_id,\n  157:             job_id=job_id,\n  158:             job_type=job_type,\n  159:             error=str(e),\n  160:             payload=payload,\n  161:         )\n  162: \n  163:         return {\n  164:             \"ok\": False,\n  165:             \"job_id\": job_id,\n  166:             \"workspace_id\": workspace_id,\n  167:             \"job_type\": job_type,\n  168:             \"failure\": failure,\n  169:         }\n  170: \n  171: \n  172: def create_and_execute_local_job_v1(\n  173:     *,\n  174:     workspace_id: str,\n  175:     job_type: str,\n  176:     payload: Dict[str, Any] | None = None,\n  177: ) -> Dict[str, Any]:"
+    },
+    {
+      "path": "backend\\server\\workers\\universal_knowledge_worker.py",
+      "name": "_run_website_raw_html_acquisition_job",
+      "line": 278,
+      "source": "  273:         })\n  274: \n  275:     return results\n  276: \n  277: \n  278: def _run_website_raw_html_acquisition_job(job):\n  279:     payload = job.get(\"payload\") or {}\n  280:     workspace_id = job.get(\"workspace_id\") or payload.get(\"workspace_id\") or \"default\"\n  281: \n  282:     batch_size = int(payload.get(\"batch_size\") or 100)\n  283:     checkpoint_every = int(payload.get(\"checkpoint_every\") or 25)\n  284:     sleep_seconds = float(payload.get(\"sleep_seconds\") or 0.15)\n  285: \n  286:     assigned_urls = payload.get(\"assigned_urls\") or []\n  287: \n  288:     if assigned_urls:\n  289:         from pathlib import Path\n  290:         import json\n  291: \n  292:         site_pages_path = Path(\"backend/server/data\") / f\"site_pages_{workspace_id}.json\"\n  293:         site_pages_path.parent.mkdir(parents=True, exist_ok=True)\n  294: \n  295:         temp_workspace_id = f\"{workspace_id}__assigned_{job.get('job_id')}\"\n  296:         temp_site_pages_path = Path(\"backend/server/data\") / f\"site_pages_{temp_workspace_id}.json\"\n  297: \n  298:         temp_site_pages_path.write_text(\n  299:             json.dumps({\n  300:                 \"workspace_id\": temp_workspace_id,\n  301:                 \"source_workspace_id\": workspace_id,\n  302:                 \"pages\": [{\"url\": url} for url in assigned_urls],\n  303:             }, indent=2, ensure_ascii=False),\n  304:             encoding=\"utf-8\",\n  305:         )\n  306: \n  307:         result = acquire_raw_html_for_workspace_v1(\n  308:             workspace_id=temp_workspace_id,\n  309:             resume=True,\n  310:             force=False,\n  311:             batch_size=batch_size,\n  312:             checkpoint_every=checkpoint_every,\n  313:             sleep_seconds=sleep_seconds,\n  314:         )\n  315: \n  316:         # Merge temp raw store into the real workspace raw store.\n  317:         real_path = Path(\"backend/server/data/raw_website_html\") / f\"raw_website_html_{workspace_id}.json\"\n  318:         temp_path = Path(\"backend/server/data/raw_website_html\") / f\"raw_website_html_{temp_workspace_id}.json\"\n  319: \n  320:         real_path.parent.mkdir(parents=True, exist_ok=True)\n  321: \n  322:         if real_path.exists():\n  323:             real_store = json.loads(real_path.read_text(encoding=\"utf-8\"))\n  324:         else:\n  325:             real_store = {\n  326:                 \"version\": \"raw_website_html_store_v1\",\n  327:                 \"workspace_id\": workspace_id,\n  328:                 \"pages\": {},\n  329:             }\n  330: \n  331:         temp_store = json.loads(temp_path.read_text(encoding=\"utf-8\")) if temp_path.exists() else {\"pages\": {}}\n  332: \n  333:         real_store.setdefault(\"pages\", {})\n  334:         for html_id, record in (temp_store.get(\"pages\") or {}).items():\n  335:             record[\"workspace_id\"] = workspace_id\n  336:             real_store[\"pages\"][html_id] = record\n  337: \n  338:         merge_temp_path = real_path.with_name(\n  339:             real_path.name\n  340:             + f\".merge_{os.getpid()}.tmp\"\n  341:         )\n  342: \n  343:         with merge_temp_path.open(\n  344:             \"w\",\n  345:             encoding=\"utf-8\",\n  346:             newline=\"\\\\n\",\n  347:         ) as merge_handle:\n  348:             json.dump(\n  349:                 real_store,\n  350:                 merge_handle,\n  351:                 indent=2,\n  352:                 ensure_ascii=False,\n  353:             )\n  354:             merge_handle.flush()\n  355:             os.fsync(\n  356:                 merge_handle.fileno()\n  357:             )\n  358: \n  359:         os.replace(\n  360:             merge_temp_path,\n  361:             real_path,\n  362:         )\n  363: \n  364:         raw_html_count = len(real_store.get(\"pages\") or {})\n  365: \n  366:         return {\n  367:             \"ok\": True,\n  368:             \"stage\": \"raw_html_acquisition\",\n  369:             \"mode\": \"assigned_urls\",\n  370:             \"assigned_count\": len(assigned_urls),\n  371:             \"processing\": result.get(\"processing\"),\n  372:             \"stores\": {\n  373:                 \"raw_html_store_count\": raw_html_count,\n  374:                 \"raw_html_store_path\": str(real_path),\n  375:             },\n  376:             \"certification\": {\n  377:                 **(result.get(\"certification\") or {}),\n  378:                 \"raw_html_store_count\": raw_html_count,\n  379:                 \"worker_batch_complete\": True,\n  380:             },\n  381:             \"report_path\": result.get(\"report_path\"),\n  382:             \"raw_html_complete\": False,\n  383:             \"next_job_created\": False,\n  384:             \"next_job_id\": None,\n  385:         }\n  386: \n  387:     result = acquire_raw_html_for_workspace_v1(\n  388:         workspace_id=workspace_id,\n  389:         resume=True,\n  390:         force=False,\n  391:         batch_size=batch_size,\n  392:         checkpoint_every=checkpoint_every,\n  393:         sleep_seconds=sleep_seconds,\n  394:     )\n  395: \n  396:     certification = result.get(\"certification\") or {}\n  397:     raw_html_complete = bool(certification.get(\"raw_html_complete_for_site_pages\"))\n  398: \n  399:     return {\n  400:         \"ok\": True,\n  401:         \"stage\": \"raw_html_acquisition\",\n  402:         \"mode\": \"resume_batch\",\n  403:         \"processing\": result.get(\"processing\"),\n  404:         \"stores\": result.get(\"stores\"),\n  405:         \"certification\": certification,\n  406:         \"report_path\": result.get(\"report_path\"),\n  407:         \"raw_html_complete\": raw_html_complete,\n  408:         \"next_job_created\": False,\n  409:         \"next_job_id\": None,\n  410:     }\n  411: "
+    }
+  ],
+  "job_contract_fields_detected": {
+    "workspace_id": 106,
+    "status": 19,
+    "job_id": 9,
+    "created_at": 10,
+    "error": 15,
+    "attempts": 4,
+    "started_at_utc": 3,
+    "attempt": 1,
+    "stage": 6
+  },
+  "stage_literals_detected": {
+    "Verification 6G": 1,
+    "Universal Article Body Store": 1,
+    "Store source-agnostic article bodies from UUCD.content_body.": 1,
+    "content_body": 1,
+    "Verification 6H — Universal Article Body Store Verification": 1,
+    "Verification 6I": 1,
+    "UUCD / Body Store Certification": 1,
+    "Aggregate UUCD, body store, authorization, lifecycle, version, duplicate, and readiness checks into one semantic-readiness decision.": 1,
+    "Phase 4.6.1 Semantic Article Reader": 1,
+    "article_validation_to_certified_website_article_store": 1,
+    "raw_html_acquisition": 2,
+    "resume_batch": 1,
+    "assigned_urls": 1,
+    "raw_html_to_website_unified_content_and_uucd": 1,
+    "raw_website_html_store_v1": 1
+  },
+  "pipeline_literals_detected": {
+    "final_website_pipeline_certification": 1,
+    "Build and persist complete certified website articles.\n\n    Pipeline boundary:\n    Raw HTML -> UDARE -> Integrity -> Article Validation\n    -> Certified Website Article Store -> STOP.": 1
+  },
+  "raw_html_store": {
+    "path": "backend\\server\\data\\raw_website_html\\raw_website_html_ws_whattoexpect_com.json",
+    "exists": true,
+    "version": "raw_website_html_store_v1",
+    "record_count": 2225,
+    "usable_count": 2225,
+    "missing_url_count": 0,
+    "empty_html_count": 0,
+    "record_fields": {
+      "html_id": 2225,
+      "workspace_id": 2225,
+      "url": 2225,
+      "final_url": 2225,
+      "title": 2225,
+      "source_type": 2225,
+      "status_code": 2225,
+      "content_type": 2225,
+      "html": 2225,
+      "html_length": 2225,
+      "byte_length": 2225,
+      "captured_at_utc": 2225,
+      "metadata": 2225
+    }
+  },
+  "data_directories": [
+    {
+      "name": "_canonical_reset_archives",
+      "path": "backend\\server\\data\\_canonical_reset_archives",
+      "file_count": 66
+    },
+    {
+      "name": "article_body_completion_ledger",
+      "path": "backend\\server\\data\\article_body_completion_ledger",
+      "file_count": 1
+    },
+    {
+      "name": "article_body_completion_reports",
+      "path": "backend\\server\\data\\article_body_completion_reports",
+      "file_count": 1
+    },
+    {
+      "name": "article_body_semantic_intelligence",
+      "path": "backend\\server\\data\\article_body_semantic_intelligence",
+      "file_count": 20
+    },
+    {
+      "name": "concepts",
+      "path": "backend\\server\\data\\concepts",
+      "file_count": 1
+    },
+    {
+      "name": "crawler_certification",
+      "path": "backend\\server\\data\\crawler_certification",
+      "file_count": 12
+    },
+    {
+      "name": "dis",
+      "path": "backend\\server\\data\\dis",
+      "file_count": 3
+    },
+    {
+      "name": "display_exports",
+      "path": "backend\\server\\data\\display_exports",
+      "file_count": 1
+    },
+    {
+      "name": "docs",
+      "path": "backend\\server\\data\\docs",
+      "file_count": 48
+    },
+    {
+      "name": "entity_graph_v2",
+      "path": "backend\\server\\data\\entity_graph_v2",
+      "file_count": 1
+    },
+    {
+      "name": "failure_registry",
+      "path": "backend\\server\\data\\failure_registry",
+      "file_count": 1
+    },
+    {
+      "name": "freezes",
+      "path": "backend\\server\\data\\freezes",
+      "file_count": 11
+    },
+    {
+      "name": "job_status",
+      "path": "backend\\server\\data\\job_status",
+      "file_count": 476
+    },
+    {
+      "name": "jobs",
+      "path": "backend\\server\\data\\jobs",
+      "file_count": 6
+    },
+    {
+      "name": "link_decisions",
+      "path": "backend\\server\\data\\link_decisions",
+      "file_count": 1
+    },
+    {
+      "name": "live_domains",
+      "path": "backend\\server\\data\\live_domains",
+      "file_count": 1
+    },
+    {
+      "name": "orchestration",
+      "path": "backend\\server\\data\\orchestration",
+      "file_count": 2
+    },
+    {
+      "name": "orchestration_archive",
+      "path": "backend\\server\\data\\orchestration_archive",
+      "file_count": 2
+    },
+    {
+      "name": "page_type_classification_reports",
+      "path": "backend\\server\\data\\page_type_classification_reports",
+      "file_count": 1
+    },
+    {
+      "name": "phase_freeze_markers",
+      "path": "backend\\server\\data\\phase_freeze_markers",
+      "file_count": 4
+    },
+    {
+      "name": "phase_verifications",
+      "path": "backend\\server\\data\\phase_verifications",
+      "file_count": 1
+    },
+    {
+      "name": "phrase_pools",
+      "path": "backend\\server\\data\\phrase_pools",
+      "file_count": 320
+    },
+    {
+      "name": "progress",
+      "path": "backend\\server\\data\\progress",
+      "file_count": 476
+    },
+    {
+      "name": "queues",
+      "path": "backend\\server\\data\\queues",
+      "file_count": 6
+    },
+    {
+      "name": "raw_html_acquisition_reports",
+      "path": "backend\\server\\data\\raw_html_acquisition_reports",
+      "file_count": 122
+    },
+    {
+      "name": "raw_html_failure_registry",
+      "path": "backend\\server\\data\\raw_html_failure_registry",
+      "file_count": 61
+    },
+    {
+      "name": "raw_website_html",
+      "path": "backend\\server\\data\\raw_website_html",
+      "file_count": 64
+    },
+    {
+      "name": "rebuild_governance",
+      "path": "backend\\server\\data\\rebuild_governance",
+      "file_count": 29
+    },
+    {
+      "name": "reload_governance",
+      "path": "backend\\server\\data\\reload_governance",
+      "file_count": 7
+    },
+    {
+      "name": "resolver_learning",
+      "path": "backend\\server\\data\\resolver_learning",
+      "file_count": 7
+    },
+    {
+      "name": "resolver_performance",
+      "path": "backend\\server\\data\\resolver_performance",
+      "file_count": 1
+    },
+    {
+      "name": "runtime",
+      "path": "backend\\server\\data\\runtime",
+      "file_count": 283
+    },
+    {
+      "name": "runtime_backups",
+      "path": "backend\\server\\data\\runtime_backups",
+      "file_count": 19
+    },
+    {
+      "name": "semantic",
+      "path": "backend\\server\\data\\semantic",
+      "file_count": 6
+    },
+    {
+      "name": "semantic_article_reader",
+      "path": "backend\\server\\data\\semantic_article_reader",
+      "file_count": 18
+    },
+    {
+      "name": "semantic_explainability",
+      "path": "backend\\server\\data\\semantic_explainability",
+      "file_count": 1
+    },
+    {
+      "name": "semantic_learning",
+      "path": "backend\\server\\data\\semantic_learning",
+      "file_count": 1
+    },
+    {
+      "name": "semantic_linking_execution",
+      "path": "backend\\server\\data\\semantic_linking_execution",
+      "file_count": 18
+    },
+    {
+      "name": "semantic_memory",
+      "path": "backend\\server\\data\\semantic_memory",
+      "file_count": 2
+    },
+    {
+      "name": "semantic_reasoning",
+      "path": "backend\\server\\data\\semantic_reasoning",
+      "file_count": 1
+    },
+    {
+      "name": "semantic_vocab",
+      "path": "backend\\server\\data\\semantic_vocab",
+      "file_count": 6
+    },
+    {
+      "name": "source_asset_versions",
+      "path": "backend\\server\\data\\source_asset_versions",
+      "file_count": 1
+    },
+    {
+      "name": "source_lifecycle_controls",
+      "path": "backend\\server\\data\\source_lifecycle_controls",
+      "file_count": 1
+    },
+    {
+      "name": "source_lifecycle_registry",
+      "path": "backend\\server\\data\\source_lifecycle_registry",
+      "file_count": 1
+    },
+    {
+      "name": "source_purge_ledgers",
+      "path": "backend\\server\\data\\source_purge_ledgers",
+      "file_count": 1
+    },
+    {
+      "name": "symbolic_reasoning",
+      "path": "backend\\server\\data\\symbolic_reasoning",
+      "file_count": 5
+    },
+    {
+      "name": "target_pools",
+      "path": "backend\\server\\data\\target_pools",
+      "file_count": 37
+    },
+    {
+      "name": "tms",
+      "path": "backend\\server\\data\\tms",
+      "file_count": 31
+    },
+    {
+      "name": "topic_clusters",
+      "path": "backend\\server\\data\\topic_clusters",
+      "file_count": 18
+    },
+    {
+      "name": "unified_content_documents",
+      "path": "backend\\server\\data\\unified_content_documents",
+      "file_count": 5
+    },
+    {
+      "name": "universal_article_body_store",
+      "path": "backend\\server\\data\\universal_article_body_store",
+      "file_count": 42
+    },
+    {
+      "name": "universal_unified_content_documents",
+      "path": "backend\\server\\data\\universal_unified_content_documents",
+      "file_count": 2279
+    },
+    {
+      "name": "universal_universal_unified_content_documents",
+      "path": "backend\\server\\data\\universal_universal_unified_content_documents",
+      "file_count": 1
+    },
+    {
+      "name": "upload_integrity_certification",
+      "path": "backend\\server\\data\\upload_integrity_certification",
+      "file_count": 3
+    },
+    {
+      "name": "uploaded_document_unified_content",
+      "path": "backend\\server\\data\\uploaded_document_unified_content",
+      "file_count": 59
+    },
+    {
+      "name": "uucd_body_store_certifications",
+      "path": "backend\\server\\data\\uucd_body_store_certifications",
+      "file_count": 1
+    },
+    {
+      "name": "website_article_pipeline_certification",
+      "path": "backend\\server\\data\\website_article_pipeline_certification",
+      "file_count": 7
+    },
+    {
+      "name": "website_content_exclusions",
+      "path": "backend\\server\\data\\website_content_exclusions",
+      "file_count": 1
+    },
+    {
+      "name": "website_ucd_rebuild_reports",
+      "path": "backend\\server\\data\\website_ucd_rebuild_reports",
+      "file_count": 2
+    },
+    {
+      "name": "website_unified_content",
+      "path": "backend\\server\\data\\website_unified_content",
+      "file_count": 10
+    },
+    {
+      "name": "website_unified_content_reports",
+      "path": "backend\\server\\data\\website_unified_content_reports",
+      "file_count": 4
+    },
+    {
+      "name": "website_uucd_rebuild_reports",
+      "path": "backend\\server\\data\\website_uucd_rebuild_reports",
+      "file_count": 2
+    },
+    {
+      "name": "workspace_governance",
+      "path": "backend\\server\\data\\workspace_governance",
+      "file_count": 2
+    },
+    {
+      "name": "workspaces",
+      "path": "backend\\server\\data\\workspaces",
+      "file_count": 49
+    },
+    {
+      "name": "wuc_manual_article_inspection",
+      "path": "backend\\server\\data\\wuc_manual_article_inspection",
+      "file_count": 5
+    }
+  ],
+  "existing_udare_references": [
+    {
+      "path": "backend\\server\\stores\\main_content_extraction_engine.py",
+      "line": 163,
+      "terms": [
+        "udare"
+      ],
+      "text": "# BEGIN UDARE V1.3 MAIN CONTENT ADAPTER"
+    },
+    {
+      "path": "backend\\server\\stores\\main_content_extraction_engine.py",
+      "line": 165,
+      "terms": [
+        "universal_dom_article_reconstruction",
+        "reconstruction_engine"
+      ],
+      "text": "from backend.server.stores.universal_dom_article_reconstruction_engine import ("
+    },
+    {
+      "path": "backend\\server\\stores\\main_content_extraction_engine.py",
+      "line": 225,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"main_content_extraction_engine_v2_udare_v1_3\","
+    },
+    {
+      "path": "backend\\server\\stores\\main_content_extraction_engine.py",
+      "line": 256,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"udare:\""
+    },
+    {
+      "path": "backend\\server\\stores\\main_content_extraction_engine.py",
+      "line": 282,
+      "terms": [
+        "udare"
+      ],
+      "text": "# END UDARE V1.3 MAIN CONTENT ADAPTER"
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 58,
+      "terms": [
+        "universal_dom_article_reconstruction",
+        "reconstruction_engine"
+      ],
+      "text": "ENGINE_NAME = \"universal_dom_article_reconstruction_engine_v1_8\""
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 1960,
+      "terms": [
+        "udare"
+      ],
+      "text": "# UDARE V1.6 ? MEDIA, IMAGE-NOISE AND INLINE-LINK PRESERVATION"
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 1963,
+      "terms": [
+        "udare"
+      ],
+      "text": "_UDARE_V16_NOISY_IMAGE_PATTERN = re.compile("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 1975,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2002,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_first_srcset_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2058,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_numeric_dimension("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2078,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_is_noisy_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2084,
+      "terms": [
+        "udare"
+      ],
+      "text": "width = _udare_v16_numeric_dimension("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2088,
+      "terms": [
+        "udare"
+      ],
+      "text": "height = _udare_v16_numeric_dimension("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2112,
+      "terms": [
+        "udare"
+      ],
+      "text": "if _UDARE_V16_NOISY_IMAGE_PATTERN.search("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2144,
+      "terms": [
+        "udare"
+      ],
+      "text": "if _UDARE_V16_NOISY_IMAGE_PATTERN.search("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2155,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_extract_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2176,
+      "terms": [
+        "udare"
+      ],
+      "text": "raw_src = _udare_v16_first_srcset_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2180,
+      "terms": [
+        "udare"
+      ],
+      "text": "src = _udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2199,
+      "terms": [
+        "udare"
+      ],
+      "text": "absolute = _udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2222,
+      "terms": [
+        "udare"
+      ],
+      "text": "if _udare_v16_is_noisy_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2239,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_numeric_dimension("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2243,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_numeric_dimension("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2249,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2322,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2382,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_rich_list_items("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2423,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2435,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v16_media("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2443,
+      "terms": [
+        "udare"
+      ],
+      "text": "src = _udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2466,
+      "terms": [
+        "udare"
+      ],
+      "text": "resolved = _udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2495,
+      "terms": [
+        "udare"
+      ],
+      "text": "_UDARE_V17_LINK_GROUP_HEADING_PATTERN = re.compile("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2509,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v17_is_link_group_heading("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2584,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v17_extract_links_from_node("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2614,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_absolute_url("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2665,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v17_find_link_group_container("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2723,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v17_build_link_group("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2734,
+      "terms": [
+        "udare"
+      ],
+      "text": "if not _udare_v17_is_link_group_heading("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2740,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v17_find_link_group_container("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2752,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v17_extract_links_from_node("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2803,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"\"\"UDARE v1.6 canonical structured reconstruction."
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 2984,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3001,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3025,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3038,
+      "terms": [
+        "udare"
+      ],
+      "text": ") = _udare_v16_rich_list_items("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3087,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_extract_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3136,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3157,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_extract_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3180,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3234,
+      "terms": [
+        "udare"
+      ],
+      "text": "media_data = _udare_v16_media("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3266,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3315,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3350,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3393,
+      "terms": [
+        "udare"
+      ],
+      "text": "def _udare_v18_duplicate_text_key("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3443,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"\"\"UDARE v1.6 canonical structured reconstruction."
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3527,
+      "terms": [
+        "udare"
+      ],
+      "text": "+ _udare_v18_duplicate_text_key("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3610,
+      "terms": [
+        "udare"
+      ],
+      "text": "and _udare_v17_is_link_group_heading("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3618,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v17_build_link_group("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3626,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v17_find_link_group_container("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3656,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3673,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3697,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3710,
+      "terms": [
+        "udare"
+      ],
+      "text": ") = _udare_v16_rich_list_items("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3759,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_extract_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3808,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3829,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_extract_image("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3852,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3906,
+      "terms": [
+        "udare"
+      ],
+      "text": "media_data = _udare_v16_media("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3938,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 3987,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 4022,
+      "terms": [
+        "udare"
+      ],
+      "text": "_udare_v16_inline_content("
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line": 4215,
+      "terms": [
+        "universal_dom_article_reconstruction"
+      ],
+      "text": "def explain_universal_dom_article_reconstruction_v1() -> dict[str, Any]:"
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 10,
+      "terms": [
+        "universal_dom_article_reconstruction",
+        "reconstruction_engine"
+      ],
+      "text": "from backend.server.stores.universal_dom_article_reconstruction_engine import ("
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 30,
+      "terms": [
+        "udare"
+      ],
+      "text": "EXPECTED_UDARE_ENGINE = ("
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 31,
+      "terms": [
+        "universal_dom_article_reconstruction",
+        "reconstruction_engine"
+      ],
+      "text": "\"universal_dom_article_reconstruction_engine_v1_8\""
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 140,
+      "terms": [
+        "udare"
+      ],
+      "text": "Raw HTML -> UDARE -> Integrity -> Article Validation"
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 313,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"udare_exception\","
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 339,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"udare_non_dictionary_result\","
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 392,
+      "terms": [
+        "udare"
+      ],
+      "text": "!= EXPECTED_UDARE_ENGINE"
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 414,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"invalid_udare_output\","
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 479,
+      "terms": [
+        "udare"
+      ],
+      "text": "EXPECTED_UDARE_ENGINE,"
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line": 797,
+      "terms": [
+        "udare"
+      ],
+      "text": "\"udare_engine\":"
+    },
+    {
+      "path": "backend\\server\\workers\\website_unified_content_batch_worker.py",
+      "line": 28,
+      "terms": [
+        "udare",
+        "worker",
+        "batch",
+        "website_unified_content"
+      ],
+      "text": "\"website_unified_content_batch_worker_v2_raw_html_udare\""
+    }
+  ],
+  "existing_udare_data_directories": [],
+  "file_summaries": [
+    {
+      "path": "backend\\server\\routes\\external\\runtime.py",
+      "line_count": 319,
+      "functions": [
+        {
+          "name": "_ensure_data_dir",
+          "line": 32,
+          "arguments": []
+        },
+        {
+          "name": "_invalidate_cache",
+          "line": 36,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "_invalidate_resolve_index",
+          "line": 43,
+          "arguments": []
+        },
+        {
+          "name": "_atomic_write_json",
+          "line": 50,
+          "arguments": [
+            "path",
+            "data"
+          ]
+        },
+        {
+          "name": "_safe_read_json",
+          "line": 59,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "_cached_read_json",
+          "line": 68,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "_safe_read_list",
+          "line": 82,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "_ensure_files_exist",
+          "line": 87,
+          "arguments": []
+        },
+        {
+          "name": "_make_key",
+          "line": 97,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_normalize_url",
+          "line": 101,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_extract_domain",
+          "line": 105,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_normalize_url_for_storage",
+          "line": 113,
+          "arguments": [
+            "url",
+            "prefer_no_www",
+            "drop_query"
+          ]
+        },
+        {
+          "name": "_get_mtime_safe",
+          "line": 137,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "_read_blacklist",
+          "line": 144,
+          "arguments": []
+        },
+        {
+          "name": "_is_blocked",
+          "line": 153,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_extra_keys_from_url",
+          "line": 164,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_index_rows_by_key",
+          "line": 176,
+          "arguments": [
+            "rows",
+            "is_manual"
+          ]
+        },
+        {
+          "name": "_ensure_resolve_index_uptodate",
+          "line": 218,
+          "arguments": []
+        },
+        {
+          "name": "external_log",
+          "line": 254,
+          "arguments": [
+            "payload"
+          ]
+        },
+        {
+          "name": "_score",
+          "line": 203,
+          "arguments": [
+            "x"
+          ]
+        },
+        {
+          "name": "_last_seen",
+          "line": 209,
+          "arguments": [
+            "x"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "ExternalCandidate",
+          "line": 235
+        },
+        {
+          "name": "ExternalLogEvent",
+          "line": 244
+        }
+      ]
+    },
+    {
+      "path": "backend\\server\\routes\\site_workspace.py",
+      "line_count": 95,
+      "functions": [
+        {
+          "name": "_now_iso",
+          "line": 24,
+          "arguments": []
+        },
+        {
+          "name": "_safe_workspace_id",
+          "line": 28,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_normalize_domain",
+          "line": 37,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_write_json",
+          "line": 51,
+          "arguments": [
+            "path",
+            "data"
+          ]
+        },
+        {
+          "name": "connect_domain",
+          "line": 58,
+          "arguments": [
+            "payload"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "ConnectDomainRequest",
+          "line": 18
+        }
+      ]
+    },
+    {
+      "path": "backend\\server\\runtime\\automatic_canonical_rebuild_runner.py",
+      "line_count": 307,
+      "functions": [
+        {
+          "name": "read_text",
+          "line": 20,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "write_json",
+          "line": 24,
+          "arguments": [
+            "path",
+            "data"
+          ]
+        },
+        {
+          "name": "safe_id",
+          "line": 30,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "collect_uploaded_documents",
+          "line": 34,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "collect_website_documents",
+          "line": 78,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "create_and_run_jobs",
+          "line": 127,
+          "arguments": [
+            "workspace_id",
+            "docs",
+            "source_type"
+          ]
+        },
+        {
+          "name": "build_uucd_collection",
+          "line": 149,
+          "arguments": [
+            "workspace_id",
+            "upload_docs",
+            "website_docs"
+          ]
+        },
+        {
+          "name": "run_automatic_canonical_rebuild",
+          "line": 197,
+          "arguments": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\runtime\\live_route_orchestration_hooks.py",
+      "line_count": 65,
+      "functions": [
+        {
+          "name": "enqueue_and_run_upload_ingestion_job_v1",
+          "line": 9,
+          "arguments": []
+        },
+        {
+          "name": "enqueue_and_run_website_ingestion_job_v1",
+          "line": 39,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\runtime\\registry_driven_canonical_rebuild_manager.py",
+      "line_count": 366,
+      "functions": [
+        {
+          "name": "read_json",
+          "line": 17,
+          "arguments": [
+            "path",
+            "default"
+          ]
+        },
+        {
+          "name": "write_json",
+          "line": 26,
+          "arguments": [
+            "path",
+            "data"
+          ]
+        },
+        {
+          "name": "safe_id",
+          "line": 32,
+          "arguments": [
+            "value",
+            "fallback"
+          ]
+        },
+        {
+          "name": "body_value",
+          "line": 37,
+          "arguments": [
+            "row"
+          ]
+        },
+        {
+          "name": "extract_rows",
+          "line": 49,
+          "arguments": [
+            "payload"
+          ]
+        },
+        {
+          "name": "normalize_website_doc",
+          "line": 72,
+          "arguments": [
+            "row",
+            "workspace_id",
+            "index"
+          ]
+        },
+        {
+          "name": "normalize_upload_doc",
+          "line": 122,
+          "arguments": [
+            "row",
+            "workspace_id",
+            "index"
+          ]
+        },
+        {
+          "name": "collect_website_registry_docs",
+          "line": 173,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "collect_upload_registry_docs",
+          "line": 204,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "execute_rebuild_jobs",
+          "line": 243,
+          "arguments": [
+            "workspace_id",
+            "docs"
+          ]
+        },
+        {
+          "name": "build_registry_driven_rebuild",
+          "line": 260,
+          "arguments": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\runtime\\universal_runtime_infrastructure.py",
+      "line_count": 476,
+      "functions": [
+        {
+          "name": "now_iso",
+          "line": 27,
+          "arguments": []
+        },
+        {
+          "name": "read_json",
+          "line": 31,
+          "arguments": [
+            "path",
+            "default"
+          ]
+        },
+        {
+          "name": "write_json",
+          "line": 40,
+          "arguments": [
+            "path",
+            "payload"
+          ]
+        },
+        {
+          "name": "runtime_job_summary",
+          "line": 48,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "runtime_progress_summary",
+          "line": 66,
+          "arguments": [
+            "workspace_id",
+            "job_id"
+          ]
+        },
+        {
+          "name": "inspect_queue",
+          "line": 83,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "worker_heartbeat",
+          "line": 99,
+          "arguments": [
+            "workspace_id",
+            "worker_id",
+            "state",
+            "current_job_id"
+          ]
+        },
+        {
+          "name": "inspect_workers",
+          "line": 112,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "move_to_dead_letter",
+          "line": 133,
+          "arguments": [
+            "workspace_id",
+            "job",
+            "reason"
+          ]
+        },
+        {
+          "name": "retry_job",
+          "line": 153,
+          "arguments": [
+            "workspace_id",
+            "job"
+          ]
+        },
+        {
+          "name": "create_batch",
+          "line": 181,
+          "arguments": [
+            "workspace_id",
+            "batch_id",
+            "jobs"
+          ]
+        },
+        {
+          "name": "inspect_batch",
+          "line": 196,
+          "arguments": [
+            "workspace_id",
+            "batch_id"
+          ]
+        },
+        {
+          "name": "workspace_concurrency_decision",
+          "line": 209,
+          "arguments": [
+            "workspace_id",
+            "max_running"
+          ]
+        },
+        {
+          "name": "runtime_metrics",
+          "line": 224,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "certify_runtime_infrastructure",
+          "line": 246,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "website_completion_gate",
+          "line": 289,
+          "arguments": []
+        },
+        {
+          "name": "upload_batch_completion_gate",
+          "line": 384,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\active_phrase_set_store.py",
+      "line_count": 116,
+      "functions": [
+        {
+          "name": "_data_dir",
+          "line": 10,
+          "arguments": []
+        },
+        {
+          "name": "_ws_safe",
+          "line": 16,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "_active_phrase_set_path",
+          "line": 34,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_default_obj",
+          "line": 39,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "load_active_phrase_set",
+          "line": 52,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "save_active_phrase_set",
+          "line": 85,
+          "arguments": [
+            "workspace_id",
+            "obj"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\article_validation_store.py",
+      "line_count": 109,
+      "functions": [
+        {
+          "name": "_candidate_paths",
+          "line": 13,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "load_article_validation_store_v2",
+          "line": 44,
+          "arguments": [
+            "workspace_id"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\certified_website_article_store.py",
+      "line_count": 571,
+      "functions": [
+        {
+          "name": "_utc_now",
+          "line": 24,
+          "arguments": []
+        },
+        {
+          "name": "_content_hash",
+          "line": 30,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_store_path_v1",
+          "line": 40,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_empty_store_v1",
+          "line": 61,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "load_certified_website_article_store_v1",
+          "line": 87,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "save_certified_website_article_store_v1",
+          "line": 136,
+          "arguments": [
+            "workspace_id",
+            "store"
+          ]
+        },
+        {
+          "name": "build_certified_website_article_v1",
+          "line": 216,
+          "arguments": []
+        },
+        {
+          "name": "upsert_certified_website_article_v1",
+          "line": 443,
+          "arguments": []
+        },
+        {
+          "name": "get_certified_website_article_v1",
+          "line": 543,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\dis_rejection_pattern_store.py",
+      "line_count": 290,
+      "functions": [
+        {
+          "name": "_ensure_dir",
+          "line": 29,
+          "arguments": []
+        },
+        {
+          "name": "_workspace_file",
+          "line": 33,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_is_valid_rejection_pattern_event",
+          "line": 38,
+          "arguments": [
+            "event"
+          ]
+        },
+        {
+          "name": "load_rejection_pattern_events",
+          "line": 95,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "save_rejection_pattern_events",
+          "line": 130,
+          "arguments": [
+            "workspace_id",
+            "events"
+          ]
+        },
+        {
+          "name": "flush_rejection_pattern_events",
+          "line": 155,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "append_rejection_pattern_event",
+          "line": 201,
+          "arguments": [
+            "workspace_id",
+            "event"
+          ]
+        },
+        {
+          "name": "get_rejection_pattern_knowledge",
+          "line": 228,
+          "arguments": [
+            "workspace_id",
+            "vertical"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\draft_pool_store.py",
+      "line_count": 72,
+      "functions": [
+        {
+          "name": "_data_dir",
+          "line": 8,
+          "arguments": []
+        },
+        {
+          "name": "draft_topics_path",
+          "line": 17,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "draft_topics_meta_path",
+          "line": 21,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "load_draft_items_ws",
+          "line": 25,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "save_draft_items_ws",
+          "line": 41,
+          "arguments": [
+            "ws",
+            "items"
+          ]
+        },
+        {
+          "name": "load_draft_meta_ws",
+          "line": 50,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "save_draft_meta_ws",
+          "line": 66,
+          "arguments": [
+            "ws",
+            "meta"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\enterprise_raw_html_acquisition_engine.py",
+      "line_count": 768,
+      "functions": [
+        {
+          "name": "_utc_now_iso_v1",
+          "line": 14,
+          "arguments": []
+        },
+        {
+          "name": "_safe_workspace_id_v1",
+          "line": 22,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_site_pages_path_v1",
+          "line": 26,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_raw_html_store_dir_v1",
+          "line": 30,
+          "arguments": []
+        },
+        {
+          "name": "_raw_html_store_path_v1",
+          "line": 36,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_reports_dir_v1",
+          "line": 40,
+          "arguments": []
+        },
+        {
+          "name": "_report_path_v1",
+          "line": 46,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_checkpoint_path_v1",
+          "line": 50,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_raw_html_id_for_url_v1",
+          "line": 54,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_load_json_v1",
+          "line": 59,
+          "arguments": [
+            "path",
+            "default"
+          ]
+        },
+        {
+          "name": "_write_json_v1",
+          "line": 68,
+          "arguments": [
+            "path",
+            "data"
+          ]
+        },
+        {
+          "name": "_load_site_pages_v1",
+          "line": 72,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_extract_url_v1",
+          "line": 93,
+          "arguments": [
+            "page"
+          ]
+        },
+        {
+          "name": "_load_raw_html_store_v1",
+          "line": 103,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_save_raw_html_store_v1",
+          "line": 116,
+          "arguments": [
+            "workspace_id",
+            "store"
+          ]
+        },
+        {
+          "name": "_decode_html_bytes_v1",
+          "line": 121,
+          "arguments": [
+            "content",
+            "content_type"
+          ]
+        },
+        {
+          "name": "_fetch_html_v1",
+          "line": 145,
+          "arguments": []
+        },
+        {
+          "name": "_failure_registry_path_v1",
+          "line": 242,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_load_failure_registry_v1",
+          "line": 248,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_save_failure_registry_v1",
+          "line": 262,
+          "arguments": [
+            "workspace_id",
+            "registry"
+          ]
+        },
+        {
+          "name": "_classify_failure_v1",
+          "line": 272,
+          "arguments": [
+            "status_code",
+            "error"
+          ]
+        },
+        {
+          "name": "_record_failure_v1",
+          "line": 285,
+          "arguments": []
+        },
+        {
+          "name": "_clear_failure_if_success_v1",
+          "line": 352,
+          "arguments": []
+        },
+        {
+          "name": "acquire_raw_html_for_workspace_v1",
+          "line": 359,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\link_decision_store.py",
+      "line_count": 91,
+      "functions": [
+        {
+          "name": "_ensure_dir",
+          "line": 24,
+          "arguments": []
+        },
+        {
+          "name": "_workspace_file",
+          "line": 28,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_is_valid_decision",
+          "line": 33,
+          "arguments": [
+            "decision"
+          ]
+        },
+        {
+          "name": "load_link_decisions",
+          "line": 53,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "save_link_decision",
+          "line": 69,
+          "arguments": [
+            "workspace_id",
+            "decision"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\main_content_extraction_engine.py",
+      "line_count": 282,
+      "functions": [
+        {
+          "name": "_strip_removed_tags_v1",
+          "line": 20,
+          "arguments": [
+            "markup"
+          ]
+        },
+        {
+          "name": "_extract_tag_blocks_v1",
+          "line": 34,
+          "arguments": [
+            "markup",
+            "tag"
+          ]
+        },
+        {
+          "name": "_html_to_text_v1",
+          "line": 39,
+          "arguments": [
+            "markup"
+          ]
+        },
+        {
+          "name": "_score_candidate_v1",
+          "line": 56,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "extract_main_content_from_html_v1",
+          "line": 95,
+          "arguments": []
+        },
+        {
+          "name": "extract_main_content_from_html_v1",
+          "line": 170,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\raw_website_html_fetch_runner.py",
+      "line_count": 135,
+      "functions": [
+        {
+          "name": "_site_pages_path_v1",
+          "line": 15,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "load_connected_site_urls_v1",
+          "line": 19,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "fetch_url_html_v1",
+          "line": 43,
+          "arguments": [
+            "url",
+            "timeout"
+          ]
+        },
+        {
+          "name": "build_raw_website_html_store_from_connected_urls_v1",
+          "line": 66,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\raw_website_html_store.py",
+      "line_count": 115,
+      "functions": [
+        {
+          "name": "_safe_workspace_id_v1",
+          "line": 14,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "html_id_for_url_v1",
+          "line": 21,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_store_path_v1",
+          "line": 26,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "load_raw_website_html_store_v1",
+          "line": 31,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "save_raw_website_html_store_v1",
+          "line": 54,
+          "arguments": [
+            "workspace_id",
+            "store"
+          ]
+        },
+        {
+          "name": "upsert_raw_website_html_v1",
+          "line": 64,
+          "arguments": []
+        },
+        {
+          "name": "get_raw_website_html_v1",
+          "line": 101,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\semantic_runtime_candidate_fusion.py",
+      "line_count": 418,
+      "functions": [
+        {
+          "name": "_safe_text",
+          "line": 7,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_normalize",
+          "line": 11,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_safe_float",
+          "line": 15,
+          "arguments": [
+            "value",
+            "default"
+          ]
+        },
+        {
+          "name": "_clamp_score",
+          "line": 22,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_make_response",
+          "line": 29,
+          "arguments": [
+            "layer",
+            "name",
+            "summary",
+            "actions"
+          ]
+        },
+        {
+          "name": "get_candidate_fusion_architecture_v1",
+          "line": 49,
+          "arguments": []
+        },
+        {
+          "name": "score_semantic_fusion_candidates_v1",
+          "line": 81,
+          "arguments": [
+            "candidates"
+          ]
+        },
+        {
+          "name": "fuse_semantic_runtime_candidates_v1",
+          "line": 126,
+          "arguments": [
+            "candidates",
+            "min_score"
+          ]
+        },
+        {
+          "name": "validate_candidate_fusion_module_v1",
+          "line": 168,
+          "arguments": []
+        },
+        {
+          "name": "rank_runtime_semantic_candidates_v1",
+          "line": 195,
+          "arguments": [
+            "candidates"
+          ]
+        },
+        {
+          "name": "integrate_yellow_highlight_candidates_v1",
+          "line": 222,
+          "arguments": [
+            "candidates",
+            "yellow_threshold"
+          ]
+        },
+        {
+          "name": "integrate_semantic_bulk_autolink_candidates_v1",
+          "line": 255,
+          "arguments": [
+            "candidates"
+          ]
+        },
+        {
+          "name": "order_semantic_targets_v1",
+          "line": 285,
+          "arguments": [
+            "targets"
+          ]
+        },
+        {
+          "name": "suppress_weak_semantic_matches_v1",
+          "line": 326,
+          "arguments": [
+            "candidates",
+            "min_score"
+          ]
+        },
+        {
+          "name": "validate_runtime_semantic_candidate_fusion_v1",
+          "line": 358,
+          "arguments": [
+            "candidates"
+          ]
+        },
+        {
+          "name": "explain_semantic_runtime_candidate_fusion_v1",
+          "line": 390,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\semantic_runtime_foundation.py",
+      "line_count": 269,
+      "functions": [
+        {
+          "name": "_safe_text",
+          "line": 7,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_normalize",
+          "line": 11,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_make_response",
+          "line": 15,
+          "arguments": [
+            "layer",
+            "name",
+            "summary",
+            "actions"
+          ]
+        },
+        {
+          "name": "establish_semantic_runtime_foundations_v1",
+          "line": 39,
+          "arguments": [
+            "runtime_items"
+          ]
+        },
+        {
+          "name": "establish_semantic_highlight_foundations_v1",
+          "line": 77,
+          "arguments": [
+            "highlights"
+          ]
+        },
+        {
+          "name": "register_semantic_runtime_hooks_v1",
+          "line": 115,
+          "arguments": [
+            "hooks"
+          ]
+        },
+        {
+          "name": "support_semantic_match_infrastructure_v1",
+          "line": 154,
+          "arguments": [
+            "matches"
+          ]
+        },
+        {
+          "name": "establish_yellow_highlight_foundations_v1",
+          "line": 208,
+          "arguments": [
+            "candidates"
+          ]
+        },
+        {
+          "name": "explain_semantic_runtime_foundation_v1",
+          "line": 247,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\universal_article_body_store.py",
+      "line_count": 294,
+      "functions": [
+        {
+          "name": "_now_iso",
+          "line": 16,
+          "arguments": []
+        },
+        {
+          "name": "_safe_id",
+          "line": 20,
+          "arguments": [
+            "value",
+            "fallback"
+          ]
+        },
+        {
+          "name": "_stable_hash",
+          "line": 25,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_read_json",
+          "line": 29,
+          "arguments": [
+            "path",
+            "default"
+          ]
+        },
+        {
+          "name": "_write_json",
+          "line": 38,
+          "arguments": [
+            "path",
+            "payload"
+          ]
+        },
+        {
+          "name": "body_store_dir",
+          "line": 46,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "body_files_dir",
+          "line": 50,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "body_index_path",
+          "line": 54,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_extract_documents_from_uucd_payload",
+          "line": 59,
+          "arguments": [
+            "payload"
+          ]
+        },
+        {
+          "name": "_load_existing_index",
+          "line": 75,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "build_universal_article_body_store_from_uucd_payload_v2",
+          "line": 93,
+          "arguments": []
+        },
+        {
+          "name": "build_universal_article_body_store_from_uucd_file_v2",
+          "line": 240,
+          "arguments": []
+        },
+        {
+          "name": "read_universal_article_body_index_v2",
+          "line": 261,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "explain_universal_article_body_store_v2",
+          "line": 265,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\universal_dom_article_reconstruction_engine.py",
+      "line_count": 4243,
+      "functions": [
+        {
+          "name": "_resolve_profile_for_url",
+          "line": 359,
+          "arguments": [
+            "url",
+            "explicit_profile"
+          ]
+        },
+        {
+          "name": "_resolve_rules",
+          "line": 389,
+          "arguments": [
+            "profile"
+          ]
+        },
+        {
+          "name": "_normalize_href_v1_7",
+          "line": 420,
+          "arguments": [
+            "href"
+          ]
+        },
+        {
+          "name": "_normalize_text",
+          "line": 446,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_node_text",
+          "line": 458,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_clean_reconstructed_text",
+          "line": 502,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_word_count",
+          "line": 518,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_signal_text",
+          "line": 532,
+          "arguments": [
+            "node"
+          ]
+        },
+        {
+          "name": "_contains_signal",
+          "line": 557,
+          "arguments": [
+            "node",
+            "terms"
+          ]
+        },
+        {
+          "name": "_is_noise_node",
+          "line": 617,
+          "arguments": [
+            "node",
+            "noise_signal_terms"
+          ]
+        },
+        {
+          "name": "_remove_noise_nodes",
+          "line": 630,
+          "arguments": [
+            "root",
+            "noise_signal_terms"
+          ]
+        },
+        {
+          "name": "_is_metadata_or_ui",
+          "line": 660,
+          "arguments": [
+            "text",
+            "rules"
+          ]
+        },
+        {
+          "name": "_link_word_count",
+          "line": 684,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_candidate_score",
+          "line": 696,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_collect_root_candidates",
+          "line": 760,
+          "arguments": [
+            "soup",
+            "cache"
+          ]
+        },
+        {
+          "name": "_select_best_root",
+          "line": 815,
+          "arguments": [
+            "soup",
+            "cache"
+          ]
+        },
+        {
+          "name": "_selected_ancestor",
+          "line": 848,
+          "arguments": [
+            "node",
+            "selected_tags"
+          ]
+        },
+        {
+          "name": "_has_consumed_ancestor",
+          "line": 865,
+          "arguments": [
+            "node",
+            "consumed"
+          ]
+        },
+        {
+          "name": "_has_substantial_block_descendant",
+          "line": 887,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_leaf_container_text",
+          "line": 915,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_is_navigation_list_item",
+          "line": 963,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_postprocess_reconstructed_blocks",
+          "line": 1023,
+          "arguments": [
+            "blocks",
+            "rules"
+          ]
+        },
+        {
+          "name": "_direct_text_without_nested_structures",
+          "line": 1073,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_extract_list_items",
+          "line": 1118,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_extract_table_block",
+          "line": 1152,
+          "arguments": [
+            "node",
+            "cache"
+          ]
+        },
+        {
+          "name": "_extract_image_data",
+          "line": 1232,
+          "arguments": [
+            "node"
+          ]
+        },
+        {
+          "name": "_extract_media_data",
+          "line": 1279,
+          "arguments": [
+            "node"
+          ]
+        },
+        {
+          "name": "_derive_compatibility_views",
+          "line": 1331,
+          "arguments": [
+            "content_blocks"
+          ]
+        },
+        {
+          "name": "_extract_ordered_blocks",
+          "line": 1411,
+          "arguments": [
+            "root",
+            "rules",
+            "cache"
+          ]
+        },
+        {
+          "name": "_udare_v16_absolute_url",
+          "line": 1975,
+          "arguments": [
+            "value",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_udare_v16_first_srcset_url",
+          "line": 2002,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_udare_v16_numeric_dimension",
+          "line": 2058,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_udare_v16_is_noisy_image",
+          "line": 2078,
+          "arguments": [
+            "node",
+            "src",
+            "alt",
+            "title"
+          ]
+        },
+        {
+          "name": "_udare_v16_extract_image",
+          "line": 2155,
+          "arguments": [
+            "node",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_udare_v16_inline_content",
+          "line": 2249,
+          "arguments": [
+            "node",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_udare_v16_rich_list_items",
+          "line": 2382,
+          "arguments": [
+            "node",
+            "page_url",
+            "cache"
+          ]
+        },
+        {
+          "name": "_udare_v16_media",
+          "line": 2435,
+          "arguments": [
+            "node",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_udare_v17_is_link_group_heading",
+          "line": 2509,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_udare_v17_extract_links_from_node",
+          "line": 2584,
+          "arguments": [
+            "node",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_udare_v17_find_link_group_container",
+          "line": 2665,
+          "arguments": [
+            "heading_node"
+          ]
+        },
+        {
+          "name": "_udare_v17_build_link_group",
+          "line": 2723,
+          "arguments": [
+            "heading_node",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_extract_ordered_blocks_v1_6",
+          "line": 2797,
+          "arguments": [
+            "root",
+            "rules",
+            "cache",
+            "page_url"
+          ]
+        },
+        {
+          "name": "_udare_v18_duplicate_text_key",
+          "line": 3393,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_extract_ordered_blocks_v1_8",
+          "line": 3437,
+          "arguments": [
+            "root",
+            "rules",
+            "cache",
+            "page_url"
+          ]
+        },
+        {
+          "name": "reconstruct_universal_dom_article_v1",
+          "line": 4068,
+          "arguments": []
+        },
+        {
+          "name": "explain_universal_dom_article_reconstruction_v1",
+          "line": 4215,
+          "arguments": []
+        },
+        {
+          "name": "add",
+          "line": 767,
+          "arguments": [
+            "node"
+          ]
+        },
+        {
+          "name": "append_block",
+          "line": 1457,
+          "arguments": [
+            "block"
+          ]
+        },
+        {
+          "name": "add_text",
+          "line": 2257,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "walk",
+          "line": 2291,
+          "arguments": [
+            "current"
+          ]
+        },
+        {
+          "name": "append_block",
+          "line": 2847,
+          "arguments": [
+            "block"
+          ]
+        },
+        {
+          "name": "append_block",
+          "line": 3487,
+          "arguments": [
+            "block"
+          ]
+        }
+      ],
+      "classes": [
+        {
+          "name": "ReconstructionProfile",
+          "line": 289
+        },
+        {
+          "name": "_ResolvedRules",
+          "line": 382
+        }
+      ]
+    },
+    {
+      "path": "backend\\server\\stores\\upload_intel_store_old.py",
+      "line_count": 1344,
+      "functions": [
+        {
+          "name": "_ws_safe",
+          "line": 147,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "_data_dir",
+          "line": 155,
+          "arguments": []
+        },
+        {
+          "name": "_now_iso",
+          "line": 159,
+          "arguments": []
+        },
+        {
+          "name": "_strip_tags",
+          "line": 163,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_norm_text",
+          "line": 169,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_strip_leading_numbering",
+          "line": 176,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_collapse_repeated_adjacent_words",
+          "line": 182,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_canonical_phrase",
+          "line": 193,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_extract_canonical_core_phrase",
+          "line": 203,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_aliases_for_phrase",
+          "line": 261,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_tokenize",
+          "line": 294,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_split_paragraphs",
+          "line": 300,
+          "arguments": [
+            "html",
+            "text"
+          ]
+        },
+        {
+          "name": "_split_sentences",
+          "line": 315,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_is_valid_content_sentence",
+          "line": 322,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_extract_headings",
+          "line": 342,
+          "arguments": [
+            "html"
+          ]
+        },
+        {
+          "name": "_extract_list_items",
+          "line": 368,
+          "arguments": [
+            "html"
+          ]
+        },
+        {
+          "name": "_looks_like_ui_junk",
+          "line": 378,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_numeric_ratio",
+          "line": 385,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_stopword_ratio",
+          "line": 392,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_looks_like_name_noise",
+          "line": 399,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_is_numeric_fragment",
+          "line": 408,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_looks_like_intent_phrase",
+          "line": 423,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_bad_boundary",
+          "line": 446,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_content_tokens",
+          "line": 458,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_semantic_seed_hits",
+          "line": 462,
+          "arguments": [
+            "joined"
+          ]
+        },
+        {
+          "name": "_is_nounish_token",
+          "line": 470,
+          "arguments": [
+            "tok"
+          ]
+        },
+        {
+          "name": "_looks_like_clause_fragment",
+          "line": 482,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_looks_like_clean_noun_phrase",
+          "line": 521,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_classify_candidate",
+          "line": 554,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_structure_score",
+          "line": 578,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_semantic_independence_score",
+          "line": 615,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_anchor_fitness_score",
+          "line": 641,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_context_dependency_penalty",
+          "line": 665,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_score_candidate",
+          "line": 693,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_accept_candidate",
+          "line": 723,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_fails_semantic_filter",
+          "line": 741,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_qualify_phrase",
+          "line": 792,
+          "arguments": [
+            "raw_phrase"
+          ]
+        },
+        {
+          "name": "_generate_sentence_candidates",
+          "line": 813,
+          "arguments": [
+            "sentence"
+          ]
+        },
+        {
+          "name": "_canonical_dominance_filter",
+          "line": 862,
+          "arguments": [
+            "phrases"
+          ]
+        },
+        {
+          "name": "_dominance_filter",
+          "line": 880,
+          "arguments": [
+            "phrases"
+          ]
+        },
+        {
+          "name": "_derive_alias_variants",
+          "line": 917,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_detect_entities",
+          "line": 939,
+          "arguments": [
+            "paragraph_text"
+          ]
+        },
+        {
+          "name": "_read_json",
+          "line": 963,
+          "arguments": [
+            "fp",
+            "default"
+          ]
+        },
+        {
+          "name": "_write_json_atomic",
+          "line": 972,
+          "arguments": [
+            "fp",
+            "obj"
+          ]
+        },
+        {
+          "name": "_paths_for_ws",
+          "line": 979,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_tier_for_source",
+          "line": 990,
+          "arguments": [
+            "source_type"
+          ]
+        },
+        {
+          "name": "_quality_score_for",
+          "line": 1000,
+          "arguments": [
+            "source_type",
+            "repeats"
+          ]
+        },
+        {
+          "name": "_upsert_phrase_record",
+          "line": 1005,
+          "arguments": [
+            "ph",
+            "phrase",
+            "source_type",
+            "doc_id",
+            "section_id",
+            "snippet"
+          ]
+        },
+        {
+          "name": "build_upload_intelligence",
+          "line": 1076,
+          "arguments": [
+            "workspace_id",
+            "doc_id",
+            "stored_path",
+            "original_name",
+            "html",
+            "text"
+          ]
+        },
+        {
+          "name": "upsert_node",
+          "line": 1135,
+          "arguments": [
+            "node_id",
+            "ntype",
+            "label"
+          ]
+        },
+        {
+          "name": "add_edge",
+          "line": 1142,
+          "arguments": [
+            "src",
+            "dst",
+            "etype",
+            "w_inc"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\upload_intel_store_v2.py",
+      "line_count": 1011,
+      "functions": [
+        {
+          "name": "_ws_safe",
+          "line": 73,
+          "arguments": [
+            "ws"
+          ]
+        },
+        {
+          "name": "_data_dir",
+          "line": 78,
+          "arguments": []
+        },
+        {
+          "name": "_now_iso",
+          "line": 82,
+          "arguments": []
+        },
+        {
+          "name": "_strip_tags",
+          "line": 86,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_canonical_phrase",
+          "line": 90,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_normalize_document_text",
+          "line": 98,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_document_fingerprint",
+          "line": 112,
+          "arguments": []
+        },
+        {
+          "name": "_is_duplicate_document",
+          "line": 144,
+          "arguments": []
+        },
+        {
+          "name": "_tokenize",
+          "line": 187,
+          "arguments": [
+            "text"
+          ]
+        },
+        {
+          "name": "_content_tokens",
+          "line": 191,
+          "arguments": [
+            "tokens"
+          ]
+        },
+        {
+          "name": "_looks_like_ui_junk",
+          "line": 195,
+          "arguments": [
+            "s"
+          ]
+        },
+        {
+          "name": "_split_paragraphs",
+          "line": 202,
+          "arguments": [
+            "html",
+            "text"
+          ]
+        },
+        {
+          "name": "_extract_headings",
+          "line": 213,
+          "arguments": [
+            "html"
+          ]
+        },
+        {
+          "name": "_extract_list_items",
+          "line": 220,
+          "arguments": [
+            "html"
+          ]
+        },
+        {
+          "name": "_looks_like_intent_phrase",
+          "line": 224,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_fails_semantic_filter",
+          "line": 229,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_accept_phrase",
+          "line": 258,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_derive_alias_variants",
+          "line": 298,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_accept_entity_phrase",
+          "line": 320,
+          "arguments": [
+            "phrase"
+          ]
+        },
+        {
+          "name": "_upsert_entity_from_phrase",
+          "line": 388,
+          "arguments": [
+            "entities"
+          ]
+        },
+        {
+          "name": "_read_json",
+          "line": 461,
+          "arguments": [
+            "fp",
+            "default"
+          ]
+        },
+        {
+          "name": "_write_json_atomic",
+          "line": 470,
+          "arguments": [
+            "fp",
+            "obj"
+          ]
+        },
+        {
+          "name": "_paths_for_ws",
+          "line": 477,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_tier_for_source",
+          "line": 488,
+          "arguments": [
+            "source_type"
+          ]
+        },
+        {
+          "name": "_quality_score_for",
+          "line": 496,
+          "arguments": [
+            "source_type",
+            "repeats"
+          ]
+        },
+        {
+          "name": "_upsert_phrase_record",
+          "line": 516,
+          "arguments": [
+            "ph",
+            "phrase",
+            "source_type",
+            "doc_id",
+            "section_id",
+            "snippet",
+            "item"
+          ]
+        },
+        {
+          "name": "_remove_doc_phrases",
+          "line": 606,
+          "arguments": [
+            "ph",
+            "doc_id"
+          ]
+        },
+        {
+          "name": "_selector_metadata_map",
+          "line": 653,
+          "arguments": [
+            "selected"
+          ]
+        },
+        {
+          "name": "_build_quality_phrase_items",
+          "line": 670,
+          "arguments": []
+        },
+        {
+          "name": "build_upload_intelligence",
+          "line": 771,
+          "arguments": [
+            "workspace_id",
+            "doc_id",
+            "stored_path",
+            "original_name",
+            "html",
+            "text"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\uucd_body_store_certification.py",
+      "line_count": 269,
+      "functions": [
+        {
+          "name": "_now_iso",
+          "line": 16,
+          "arguments": []
+        },
+        {
+          "name": "_safe_ws",
+          "line": 20,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_read_json",
+          "line": 25,
+          "arguments": [
+            "path",
+            "default"
+          ]
+        },
+        {
+          "name": "_write_json",
+          "line": 34,
+          "arguments": [
+            "path",
+            "payload"
+          ]
+        },
+        {
+          "name": "certification_path",
+          "line": 42,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_extract_uucd_documents",
+          "line": 47,
+          "arguments": [
+            "uucd"
+          ]
+        },
+        {
+          "name": "_bool_result",
+          "line": 60,
+          "arguments": [
+            "ok",
+            "problems"
+          ]
+        },
+        {
+          "name": "certify_uucd_body_store_v1",
+          "line": 67,
+          "arguments": []
+        },
+        {
+          "name": "explain_uucd_body_store_certification_v1",
+          "line": 256,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_builder_v2.py",
+      "line_count": 135,
+      "functions": [
+        {
+          "name": "_sha256",
+          "line": 14,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "build_website_unified_content_document_v2",
+          "line": 20,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_certifier_v2.py",
+      "line_count": 55,
+      "functions": [
+        {
+          "name": "certify_website_unified_content_document_v2",
+          "line": 12,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_store.py",
+      "line_count": 141,
+      "functions": [
+        {
+          "name": "_safe_workspace_id_v1",
+          "line": 18,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_content_id_for_url_v1",
+          "line": 22,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_store_path_v1",
+          "line": 27,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "load_website_unified_content_store_v1",
+          "line": 32,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "save_website_unified_content_store_v1",
+          "line": 55,
+          "arguments": [
+            "workspace_id",
+            "store"
+          ]
+        },
+        {
+          "name": "upsert_website_unified_content_document_v1",
+          "line": 62,
+          "arguments": []
+        },
+        {
+          "name": "get_website_unified_content_document_v1",
+          "line": 127,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\website_unified_content_verifier_v2.py",
+      "line_count": 60,
+      "functions": [
+        {
+          "name": "verify_website_unified_content_document_v2",
+          "line": 11,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\workspace_profile_store.py",
+      "line_count": 78,
+      "functions": [
+        {
+          "name": "_ensure_store_dir",
+          "line": 22,
+          "arguments": []
+        },
+        {
+          "name": "_load_store",
+          "line": 26,
+          "arguments": []
+        },
+        {
+          "name": "_save_store",
+          "line": 53,
+          "arguments": [
+            "data"
+          ]
+        },
+        {
+          "name": "get_workspace_profile",
+          "line": 61,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "set_workspace_profile",
+          "line": 69,
+          "arguments": [
+            "workspace_id",
+            "profile_id"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\stores\\workspace_session_store.py",
+      "line_count": 200,
+      "functions": [
+        {
+          "name": "utc_now_iso",
+          "line": 14,
+          "arguments": []
+        },
+        {
+          "name": "safe_slug",
+          "line": 18,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "workspace_root",
+          "line": 25,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "saved_sessions_root",
+          "line": 29,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "ensure_workspace_saved_session_dirs",
+          "line": 33,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "create_session_id",
+          "line": 48,
+          "arguments": [
+            "prefix"
+          ]
+        },
+        {
+          "name": "session_root",
+          "line": 53,
+          "arguments": [
+            "workspace_id",
+            "session_id"
+          ]
+        },
+        {
+          "name": "ensure_session_dirs",
+          "line": 57,
+          "arguments": [
+            "workspace_id",
+            "session_id"
+          ]
+        },
+        {
+          "name": "write_json",
+          "line": 80,
+          "arguments": [
+            "path",
+            "data"
+          ]
+        },
+        {
+          "name": "read_json",
+          "line": 85,
+          "arguments": [
+            "path"
+          ]
+        },
+        {
+          "name": "create_default_session_files",
+          "line": 94,
+          "arguments": [
+            "workspace_id",
+            "session_id",
+            "domain"
+          ]
+        },
+        {
+          "name": "create_session_manifest",
+          "line": 166,
+          "arguments": [
+            "workspace_id",
+            "session_id",
+            "domain",
+            "title"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\certified_website_article_batch_worker.py",
+      "line_count": 992,
+      "functions": [
+        {
+          "name": "_plain_html_text",
+          "line": 44,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_html_title",
+          "line": 64,
+          "arguments": [
+            "html_text"
+          ]
+        },
+        {
+          "name": "_html_h1",
+          "line": 81,
+          "arguments": [
+            "html_text"
+          ]
+        },
+        {
+          "name": "_result_passed",
+          "line": 98,
+          "arguments": [
+            "result"
+          ]
+        },
+        {
+          "name": "run_certified_website_article_batch_v1",
+          "line": 128,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\universal_knowledge_queue_runner.py",
+      "line_count": 85,
+      "functions": [
+        {
+          "name": "_write_remaining_queue_v1",
+          "line": 15,
+          "arguments": [
+            "workspace_id",
+            "jobs"
+          ]
+        },
+        {
+          "name": "run_universal_knowledge_queue_v1",
+          "line": 24,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\universal_knowledge_worker.py",
+      "line_count": 411,
+      "functions": [
+        {
+          "name": "execute_universal_knowledge_job_v1",
+          "line": 21,
+          "arguments": [
+            "job"
+          ]
+        },
+        {
+          "name": "create_and_execute_local_job_v1",
+          "line": 172,
+          "arguments": []
+        },
+        {
+          "name": "_write_uduc_for_upload_batch_job",
+          "line": 186,
+          "arguments": [
+            "job"
+          ]
+        },
+        {
+          "name": "_run_website_raw_html_acquisition_job",
+          "line": 278,
+          "arguments": [
+            "job"
+          ]
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\website_raw_html_acquisition_orchestrator.py",
+      "line_count": 160,
+      "functions": [
+        {
+          "name": "_safe_workspace_id_v1",
+          "line": 14,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_site_pages_path_v1",
+          "line": 18,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_raw_html_store_path_v1",
+          "line": 22,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_extract_url_v1",
+          "line": 26,
+          "arguments": [
+            "page"
+          ]
+        },
+        {
+          "name": "_html_id_for_url_v1",
+          "line": 40,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_load_site_pages_v1",
+          "line": 45,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_existing_raw_html_ids_v1",
+          "line": 68,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "create_raw_html_acquisition_batch_jobs_v1",
+          "line": 85,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\website_unified_content_batch_worker.py",
+      "line_count": 503,
+      "functions": [
+        {
+          "name": "_plain_html_text_v1",
+          "line": 32,
+          "arguments": [
+            "value"
+          ]
+        },
+        {
+          "name": "_extract_title_from_html_v1",
+          "line": 48,
+          "arguments": [
+            "html_text"
+          ]
+        },
+        {
+          "name": "_extract_h1_from_html_v1",
+          "line": 63,
+          "arguments": [
+            "html_text"
+          ]
+        },
+        {
+          "name": "run_website_unified_content_batch_v1",
+          "line": 78,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\website_unified_content_batch_worker_v2.py",
+      "line_count": 216,
+      "functions": [
+        {
+          "name": "run_website_unified_content_batch_v2",
+          "line": 31,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    },
+    {
+      "path": "backend\\server\\workers\\website_unified_content_orchestrator.py",
+      "line_count": 258,
+      "functions": [
+        {
+          "name": "_safe_workspace_id_v1",
+          "line": 16,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_raw_store_path_v1",
+          "line": 32,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_website_store_path_v1",
+          "line": 46,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "_content_id_for_url_v1",
+          "line": 60,
+          "arguments": [
+            "url"
+          ]
+        },
+        {
+          "name": "_existing_content_ids_v1",
+          "line": 72,
+          "arguments": [
+            "workspace_id"
+          ]
+        },
+        {
+          "name": "create_website_unified_content_batch_jobs_v1",
+          "line": 100,
+          "arguments": []
+        }
+      ],
+      "classes": []
+    }
+  ],
+  "term_match_count": 1331
+}

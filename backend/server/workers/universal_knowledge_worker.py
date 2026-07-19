@@ -18,7 +18,7 @@ from backend.server.jobs.universal_knowledge_orchestrator import (
 )
 
 
-def execute_universal_knowledge_job_v1(job: Dict[str, Any]) -> Dict[str, Any]:
+def _execute_universal_knowledge_job_without_udare_v1(job: Dict[str, Any]) -> Dict[str, Any]:
     """
     Local worker execution contract.
 
@@ -167,6 +167,54 @@ def execute_universal_knowledge_job_v1(job: Dict[str, Any]) -> Dict[str, Any]:
             "job_type": job_type,
             "failure": failure,
         }
+
+def execute_universal_knowledge_job_v1(
+    job: Dict[str, Any],
+) -> Dict[str, Any]:
+    from backend.server.runtime.universal_runtime_registration import (
+        ensure_persisted_runtime_registrations_loaded,
+        execute_registered_runtime_job_v1,
+        has_runtime_handler,
+    )
+
+    ensure_persisted_runtime_registrations_loaded()
+
+    registered_job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    if has_runtime_handler(
+        registered_job_type
+    ):
+        return execute_registered_runtime_job_v1(
+            job
+        )
+
+    _udare_job = job
+
+    if (
+        isinstance(_udare_job, dict)
+        and str(
+            _udare_job.get("job_type")
+            or _udare_job.get("stage")
+            or ""
+        ).strip()
+        == "udare_reconstruction"
+    ):
+        from backend.server.workers.udare_reconstruction_worker import (
+            run_udare_reconstruction_job_v1,
+        )
+
+        return run_udare_reconstruction_job_v1(
+            job=_udare_job,
+        )
+
+    return _execute_universal_knowledge_job_without_udare_v1(
+        job
+    )
+
 
 
 def create_and_execute_local_job_v1(

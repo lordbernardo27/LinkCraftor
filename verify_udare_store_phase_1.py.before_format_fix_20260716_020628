@@ -1,0 +1,1152 @@
+﻿from __future__ import annotations
+
+import hashlib
+import json
+import shutil
+from pathlib import Path
+from typing import Any, Dict
+
+
+from backend.server.stores.udare_store import (
+    ARTICLE_DOCUMENT_FORMAT,
+    MANIFEST_SCHEMA_VERSION,
+    RECORD_SCHEMA_VERSION,
+    REQUIRED_UDARE_ENGINE,
+    SOURCE_STORE_VERSION,
+    STORE_VERSION,
+    UdareStoreConflict,
+    create_udare_store_v1,
+    get_udare_store_paths_v1,
+    get_udare_store_schema_v1,
+    load_udare_article_document_v1,
+    persist_udare_article_document_v1,
+    refresh_udare_store_manifest_v1,
+    validate_udare_article_document_v1,
+    verify_udare_store_v1,
+)
+
+
+ROOT = Path(__file__).resolve().parent
+
+REAL_WORKSPACE_ID = "ws_whattoexpect_com"
+
+TEST_WORKSPACE_ID = (
+    "ws_udare_store_phase_1_verification"
+)
+
+REFERENCE_ARTICLE_PATH = (
+    ROOT
+    / "backend"
+    / "server"
+    / "data"
+    / "runtime"
+    / "final_website_pipeline_certification"
+    / "udare_v1_7_evidence_review_30"
+    / "articles"
+    / (
+        "01_toddler-ask-heidi-"
+        "how-to-spot-a-gifted-"
+        "toddler-aspx_aeee8dfb.html"
+    )
+)
+
+REPORT_DIR = (
+    ROOT
+    / "backend"
+    / "server"
+    / "data"
+    / "runtime"
+    / "udare_store_phase_1_verification"
+)
+
+REPORT_PATH = (
+    REPORT_DIR
+    / "udare_store_phase_1_verification.json"
+)
+
+
+PROTECTED_DIRECTORIES = [
+    (
+        ROOT
+        / "backend"
+        / "server"
+        / "data"
+        / "raw_website_html"
+    ),
+    (
+        ROOT
+        / "backend"
+        / "server"
+        / "data"
+        / "website_unified_content"
+    ),
+    (
+        ROOT
+        / "backend"
+        / "server"
+        / "data"
+        / "universal_unified_content_document"
+    ),
+    (
+        ROOT
+        / "backend"
+        / "server"
+        / "data"
+        / "universal_article_body_store"
+    ),
+]
+
+
+def sha256_bytes(
+    value: bytes,
+) -> str:
+    return hashlib.sha256(
+        value
+    ).hexdigest()
+
+
+def tree_snapshot(
+    root: Path,
+) -> Dict[str, Any]:
+    if not root.exists():
+        return {
+            "exists":
+                False,
+
+            "files":
+                {},
+        }
+
+    files: Dict[str, Any] = {}
+
+    for path in sorted(
+        root.rglob("*")
+    ):
+        if not path.is_file():
+            continue
+
+        stat = path.stat()
+
+        files[
+            path.relative_to(
+                root
+            ).as_posix()
+        ] = {
+            "size":
+                stat.st_size,
+
+            "modified_ns":
+                stat.st_mtime_ns,
+        }
+
+    return {
+        "exists":
+            True,
+
+        "files":
+            files,
+    }
+
+
+def protected_snapshot() -> Dict[str, Any]:
+    return {
+        str(path):
+            tree_snapshot(
+                path
+            )
+
+        for path
+        in PROTECTED_DIRECTORIES
+    }
+
+
+def require(
+    condition: bool,
+    message: str,
+) -> None:
+    if not condition:
+        raise RuntimeError(
+            message
+        )
+
+
+print()
+print("=" * 112)
+print(
+    "PHASE 1 — UDARE STORE SCHEMA "
+    "AND PERSISTENCE VERIFICATION"
+)
+print("=" * 112)
+
+print(
+    "Real workspace:",
+    REAL_WORKSPACE_ID,
+)
+
+print(
+    "Reference article:",
+    REFERENCE_ARTICLE_PATH,
+)
+
+print(
+    "Scope: schema and persistence only"
+)
+
+print()
+
+
+before_protected = (
+    protected_snapshot()
+)
+
+test_store_root = Path(
+    get_udare_store_paths_v1(
+        TEST_WORKSPACE_ID
+    )["root"]
+)
+
+if test_store_root.exists():
+    shutil.rmtree(
+        test_store_root
+    )
+
+
+checks: Dict[str, bool] = {}
+
+try:
+    # ================================================================
+    # 1. REFERENCE ARTICLE FORMAT
+    # ================================================================
+
+    require(
+        REFERENCE_ARTICLE_PATH.is_file(),
+        (
+            "Reference UDARE article document "
+            "was not found."
+        ),
+    )
+
+    reference_bytes = (
+        REFERENCE_ARTICLE_PATH.read_bytes()
+    )
+
+    reference_sha256 = (
+        sha256_bytes(
+            reference_bytes
+        )
+    )
+
+    reference_validation = (
+        validate_udare_article_document_v1(
+            reference_bytes
+        )
+    )
+
+    require(
+        reference_validation[
+            "ok"
+        ],
+        (
+            "Reference UDARE article document "
+            "does not match the frozen reader format: "
+            + ", ".join(
+                reference_validation[
+                    "errors"
+                ]
+            )
+        ),
+    )
+
+    checks[
+        "reference_article_exists"
+    ] = True
+
+    checks[
+        "reference_article_format_valid"
+    ] = True
+
+    checks[
+        "reference_contains_article_body_container"
+    ] = (
+        b'class="article-body"'
+        in reference_bytes
+    )
+
+    # ================================================================
+    # 2. FORMAL STORE SCHEMA
+    # ================================================================
+
+    schema = (
+        get_udare_store_schema_v1()
+    )
+
+    checks[
+        "store_schema_version"
+    ] = (
+        schema.get(
+            "store_version"
+        )
+        == STORE_VERSION
+    )
+
+    checks[
+        "record_schema_version"
+    ] = (
+        schema.get(
+            "record_schema_version"
+        )
+        == RECORD_SCHEMA_VERSION
+    )
+
+    checks[
+        "manifest_schema_version"
+    ] = (
+        schema.get(
+            "manifest_schema_version"
+        )
+        == MANIFEST_SCHEMA_VERSION
+    )
+
+    checks[
+        "article_document_format"
+    ] = (
+        schema.get(
+            "article_document",
+            {},
+        ).get(
+            "format"
+        )
+        == ARTICLE_DOCUMENT_FORMAT
+    )
+
+    checks[
+        "json_body_storage_disabled"
+    ] = (
+        schema.get(
+            "json_metadata",
+            {},
+        ).get(
+            "contains_article_body"
+        )
+        is False
+    )
+
+    # ================================================================
+    # 3. CREATE THE REAL EMPTY UDARE STORE
+    # ================================================================
+
+    real_creation = (
+        create_udare_store_v1(
+            REAL_WORKSPACE_ID
+        )
+    )
+
+    real_refresh = (
+        refresh_udare_store_manifest_v1(
+            REAL_WORKSPACE_ID
+        )
+    )
+
+    real_verification = (
+        verify_udare_store_v1(
+            REAL_WORKSPACE_ID
+        )
+    )
+
+    require(
+        real_verification[
+            "ok"
+        ],
+        (
+            "The permanent empty UDARE Store "
+            "failed schema verification: "
+            + json.dumps(
+                real_verification,
+                indent=2,
+            )
+        ),
+    )
+
+    require(
+        real_verification[
+            "counts"
+        ][
+            "metadata_records"
+        ]
+        == 0,
+        (
+            "Phase 1 must not populate the "
+            "real UDARE Store."
+        ),
+    )
+
+    require(
+        real_verification[
+            "counts"
+        ][
+            "article_documents"
+        ]
+        == 0,
+        (
+            "Phase 1 must not write articles "
+            "into the real workspace store."
+        ),
+    )
+
+    checks[
+        "real_udare_store_created"
+    ] = True
+
+    checks[
+        "real_store_is_empty"
+    ] = True
+
+    checks[
+        "real_store_schema_passed"
+    ] = True
+
+    checks[
+        "real_store_runtime_not_integrated"
+    ] = (
+        real_verification[
+            "checks"
+        ][
+            "phase_1_runtime_not_integrated"
+        ]
+    )
+
+    checks[
+        "real_store_queue_not_created"
+    ] = (
+        real_verification[
+            "checks"
+        ][
+            "phase_1_queue_not_created"
+        ]
+    )
+
+    checks[
+        "real_store_workers_not_created"
+    ] = (
+        real_verification[
+            "checks"
+        ][
+            "phase_1_workers_not_created"
+        ]
+    )
+
+    checks[
+        "real_store_population_not_started"
+    ] = (
+        real_verification[
+            "checks"
+        ][
+            "phase_1_population_not_started"
+        ]
+    )
+
+    # ================================================================
+    # 4. TEST BYTE-FOR-BYTE HTML PERSISTENCE
+    # ================================================================
+
+    create_udare_store_v1(
+        TEST_WORKSPACE_ID
+    )
+
+    stored = (
+        persist_udare_article_document_v1(
+            workspace_id=
+                TEST_WORKSPACE_ID,
+
+            document_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            html_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            source_url=(
+                "https://www.whattoexpect.com/"
+                "toddler/ask-heidi/"
+                "how-to-spot-a-gifted-toddler.aspx"
+            ),
+
+            title=(
+                "How to Tell if Your Toddler Is Gifted"
+            ),
+
+            h1=(
+                "How to Tell if Your Toddler Is Gifted"
+            ),
+
+            headings=[
+                (
+                    "How to Tell if Your "
+                    "Toddler Is Gifted"
+                ),
+                (
+                    "What does it mean for "
+                    "a toddler to be gifted?"
+                ),
+                (
+                    "Signs your toddler may "
+                    "be gifted"
+                ),
+                (
+                    "What to know about testing "
+                    "for giftedness in children"
+                ),
+                (
+                    "How to encourage your "
+                    "toddler's development "
+                    "in a healthy way"
+                ),
+                "Sources",
+            ],
+
+            article_document=
+                reference_bytes,
+
+            article_filename=
+                REFERENCE_ARTICLE_PATH.name,
+
+            udare_engine=
+                REQUIRED_UDARE_ENGINE,
+
+            source_store_version=
+                SOURCE_STORE_VERSION,
+
+            source_record_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            reconstruction_status=
+                "completed",
+
+            selected_tag=
+                "article",
+
+            content_block_count=
+                1,
+
+            operational_metadata={
+                "phase":
+                    "phase_1_persistence_test",
+
+                "reference_file":
+                    str(
+                        REFERENCE_ARTICLE_PATH
+                    ),
+
+                "test_only":
+                    True,
+            },
+
+            expected_document_sha256=
+                reference_sha256,
+        )
+    )
+
+    stored_article_path = Path(
+        stored[
+            "article_path"
+        ]
+    )
+
+    stored_metadata_path = Path(
+        stored[
+            "metadata_path"
+        ]
+    )
+
+    require(
+        stored_article_path.is_file(),
+        "Stored test HTML file is missing.",
+    )
+
+    require(
+        stored_metadata_path.is_file(),
+        "Stored test metadata file is missing.",
+    )
+
+    stored_bytes = (
+        stored_article_path.read_bytes()
+    )
+
+    require(
+        stored_bytes
+        == reference_bytes,
+        (
+            "The persistence layer modified "
+            "the HTML article document."
+        ),
+    )
+
+    checks[
+        "html_persisted_byte_for_byte"
+    ] = True
+
+    checks[
+        "html_hash_preserved"
+    ] = (
+        sha256_bytes(
+            stored_bytes
+        )
+        == reference_sha256
+    )
+
+    # ================================================================
+    # 5. VERIFY JSON DOES NOT STORE THE ARTICLE BODY
+    # ================================================================
+
+    metadata_record = json.loads(
+        stored_metadata_path.read_text(
+            encoding="utf-8-sig"
+        )
+    )
+
+    metadata_text = json.dumps(
+        metadata_record,
+        ensure_ascii=False,
+    )
+
+    body_probe = (
+        "All children have unique gifts"
+    )
+
+    checks[
+        "metadata_has_identity"
+    ] = (
+        metadata_record.get(
+            "document_id"
+        )
+        == "raw_html_aeee8dfbad4e6664"
+    )
+
+    checks[
+        "metadata_has_html_path"
+    ] = bool(
+        metadata_record.get(
+            "article_document",
+            {},
+        ).get(
+            "relative_path"
+        )
+    )
+
+    checks[
+        "metadata_has_document_hash"
+    ] = (
+        metadata_record.get(
+            "article_document",
+            {},
+        ).get(
+            "sha256"
+        )
+        == reference_sha256
+    )
+
+    checks[
+        "metadata_does_not_duplicate_body"
+    ] = (
+        body_probe
+        not in metadata_text
+    )
+
+    checks[
+        "metadata_has_no_article_body_field"
+    ] = (
+        "article_body"
+        not in metadata_record
+    )
+
+    checks[
+        "metadata_has_no_content_blocks_field"
+    ] = (
+        "content_blocks"
+        not in metadata_record
+    )
+
+    # ================================================================
+    # 6. IDEMPOTENCY
+    # ================================================================
+
+    unchanged = (
+        persist_udare_article_document_v1(
+            workspace_id=
+                TEST_WORKSPACE_ID,
+
+            document_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            html_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            source_url=(
+                "https://www.whattoexpect.com/"
+                "toddler/ask-heidi/"
+                "how-to-spot-a-gifted-toddler.aspx"
+            ),
+
+            title=(
+                "How to Tell if Your Toddler Is Gifted"
+            ),
+
+            h1=(
+                "How to Tell if Your Toddler Is Gifted"
+            ),
+
+            headings=[],
+
+            article_document=
+                reference_bytes,
+
+            article_filename=
+                REFERENCE_ARTICLE_PATH.name,
+
+            source_record_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            operational_metadata={
+                "test_only":
+                    True,
+            },
+        )
+    )
+
+    checks[
+        "identical_write_is_idempotent"
+    ] = (
+        unchanged.get(
+            "status"
+        )
+        == "unchanged"
+    )
+
+    # ================================================================
+    # 7. IMMUTABILITY / CONFLICT PROTECTION
+    # ================================================================
+
+    modified_bytes = (
+        reference_bytes.replace(
+            b"UDARE Visual Review",
+            b"UDARE Visual Review ",
+            1,
+        )
+    )
+
+    conflict_detected = False
+
+    try:
+        persist_udare_article_document_v1(
+            workspace_id=
+                TEST_WORKSPACE_ID,
+
+            document_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            html_id=
+                "raw_html_aeee8dfbad4e6664",
+
+            source_url=(
+                "https://www.whattoexpect.com/"
+                "toddler/ask-heidi/"
+                "how-to-spot-a-gifted-toddler.aspx"
+            ),
+
+            title=
+                "Changed test title",
+
+            h1=
+                "Changed test title",
+
+            headings=[],
+
+            article_document=
+                modified_bytes,
+
+            article_filename=
+                REFERENCE_ARTICLE_PATH.name,
+
+            operational_metadata={
+                "test_only":
+                    True,
+            },
+        )
+
+    except UdareStoreConflict:
+        conflict_detected = True
+
+    checks[
+        "implicit_document_replacement_blocked"
+    ] = conflict_detected
+
+    # ================================================================
+    # 8. LOAD AND HASH VERIFICATION
+    # ================================================================
+
+    loaded = (
+        load_udare_article_document_v1(
+            workspace_id=
+                TEST_WORKSPACE_ID,
+
+            document_id=
+                "raw_html_aeee8dfbad4e6664",
+        )
+    )
+
+    require(
+        loaded is not None,
+        "Stored test article could not be loaded.",
+    )
+
+    checks[
+        "stored_article_loads"
+    ] = True
+
+    checks[
+        "loaded_bytes_match_reference"
+    ] = (
+        loaded[
+            "article_document_bytes"
+        ]
+        == reference_bytes
+    )
+
+    checks[
+        "loaded_record_engine_correct"
+    ] = (
+        loaded[
+            "record"
+        ][
+            "udare_engine"
+        ]
+        == REQUIRED_UDARE_ENGINE
+    )
+
+    # ================================================================
+    # 9. COMPLETE TEST STORE VERIFICATION
+    # ================================================================
+
+    refresh_udare_store_manifest_v1(
+        TEST_WORKSPACE_ID
+    )
+
+    test_verification = (
+        verify_udare_store_v1(
+            TEST_WORKSPACE_ID
+        )
+    )
+
+    require(
+        test_verification[
+            "ok"
+        ],
+        (
+            "Test UDARE Store verification failed: "
+            + json.dumps(
+                test_verification,
+                indent=2,
+            )
+        ),
+    )
+
+    checks[
+        "test_store_verification_passed"
+    ] = True
+
+    checks[
+        "test_store_one_article"
+    ] = (
+        test_verification[
+            "counts"
+        ][
+            "article_documents"
+        ]
+        == 1
+    )
+
+    checks[
+        "test_store_one_metadata_record"
+    ] = (
+        test_verification[
+            "counts"
+        ][
+            "metadata_records"
+        ]
+        == 1
+    )
+
+    checks[
+        "test_store_no_orphans"
+    ] = (
+        test_verification[
+            "checks"
+        ][
+            "no_orphan_articles"
+        ]
+    )
+
+    checks[
+        "test_store_no_duplicate_urls"
+    ] = (
+        test_verification[
+            "checks"
+        ][
+            "no_duplicate_source_urls"
+        ]
+    )
+
+    # ================================================================
+    # 10. CONFIRM UPSTREAM AND DOWNSTREAM STORES WERE NOT MODIFIED
+    # ================================================================
+
+    after_protected = (
+        protected_snapshot()
+    )
+
+    checks[
+        "raw_html_wuc_uucd_body_store_unchanged"
+    ] = (
+        before_protected
+        == after_protected
+    )
+
+    require(
+        all(
+            checks.values()
+        ),
+        (
+            "One or more Phase 1 checks failed: "
+            + json.dumps(
+                {
+                    key:
+                        value
+
+                    for key, value
+                    in checks.items()
+
+                    if not value
+                },
+                indent=2,
+            )
+        ),
+    )
+
+    report = {
+        "status":
+            "PASS",
+
+        "phase":
+            "Phase 1 — UDARE Store Schema and Persistence",
+
+        "workspace_id":
+            REAL_WORKSPACE_ID,
+
+        "store_version":
+            STORE_VERSION,
+
+        "record_schema_version":
+            RECORD_SCHEMA_VERSION,
+
+        "manifest_schema_version":
+            MANIFEST_SCHEMA_VERSION,
+
+        "article_document_format":
+            ARTICLE_DOCUMENT_FORMAT,
+
+        "required_udare_engine":
+            REQUIRED_UDARE_ENGINE,
+
+        "source_store_version":
+            SOURCE_STORE_VERSION,
+
+        "reference_article": {
+            "path":
+                str(
+                    REFERENCE_ARTICLE_PATH
+                ),
+
+            "sha256":
+                reference_sha256,
+
+            "byte_length":
+                len(
+                    reference_bytes
+                ),
+
+            "reader_word_count":
+                reference_validation[
+                    "reader_body_word_count"
+                ],
+
+            "format_valid":
+                reference_validation[
+                    "ok"
+                ],
+        },
+
+        "real_store": {
+            "path":
+                real_creation[
+                    "store_root"
+                ],
+
+            "record_count":
+                real_verification[
+                    "counts"
+                ][
+                    "metadata_records"
+                ],
+
+            "article_document_count":
+                real_verification[
+                    "counts"
+                ][
+                    "article_documents"
+                ],
+
+            "population_started":
+                False,
+        },
+
+        "checks":
+            checks,
+
+        "scope_controls": {
+            "runtime_integrated":
+                False,
+
+            "queue_created":
+                False,
+
+            "workers_created":
+                False,
+
+            "population_started":
+                False,
+
+            "integrity_validator_run":
+                False,
+
+            "article_validation_run":
+                False,
+
+            "certified_store_created":
+                False,
+        },
+
+        "protected_data_unchanged":
+            True,
+
+        "next_phase":
+            "Phase 2 — Runtime Integration",
+
+        "phase_2_started":
+            False,
+    }
+
+    REPORT_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    REPORT_PATH.write_text(
+        json.dumps(
+            report,
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    print(
+        "Reference format:",
+        "PASS",
+    )
+
+    print(
+        "Formal schema:",
+        "PASS",
+    )
+
+    print(
+        "Permanent empty store:",
+        "PASS",
+    )
+
+    print(
+        "HTML byte-for-byte persistence:",
+        "PASS",
+    )
+
+    print(
+        "JSON body exclusion:",
+        "PASS",
+    )
+
+    print(
+        "Idempotent write:",
+        "PASS",
+    )
+
+    print(
+        "Immutable conflict protection:",
+        "PASS",
+    )
+
+    print(
+        "Load and hash verification:",
+        "PASS",
+    )
+
+    print(
+        "Store-level verification:",
+        "PASS",
+    )
+
+    print(
+        "Protected pipeline data unchanged:",
+        "PASS",
+    )
+
+    print()
+    print(
+        "Permanent store:",
+        real_creation[
+            "store_root"
+        ],
+    )
+
+    print(
+        "Real stored articles:",
+        0,
+    )
+
+    print(
+        "Verification report:",
+        REPORT_PATH,
+    )
+
+    print()
+    print("=" * 112)
+    print(
+        "PHASE 1 — UDARE STORE SCHEMA "
+        "AND PERSISTENCE: PASS"
+    )
+    print("=" * 112)
+
+    print(
+        "The permanent UDARE Store now exists "
+        "with zero populated articles."
+    )
+
+    print(
+        "No runtime, queue, worker, population "
+        "or validation stage was created."
+    )
+
+finally:
+    if test_store_root.exists():
+        shutil.rmtree(
+            test_store_root
+        )

@@ -1,0 +1,1236 @@
+from __future__ import annotations
+
+import hashlib
+import re
+from html import escape
+from html.parser import HTMLParser
+from typing import Any, Dict, Iterable, Mapping
+
+
+from backend.server.stores.udare_store import (
+    ARTICLE_DOCUMENT_FORMAT,
+    REQUIRED_UDARE_ENGINE,
+    validate_udare_article_document_v1,
+)
+
+
+BUILDER_NAME = (
+    "udare_article_document_builder_v1"
+)
+
+SUPPORTED_BLOCK_TYPES = {
+    "heading",
+    "paragraph",
+    "blockquote",
+    "unordered_list",
+    "ordered_list",
+    "table",
+    "image",
+    "figure",
+    "link_group",
+}
+
+
+class UdareArticleDocumentBuilderError(
+    RuntimeError
+):
+    """Raised when a reconstruction cannot be rendered safely."""
+
+
+class _VisibleTextParser(
+    HTMLParser
+):
+    SKIP_TAGS = {
+        "script",
+        "style",
+        "template",
+        "noscript",
+        "svg",
+    }
+
+    def __init__(
+        self,
+    ) -> None:
+        super().__init__(
+            convert_charrefs=True
+        )
+
+        self.parts: list[str] = []
+        self.skip_depth = 0
+        self.body_depth = 0
+
+    def handle_starttag(
+        self,
+        tag: str,
+        attrs: list[
+            tuple[str, str | None]
+        ],
+    ) -> None:
+        normalized = str(
+            tag or ""
+        ).casefold()
+
+        if normalized == "body":
+            self.body_depth += 1
+
+        if normalized in self.SKIP_TAGS:
+            self.skip_depth += 1
+
+    def handle_endtag(
+        self,
+        tag: str,
+    ) -> None:
+        normalized = str(
+            tag or ""
+        ).casefold()
+
+        if (
+            normalized in self.SKIP_TAGS
+            and self.skip_depth > 0
+        ):
+            self.skip_depth -= 1
+
+        if (
+            normalized == "body"
+            and self.body_depth > 0
+        ):
+            self.body_depth -= 1
+
+    def handle_data(
+        self,
+        data: str,
+    ) -> None:
+        if self.skip_depth > 0:
+            return
+
+        if self.body_depth <= 0:
+            return
+
+        value = str(
+            data or ""
+        ).strip()
+
+        if value:
+            self.parts.append(
+                value
+            )
+
+
+def _sha256_text(
+    value: str,
+) -> str:
+    normalized = str(
+        value or ""
+    )
+
+    return hashlib.sha256(
+        normalized.encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+def _normalized_text(
+    value: Any,
+) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        str(
+            value or ""
+        ),
+    ).strip()
+
+
+def _comparison_text(
+    value: Any,
+) -> str:
+    """
+    Normalize text only for wording-integrity comparisons.
+
+    HTML parsing can split inline markup into separate text nodes and
+    introduce an artificial space before punctuation, for example:
+
+        link</a>.  ->  link .
+
+    This helper removes only those parser-created punctuation spaces.
+    It does not change the rendered or stored article document.
+    """
+
+    normalized = _normalized_text(
+        value
+    )
+
+    normalized = re.sub(
+        r"\s+([,.;:!?%…\)\]\}])",
+        r"\1",
+        normalized,
+    )
+
+    normalized = re.sub(
+        r"([\(\[\{])\s+",
+        r"\1",
+        normalized,
+    )
+
+    return normalized
+
+
+def _visible_text(
+    html_text: str,
+) -> str:
+    parser = _VisibleTextParser()
+
+    parser.feed(
+        html_text
+    )
+
+    parser.close()
+
+    return _normalized_text(
+        " ".join(
+            parser.parts
+        )
+    )
+
+
+def _visible_fragment_text(
+    fragment: str,
+) -> str:
+    document = (
+        "<!doctype html>"
+        "<html>"
+        "<head>"
+        '<meta charset="utf-8">'
+        "</head>"
+        "<body>"
+        + fragment
+        + "</body>"
+        "</html>"
+    )
+
+    return _visible_text(
+        document
+    )
+
+
+def _safe_attribute(
+    value: Any,
+) -> str:
+    return escape(
+        str(
+            value or ""
+        ),
+        quote=True,
+    )
+
+
+def _render_inline_segments(
+    segments: Any,
+    fallback_text: str,
+) -> str:
+    if not isinstance(
+        segments,
+        list,
+    ):
+        return escape(
+            fallback_text
+        )
+
+    rendered_parts: list[str] = []
+
+    for segment in segments:
+        if not isinstance(
+            segment,
+            Mapping,
+        ):
+            continue
+
+        segment_type = str(
+            segment.get(
+                "type"
+            )
+            or "text"
+        ).strip().casefold()
+
+        text = str(
+            segment.get(
+                "text"
+            )
+            or ""
+        )
+
+        if segment_type == "link":
+            href = str(
+                segment.get(
+                    "href"
+                )
+                or ""
+            ).strip()
+
+            if href and text:
+                rendered_parts.append(
+                    (
+                        '<a href="'
+                        + _safe_attribute(
+                            href
+                        )
+                        + '">'
+                        + escape(
+                            text
+                        )
+                        + "</a>"
+                    )
+                )
+
+            elif text:
+                rendered_parts.append(
+                    escape(
+                        text
+                    )
+                )
+
+        elif segment_type in {
+            "line_break",
+            "break",
+        }:
+            rendered_parts.append(
+                "<br>"
+            )
+
+        elif text:
+            rendered_parts.append(
+                escape(
+                    text
+                )
+            )
+
+    rendered = "".join(
+        rendered_parts
+    )
+
+    if not rendered:
+        return escape(
+            fallback_text
+        )
+
+    rendered_visible = (
+        _visible_fragment_text(
+            rendered
+        )
+    )
+
+    if (
+        _comparison_text(
+            rendered_visible
+        )
+        != _comparison_text(
+            fallback_text
+        )
+    ):
+        # Preserve wording over markup when the inline representation
+        # does not reproduce the certified block text exactly.
+        return escape(
+            fallback_text
+        )
+
+    return rendered
+
+
+def _render_heading(
+    block: Mapping[str, Any],
+) -> str:
+    level_value = block.get(
+        "level"
+    )
+
+    try:
+        level = int(
+            level_value
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        level = 2
+
+    level = max(
+        1,
+        min(
+            level,
+            6,
+        ),
+    )
+
+    text = str(
+        block.get(
+            "text"
+        )
+        or ""
+    ).strip()
+
+    if not text:
+        return ""
+
+    inline = _render_inline_segments(
+        block.get(
+            "inline_content"
+        ),
+        text,
+    )
+
+    return (
+        f"<h{level}>"
+        + inline
+        + f"</h{level}>"
+    )
+
+
+def _render_paragraph(
+    block: Mapping[str, Any],
+) -> str:
+    text = str(
+        block.get(
+            "text"
+        )
+        or ""
+    ).strip()
+
+    if not text:
+        return ""
+
+    inline = _render_inline_segments(
+        block.get(
+            "inline_content"
+        ),
+        text,
+    )
+
+    return (
+        "<p>"
+        + inline
+        + "</p>"
+    )
+
+
+def _render_blockquote(
+    block: Mapping[str, Any],
+) -> str:
+    text = str(
+        block.get(
+            "text"
+        )
+        or ""
+    ).strip()
+
+    if not text:
+        return ""
+
+    inline = _render_inline_segments(
+        block.get(
+            "inline_content"
+        ),
+        text,
+    )
+
+    return (
+        "<blockquote>"
+        + inline
+        + "</blockquote>"
+    )
+
+
+def _render_list(
+    block: Mapping[str, Any],
+    *,
+    ordered: bool,
+) -> str:
+    items = block.get(
+        "items"
+    )
+
+    if not isinstance(
+        items,
+        list,
+    ):
+        items = []
+
+    inline_items = block.get(
+        "item_inline_content"
+    )
+
+    if not isinstance(
+        inline_items,
+        list,
+    ):
+        inline_items = []
+
+    rendered_items: list[str] = []
+
+    for index, item in enumerate(
+        items
+    ):
+        item_text = str(
+            item or ""
+        ).strip()
+
+        if not item_text:
+            continue
+
+        segments = (
+            inline_items[
+                index
+            ]
+            if index < len(
+                inline_items
+            )
+            else None
+        )
+
+        rendered_items.append(
+            (
+                "<li>"
+                + _render_inline_segments(
+                    segments,
+                    item_text,
+                )
+                + "</li>"
+            )
+        )
+
+    if not rendered_items:
+        text = str(
+            block.get(
+                "text"
+            )
+            or ""
+        ).strip()
+
+        if not text:
+            return ""
+
+        rendered_items = [
+            "<li>"
+            + escape(
+                line
+            )
+            + "</li>"
+
+            for line in text.splitlines()
+
+            if line.strip()
+        ]
+
+    tag = (
+        "ol"
+        if ordered
+        else "ul"
+    )
+
+    return (
+        f"<{tag}>"
+        + "".join(
+            rendered_items
+        )
+        + f"</{tag}>"
+    )
+
+
+def _render_table(
+    block: Mapping[str, Any],
+) -> str:
+    rows = block.get(
+        "rows"
+    )
+
+    if not isinstance(
+        rows,
+        list,
+    ):
+        rows = []
+
+    rendered_rows: list[str] = []
+
+    for row in rows:
+        if not isinstance(
+            row,
+            list,
+        ):
+            continue
+
+        cells = [
+            "<td>"
+            + escape(
+                str(
+                    value or ""
+                )
+            )
+            + "</td>"
+
+            for value in row
+        ]
+
+        if cells:
+            rendered_rows.append(
+                "<tr>"
+                + "".join(
+                    cells
+                )
+                + "</tr>"
+            )
+
+    if not rendered_rows:
+        return _render_paragraph(
+            block
+        )
+
+    return (
+        "<table>"
+        "<tbody>"
+        + "".join(
+            rendered_rows
+        )
+        + "</tbody>"
+        "</table>"
+    )
+
+
+def _render_image_data(
+    image: Mapping[str, Any],
+) -> str:
+    src = str(
+        image.get(
+            "src"
+        )
+        or ""
+    ).strip()
+
+    if not src:
+        return ""
+
+    alt = str(
+        image.get(
+            "alt"
+        )
+        or ""
+    )
+
+    title = str(
+        image.get(
+            "title"
+        )
+        or ""
+    )
+
+    title_attribute = (
+        ' title="'
+        + _safe_attribute(
+            title
+        )
+        + '"'
+        if title
+        else ""
+    )
+
+    return (
+        '<img src="'
+        + _safe_attribute(
+            src
+        )
+        + '" alt="'
+        + _safe_attribute(
+            alt
+        )
+        + '"'
+        + title_attribute
+        + ' loading="lazy">'
+    )
+
+
+def _render_image(
+    block: Mapping[str, Any],
+) -> str:
+    return _render_image_data(
+        block
+    )
+
+
+def _render_figure(
+    block: Mapping[str, Any],
+) -> str:
+    image = block.get(
+        "image"
+    )
+
+    image_html = (
+        _render_image_data(
+            image
+        )
+        if isinstance(
+            image,
+            Mapping,
+        )
+        else ""
+    )
+
+    caption = str(
+        block.get(
+            "caption"
+        )
+        or block.get(
+            "text"
+        )
+        or ""
+    ).strip()
+
+    caption_html = ""
+
+    if caption:
+        caption_html = (
+            "<figcaption>"
+            + _render_inline_segments(
+                block.get(
+                    "caption_inline_content"
+                ),
+                caption,
+            )
+            + "</figcaption>"
+        )
+
+    if not image_html and not caption_html:
+        return ""
+
+    return (
+        "<figure>"
+        + image_html
+        + caption_html
+        + "</figure>"
+    )
+
+
+def _render_link_group(
+    block: Mapping[str, Any],
+) -> str:
+    heading = str(
+        block.get(
+            "heading"
+        )
+        or ""
+    ).strip()
+
+    links = block.get(
+        "links"
+    )
+
+    if not isinstance(
+        links,
+        list,
+    ):
+        links = []
+
+    parts: list[str] = []
+
+    if heading:
+        parts.append(
+            "<h2>"
+            + escape(
+                heading
+            )
+            + "</h2>"
+        )
+
+    rendered_links: list[str] = []
+
+    for link in links:
+        if not isinstance(
+            link,
+            Mapping,
+        ):
+            continue
+
+        text = str(
+            link.get(
+                "text"
+            )
+            or ""
+        ).strip()
+
+        href = str(
+            link.get(
+                "href"
+            )
+            or ""
+        ).strip()
+
+        if not text:
+            continue
+
+        if href:
+            content = (
+                '<a href="'
+                + _safe_attribute(
+                    href
+                )
+                + '">'
+                + escape(
+                    text
+                )
+                + "</a>"
+            )
+        else:
+            content = escape(
+                text
+            )
+
+        rendered_links.append(
+            "<li>"
+            + content
+            + "</li>"
+        )
+
+    if rendered_links:
+        parts.append(
+            "<ul>"
+            + "".join(
+                rendered_links
+            )
+            + "</ul>"
+        )
+
+    if not parts:
+        return _render_paragraph(
+            block
+        )
+
+    return (
+        "<section>"
+        + "".join(
+            parts
+        )
+        + "</section>"
+    )
+
+
+def _render_block(
+    block: Mapping[str, Any],
+) -> str:
+    block_type = str(
+        block.get(
+            "type"
+        )
+        or ""
+    ).strip().casefold()
+
+    if block_type not in SUPPORTED_BLOCK_TYPES:
+        raise UdareArticleDocumentBuilderError(
+            "Unsupported UDARE content block type: "
+            + repr(
+                block_type
+            )
+        )
+
+    if block_type == "heading":
+        rendered = _render_heading(
+            block
+        )
+
+    elif block_type == "paragraph":
+        rendered = _render_paragraph(
+            block
+        )
+
+    elif block_type == "blockquote":
+        rendered = _render_blockquote(
+            block
+        )
+
+    elif block_type == "unordered_list":
+        rendered = _render_list(
+            block,
+            ordered=False,
+        )
+
+    elif block_type == "ordered_list":
+        rendered = _render_list(
+            block,
+            ordered=True,
+        )
+
+    elif block_type == "table":
+        rendered = _render_table(
+            block
+        )
+
+    elif block_type == "image":
+        rendered = _render_image(
+            block
+        )
+
+    elif block_type == "figure":
+        rendered = _render_figure(
+            block
+        )
+
+    elif block_type == "link_group":
+        rendered = _render_link_group(
+            block
+        )
+
+    else:
+        rendered = ""
+
+    expected_text = _comparison_text(
+        block.get(
+            "text"
+        )
+    )
+
+    if (
+        rendered
+        and expected_text
+    ):
+        actual_text = _visible_fragment_text(
+            rendered
+        )
+
+        if (
+            _comparison_text(
+                actual_text
+            )
+            != expected_text
+        ):
+            # Never let presentation markup alter certified wording.
+            rendered = (
+                "<p>"
+                + escape(
+                    str(
+                        block.get(
+                            "text"
+                        )
+                        or ""
+                    )
+                )
+                + "</p>"
+            )
+
+    return rendered
+
+
+def build_udare_article_reader_document_v1(
+    *,
+    reconstruction: Mapping[str, Any],
+    source_url: str = "",
+    document_id: str = "",
+    html_id: str = "",
+) -> Dict[str, Any]:
+    if not isinstance(
+        reconstruction,
+        Mapping,
+    ):
+        raise UdareArticleDocumentBuilderError(
+            "reconstruction must be a mapping"
+        )
+
+    engine = str(
+        reconstruction.get(
+            "engine"
+        )
+        or ""
+    )
+
+    if engine != REQUIRED_UDARE_ENGINE:
+        raise UdareArticleDocumentBuilderError(
+            "Unexpected UDARE engine: "
+            + repr(
+                engine
+            )
+        )
+
+    if reconstruction.get(
+        "ok"
+    ) is not True:
+        raise UdareArticleDocumentBuilderError(
+            "UDARE reconstruction did not return ok=True"
+        )
+
+    content_blocks = reconstruction.get(
+        "content_blocks"
+    )
+
+    if not isinstance(
+        content_blocks,
+        list,
+    ) or not content_blocks:
+        raise UdareArticleDocumentBuilderError(
+            "UDARE reconstruction contains no content_blocks"
+        )
+
+    rendered_blocks: list[str] = []
+
+    for expected_index, block in enumerate(
+        content_blocks
+    ):
+        if not isinstance(
+            block,
+            Mapping,
+        ):
+            raise UdareArticleDocumentBuilderError(
+                f"content block {expected_index} is not an object"
+            )
+
+        actual_index = block.get(
+            "index"
+        )
+
+        if actual_index != expected_index:
+            raise UdareArticleDocumentBuilderError(
+                "UDARE content block indexes are not sequential"
+            )
+
+        rendered = _render_block(
+            block
+        )
+
+        if rendered:
+            rendered_blocks.append(
+                rendered
+            )
+
+    if not rendered_blocks:
+        raise UdareArticleDocumentBuilderError(
+            "No article HTML was rendered from content_blocks"
+        )
+
+    title = str(
+        reconstruction.get(
+            "title"
+        )
+        or reconstruction.get(
+            "h1"
+        )
+        or ""
+    ).strip()
+
+    resolved_url = str(
+        source_url
+        or reconstruction.get(
+            "url"
+        )
+        or ""
+    ).strip()
+
+    canonical_link = (
+        '<link rel="canonical" href="'
+        + _safe_attribute(
+            resolved_url
+        )
+        + '">'
+        if resolved_url
+        else ""
+    )
+
+    identity_attributes = ""
+
+    if document_id:
+        identity_attributes += (
+            ' data-document-id="'
+            + _safe_attribute(
+                document_id
+            )
+            + '"'
+        )
+
+    if html_id:
+        identity_attributes += (
+            ' data-html-id="'
+            + _safe_attribute(
+                html_id
+            )
+            + '"'
+        )
+
+    article_document = (
+        "<!doctype html>\n"
+        '<html lang="en">\n'
+        "<head>\n"
+        '<meta charset="utf-8">\n'
+        '<meta name="viewport" '
+        'content="width=device-width, initial-scale=1">\n'
+        "<title>"
+        + escape(
+            title
+        )
+        + "</title>\n"
+        + canonical_link
+        + "\n"
+        "</head>\n"
+        "<body>\n"
+        "<article"
+        + identity_attributes
+        + ">\n"
+        + "\n".join(
+            rendered_blocks
+        )
+        + "\n"
+        "</article>\n"
+        "</body>\n"
+        "</html>\n"
+    )
+
+    document_validation = (
+        validate_udare_article_document_v1(
+            article_document
+        )
+    )
+
+    if not document_validation.get(
+        "ok"
+    ):
+        raise UdareArticleDocumentBuilderError(
+            "Generated UDARE article document failed validation: "
+            + ", ".join(
+                document_validation.get(
+                    "errors"
+                )
+                or []
+            )
+        )
+
+    expected_article_body = (
+        _comparison_text(
+            reconstruction.get(
+                "article_body"
+            )
+        )
+    )
+
+    rendered_visible_text = (
+        _visible_text(
+            article_document
+        )
+    )
+
+    if (
+        expected_article_body
+        and _comparison_text(
+            rendered_visible_text
+        )
+        != expected_article_body
+    ):
+        raise UdareArticleDocumentBuilderError(
+            "Generated document visible text does not match "
+            "the UDARE article body."
+        )
+
+    return {
+        "ok":
+            True,
+
+        "builder":
+            BUILDER_NAME,
+
+        "article_document_format":
+            ARTICLE_DOCUMENT_FORMAT,
+
+        "udare_engine":
+            engine,
+
+        "source_url":
+            resolved_url,
+
+        "document_id":
+            str(
+                document_id or ""
+            ),
+
+        "html_id":
+            str(
+                html_id or ""
+            ),
+
+        "title":
+            title,
+
+        "h1":
+            str(
+                reconstruction.get(
+                    "h1"
+                )
+                or ""
+            ),
+
+        "article_document":
+            article_document,
+
+        "article_document_bytes":
+            article_document.encode(
+                "utf-8"
+            ),
+
+        "article_document_sha256":
+            _sha256_text(
+                article_document
+            ),
+
+        "article_body_sha256":
+            _sha256_text(
+                str(
+                    reconstruction.get(
+                        "article_body"
+                    )
+                    or ""
+                )
+            ),
+
+        "content_block_count":
+            len(
+                content_blocks
+            ),
+
+        "reader_body_word_count":
+            document_validation.get(
+                "reader_body_word_count"
+            ),
+
+        "reader_body_character_count":
+            document_validation.get(
+                "reader_body_character_count"
+            ),
+
+        "document_validation":
+            document_validation,
+    }
+
+
+def explain_udare_article_document_builder_v1(
+) -> Dict[str, Any]:
+    return {
+        "builder":
+            BUILDER_NAME,
+
+        "input":
+            "UDARE v1.7 reconstruction result",
+
+        "output":
+            ARTICLE_DOCUMENT_FORMAT,
+
+        "supported_block_types":
+            sorted(
+                SUPPORTED_BLOCK_TYPES
+            ),
+
+        "preserves_block_order":
+            True,
+
+        "preserves_visible_wording":
+            True,
+
+        "stores_article_body_in_json":
+            False,
+
+        "writes_to_udare_store":
+            False,
+
+        "worker_integration":
+            False,
+    }
