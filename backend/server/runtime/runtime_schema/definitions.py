@@ -1,19 +1,23 @@
 # -*- coding: utf-8 -*-
 """Immutable schema-definition contracts for Runtime Schema Management.
 
-A schema definition is never mutated. Evolution always creates a new
-definition at a new semantic version.
+``SchemaDefinition`` is the canonical value object of the subsystem. A
+definition never mutates; an evolution creates a new definition at a new
+semantic version.
 
-Two identities remain separate:
+Identity and integrity remain distinct:
 
-* ``schema_id`` identifies ``namespace/name@version``.
-* ``content_fingerprint`` verifies canonical definition content.
+* ``schema_id`` derives only from ``namespace/name@version``.
+* ``content_fingerprint`` verifies the immutable schema content.
+* ``record_fingerprint`` verifies the complete stored record.
+
+The module is business-logic agnostic and contains no product-specific
+schema knowledge.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Final, Mapping, Sequence
@@ -23,7 +27,7 @@ from .fingerprint import (
     schema_id_from_coordinate,
 )
 from .serialization import (
-    canonical_json,
+    canonical_bytes,
     structure_fingerprint,
 )
 from .types import (
@@ -33,6 +37,7 @@ from .types import (
     CompatibilityMode,
     SchemaDefinitionError,
     SchemaLifecycleState,
+    SchemaSerializationError,
     deep_freeze,
     deep_thaw,
     is_canonical_timestamp,
@@ -44,7 +49,9 @@ from .types import (
 from .versioning import SchemaVersion
 
 
-SUPPORTED_FIELD_TYPES: Final[frozenset[str]] = frozenset(
+SUPPORTED_FIELD_TYPES: Final[
+    frozenset[str]
+] = frozenset(
     {
         "string",
         "integer",
@@ -55,7 +62,9 @@ SUPPORTED_FIELD_TYPES: Final[frozenset[str]] = frozenset(
     }
 )
 
-ALLOWED_FIELD_SPEC_KEYS: Final[frozenset[str]] = frozenset(
+_ALLOWED_SPEC_KEYS: Final[
+    frozenset[str]
+] = frozenset(
     {
         "type",
         "required",
@@ -68,7 +77,9 @@ ALLOWED_FIELD_SPEC_KEYS: Final[frozenset[str]] = frozenset(
     }
 )
 
-ALLOWED_CONSTRAINT_KEYS: Final[frozenset[str]] = frozenset(
+_ALLOWED_CONSTRAINT_KEYS: Final[
+    frozenset[str]
+] = frozenset(
     {
         "minimum",
         "maximum",
@@ -82,13 +93,13 @@ ALLOWED_CONSTRAINT_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 MAX_BODY_DEPTH: Final[int] = 32
-MAX_FIELD_COUNT: Final[int] = 10_000
-MAX_ENUM_VALUES: Final[int] = 1_000
-MAX_PATTERN_LENGTH: Final[int] = 4_096
+MAX_SCHEMA_FIELDS: Final[int] = 10_000
+MAX_ENUM_VALUES: Final[int] = 10_000
+MAX_SCHEMA_BODY_BYTES: Final[int] = 8 * 1024 * 1024
 
 
 def _is_number(
-    value: Any,
+    value: object,
 ) -> bool:
     return (
         isinstance(value, (int, float))
@@ -100,9 +111,6 @@ def _value_matches_type(
     value: Any,
     type_name: str,
 ) -> bool:
-    if value is None:
-        return True
-
     if type_name == "string":
         return isinstance(value, str)
 
@@ -133,79 +141,75 @@ def _value_matches_type(
     return False
 
 
+def _constraint_integer(
+    constraints: Mapping[str, Any],
+    key: str,
+    path: str,
+    errors: list[str],
+) -> None:
+    if key not in constraints:
+        return
+
+    value = constraints[key]
+
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or value < 0
+    ):
+        errors.append(
+            f"{path}: {key} must be a "
+            "non-negative integer"
+        )
+
+
 def _validate_constraints(
     path: str,
     type_name: str,
-    constraints: Any,
+    constraints: Mapping[str, Any],
     errors: list[str],
 ) -> None:
-    if constraints is None:
-        return
-
-    if not isinstance(
-        constraints,
-        Mapping,
-    ):
-        errors.append(
-            f"{path}: constraints must be a mapping"
-        )
-        return
-
     unknown = sorted(
         set(constraints)
-        - ALLOWED_CONSTRAINT_KEYS
+        - _ALLOWED_CONSTRAINT_KEYS
     )
 
     if unknown:
         errors.append(
-            f"{path}: unsupported constraints: "
+            f"{path}: unknown constraint keys: "
             + ", ".join(unknown)
         )
 
-    numeric_keys = {
-        "minimum",
-        "maximum",
-    }
+    minimum = constraints.get("minimum")
+    maximum = constraints.get("maximum")
 
-    for key in numeric_keys:
-        if (
-            key in constraints
-            and not _is_number(
-                constraints[key]
-            )
-        ):
+    if minimum is not None:
+        if type_name not in {
+            "integer",
+            "number",
+        }:
             errors.append(
-                f"{path}: {key} must be numeric"
+                f"{path}: minimum is only valid "
+                "for numeric fields"
+            )
+        elif not _is_number(minimum):
+            errors.append(
+                f"{path}: minimum must be numeric"
             )
 
-    integer_keys = {
-        "min_length",
-        "max_length",
-        "min_items",
-        "max_items",
-    }
-
-    for key in integer_keys:
-        if key in constraints:
-            value = constraints[key]
-
-            if (
-                not isinstance(value, int)
-                or isinstance(value, bool)
-                or value < 0
-            ):
-                errors.append(
-                    f"{path}: {key} must be a "
-                    "non-negative integer"
-                )
-
-    minimum = constraints.get(
-        "minimum"
-    )
-
-    maximum = constraints.get(
-        "maximum"
-    )
+    if maximum is not None:
+        if type_name not in {
+            "integer",
+            "number",
+        }:
+            errors.append(
+                f"{path}: maximum is only valid "
+                "for numeric fields"
+            )
+        elif not _is_number(maximum):
+            errors.append(
+                f"{path}: maximum must be numeric"
+            )
 
     if (
         _is_number(minimum)
@@ -213,70 +217,113 @@ def _validate_constraints(
         and minimum > maximum
     ):
         errors.append(
-            f"{path}: minimum exceeds maximum"
+            f"{path}: minimum must not exceed maximum"
+        )
+
+    for key in (
+        "min_length",
+        "max_length",
+    ):
+        if (
+            key in constraints
+            and type_name != "string"
+        ):
+            errors.append(
+                f"{path}: {key} is only valid "
+                "for string fields"
+            )
+
+        _constraint_integer(
+            constraints,
+            key,
+            path,
+            errors,
+        )
+
+    for key in (
+        "min_items",
+        "max_items",
+    ):
+        if (
+            key in constraints
+            and type_name != "array"
+        ):
+            errors.append(
+                f"{path}: {key} is only valid "
+                "for array fields"
+            )
+
+        _constraint_integer(
+            constraints,
+            key,
+            path,
+            errors,
         )
 
     min_length = constraints.get(
         "min_length"
     )
-
     max_length = constraints.get(
         "max_length"
     )
 
     if (
         isinstance(min_length, int)
+        and not isinstance(min_length, bool)
         and isinstance(max_length, int)
+        and not isinstance(max_length, bool)
         and min_length > max_length
     ):
         errors.append(
-            f"{path}: min_length exceeds max_length"
+            f"{path}: min_length must not "
+            "exceed max_length"
         )
 
     min_items = constraints.get(
         "min_items"
     )
-
     max_items = constraints.get(
         "max_items"
     )
 
     if (
         isinstance(min_items, int)
+        and not isinstance(min_items, bool)
         and isinstance(max_items, int)
+        and not isinstance(max_items, bool)
         and min_items > max_items
     ):
         errors.append(
-            f"{path}: min_items exceeds max_items"
+            f"{path}: min_items must not "
+            "exceed max_items"
         )
 
     if "pattern" in constraints:
         pattern = constraints["pattern"]
 
-        if not isinstance(pattern, str):
+        if type_name != "string":
+            errors.append(
+                f"{path}: pattern is only valid "
+                "for string fields"
+            )
+        elif not isinstance(pattern, str):
             errors.append(
                 f"{path}: pattern must be a string"
-            )
-        elif len(pattern) > MAX_PATTERN_LENGTH:
-            errors.append(
-                f"{path}: pattern exceeds maximum length"
             )
         else:
             try:
                 re.compile(pattern)
             except re.error as exc:
                 errors.append(
-                    f"{path}: invalid pattern: {exc}"
+                    f"{path}: invalid regular expression: "
+                    f"{exc}"
                 )
 
     if "enum" in constraints:
         enum_values = constraints["enum"]
 
         if (
-            not isinstance(
-                enum_values,
-                Sequence,
-            )
+            not isinstance(enum_values, Sequence)
             or isinstance(
                 enum_values,
                 (str, bytes, bytearray),
@@ -286,77 +333,93 @@ def _validate_constraints(
                 f"{path}: enum must be a sequence"
             )
         else:
+            if not enum_values:
+                errors.append(
+                    f"{path}: enum must not be empty"
+                )
+
             if len(enum_values) > MAX_ENUM_VALUES:
                 errors.append(
                     f"{path}: enum exceeds "
                     f"{MAX_ENUM_VALUES} values"
                 )
 
-            canonical_values: set[str] = set()
+            fingerprints: set[str] = set()
 
-            for index, item in enumerate(
+            for index, enum_value in enumerate(
                 enum_values
             ):
+                if enum_value is None:
+                    continue
+
                 if not _value_matches_type(
-                    item,
+                    enum_value,
                     type_name,
                 ):
                     errors.append(
                         f"{path}: enum value at index "
-                        f"{index} does not match {type_name}"
+                        f"{index} does not match "
+                        "the declared type"
                     )
                     continue
 
                 try:
-                    encoded = canonical_json(item)
-                except Exception as exc:
+                    fingerprint = (
+                        structure_fingerprint(
+                            enum_value
+                        )
+                    )
+                except Exception:
                     errors.append(
                         f"{path}: enum value at index "
-                        f"{index} is not serializable: {exc}"
+                        f"{index} is not serializable"
                     )
                     continue
 
-                if encoded in canonical_values:
+                if fingerprint in fingerprints:
                     errors.append(
-                        f"{path}: enum contains duplicate values"
+                        f"{path}: enum values must "
+                        "be unique"
                     )
                     break
 
-                canonical_values.add(encoded)
+                fingerprints.add(fingerprint)
 
-    if type_name not in {
-        "integer",
-        "number",
-    }:
-        for key in numeric_keys:
-            if key in constraints:
-                errors.append(
-                    f"{path}: {key} is only valid "
-                    "for numeric fields"
-                )
 
-    if type_name != "string":
-        for key in {
-            "min_length",
-            "max_length",
-            "pattern",
-        }:
-            if key in constraints:
-                errors.append(
-                    f"{path}: {key} is only valid "
-                    "for string fields"
-                )
+def _validate_default(
+    path: str,
+    spec: Mapping[str, Any],
+    type_name: str,
+    errors: list[str],
+) -> None:
+    if "default" not in spec:
+        return
 
-    if type_name != "array":
-        for key in {
-            "min_items",
-            "max_items",
-        }:
-            if key in constraints:
-                errors.append(
-                    f"{path}: {key} is only valid "
-                    "for array fields"
-                )
+    default = spec["default"]
+    nullable = bool(
+        spec.get(
+            "nullable",
+            False,
+        )
+    )
+
+    if default is None:
+        if not nullable:
+            errors.append(
+                f"{path}: null default requires "
+                "nullable=true"
+            )
+
+        return
+
+    if not _value_matches_type(
+        default,
+        type_name,
+    ):
+        errors.append(
+            f"{path}: default does not match "
+            "the declared type"
+        )
 
 
 def _validate_field_spec(
@@ -364,102 +427,113 @@ def _validate_field_spec(
     spec: Any,
     depth: int,
     errors: list[str],
+    field_counter: list[int],
 ) -> None:
     if depth > MAX_BODY_DEPTH:
         errors.append(
-            f"{path}: maximum body depth exceeded"
+            f"{path}: nesting exceeds "
+            f"MAX_BODY_DEPTH ({MAX_BODY_DEPTH})"
         )
+
         return
 
-    if not isinstance(
-        spec,
-        Mapping,
-    ):
+    field_counter[0] += 1
+
+    if field_counter[0] > MAX_SCHEMA_FIELDS:
         errors.append(
-            f"{path}: field specification must be a mapping"
+            "schema exceeds the maximum "
+            f"field count of {MAX_SCHEMA_FIELDS}"
         )
+
+        return
+
+    if not isinstance(spec, Mapping):
+        errors.append(
+            f"{path}: field spec must be a mapping"
+        )
+
         return
 
     unknown = sorted(
         set(spec)
-        - ALLOWED_FIELD_SPEC_KEYS
+        - _ALLOWED_SPEC_KEYS
     )
 
     if unknown:
         errors.append(
-            f"{path}: unsupported field keys: "
+            f"{path}: unknown spec keys: "
             + ", ".join(unknown)
         )
 
-    type_name = spec.get(
-        "type"
-    )
+    type_name = spec.get("type")
 
     if type_name not in SUPPORTED_FIELD_TYPES:
         errors.append(
-            f"{path}: unsupported or missing type"
+            f"{path}: unsupported or missing "
+            f"type: {type_name!r}"
         )
+
         return
 
-    for boolean_key in (
+    for flag_name in (
         "required",
         "nullable",
     ):
         if (
-            boolean_key in spec
+            flag_name in spec
             and not isinstance(
-                spec[boolean_key],
+                spec[flag_name],
                 bool,
             )
         ):
             errors.append(
-                f"{path}: {boolean_key} must be boolean"
+                f"{path}: {flag_name} must "
+                "be a boolean"
             )
 
-    description = spec.get(
-        "description",
-        "",
-    )
+    description = spec.get("description")
 
-    if not isinstance(
-        description,
-        str,
-    ):
-        errors.append(
-            f"{path}: description must be a string"
-        )
-    elif len(description) > MAX_DESCRIPTION_LENGTH:
-        errors.append(
-            f"{path}: description exceeds maximum length"
-        )
+    if description is not None:
+        if not isinstance(description, str):
+            errors.append(
+                f"{path}: description must "
+                "be a string"
+            )
+        elif (
+            len(description)
+            > MAX_DESCRIPTION_LENGTH
+        ):
+            errors.append(
+                f"{path}: description exceeds "
+                f"{MAX_DESCRIPTION_LENGTH} characters"
+            )
 
-    _validate_constraints(
+    _validate_default(
         path,
+        spec,
         type_name,
-        spec.get("constraints"),
         errors,
     )
 
-    if "default" in spec:
-        default = spec["default"]
-        nullable = bool(
-            spec.get(
-                "nullable",
-                False,
-            )
-        )
+    constraints = spec.get(
+        "constraints"
+    )
 
-        if default is None and not nullable:
-            errors.append(
-                f"{path}: null default requires nullable=true"
-            )
-        elif not _value_matches_type(
-            default,
-            type_name,
+    if constraints is not None:
+        if not isinstance(
+            constraints,
+            Mapping,
         ):
             errors.append(
-                f"{path}: default does not match "
-                f"declared type {type_name}"
+                f"{path}: constraints must "
+                "be a mapping"
+            )
+        else:
+            _validate_constraints(
+                path,
+                type_name,
+                constraints,
+                errors,
             )
 
     if type_name == "object":
@@ -472,15 +546,10 @@ def _validate_field_spec(
             Mapping,
         ):
             errors.append(
-                f"{path}: object requires a fields mapping"
+                f"{path}: object type requires "
+                "a 'fields' mapping"
             )
         else:
-            if len(nested_fields) > MAX_FIELD_COUNT:
-                errors.append(
-                    f"{path}: field count exceeds "
-                    f"{MAX_FIELD_COUNT}"
-                )
-
             for nested_name in sorted(
                 nested_fields
             ):
@@ -488,9 +557,10 @@ def _validate_field_spec(
                     nested_name
                 ):
                     errors.append(
-                        f"{path}: invalid nested field name "
-                        f"{nested_name!r}"
+                        f"{path}: invalid nested "
+                        f"field name {nested_name!r}"
                     )
+
                     continue
 
                 _validate_field_spec(
@@ -498,33 +568,34 @@ def _validate_field_spec(
                     nested_fields[nested_name],
                     depth + 1,
                     errors,
+                    field_counter,
                 )
     elif "fields" in spec:
         errors.append(
-            f"{path}: fields is only valid "
-            "for object fields"
+            f"{path}: 'fields' is only valid "
+            "for object type"
         )
 
     if type_name == "array":
-        item_spec = spec.get(
-            "item"
-        )
+        item = spec.get("item")
 
-        if item_spec is None:
+        if item is None:
             errors.append(
-                f"{path}: array requires an item specification"
+                f"{path}: array type requires "
+                "an 'item' spec"
             )
         else:
             _validate_field_spec(
                 f"{path}[]",
-                item_spec,
+                item,
                 depth + 1,
                 errors,
+                field_counter,
             )
     elif "item" in spec:
         errors.append(
-            f"{path}: item is only valid "
-            "for array fields"
+            f"{path}: 'item' is only valid "
+            "for array type"
         )
 
 
@@ -555,19 +626,19 @@ class SchemaDefinition:
     )
 
     def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "version",
-            SchemaVersion.coerce(
-                self.version
-            ),
-        )
+        try:
+            object.__setattr__(
+                self,
+                "version",
+                SchemaVersion.coerce(
+                    self.version
+                ),
+            )
 
-        if not isinstance(
-            self.compatibility_mode,
-            CompatibilityMode,
-        ):
-            try:
+            if not isinstance(
+                self.compatibility_mode,
+                CompatibilityMode,
+            ):
                 object.__setattr__(
                     self,
                     "compatibility_mode",
@@ -575,16 +646,11 @@ class SchemaDefinition:
                         self.compatibility_mode
                     ),
                 )
-            except Exception as exc:
-                raise SchemaDefinitionError(
-                    "invalid compatibility_mode"
-                ) from exc
 
-        if not isinstance(
-            self.lifecycle_state,
-            SchemaLifecycleState,
-        ):
-            try:
+            if not isinstance(
+                self.lifecycle_state,
+                SchemaLifecycleState,
+            ):
                 object.__setattr__(
                     self,
                     "lifecycle_state",
@@ -592,12 +658,7 @@ class SchemaDefinition:
                         self.lifecycle_state
                     ),
                 )
-            except Exception as exc:
-                raise SchemaDefinitionError(
-                    "invalid lifecycle_state"
-                ) from exc
 
-        try:
             object.__setattr__(
                 self,
                 "body",
@@ -613,9 +674,20 @@ class SchemaDefinition:
                     self.metadata
                 ),
             )
-        except Exception as exc:
+        except (
+            ValueError,
+            TypeError,
+            SchemaSerializationError,
+            SchemaDefinitionError,
+        ) as exc:
+            if isinstance(
+                exc,
+                SchemaDefinitionError,
+            ):
+                raise
+
             raise SchemaDefinitionError(
-                f"definition contains unsupported content: {exc}"
+                f"definition construction failed: {exc}"
             ) from exc
 
     def coordinate(
@@ -632,42 +704,40 @@ class SchemaDefinition:
     def schema_id(
         self,
     ) -> str:
-        """Return deterministic schema-version identity."""
+        """Return deterministic coordinate identity."""
         return schema_id_from_coordinate(
             self.coordinate()
         )
 
-    def content_dict(
-        self,
-    ) -> dict[str, Any]:
-        """Return immutable identity-bearing content."""
-        return {
-            "namespace": self.namespace,
-            "name": self.name,
-            "version": str(
-                self.version
-            ),
-            "body": deep_thaw(
-                self.body
-            ),
-            "owner_id": self.owner_id,
-            "compatibility_mode": (
-                self.compatibility_mode.value
-            ),
-        }
-
     def content_fingerprint(
         self,
     ) -> str:
-        """Return deterministic integrity fingerprint."""
+        """Fingerprint immutable schema content.
+
+        Lifecycle, descriptive metadata, and creation time are intentionally
+        excluded because they do not alter the data contract.
+        """
         return structure_fingerprint(
-            self.content_dict()
+            {
+                "namespace": self.namespace,
+                "name": self.name,
+                "version": str(
+                    self.version
+                ),
+                "body": deep_thaw(
+                    self.body
+                ),
+                "owner_id": self.owner_id,
+                "compatibility_mode": (
+                    self.compatibility_mode.value
+                ),
+            }
         )
 
     def record_fingerprint(
         self,
     ) -> str:
-        """Return deterministic fingerprint of the complete record."""
+        """Fingerprint the complete stored definition record."""
         return structure_fingerprint(
             self.to_canonical_dict()
         )
@@ -675,14 +745,15 @@ class SchemaDefinition:
     def self_validation_errors(
         self,
     ) -> tuple[str, ...]:
-        """Return every structural violation."""
+        """Return every structural violation deterministically."""
         errors: list[str] = []
 
         if not is_valid_namespace(
             self.namespace
         ):
             errors.append(
-                "namespace is not a valid dotted namespace"
+                "namespace is not a valid "
+                "dotted namespace"
             )
 
         if not is_valid_name(
@@ -711,44 +782,39 @@ class SchemaDefinition:
             > MAX_DESCRIPTION_LENGTH
         ):
             errors.append(
-                "description exceeds maximum length"
+                "description exceeds "
+                f"{MAX_DESCRIPTION_LENGTH} characters"
             )
 
         if not is_canonical_timestamp(
             self.created_at
         ):
             errors.append(
-                "created_at must be a canonical UTC timestamp"
+                "created_at must be a canonical "
+                "UTC timestamp"
             )
 
-        if not isinstance(
-            self.metadata,
-            Mapping,
-        ):
-            errors.append(
-                "metadata must be a mapping"
-            )
-        else:
-            try:
-                metadata_size = len(
-                    canonical_json(
-                        deep_thaw(
-                            self.metadata
-                        )
-                    ).encode("utf-8")
-                )
-
-                if (
-                    metadata_size
-                    > MAX_METADATA_SIZE_BYTES
-                ):
-                    errors.append(
-                        "metadata exceeds maximum size"
+        try:
+            metadata_size = len(
+                canonical_bytes(
+                    deep_thaw(
+                        self.metadata
                     )
-            except Exception as exc:
-                errors.append(
-                    f"metadata is invalid: {exc}"
                 )
+            )
+
+            if (
+                metadata_size
+                > MAX_METADATA_SIZE_BYTES
+            ):
+                errors.append(
+                    "metadata exceeds "
+                    f"{MAX_METADATA_SIZE_BYTES} bytes"
+                )
+        except Exception:
+            errors.append(
+                "metadata is not canonically serializable"
+            )
 
         if not isinstance(
             self.body,
@@ -757,61 +823,84 @@ class SchemaDefinition:
             errors.append(
                 "body must be a mapping"
             )
-        else:
-            unknown_top = sorted(
-                set(self.body)
-                - {"fields"}
-            )
 
-            if unknown_top:
-                errors.append(
-                    "body may only contain fields: "
-                    + ", ".join(unknown_top)
+            return tuple(errors)
+
+        try:
+            body_size = len(
+                canonical_bytes(
+                    deep_thaw(
+                        self.body
+                    )
                 )
-
-            fields = self.body.get(
-                "fields"
             )
 
-            if not isinstance(
-                fields,
-                Mapping,
+            if (
+                body_size
+                > MAX_SCHEMA_BODY_BYTES
             ):
                 errors.append(
-                    "body requires a fields mapping"
+                    "body exceeds "
+                    f"{MAX_SCHEMA_BODY_BYTES} bytes"
                 )
-            else:
-                if len(fields) > MAX_FIELD_COUNT:
-                    errors.append(
-                        "body field count exceeds "
-                        f"{MAX_FIELD_COUNT}"
-                    )
+        except Exception:
+            errors.append(
+                "body is not canonically serializable"
+            )
 
-                for field_name in sorted(
-                    fields
+        unknown_top = sorted(
+            set(self.body)
+            - {"fields"}
+        )
+
+        if unknown_top:
+            errors.append(
+                "body may only contain 'fields': "
+                "unexpected "
+                + ", ".join(unknown_top)
+            )
+
+        fields = self.body.get(
+            "fields"
+        )
+
+        if not isinstance(
+            fields,
+            Mapping,
+        ):
+            errors.append(
+                "body requires a 'fields' mapping"
+            )
+        else:
+            field_counter = [0]
+
+            for field_name in sorted(
+                fields
+            ):
+                if not is_valid_name(
+                    field_name
                 ):
-                    if not is_valid_name(
-                        field_name
-                    ):
-                        errors.append(
-                            "invalid field name "
-                            f"{field_name!r}"
-                        )
-                        continue
-
-                    _validate_field_spec(
-                        field_name,
-                        fields[field_name],
-                        1,
-                        errors,
+                    errors.append(
+                        "invalid field name "
+                        f"{field_name!r}"
                     )
+
+                    continue
+
+                _validate_field_spec(
+                    field_name,
+                    fields[field_name],
+                    1,
+                    errors,
+                    field_counter,
+                )
 
         return tuple(errors)
 
     def validate(
         self,
     ) -> "SchemaDefinition":
-        """Raise when this definition is invalid."""
+        """Validate and return this immutable definition."""
         errors = self.self_validation_errors()
 
         if errors:
@@ -825,7 +914,7 @@ class SchemaDefinition:
     def to_canonical_dict(
         self,
     ) -> dict[str, Any]:
-        """Return the complete lossless record."""
+        """Return the complete lossless canonical record."""
         return {
             "namespace": self.namespace,
             "name": self.name,
@@ -858,7 +947,7 @@ class SchemaDefinition:
         cls,
         data: Mapping[str, Any],
     ) -> "SchemaDefinition":
-        """Rebuild and verify a canonical definition record."""
+        """Rebuild and integrity-check a canonical definition record."""
         if not isinstance(
             data,
             Mapping,
@@ -867,7 +956,7 @@ class SchemaDefinition:
                 "definition record must be a mapping"
             )
 
-        known_fields = {
+        known = {
             "namespace",
             "name",
             "version",
@@ -884,7 +973,7 @@ class SchemaDefinition:
 
         unknown = sorted(
             set(data)
-            - known_fields
+            - known
         )
 
         if unknown:
@@ -963,7 +1052,8 @@ class SchemaDefinition:
             != definition.content_fingerprint()
         ):
             raise SchemaDefinitionError(
-                "content fingerprint mismatch on rebuild"
+                "content fingerprint mismatch "
+                "on rebuild"
             )
 
         return definition
@@ -984,9 +1074,12 @@ class SchemaDefinition:
                     new_state
                 )
             )
-        except Exception as exc:
+        except (
+            ValueError,
+            TypeError,
+        ) as exc:
             raise SchemaDefinitionError(
-                "invalid lifecycle state"
+                f"invalid lifecycle state: {new_state!r}"
             ) from exc
 
         return dataclasses.replace(
@@ -997,28 +1090,24 @@ class SchemaDefinition:
     def fields(
         self,
     ) -> Mapping[str, Any]:
-        """Return the immutable top-level field mapping."""
+        """Return the frozen top-level field map."""
         value = self.body.get(
             "fields",
             EMPTY_FROZEN_MAPPING,
         )
 
-        if isinstance(
-            value,
-            Mapping,
-        ):
-            return value
-
-        return EMPTY_FROZEN_MAPPING
+        return (
+            value
+            if isinstance(value, Mapping)
+            else EMPTY_FROZEN_MAPPING
+        )
 
 
 __all__ = [
-    "ALLOWED_CONSTRAINT_KEYS",
-    "ALLOWED_FIELD_SPEC_KEYS",
     "MAX_BODY_DEPTH",
     "MAX_ENUM_VALUES",
-    "MAX_FIELD_COUNT",
-    "MAX_PATTERN_LENGTH",
+    "MAX_SCHEMA_BODY_BYTES",
+    "MAX_SCHEMA_FIELDS",
     "SUPPORTED_FIELD_TYPES",
     "SchemaDefinition",
 ]
