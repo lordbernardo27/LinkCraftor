@@ -5,9 +5,6 @@ import shutil
 from pathlib import Path
 from typing import Any, Dict, List
 
-from backend.server.runtime.registry_driven_canonical_rebuild_manager import (
-    build_registry_driven_rebuild,
-)
 
 ROOT = Path("backend/server/data")
 
@@ -63,32 +60,9 @@ def clear_generated_environment() -> Dict[str, Any]:
 
 
 def run_canonical_environment_rebuild(workspace_id: str) -> Dict[str, Any]:
-    reset = clear_generated_environment()
-
-    rebuild = build_registry_driven_rebuild(workspace_id)
-
-    report = {
-        "schema_version": "canonical_environment_rebuild_manager_v1",
-        "workspace_id": workspace_id,
-        "reset": reset,
-        "rebuild": rebuild,
-        "canonical_environment_ready": bool(
-            rebuild.get("certified") and rebuild.get("semantic_ready")
-        ),
-        "next_stage": (
-            "Phase 4.6.1 Semantic Article Reader"
-            if rebuild.get("semantic_ready")
-            else "Resolve canonical rebuild blockers"
-        ),
-    }
-
-    report_path = write_json(
-        ROOT / "runtime" / "canonical_environment_rebuild_reports" / workspace_id / "canonical_environment_rebuild_report.json",
-        report,
+    raise RuntimeError(
+        "Canonical environment rebuild execution is retired pending the fresh runtime implementation."
     )
-
-    report["report_path"] = str(report_path)
-    return report
 
 
 if __name__ == "__main__":

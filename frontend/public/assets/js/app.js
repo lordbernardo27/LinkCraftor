@@ -1,4 +1,4 @@
-﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
 // ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
@@ -6710,6 +6710,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    const customWorkspaceName = (workspaceNameInput?.value || "").trim();
     const domain = (domainInput.value || "").trim();
 
     if (!domain) {
@@ -6723,7 +6724,13 @@ document.addEventListener("DOMContentLoaded", () => {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ domain })
+          body: JSON.stringify({
+            workspace_id: null,
+            workspace_name: customWorkspaceName || null,
+            workspace_mode: "domain",
+            domain,
+            site_url: null
+          })
         }
       );
 
@@ -6740,7 +6747,7 @@ document.addEventListener("DOMContentLoaded", () => {
         // Use backend canonical workspace ID for all runtime engines.
         // Do NOT use timestamped identity.workspaceId for RB2/target pools.
         const workspaceId = data.workspace_id;
-        const workspaceName = customWorkspaceName || identity.workspaceName;
+        const workspaceName = data.workspace_name || customWorkspaceName || identity.workspaceName;
         const sessionId = localStorage.getItem("lc_active_session_id_" + workspaceId) || identity.sessionId;
         const cleanDomain = data.domain || identity.cleanDomain;
 
@@ -6763,23 +6770,8 @@ document.addEventListener("DOMContentLoaded", () => {
         window.LC_CONNECTED_DOMAIN = cleanDomain;
         window.CURRENT_DOMAIN = cleanDomain;
 
-        try {
-          await fetch("/api/workspace/workspace-folder/name", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              workspace_id: workspaceId,
-              workspace_name: workspaceName,
-
-              // LC_DOMAIN_WORKSPACE_MODE_4_1
-              workspace_mode: "domain",
-              domain: cleanDomain,
-              source_type: "domain"
-            })
-          });
-        } catch (profileErr) {
-          console.warn("[Domain Connect] workspace name save failed:", profileErr);
-        }
+        // Workspace profile is persisted atomically by
+        // /api/site/workspace/connect_domain.
 
         updateConnectionStatus(cleanDomain);
 
@@ -8335,6 +8327,3 @@ window.LC_openWorkspaceFileInEditor = async function(workspaceId, sessionId){
     alert("Could not open workspace: " + (e.message || e));
   }
 };
-
-
-

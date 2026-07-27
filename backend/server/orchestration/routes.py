@@ -20,7 +20,6 @@ from .service import (
     list_orchestration_jobs,
     service_health,
 )
-from .worker import run_one_job, worker_health
 
 
 router = APIRouter(prefix="/api/jobs", tags=["orchestration"])
@@ -31,9 +30,6 @@ def orchestration_health() -> Dict[str, Any]:
     return service_health()
 
 
-@router.get("/worker/health")
-def orchestration_worker_health() -> Dict[str, Any]:
-    return worker_health()
 
 
 @router.post("/test", response_model=CreateJobResponse)
@@ -77,9 +73,3 @@ def cancel_job_route(job_id: str) -> JobActionResponse:
         return JobActionResponse(ok=True, data={"job": asdict(job)})
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
-
-
-@router.post("/worker/run-one", response_model=WorkerRunResponse)
-def run_one_worker_job() -> WorkerRunResponse:
-    result = run_one_job()
-    return WorkerRunResponse(ok=bool(result.get("ok", False)), data=result)

@@ -1,0 +1,2453 @@
+﻿CONNECT DOMAIN — PIPELINE 1 EXECUTION SCAN
+Generated: 2026-07-27 01:17:56
+
+============================================================
+FILE: backend\server\routes\site_reader.py
+============================================================
+
+MATCH: active_live_domain_urls
+LINE: 26
+------------------------------------------------------------
+    19: from pydantic import BaseModel, Field
+    20: 
+    21: class ActiveTargetSetPayload(BaseModel):
+    22:     workspace_id: str
+    23:     active_document_ids: list[str] | None = None
+    24:     active_draft_ids: list[str] | None = None
+    25:     active_imported_urls: list[str] | None = None
+    26:     active_live_domain_urls: list[str] | None = None
+    27: 
+    28: 
+    29: from backend.server.pools.target_pools.document_registry_pool import build_document_registry_pool
+    30: from backend.server.pools.target_pools.draft_target_pool import build_draft_target_pool
+    31: from backend.server.pools.target_pools.imported_target_pool import build_imported_target_pool
+    32: from backend.server.pools.target_pools.live_domain_target_pool import build_live_domain_target_pool
+    33: from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
+    34: from backend.server.pools.target_pools.url_pool_manager import (
+    35:     initialize_url_pool_from_current_active,
+    36:     get_url_pool_stats,
+    37:     load_active_urls,
+    38:     load_reserve_urls,
+    39:     classify_url_list,
+    40:     promote_url,
+    41:     demote_url,
+    42: )
+
+MATCH: build_live_domain_target_pool
+LINE: 32
+------------------------------------------------------------
+    25:     active_imported_urls: list[str] | None = None
+    26:     active_live_domain_urls: list[str] | None = None
+    27: 
+    28: 
+    29: from backend.server.pools.target_pools.document_registry_pool import build_document_registry_pool
+    30: from backend.server.pools.target_pools.draft_target_pool import build_draft_target_pool
+    31: from backend.server.pools.target_pools.imported_target_pool import build_imported_target_pool
+    32: from backend.server.pools.target_pools.live_domain_target_pool import build_live_domain_target_pool
+    33: from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
+    34: from backend.server.pools.target_pools.url_pool_manager import (
+    35:     initialize_url_pool_from_current_active,
+    36:     get_url_pool_stats,
+    37:     load_active_urls,
+    38:     load_reserve_urls,
+    39:     classify_url_list,
+    40:     promote_url,
+    41:     demote_url,
+    42: )
+    43: from backend.server.site_reader.html_extract import extract_headings_and_body
+    44: from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
+    45: from backend.server.site_reader.phrase_generators import (
+    46:     generate_phrase_bundle_for_page,
+    47: )
+    48: 
+
+MATCH: build_workspace_topic_clusters
+LINE: 33
+------------------------------------------------------------
+    26:     active_live_domain_urls: list[str] | None = None
+    27: 
+    28: 
+    29: from backend.server.pools.target_pools.document_registry_pool import build_document_registry_pool
+    30: from backend.server.pools.target_pools.draft_target_pool import build_draft_target_pool
+    31: from backend.server.pools.target_pools.imported_target_pool import build_imported_target_pool
+    32: from backend.server.pools.target_pools.live_domain_target_pool import build_live_domain_target_pool
+    33: from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
+    34: from backend.server.pools.target_pools.url_pool_manager import (
+    35:     initialize_url_pool_from_current_active,
+    36:     get_url_pool_stats,
+    37:     load_active_urls,
+    38:     load_reserve_urls,
+    39:     classify_url_list,
+    40:     promote_url,
+    41:     demote_url,
+    42: )
+    43: from backend.server.site_reader.html_extract import extract_headings_and_body
+    44: from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
+    45: from backend.server.site_reader.phrase_generators import (
+    46:     generate_phrase_bundle_for_page,
+    47: )
+    48: 
+    49: from backend.server.site_reader.store import (
+
+MATCH: initialize_url_pool_from_current_active
+LINE: 35
+------------------------------------------------------------
+    28: 
+    29: from backend.server.pools.target_pools.document_registry_pool import build_document_registry_pool
+    30: from backend.server.pools.target_pools.draft_target_pool import build_draft_target_pool
+    31: from backend.server.pools.target_pools.imported_target_pool import build_imported_target_pool
+    32: from backend.server.pools.target_pools.live_domain_target_pool import build_live_domain_target_pool
+    33: from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
+    34: from backend.server.pools.target_pools.url_pool_manager import (
+    35:     initialize_url_pool_from_current_active,
+    36:     get_url_pool_stats,
+    37:     load_active_urls,
+    38:     load_reserve_urls,
+    39:     classify_url_list,
+    40:     promote_url,
+    41:     demote_url,
+    42: )
+    43: from backend.server.site_reader.html_extract import extract_headings_and_body
+    44: from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
+    45: from backend.server.site_reader.phrase_generators import (
+    46:     generate_phrase_bundle_for_page,
+    47: )
+    48: 
+    49: from backend.server.site_reader.store import (
+    50:     load_site_pages,
+    51:     load_site_phrase_index,
+
+MATCH: active_target_set
+LINE: 100
+------------------------------------------------------------
+    93: def _ws_or_error(workspace_id: str) -> tuple[str | None, dict | None]:
+    94:     try:
+    95:         return _ws_safe(workspace_id), None
+    96:     except ValueError as e:
+    97:         return None, {"ok": False, "error": str(e)}
+    98: 
+    99: 
+   100: def _active_target_set_path(ws: str) -> Path:
+   101:     return Path("backend/server/data/target_pools") / f"active_target_set_{ws}.json"
+   102: 
+   103: 
+   104: def _now_ts() -> float:
+   105:     return time.time()
+   106: 
+   107: 
+   108: def _time_left(deadline_ts: float | None) -> float:
+   109:     if deadline_ts is None:
+   110:         return 999999.0
+   111:     return max(0.0, float(deadline_ts) - _now_ts())
+   112: 
+   113: 
+   114: def _near_deadline(deadline_ts: float | None, *, min_left: float = 1.5) -> bool:
+   115:     return _time_left(deadline_ts) <= float(min_left)
+   116: 
+
+MATCH: active_target_set
+LINE: 101
+------------------------------------------------------------
+    94:     try:
+    95:         return _ws_safe(workspace_id), None
+    96:     except ValueError as e:
+    97:         return None, {"ok": False, "error": str(e)}
+    98: 
+    99: 
+   100: def _active_target_set_path(ws: str) -> Path:
+   101:     return Path("backend/server/data/target_pools") / f"active_target_set_{ws}.json"
+   102: 
+   103: 
+   104: def _now_ts() -> float:
+   105:     return time.time()
+   106: 
+   107: 
+   108: def _time_left(deadline_ts: float | None) -> float:
+   109:     if deadline_ts is None:
+   110:         return 999999.0
+   111:     return max(0.0, float(deadline_ts) - _now_ts())
+   112: 
+   113: 
+   114: def _near_deadline(deadline_ts: float | None, *, min_left: float = 1.5) -> bool:
+   115:     return _time_left(deadline_ts) <= float(min_left)
+   116: 
+   117: 
+
+MATCH: build_live_domain_target_pool
+LINE: 665
+------------------------------------------------------------
+   658:     except Exception as e:
+   659:         results["imported"] = {
+   660:             "ok": False,
+   661:             "error": str(e)[:200],
+   662:         }
+   663: 
+   664:     try:
+   665:         live_out = build_live_domain_target_pool(ws)
+   666:         results["live_domain"] = {
+   667:             "ok": True,
+   668:             "counts": live_out.get("counts", {}),
+   669:             "path": f"backend/server/data/target_pools/live_domain/live_domain_target_pool_{ws}.json",
+   670:         }
+   671:     except Exception as e:
+   672:         results["live_domain"] = {
+   673:             "ok": False,
+   674:             "error": str(e)[:200],
+   675:         }
+   676: 
+   677:     try:
+   678:         upload_out = build_upload_phrase_pool(ws)
+   679:         results["upload"] = {
+   680:             "ok": True,
+   681:             "counts": {
+
+MATCH: active_target_set
+LINE: 701
+------------------------------------------------------------
+   694:     return {
+   695:         "ok": overall_ok,
+   696:         "workspace_id": ws,
+   697:         "results": results,
+   698:     }
+   699: 
+   700: 
+   701: @router.get("/target_pools/active_target_set")
+   702: def get_active_target_set(
+   703:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   704: ):
+   705:     ws, err = _ws_or_error(workspace_id)
+   706:     if err:
+   707:         return err
+   708: 
+   709:     fp = _active_target_set_path(ws)
+   710:     if not fp.exists():
+   711:         return {
+   712:             "ok": True,
+   713:             "workspace_id": ws,
+   714:             "exists": False,
+   715:             "active_target_set": {
+   716:                 "workspace_id": ws,
+   717:                 "active_document_ids": [],
+
+MATCH: active_target_set
+LINE: 702
+------------------------------------------------------------
+   695:         "ok": overall_ok,
+   696:         "workspace_id": ws,
+   697:         "results": results,
+   698:     }
+   699: 
+   700: 
+   701: @router.get("/target_pools/active_target_set")
+   702: def get_active_target_set(
+   703:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   704: ):
+   705:     ws, err = _ws_or_error(workspace_id)
+   706:     if err:
+   707:         return err
+   708: 
+   709:     fp = _active_target_set_path(ws)
+   710:     if not fp.exists():
+   711:         return {
+   712:             "ok": True,
+   713:             "workspace_id": ws,
+   714:             "exists": False,
+   715:             "active_target_set": {
+   716:                 "workspace_id": ws,
+   717:                 "active_document_ids": [],
+   718:                 "active_draft_ids": [],
+
+MATCH: active_target_set
+LINE: 709
+------------------------------------------------------------
+   702: def get_active_target_set(
+   703:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   704: ):
+   705:     ws, err = _ws_or_error(workspace_id)
+   706:     if err:
+   707:         return err
+   708: 
+   709:     fp = _active_target_set_path(ws)
+   710:     if not fp.exists():
+   711:         return {
+   712:             "ok": True,
+   713:             "workspace_id": ws,
+   714:             "exists": False,
+   715:             "active_target_set": {
+   716:                 "workspace_id": ws,
+   717:                 "active_document_ids": [],
+   718:                 "active_draft_ids": [],
+   719:                 "active_imported_urls": [],
+   720:                 "active_live_domain_urls": [],
+   721:             },
+   722:         }
+   723: 
+   724:     try:
+   725:         obj = json.loads(fp.read_text(encoding="utf-8-sig"))
+
+MATCH: active_target_set
+LINE: 715
+------------------------------------------------------------
+   708: 
+   709:     fp = _active_target_set_path(ws)
+   710:     if not fp.exists():
+   711:         return {
+   712:             "ok": True,
+   713:             "workspace_id": ws,
+   714:             "exists": False,
+   715:             "active_target_set": {
+   716:                 "workspace_id": ws,
+   717:                 "active_document_ids": [],
+   718:                 "active_draft_ids": [],
+   719:                 "active_imported_urls": [],
+   720:                 "active_live_domain_urls": [],
+   721:             },
+   722:         }
+   723: 
+   724:     try:
+   725:         obj = json.loads(fp.read_text(encoding="utf-8-sig"))
+   726:     except Exception as e:
+   727:         return {
+   728:             "ok": False,
+   729:             "workspace_id": ws,
+   730:             "error": "active_target_set_read_failed",
+   731:             "detail": str(e)[:200],
+
+MATCH: active_live_domain_urls
+LINE: 720
+------------------------------------------------------------
+   713:             "workspace_id": ws,
+   714:             "exists": False,
+   715:             "active_target_set": {
+   716:                 "workspace_id": ws,
+   717:                 "active_document_ids": [],
+   718:                 "active_draft_ids": [],
+   719:                 "active_imported_urls": [],
+   720:                 "active_live_domain_urls": [],
+   721:             },
+   722:         }
+   723: 
+   724:     try:
+   725:         obj = json.loads(fp.read_text(encoding="utf-8-sig"))
+   726:     except Exception as e:
+   727:         return {
+   728:             "ok": False,
+   729:             "workspace_id": ws,
+   730:             "error": "active_target_set_read_failed",
+   731:             "detail": str(e)[:200],
+   732:         }
+   733: 
+   734:     return {
+   735:         "ok": True,
+   736:         "workspace_id": ws,
+
+MATCH: active_target_set
+LINE: 730
+------------------------------------------------------------
+   723: 
+   724:     try:
+   725:         obj = json.loads(fp.read_text(encoding="utf-8-sig"))
+   726:     except Exception as e:
+   727:         return {
+   728:             "ok": False,
+   729:             "workspace_id": ws,
+   730:             "error": "active_target_set_read_failed",
+   731:             "detail": str(e)[:200],
+   732:         }
+   733: 
+   734:     return {
+   735:         "ok": True,
+   736:         "workspace_id": ws,
+   737:         "exists": True,
+   738:         "active_target_set": {
+   739:             "workspace_id": ws,
+   740:             "active_document_ids": obj.get("active_document_ids") or [],
+   741:             "active_draft_ids": obj.get("active_draft_ids") or [],
+   742:             "active_imported_urls": obj.get("active_imported_urls") or [],
+   743:             "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+   744:             "updated_at": obj.get("updated_at"),
+   745:         },
+   746:     }
+
+MATCH: active_target_set
+LINE: 738
+------------------------------------------------------------
+   731:             "detail": str(e)[:200],
+   732:         }
+   733: 
+   734:     return {
+   735:         "ok": True,
+   736:         "workspace_id": ws,
+   737:         "exists": True,
+   738:         "active_target_set": {
+   739:             "workspace_id": ws,
+   740:             "active_document_ids": obj.get("active_document_ids") or [],
+   741:             "active_draft_ids": obj.get("active_draft_ids") or [],
+   742:             "active_imported_urls": obj.get("active_imported_urls") or [],
+   743:             "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+   744:             "updated_at": obj.get("updated_at"),
+   745:         },
+   746:     }
+   747: 
+   748: 
+   749: @router.post("/target_pools/active_target_set/clear")
+   750: def clear_active_target_set(
+   751:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   752: ):
+   753:     ws, err = _ws_or_error(workspace_id)
+   754:     if err:
+
+MATCH: active_live_domain_urls
+LINE: 743
+------------------------------------------------------------
+   736:         "workspace_id": ws,
+   737:         "exists": True,
+   738:         "active_target_set": {
+   739:             "workspace_id": ws,
+   740:             "active_document_ids": obj.get("active_document_ids") or [],
+   741:             "active_draft_ids": obj.get("active_draft_ids") or [],
+   742:             "active_imported_urls": obj.get("active_imported_urls") or [],
+   743:             "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+   744:             "updated_at": obj.get("updated_at"),
+   745:         },
+   746:     }
+   747: 
+   748: 
+   749: @router.post("/target_pools/active_target_set/clear")
+   750: def clear_active_target_set(
+   751:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   752: ):
+   753:     ws, err = _ws_or_error(workspace_id)
+   754:     if err:
+   755:         return err
+   756: 
+   757:     fp = _active_target_set_path(ws)
+   758:     fp.parent.mkdir(parents=True, exist_ok=True)
+   759: 
+
+MATCH: active_target_set
+LINE: 749
+------------------------------------------------------------
+   742:             "active_imported_urls": obj.get("active_imported_urls") or [],
+   743:             "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+   744:             "updated_at": obj.get("updated_at"),
+   745:         },
+   746:     }
+   747: 
+   748: 
+   749: @router.post("/target_pools/active_target_set/clear")
+   750: def clear_active_target_set(
+   751:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   752: ):
+   753:     ws, err = _ws_or_error(workspace_id)
+   754:     if err:
+   755:         return err
+   756: 
+   757:     fp = _active_target_set_path(ws)
+   758:     fp.parent.mkdir(parents=True, exist_ok=True)
+   759: 
+   760:     obj = {
+   761:         "workspace_id": ws,
+   762:         "active_document_ids": [],
+   763:         "active_draft_ids": [],
+   764:         "active_imported_urls": [],
+   765:         "active_live_domain_urls": [],
+
+MATCH: active_target_set
+LINE: 750
+------------------------------------------------------------
+   743:             "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+   744:             "updated_at": obj.get("updated_at"),
+   745:         },
+   746:     }
+   747: 
+   748: 
+   749: @router.post("/target_pools/active_target_set/clear")
+   750: def clear_active_target_set(
+   751:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   752: ):
+   753:     ws, err = _ws_or_error(workspace_id)
+   754:     if err:
+   755:         return err
+   756: 
+   757:     fp = _active_target_set_path(ws)
+   758:     fp.parent.mkdir(parents=True, exist_ok=True)
+   759: 
+   760:     obj = {
+   761:         "workspace_id": ws,
+   762:         "active_document_ids": [],
+   763:         "active_draft_ids": [],
+   764:         "active_imported_urls": [],
+   765:         "active_live_domain_urls": [],
+   766:         "updated_at": datetime.now(timezone.utc).isoformat(),
+
+MATCH: active_target_set
+LINE: 757
+------------------------------------------------------------
+   750: def clear_active_target_set(
+   751:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+   752: ):
+   753:     ws, err = _ws_or_error(workspace_id)
+   754:     if err:
+   755:         return err
+   756: 
+   757:     fp = _active_target_set_path(ws)
+   758:     fp.parent.mkdir(parents=True, exist_ok=True)
+   759: 
+   760:     obj = {
+   761:         "workspace_id": ws,
+   762:         "active_document_ids": [],
+   763:         "active_draft_ids": [],
+   764:         "active_imported_urls": [],
+   765:         "active_live_domain_urls": [],
+   766:         "updated_at": datetime.now(timezone.utc).isoformat(),
+   767:         "cleared": True,
+   768:     }
+   769: 
+   770:     fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+   771: 
+   772:     return {
+   773:         "ok": True,
+
+MATCH: active_live_domain_urls
+LINE: 765
+------------------------------------------------------------
+   758:     fp.parent.mkdir(parents=True, exist_ok=True)
+   759: 
+   760:     obj = {
+   761:         "workspace_id": ws,
+   762:         "active_document_ids": [],
+   763:         "active_draft_ids": [],
+   764:         "active_imported_urls": [],
+   765:         "active_live_domain_urls": [],
+   766:         "updated_at": datetime.now(timezone.utc).isoformat(),
+   767:         "cleared": True,
+   768:     }
+   769: 
+   770:     fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+   771: 
+   772:     return {
+   773:         "ok": True,
+   774:         "workspace_id": ws,
+   775:         "path": str(fp),
+   776:         "cleared": True,
+   777:         "counts": {
+   778:             "active_document_ids": 0,
+   779:             "active_draft_ids": 0,
+   780:             "active_imported_urls": 0,
+   781:             "active_live_domain_urls": 0,
+
+MATCH: active_live_domain_urls
+LINE: 781
+------------------------------------------------------------
+   774:         "workspace_id": ws,
+   775:         "path": str(fp),
+   776:         "cleared": True,
+   777:         "counts": {
+   778:             "active_document_ids": 0,
+   779:             "active_draft_ids": 0,
+   780:             "active_imported_urls": 0,
+   781:             "active_live_domain_urls": 0,
+   782:         },
+   783:     }
+   784: 
+   785: class ConnectDomainPayload(BaseModel):
+   786:     domain: str = Field(..., description="Domain entered by the user")
+   787:     workspace_id: str | None = Field(None, description="Optional existing workspace_id to connect domain into")
+   788: 
+   789: 
+   790: 
+   791: def _workspace_id_from_domain(domain: str) -> str:
+   792:     clean = domain.replace(".", "_")
+   793:     return f"ws_{clean}"
+   794: 
+   795: @router.post("/workspace/connect_domain")
+   796: def connect_domain(payload: ConnectDomainPayload):
+   797:     domain = _normalize_domain(payload.domain)
+
+MATCH: def connect_domain
+LINE: 796
+------------------------------------------------------------
+   789: 
+   790: 
+   791: def _workspace_id_from_domain(domain: str) -> str:
+   792:     clean = domain.replace(".", "_")
+   793:     return f"ws_{clean}"
+   794: 
+   795: @router.post("/workspace/connect_domain")
+   796: def connect_domain(payload: ConnectDomainPayload):
+   797:     domain = _normalize_domain(payload.domain)
+   798: 
+   799:     if not domain:
+   800:         raise HTTPException(
+   801:             status_code=400,
+   802:             detail="A valid domain is required.",
+   803:         )
+   804: 
+   805:     workspace_id = _workspace_id_from_domain(
+   806:         domain
+   807:     )
+   808: 
+   809:     try:
+   810: 
+   811:         orchestration_result = {
+   812:             "status": "QUEUED_AWAITING_FRESH_RUNTIME",
+
+MATCH: active_target_set
+LINE: 1154
+------------------------------------------------------------
+  1147:     save_site_pages(workspace_id, {
+  1148:         "workspace_id": workspace_id,
+  1149:         "domain": domain,
+  1150:         "updated_at": now,
+  1151:         "pages": pages,
+  1152:     })
+  1153: 
+  1154:     active_fp = _active_target_set_path(workspace_id)
+  1155:     active_fp.parent.mkdir(parents=True, exist_ok=True)
+  1156: 
+  1157:     active_obj = {
+  1158:         "workspace_id": workspace_id,
+  1159:         "active_document_ids": [],
+  1160:         "active_draft_ids": [],
+  1161:         "active_imported_urls": [],
+  1162:         "active_live_domain_urls": seed_urls,
+  1163:         "updated_at": datetime.now(timezone.utc).isoformat(),
+  1164:     }
+  1165: 
+  1166:     if active_fp.exists():
+  1167:         try:
+  1168:             old_obj = json.loads(active_fp.read_text(encoding="utf-8"))
+  1169:             if isinstance(old_obj, dict):
+  1170:                 active_obj["active_document_ids"] = old_obj.get("active_document_ids") or []
+
+MATCH: active_live_domain_urls
+LINE: 1162
+------------------------------------------------------------
+  1155:     active_fp.parent.mkdir(parents=True, exist_ok=True)
+  1156: 
+  1157:     active_obj = {
+  1158:         "workspace_id": workspace_id,
+  1159:         "active_document_ids": [],
+  1160:         "active_draft_ids": [],
+  1161:         "active_imported_urls": [],
+  1162:         "active_live_domain_urls": seed_urls,
+  1163:         "updated_at": datetime.now(timezone.utc).isoformat(),
+  1164:     }
+  1165: 
+  1166:     if active_fp.exists():
+  1167:         try:
+  1168:             old_obj = json.loads(active_fp.read_text(encoding="utf-8"))
+  1169:             if isinstance(old_obj, dict):
+  1170:                 active_obj["active_document_ids"] = old_obj.get("active_document_ids") or []
+  1171:                 active_obj["active_draft_ids"] = old_obj.get("active_draft_ids") or []
+  1172:                 active_obj["active_imported_urls"] = old_obj.get("active_imported_urls") or []
+  1173:         except Exception:
+  1174:             pass
+  1175: 
+  1176:     active_fp.write_text(
+  1177:         json.dumps(active_obj, ensure_ascii=False, indent=2),
+  1178:         encoding="utf-8",
+
+MATCH: build_live_domain_target_pool
+LINE: 1220
+------------------------------------------------------------
+  1213:             json.dumps(profile, ensure_ascii=False, indent=2),
+  1214:             encoding="utf-8",
+  1215:         )
+  1216:     except Exception as profile_err:
+  1217:         print("[connect_domain] workspace profile update failed:", profile_err)
+  1218: 
+  1219:     try:
+  1220:         live_out = build_live_domain_target_pool(workspace_id)
+  1221:         live_counts = live_out.get("counts", {}) if isinstance(live_out, dict) else {}
+  1222: 
+  1223:         cluster_out = build_workspace_topic_clusters(workspace_id)
+  1224:         cluster_counts = {
+  1225:             "cluster_count": (
+  1226:                 cluster_out.get("cluster_count")
+  1227:                 or cluster_out.get("data", {}).get("cluster_count")
+  1228:                 or 0
+  1229:             )
+  1230:         } if isinstance(cluster_out, dict) else {"cluster_count": 0}
+  1231: 
+  1232:         url_pool_out = initialize_url_pool_from_current_active(workspace_id)
+  1233:         url_pool_stats = get_url_pool_stats(workspace_id)
+  1234:     except Exception as e:
+  1235:         return {
+  1236:             "ok": False,
+
+MATCH: build_workspace_topic_clusters
+LINE: 1223
+------------------------------------------------------------
+  1216:     except Exception as profile_err:
+  1217:         print("[connect_domain] workspace profile update failed:", profile_err)
+  1218: 
+  1219:     try:
+  1220:         live_out = build_live_domain_target_pool(workspace_id)
+  1221:         live_counts = live_out.get("counts", {}) if isinstance(live_out, dict) else {}
+  1222: 
+  1223:         cluster_out = build_workspace_topic_clusters(workspace_id)
+  1224:         cluster_counts = {
+  1225:             "cluster_count": (
+  1226:                 cluster_out.get("cluster_count")
+  1227:                 or cluster_out.get("data", {}).get("cluster_count")
+  1228:                 or 0
+  1229:             )
+  1230:         } if isinstance(cluster_out, dict) else {"cluster_count": 0}
+  1231: 
+  1232:         url_pool_out = initialize_url_pool_from_current_active(workspace_id)
+  1233:         url_pool_stats = get_url_pool_stats(workspace_id)
+  1234:     except Exception as e:
+  1235:         return {
+  1236:             "ok": False,
+  1237:             "workspace_id": workspace_id,
+  1238:             "domain": domain,
+  1239:             "created": created,
+
+MATCH: initialize_url_pool_from_current_active
+LINE: 1232
+------------------------------------------------------------
+  1225:             "cluster_count": (
+  1226:                 cluster_out.get("cluster_count")
+  1227:                 or cluster_out.get("data", {}).get("cluster_count")
+  1228:                 or 0
+  1229:             )
+  1230:         } if isinstance(cluster_out, dict) else {"cluster_count": 0}
+  1231: 
+  1232:         url_pool_out = initialize_url_pool_from_current_active(workspace_id)
+  1233:         url_pool_stats = get_url_pool_stats(workspace_id)
+  1234:     except Exception as e:
+  1235:         return {
+  1236:             "ok": False,
+  1237:             "workspace_id": workspace_id,
+  1238:             "domain": domain,
+  1239:             "created": created,
+  1240:             "error": "live_domain_target_pool_build_failed",
+  1241:             "detail": str(e)[:300],
+  1242:             "sitemap_url_count": len(all_urls),
+  1243:             "seed_urls_count": len(seed_urls),
+  1244:         }
+  1245: 
+  1246:     return {
+  1247:         "ok": True,
+  1248:         "workspace_id": workspace_id,
+
+MATCH: active_live_domain_urls
+LINE: 1255
+------------------------------------------------------------
+  1248:         "workspace_id": workspace_id,
+  1249:         "domain": domain,
+  1250:         "created": created,
+  1251:         "workspace_file": str(ws_meta_path),
+  1252:         "sitemap_used": sitemap_used,
+  1253:         "sitemap_url_count": len(all_urls),
+  1254:         "seed_urls_count": len(seed_urls),
+  1255:         "active_live_domain_urls_count": len(active_obj["active_live_domain_urls"]),
+  1256:         "live_domain_counts": live_counts,
+  1257:         "topic_cluster_counts": cluster_counts,
+  1258:         "url_pool": url_pool_out,
+  1259:         "url_pool_stats": url_pool_stats,
+  1260:     }
+  1261: 
+  1262: 
+  1263: # -------------------------
+  1264: # URL Pool Manager
+  1265: # -------------------------
+  1266: @router.get("/url_pool/stats")
+  1267: def url_pool_stats(workspace_id: str = Query(..., description="Workspace scope (must start with ws_)")):
+  1268:     ws, err = _ws_or_error(workspace_id)
+  1269:     if err:
+  1270:         return err
+  1271:     return get_url_pool_stats(ws)
+
+MATCH: initialize_url_pool_from_current_active
+LINE: 1279
+------------------------------------------------------------
+  1272: 
+  1273: 
+  1274: @router.post("/url_pool/initialize")
+  1275: def url_pool_initialize(workspace_id: str = Query(..., description="Workspace scope (must start with ws_)")):
+  1276:     ws, err = _ws_or_error(workspace_id)
+  1277:     if err:
+  1278:         return err
+  1279:     return initialize_url_pool_from_current_active(ws)
+  1280: 
+  1281: 
+  1282: @router.get("/url_pool/active")
+  1283: def url_pool_active(
+  1284:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+  1285:     limit: int = Query(50, ge=1, le=500),
+  1286:     offset: int = Query(0, ge=0),
+  1287: ):
+  1288:     ws, err = _ws_or_error(workspace_id)
+  1289:     if err:
+  1290:         return err
+  1291: 
+  1292:     urls = load_active_urls(ws)
+  1293:     return {
+  1294:         "ok": True,
+  1295:         "workspace_id": ws,
+
+MATCH: build_live_domain_target_pool
+LINE: 1402
+------------------------------------------------------------
+  1395:         "limit": limit,
+  1396:         "offset": offset,
+  1397:         "items": slice_,
+  1398:     }
+  1399: 
+  1400: 
+  1401: @router.post("/target_pools/live_domain/rebuild")
+  1402: def rebuild_live_domain_target_pool(
+  1403:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+  1404: ):
+  1405:     ws, err = _ws_or_error(workspace_id)
+  1406:     if err:
+  1407:         return err
+  1408: 
+  1409:     try:
+  1410:         out = build_live_domain_target_pool(ws)
+  1411:         return {
+  1412:             "ok": True,
+  1413:             "workspace_id": ws,
+  1414:             "pool": "live_domain",
+  1415:             "counts": out.get("counts", {}),
+  1416:             "path": f"backend/server/data/target_pools/live_domain/live_domain_target_pool_{ws}.json",
+  1417:         }
+  1418:     except FileNotFoundError as e:
+
+MATCH: build_live_domain_target_pool
+LINE: 1410
+------------------------------------------------------------
+  1403:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+  1404: ):
+  1405:     ws, err = _ws_or_error(workspace_id)
+  1406:     if err:
+  1407:         return err
+  1408: 
+  1409:     try:
+  1410:         out = build_live_domain_target_pool(ws)
+  1411:         return {
+  1412:             "ok": True,
+  1413:             "workspace_id": ws,
+  1414:             "pool": "live_domain",
+  1415:             "counts": out.get("counts", {}),
+  1416:             "path": f"backend/server/data/target_pools/live_domain/live_domain_target_pool_{ws}.json",
+  1417:         }
+  1418:     except FileNotFoundError as e:
+  1419:         return {"ok": False, "workspace_id": ws, "error": "missing_required_source_file", "detail": str(e)}
+  1420:     except Exception as e:
+  1421:         return {"ok": False, "workspace_id": ws, "error": "rebuild_failed", "detail": str(e)[:200]}
+  1422: 
+  1423: 
+  1424: # -------------------------
+  1425: # Target Pools: Imported
+  1426: # -------------------------
+
+MATCH: active_target_set
+LINE: 1643
+------------------------------------------------------------
+  1636:         "limit": limit,
+  1637:         "offset": offset,
+  1638:         "items": items,
+  1639:         "phrase_count": int(obj.get("phrase_count", len(phrases))),
+  1640:     }
+  1641: 
+  1642: 
+  1643: @router.post("/target_pools/active_target_set/save")
+  1644: def save_active_target_set(payload: ActiveTargetSetPayload):
+  1645:     ws, err = _ws_or_error(payload.workspace_id)
+  1646:     if err:
+  1647:         return err
+  1648: 
+  1649:     fp = _active_target_set_path(ws)
+  1650:     fp.parent.mkdir(parents=True, exist_ok=True)
+  1651: 
+  1652:     existing = {
+  1653:         "workspace_id": ws,
+  1654:         "active_document_ids": [],
+  1655:         "active_draft_ids": [],
+  1656:         "active_imported_urls": [],
+  1657:         "active_live_domain_urls": [],
+  1658:     }
+  1659: 
+
+MATCH: active_target_set
+LINE: 1644
+------------------------------------------------------------
+  1637:         "offset": offset,
+  1638:         "items": items,
+  1639:         "phrase_count": int(obj.get("phrase_count", len(phrases))),
+  1640:     }
+  1641: 
+  1642: 
+  1643: @router.post("/target_pools/active_target_set/save")
+  1644: def save_active_target_set(payload: ActiveTargetSetPayload):
+  1645:     ws, err = _ws_or_error(payload.workspace_id)
+  1646:     if err:
+  1647:         return err
+  1648: 
+  1649:     fp = _active_target_set_path(ws)
+  1650:     fp.parent.mkdir(parents=True, exist_ok=True)
+  1651: 
+  1652:     existing = {
+  1653:         "workspace_id": ws,
+  1654:         "active_document_ids": [],
+  1655:         "active_draft_ids": [],
+  1656:         "active_imported_urls": [],
+  1657:         "active_live_domain_urls": [],
+  1658:     }
+  1659: 
+  1660:     if fp.exists():
+
+MATCH: active_target_set
+LINE: 1649
+------------------------------------------------------------
+  1642: 
+  1643: @router.post("/target_pools/active_target_set/save")
+  1644: def save_active_target_set(payload: ActiveTargetSetPayload):
+  1645:     ws, err = _ws_or_error(payload.workspace_id)
+  1646:     if err:
+  1647:         return err
+  1648: 
+  1649:     fp = _active_target_set_path(ws)
+  1650:     fp.parent.mkdir(parents=True, exist_ok=True)
+  1651: 
+  1652:     existing = {
+  1653:         "workspace_id": ws,
+  1654:         "active_document_ids": [],
+  1655:         "active_draft_ids": [],
+  1656:         "active_imported_urls": [],
+  1657:         "active_live_domain_urls": [],
+  1658:     }
+  1659: 
+  1660:     if fp.exists():
+  1661:         try:
+  1662:             raw = json.loads(fp.read_text(encoding="utf-8"))
+  1663:             if isinstance(raw, dict):
+  1664:                 existing["active_document_ids"] = raw.get("active_document_ids") or []
+  1665:                 existing["active_draft_ids"] = raw.get("active_draft_ids") or []
+
+MATCH: active_live_domain_urls
+LINE: 1657
+------------------------------------------------------------
+  1650:     fp.parent.mkdir(parents=True, exist_ok=True)
+  1651: 
+  1652:     existing = {
+  1653:         "workspace_id": ws,
+  1654:         "active_document_ids": [],
+  1655:         "active_draft_ids": [],
+  1656:         "active_imported_urls": [],
+  1657:         "active_live_domain_urls": [],
+  1658:     }
+  1659: 
+  1660:     if fp.exists():
+  1661:         try:
+  1662:             raw = json.loads(fp.read_text(encoding="utf-8"))
+  1663:             if isinstance(raw, dict):
+  1664:                 existing["active_document_ids"] = raw.get("active_document_ids") or []
+  1665:                 existing["active_draft_ids"] = raw.get("active_draft_ids") or []
+  1666:                 existing["active_imported_urls"] = raw.get("active_imported_urls") or []
+  1667:                 existing["active_live_domain_urls"] = raw.get("active_live_domain_urls") or []
+  1668:         except Exception:
+  1669:             pass
+  1670: 
+  1671:     def clean_list(value):
+  1672:         out = []
+  1673:         seen = set()
+
+MATCH: active_live_domain_urls
+LINE: 1667
+------------------------------------------------------------
+  1660:     if fp.exists():
+  1661:         try:
+  1662:             raw = json.loads(fp.read_text(encoding="utf-8"))
+  1663:             if isinstance(raw, dict):
+  1664:                 existing["active_document_ids"] = raw.get("active_document_ids") or []
+  1665:                 existing["active_draft_ids"] = raw.get("active_draft_ids") or []
+  1666:                 existing["active_imported_urls"] = raw.get("active_imported_urls") or []
+  1667:                 existing["active_live_domain_urls"] = raw.get("active_live_domain_urls") or []
+  1668:         except Exception:
+  1669:             pass
+  1670: 
+  1671:     def clean_list(value):
+  1672:         out = []
+  1673:         seen = set()
+  1674: 
+  1675:         for x in (value or []):
+  1676:             s = str(x).strip()
+  1677:             if not s:
+  1678:                 continue
+  1679:             if s in seen:
+  1680:                 continue
+  1681:             out.append(s)
+  1682:             seen.add(s)
+  1683: 
+
+MATCH: active_live_domain_urls
+LINE: 1691
+------------------------------------------------------------
+  1684:         return out
+  1685: 
+  1686:     obj = {
+  1687:         "workspace_id": ws,
+  1688:         "active_document_ids": clean_list(payload.active_document_ids) if payload.active_document_ids is not None else clean_list(existing["active_document_ids"]),
+  1689:         "active_draft_ids": clean_list(payload.active_draft_ids) if payload.active_draft_ids is not None else clean_list(existing["active_draft_ids"]),
+  1690:         "active_imported_urls": clean_list(payload.active_imported_urls) if payload.active_imported_urls is not None else clean_list(existing["active_imported_urls"]),
+  1691:         "active_live_domain_urls": clean_list(payload.active_live_domain_urls) if payload.active_live_domain_urls is not None else clean_list(existing["active_live_domain_urls"]),
+  1692:         "updated_at": datetime.now(timezone.utc).isoformat(),
+  1693:     }
+  1694: 
+  1695:     fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+  1696: 
+  1697:     return {
+  1698:         "ok": True,
+  1699:         "workspace_id": ws,
+  1700:         "path": str(fp),
+  1701:         "counts": {
+  1702:             "active_document_ids": len(obj["active_document_ids"]),
+  1703:             "active_draft_ids": len(obj["active_draft_ids"]),
+  1704:             "active_imported_urls": len(obj["active_imported_urls"]),
+  1705:             "active_live_domain_urls": len(obj["active_live_domain_urls"]),
+  1706:         },
+  1707:     }
+
+MATCH: active_live_domain_urls
+LINE: 1705
+------------------------------------------------------------
+  1698:         "ok": True,
+  1699:         "workspace_id": ws,
+  1700:         "path": str(fp),
+  1701:         "counts": {
+  1702:             "active_document_ids": len(obj["active_document_ids"]),
+  1703:             "active_draft_ids": len(obj["active_draft_ids"]),
+  1704:             "active_imported_urls": len(obj["active_imported_urls"]),
+  1705:             "active_live_domain_urls": len(obj["active_live_domain_urls"]),
+  1706:         },
+  1707:     }
+  1708: 
+  1709: 
+  1710: @router.get("/debug/module_paths")
+  1711: def debug_module_paths():
+  1712:     import backend.server.routes.site_reader as sr
+  1713:     import backend.server.pools.target_pools.document_registry_pool as dr
+  1714: 
+  1715:     return {
+  1716:         "ok": True,
+  1717:         "site_reader_file": getattr(sr, "__file__", ""),
+  1718:         "document_registry_pool_file": getattr(dr, "__file__", ""),
+  1719:     }
+  1720: 
+  1721: 
+
+============================================================
+FILE: backend\server\routes\site_workspace.py
+============================================================
+
+MATCH: create_universal_knowledge_job
+LINE: 11
+------------------------------------------------------------
+     4: from datetime import datetime, timezone
+     5: from pathlib import Path
+     6: from typing import Any, Dict
+     7: 
+     8: from fastapi import APIRouter, HTTPException
+     9: from pydantic import BaseModel
+    10: 
+    11: from backend.server.jobs.universal_knowledge_orchestrator import create_universal_knowledge_job
+    12: 
+    13: 
+    14: router = APIRouter(prefix="/api/site/workspace", tags=["site-workspace"])
+    15: 
+    16: 
+    17: class ConnectDomainRequest(BaseModel):
+    18:     workspace_id: str | None = None
+    19:     domain: str | None = None
+    20:     url: str | None = None
+    21: 
+    22: 
+    23: def _now_iso() -> str:
+    24:     return datetime.now(timezone.utc).isoformat()
+    25: 
+    26: 
+    27: def _safe_workspace_id(value: str | None) -> str:
+
+MATCH: def connect_domain
+LINE: 57
+------------------------------------------------------------
+    50: def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    51:     import json
+    52:     path.parent.mkdir(parents=True, exist_ok=True)
+    53:     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    54: 
+    55: 
+    56: @router.post("/connect_domain")
+    57: def connect_domain(payload: ConnectDomainRequest) -> Dict[str, Any]:
+    58:     workspace_id = _safe_workspace_id(payload.workspace_id)
+    59:     domain = _normalize_domain(payload.domain or payload.url)
+    60: 
+    61:     live_domain_payload = {
+    62:         "schema_version": "live_domain_connection_v1",
+    63:         "workspace_id": workspace_id,
+    64:         "domain": domain,
+    65:         "source_type": "website",
+    66:         "status": "connected",
+    67:         "connected_at": _now_iso(),
+    68:     }
+    69: 
+    70:     _write_json(
+    71:         Path("backend/server/data/live_domains") / f"live_domain_{workspace_id}.json",
+    72:         live_domain_payload,
+    73:     )
+
+MATCH: create_universal_knowledge_job
+LINE: 75
+------------------------------------------------------------
+    68:     }
+    69: 
+    70:     _write_json(
+    71:         Path("backend/server/data/live_domains") / f"live_domain_{workspace_id}.json",
+    72:         live_domain_payload,
+    73:     )
+    74: 
+    75:     job = create_universal_knowledge_job(
+    76:         workspace_id=workspace_id,
+    77:         job_type="website_connection_batch",
+    78:         payload={
+    79:             "workspace_id": workspace_id,
+    80:             "domain": domain,
+    81:             "urls": [],
+    82:             "trigger": "live_connect_domain_route",
+    83:         }
+    84:     )
+    85: 
+    86: 
+    87:     return {
+    88:         "ok": True,
+    89:         "workspace_id": workspace_id,
+    90:         "domain": domain,
+    91:         "connected": False,
+
+MATCH: website_connection_batch
+LINE: 77
+------------------------------------------------------------
+    70:     _write_json(
+    71:         Path("backend/server/data/live_domains") / f"live_domain_{workspace_id}.json",
+    72:         live_domain_payload,
+    73:     )
+    74: 
+    75:     job = create_universal_knowledge_job(
+    76:         workspace_id=workspace_id,
+    77:         job_type="website_connection_batch",
+    78:         payload={
+    79:             "workspace_id": workspace_id,
+    80:             "domain": domain,
+    81:             "urls": [],
+    82:             "trigger": "live_connect_domain_route",
+    83:         }
+    84:     )
+    85: 
+    86: 
+    87:     return {
+    88:         "ok": True,
+    89:         "workspace_id": workspace_id,
+    90:         "domain": domain,
+    91:         "connected": False,
+    92:         "execution_status": "QUEUED_AWAITING_FRESH_WORKER",
+    93:         "job": job,
+
+============================================================
+FILE: backend\server\pools\target_pools\live_domain_target_pool.py
+============================================================
+
+MATCH: active_target_set
+LINE: 34
+------------------------------------------------------------
+    27:     return _data_dir() / f"site_pages_{ws}.json"
+    28: 
+    29: 
+    30: def _site_sources_path(ws: str) -> Path:
+    31:     return _data_dir() / f"site_sources_{ws}.json"
+    32: 
+    33: 
+    34: def _active_target_set_path(ws: str) -> Path:
+    35:     return _data_dir() / "target_pools" / f"active_target_set_{ws}.json"
+    36: 
+    37: 
+    38: def _safe_read_json(path: Path) -> Any:
+    39:     try:
+    40:         return json.loads(path.read_text(encoding="utf-8-sig"))
+    41:     except Exception:
+    42:         return None
+    43: 
+    44: 
+    45: def _norm_url(u: str) -> str:
+    46:     u = (u or "").strip()
+    47:     u = u.split("#")[0].split("?")[0]
+    48:     return u.rstrip("/")
+    49: 
+    50: 
+
+MATCH: active_target_set
+LINE: 35
+------------------------------------------------------------
+    28: 
+    29: 
+    30: def _site_sources_path(ws: str) -> Path:
+    31:     return _data_dir() / f"site_sources_{ws}.json"
+    32: 
+    33: 
+    34: def _active_target_set_path(ws: str) -> Path:
+    35:     return _data_dir() / "target_pools" / f"active_target_set_{ws}.json"
+    36: 
+    37: 
+    38: def _safe_read_json(path: Path) -> Any:
+    39:     try:
+    40:         return json.loads(path.read_text(encoding="utf-8-sig"))
+    41:     except Exception:
+    42:         return None
+    43: 
+    44: 
+    45: def _norm_url(u: str) -> str:
+    46:     u = (u or "").strip()
+    47:     u = u.split("#")[0].split("?")[0]
+    48:     return u.rstrip("/")
+    49: 
+    50: 
+    51: def _norm_seed_path(p: str) -> str:
+
+MATCH: build_live_domain_target_pool
+LINE: 602
+------------------------------------------------------------
+   595: 
+   596:     if depth <= 1:
+   597:         return "standard"
+   598: 
+   599:     return "supporting"
+   600: 
+   601: 
+   602: def build_live_domain_target_pool(workspace_id: str) -> Dict[str, Any]:
+   603: 
+   604: 
+   605:     def _load_section_membership_index() -> Dict[str, Dict[str, Any]]:
+   606:         """
+   607:         Bridge: section clusters -> live domain target items.
+   608:         Adds broad URL-section evidence without polluting strict topic clusters.
+   609:         """
+   610:         section_fp = _data_dir() / "topic_clusters" / f"workspace_section_clusters_{ws}.json"
+   611:         obj = _safe_read_json(section_fp) if section_fp.exists() else {}
+   612: 
+   613:         sections = obj.get("sections") if isinstance(obj, dict) else {}
+   614:         rows = sections.values() if isinstance(sections, dict) else sections if isinstance(sections, list) else []
+   615: 
+   616:         index: Dict[str, Dict[str, Any]] = {}
+   617: 
+   618:         for sec in rows:
+
+MATCH: section_keywords
+LINE: 624
+------------------------------------------------------------
+   617: 
+   618:         for sec in rows:
+   619:             if not isinstance(sec, dict):
+   620:                 continue
+   621: 
+   622:             section_id = str(sec.get("section_id") or "").strip()
+   623:             section_name = str(sec.get("name") or section_id).strip()
+   624:             section_keywords = sec.get("keywords") or []
+   625:             section_score = sec.get("confidence") or 0
+   626: 
+   627:             for u in sec.get("urls") or []:
+   628:                 if isinstance(u, dict):
+   629:                     raw_url = u.get("url")
+   630:                     matched_terms = u.get("matched_terms") or []
+   631:                 else:
+   632:                     raw_url = u
+   633:                     matched_terms = []
+   634: 
+   635:                 url_key = _norm_url(str(raw_url or ""))
+   636:                 if not url_key:
+   637:                     continue
+   638: 
+   639:                 existing = index.setdefault(url_key, {
+   640:                     "section_ids": [],
+
+MATCH: section_names
+LINE: 641
+------------------------------------------------------------
+   634: 
+   635:                 url_key = _norm_url(str(raw_url or ""))
+   636:                 if not url_key:
+   637:                     continue
+   638: 
+   639:                 existing = index.setdefault(url_key, {
+   640:                     "section_ids": [],
+   641:                     "section_names": [],
+   642:                     "section_keywords": [],
+   643:                     "section_matched_terms": [],
+   644:                     "section_score": 0,
+   645:                 })
+   646: 
+   647:                 if section_id and section_id not in existing["section_ids"]:
+   648:                     existing["section_ids"].append(section_id)
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+
+MATCH: section_keywords
+LINE: 642
+------------------------------------------------------------
+   635:                 url_key = _norm_url(str(raw_url or ""))
+   636:                 if not url_key:
+   637:                     continue
+   638: 
+   639:                 existing = index.setdefault(url_key, {
+   640:                     "section_ids": [],
+   641:                     "section_names": [],
+   642:                     "section_keywords": [],
+   643:                     "section_matched_terms": [],
+   644:                     "section_score": 0,
+   645:                 })
+   646: 
+   647:                 if section_id and section_id not in existing["section_ids"]:
+   648:                     existing["section_ids"].append(section_id)
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+   658:                 for mt in matched_terms:
+
+MATCH: section_names
+LINE: 650
+------------------------------------------------------------
+   643:                     "section_matched_terms": [],
+   644:                     "section_score": 0,
+   645:                 })
+   646: 
+   647:                 if section_id and section_id not in existing["section_ids"]:
+   648:                     existing["section_ids"].append(section_id)
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+   658:                 for mt in matched_terms:
+   659:                     mt = str(mt or "").strip()
+   660:                     if mt and mt not in existing["section_matched_terms"]:
+   661:                         existing["section_matched_terms"].append(mt)
+   662: 
+   663:                 try:
+   664:                     existing["section_score"] = max(float(existing["section_score"] or 0), float(section_score or 0))
+   665:                 except Exception:
+   666:                     pass
+
+MATCH: section_names
+LINE: 651
+------------------------------------------------------------
+   644:                     "section_score": 0,
+   645:                 })
+   646: 
+   647:                 if section_id and section_id not in existing["section_ids"]:
+   648:                     existing["section_ids"].append(section_id)
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+   658:                 for mt in matched_terms:
+   659:                     mt = str(mt or "").strip()
+   660:                     if mt and mt not in existing["section_matched_terms"]:
+   661:                         existing["section_matched_terms"].append(mt)
+   662: 
+   663:                 try:
+   664:                     existing["section_score"] = max(float(existing["section_score"] or 0), float(section_score or 0))
+   665:                 except Exception:
+   666:                     pass
+   667: 
+
+MATCH: section_keywords
+LINE: 653
+------------------------------------------------------------
+   646: 
+   647:                 if section_id and section_id not in existing["section_ids"]:
+   648:                     existing["section_ids"].append(section_id)
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+   658:                 for mt in matched_terms:
+   659:                     mt = str(mt or "").strip()
+   660:                     if mt and mt not in existing["section_matched_terms"]:
+   661:                         existing["section_matched_terms"].append(mt)
+   662: 
+   663:                 try:
+   664:                     existing["section_score"] = max(float(existing["section_score"] or 0), float(section_score or 0))
+   665:                 except Exception:
+   666:                     pass
+   667: 
+   668:         return index
+   669: 
+
+MATCH: section_keywords
+LINE: 655
+------------------------------------------------------------
+   648:                     existing["section_ids"].append(section_id)
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+   658:                 for mt in matched_terms:
+   659:                     mt = str(mt or "").strip()
+   660:                     if mt and mt not in existing["section_matched_terms"]:
+   661:                         existing["section_matched_terms"].append(mt)
+   662: 
+   663:                 try:
+   664:                     existing["section_score"] = max(float(existing["section_score"] or 0), float(section_score or 0))
+   665:                 except Exception:
+   666:                     pass
+   667: 
+   668:         return index
+   669: 
+   670: 
+   671:     def _load_cluster_membership_index() -> Dict[str, Dict[str, Any]]:
+
+MATCH: section_keywords
+LINE: 656
+------------------------------------------------------------
+   649: 
+   650:                 if section_name and section_name not in existing["section_names"]:
+   651:                     existing["section_names"].append(section_name)
+   652: 
+   653:                 for kw in section_keywords:
+   654:                     kw = str(kw or "").strip()
+   655:                     if kw and kw not in existing["section_keywords"]:
+   656:                         existing["section_keywords"].append(kw)
+   657: 
+   658:                 for mt in matched_terms:
+   659:                     mt = str(mt or "").strip()
+   660:                     if mt and mt not in existing["section_matched_terms"]:
+   661:                         existing["section_matched_terms"].append(mt)
+   662: 
+   663:                 try:
+   664:                     existing["section_score"] = max(float(existing["section_score"] or 0), float(section_score or 0))
+   665:                 except Exception:
+   666:                     pass
+   667: 
+   668:         return index
+   669: 
+   670: 
+   671:     def _load_cluster_membership_index() -> Dict[str, Dict[str, Any]]:
+   672:         """
+
+MATCH: cluster_keywords
+LINE: 690
+------------------------------------------------------------
+   683: 
+   684:         for c in rows:
+   685:             if not isinstance(c, dict):
+   686:                 continue
+   687: 
+   688:             cluster_id = str(c.get("cluster_id") or "").strip()
+   689:             cluster_name = str(c.get("name") or c.get("label") or c.get("primary_token") or cluster_id).strip()
+   690:             cluster_keywords = c.get("keywords") or []
+   691:             cluster_score = c.get("confidence") or c.get("score") or 0
+   692:             purity_score = c.get("purity_score") or 0
+   693: 
+   694:             for u in c.get("urls") or []:
+   695:                 if isinstance(u, dict):
+   696:                     raw_url = u.get("url")
+   697:                     matched_terms = u.get("matched_terms") or []
+   698:                 else:
+   699:                     raw_url = u
+   700:                     matched_terms = []
+   701: 
+   702:                 url_key = _norm_url(str(raw_url or ""))
+   703:                 if not url_key:
+   704:                     continue
+   705: 
+   706:                 existing = index.setdefault(url_key, {
+
+MATCH: cluster_names
+LINE: 708
+------------------------------------------------------------
+   701: 
+   702:                 url_key = _norm_url(str(raw_url or ""))
+   703:                 if not url_key:
+   704:                     continue
+   705: 
+   706:                 existing = index.setdefault(url_key, {
+   707:                     "cluster_ids": [],
+   708:                     "cluster_names": [],
+   709:                     "cluster_keywords": [],
+   710:                     "cluster_matched_terms": [],
+   711:                     "cluster_score": 0,
+   712:                     "cluster_purity_score": 0,
+   713:                 })
+   714: 
+   715:                 if cluster_id and cluster_id not in existing["cluster_ids"]:
+   716:                     existing["cluster_ids"].append(cluster_id)
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+
+MATCH: cluster_keywords
+LINE: 709
+------------------------------------------------------------
+   702:                 url_key = _norm_url(str(raw_url or ""))
+   703:                 if not url_key:
+   704:                     continue
+   705: 
+   706:                 existing = index.setdefault(url_key, {
+   707:                     "cluster_ids": [],
+   708:                     "cluster_names": [],
+   709:                     "cluster_keywords": [],
+   710:                     "cluster_matched_terms": [],
+   711:                     "cluster_score": 0,
+   712:                     "cluster_purity_score": 0,
+   713:                 })
+   714: 
+   715:                 if cluster_id and cluster_id not in existing["cluster_ids"]:
+   716:                     existing["cluster_ids"].append(cluster_id)
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+   725: 
+
+MATCH: cluster_names
+LINE: 718
+------------------------------------------------------------
+   711:                     "cluster_score": 0,
+   712:                     "cluster_purity_score": 0,
+   713:                 })
+   714: 
+   715:                 if cluster_id and cluster_id not in existing["cluster_ids"]:
+   716:                     existing["cluster_ids"].append(cluster_id)
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+   725: 
+   726:                 for mt in matched_terms:
+   727:                     mt = str(mt or "").strip()
+   728:                     if mt and mt not in existing["cluster_matched_terms"]:
+   729:                         existing["cluster_matched_terms"].append(mt)
+   730: 
+   731:                 try:
+   732:                     existing["cluster_score"] = max(float(existing["cluster_score"] or 0), float(cluster_score or 0))
+   733:                 except Exception:
+   734:                     pass
+
+MATCH: cluster_names
+LINE: 719
+------------------------------------------------------------
+   712:                     "cluster_purity_score": 0,
+   713:                 })
+   714: 
+   715:                 if cluster_id and cluster_id not in existing["cluster_ids"]:
+   716:                     existing["cluster_ids"].append(cluster_id)
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+   725: 
+   726:                 for mt in matched_terms:
+   727:                     mt = str(mt or "").strip()
+   728:                     if mt and mt not in existing["cluster_matched_terms"]:
+   729:                         existing["cluster_matched_terms"].append(mt)
+   730: 
+   731:                 try:
+   732:                     existing["cluster_score"] = max(float(existing["cluster_score"] or 0), float(cluster_score or 0))
+   733:                 except Exception:
+   734:                     pass
+   735: 
+
+MATCH: cluster_keywords
+LINE: 721
+------------------------------------------------------------
+   714: 
+   715:                 if cluster_id and cluster_id not in existing["cluster_ids"]:
+   716:                     existing["cluster_ids"].append(cluster_id)
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+   725: 
+   726:                 for mt in matched_terms:
+   727:                     mt = str(mt or "").strip()
+   728:                     if mt and mt not in existing["cluster_matched_terms"]:
+   729:                         existing["cluster_matched_terms"].append(mt)
+   730: 
+   731:                 try:
+   732:                     existing["cluster_score"] = max(float(existing["cluster_score"] or 0), float(cluster_score or 0))
+   733:                 except Exception:
+   734:                     pass
+   735: 
+   736:                 try:
+   737:                     existing["cluster_purity_score"] = max(float(existing["cluster_purity_score"] or 0), float(purity_score or 0))
+
+MATCH: cluster_keywords
+LINE: 723
+------------------------------------------------------------
+   716:                     existing["cluster_ids"].append(cluster_id)
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+   725: 
+   726:                 for mt in matched_terms:
+   727:                     mt = str(mt or "").strip()
+   728:                     if mt and mt not in existing["cluster_matched_terms"]:
+   729:                         existing["cluster_matched_terms"].append(mt)
+   730: 
+   731:                 try:
+   732:                     existing["cluster_score"] = max(float(existing["cluster_score"] or 0), float(cluster_score or 0))
+   733:                 except Exception:
+   734:                     pass
+   735: 
+   736:                 try:
+   737:                     existing["cluster_purity_score"] = max(float(existing["cluster_purity_score"] or 0), float(purity_score or 0))
+   738:                 except Exception:
+   739:                     pass
+
+MATCH: cluster_keywords
+LINE: 724
+------------------------------------------------------------
+   717: 
+   718:                 if cluster_name and cluster_name not in existing["cluster_names"]:
+   719:                     existing["cluster_names"].append(cluster_name)
+   720: 
+   721:                 for kw in cluster_keywords:
+   722:                     kw = str(kw or "").strip()
+   723:                     if kw and kw not in existing["cluster_keywords"]:
+   724:                         existing["cluster_keywords"].append(kw)
+   725: 
+   726:                 for mt in matched_terms:
+   727:                     mt = str(mt or "").strip()
+   728:                     if mt and mt not in existing["cluster_matched_terms"]:
+   729:                         existing["cluster_matched_terms"].append(mt)
+   730: 
+   731:                 try:
+   732:                     existing["cluster_score"] = max(float(existing["cluster_score"] or 0), float(cluster_score or 0))
+   733:                 except Exception:
+   734:                     pass
+   735: 
+   736:                 try:
+   737:                     existing["cluster_purity_score"] = max(float(existing["cluster_purity_score"] or 0), float(purity_score or 0))
+   738:                 except Exception:
+   739:                     pass
+   740: 
+
+MATCH: active_target_set
+LINE: 771
+------------------------------------------------------------
+   764: 
+   765:     if not pages_fp.exists():
+   766:         raise FileNotFoundError(f"Missing site pages file: {pages_fp}")
+   767: 
+   768:     sources_obj = json.loads(src_fp.read_text(encoding="utf-8"))
+   769:     pages_obj = json.loads(pages_fp.read_text(encoding="utf-8"))
+   770: 
+   771:     active_fp = _active_target_set_path(ws)
+   772:     active_obj = _safe_read_json(active_fp) if active_fp.exists() else None
+   773: 
+   774:     active_live_domain_urls: List[str] = []
+   775: 
+   776:     if isinstance(active_obj, dict):
+   777:         raw_urls = active_obj.get("active_live_domain_urls") or []
+   778: 
+   779:         if isinstance(raw_urls, list):
+   780:             active_live_domain_urls = [
+   781:                 _norm_url(str(x))
+   782:                 for x in raw_urls
+   783:                 if str(x).strip()
+   784:             ]
+   785: 
+   786:     active_live_domain_url_set = set(active_live_domain_urls)
+   787: 
+
+MATCH: active_live_domain_urls
+LINE: 774
+------------------------------------------------------------
+   767: 
+   768:     sources_obj = json.loads(src_fp.read_text(encoding="utf-8"))
+   769:     pages_obj = json.loads(pages_fp.read_text(encoding="utf-8"))
+   770: 
+   771:     active_fp = _active_target_set_path(ws)
+   772:     active_obj = _safe_read_json(active_fp) if active_fp.exists() else None
+   773: 
+   774:     active_live_domain_urls: List[str] = []
+   775: 
+   776:     if isinstance(active_obj, dict):
+   777:         raw_urls = active_obj.get("active_live_domain_urls") or []
+   778: 
+   779:         if isinstance(raw_urls, list):
+   780:             active_live_domain_urls = [
+   781:                 _norm_url(str(x))
+   782:                 for x in raw_urls
+   783:                 if str(x).strip()
+   784:             ]
+   785: 
+   786:     active_live_domain_url_set = set(active_live_domain_urls)
+   787: 
+   788:     sources = sources_obj.get("sources") or []
+   789: 
+   790:     if not isinstance(sources, list):
+
+MATCH: active_live_domain_urls
+LINE: 777
+------------------------------------------------------------
+   770: 
+   771:     active_fp = _active_target_set_path(ws)
+   772:     active_obj = _safe_read_json(active_fp) if active_fp.exists() else None
+   773: 
+   774:     active_live_domain_urls: List[str] = []
+   775: 
+   776:     if isinstance(active_obj, dict):
+   777:         raw_urls = active_obj.get("active_live_domain_urls") or []
+   778: 
+   779:         if isinstance(raw_urls, list):
+   780:             active_live_domain_urls = [
+   781:                 _norm_url(str(x))
+   782:                 for x in raw_urls
+   783:                 if str(x).strip()
+   784:             ]
+   785: 
+   786:     active_live_domain_url_set = set(active_live_domain_urls)
+   787: 
+   788:     sources = sources_obj.get("sources") or []
+   789: 
+   790:     if not isinstance(sources, list):
+   791:         sources = []
+   792: 
+   793:     pages = pages_obj.get("pages") or {}
+
+MATCH: active_live_domain_urls
+LINE: 780
+------------------------------------------------------------
+   773: 
+   774:     active_live_domain_urls: List[str] = []
+   775: 
+   776:     if isinstance(active_obj, dict):
+   777:         raw_urls = active_obj.get("active_live_domain_urls") or []
+   778: 
+   779:         if isinstance(raw_urls, list):
+   780:             active_live_domain_urls = [
+   781:                 _norm_url(str(x))
+   782:                 for x in raw_urls
+   783:                 if str(x).strip()
+   784:             ]
+   785: 
+   786:     active_live_domain_url_set = set(active_live_domain_urls)
+   787: 
+   788:     sources = sources_obj.get("sources") or []
+   789: 
+   790:     if not isinstance(sources, list):
+   791:         sources = []
+   792: 
+   793:     pages = pages_obj.get("pages") or {}
+   794: 
+   795:     if not isinstance(pages, dict):
+   796:         pages = {}
+
+MATCH: active_live_domain_urls
+LINE: 786
+------------------------------------------------------------
+   779:         if isinstance(raw_urls, list):
+   780:             active_live_domain_urls = [
+   781:                 _norm_url(str(x))
+   782:                 for x in raw_urls
+   783:                 if str(x).strip()
+   784:             ]
+   785: 
+   786:     active_live_domain_url_set = set(active_live_domain_urls)
+   787: 
+   788:     sources = sources_obj.get("sources") or []
+   789: 
+   790:     if not isinstance(sources, list):
+   791:         sources = []
+   792: 
+   793:     pages = pages_obj.get("pages") or {}
+   794: 
+   795:     if not isinstance(pages, dict):
+   796:         pages = {}
+   797: 
+   798:     seed_paths: List[str] = []
+   799:     candidate_urls: List[str] = []
+   800: 
+   801:     for source in sources:
+   802:         if not isinstance(source, dict):
+
+MATCH: cluster_names
+LINE: 1030
+------------------------------------------------------------
+  1023:             "active_phrase_matches": phrase_awareness.get("active_phrase_matches", 0),
+  1024:             "phrase_match_details": phrase_awareness.get("phrase_match_details", []),
+  1025:             "semantic_route_score": phrase_awareness.get("semantic_route_score", 0),
+  1026:             "target_score": phrase_awareness.get("target_score", 0),
+  1027: 
+  1028:             # Cluster -> Target bridge enrichment.
+  1029:             "cluster_ids": cluster_meta.get("cluster_ids", []),
+  1030:             "cluster_names": cluster_meta.get("cluster_names", []),
+  1031:             "cluster_keywords": cluster_meta.get("cluster_keywords", [])[:30],
+  1032:             "cluster_matched_terms": cluster_meta.get("cluster_matched_terms", [])[:30],
+  1033:             "cluster_score": cluster_meta.get("cluster_score", 0),
+  1034:             "cluster_purity_score": cluster_meta.get("cluster_purity_score", 0),
+  1035: 
+  1036:             # Section -> Target bridge enrichment.
+  1037:             "section_ids": section_meta.get("section_ids", []),
+  1038:             "section_names": section_meta.get("section_names", []),
+  1039:             "section_keywords": section_meta.get("section_keywords", [])[:30],
+  1040:             "section_matched_terms": section_meta.get("section_matched_terms", [])[:30],
+  1041:             "section_score": section_meta.get("section_score", 0),
+  1042: 
+  1043:             # Universal metadata block
+  1044:             "metadata": {
+  1045:                 "builder_version": "live_domain_target_pool_v2",
+  1046:                 "source_file": str(pages_fp),
+
+MATCH: cluster_keywords
+LINE: 1031
+------------------------------------------------------------
+  1024:             "phrase_match_details": phrase_awareness.get("phrase_match_details", []),
+  1025:             "semantic_route_score": phrase_awareness.get("semantic_route_score", 0),
+  1026:             "target_score": phrase_awareness.get("target_score", 0),
+  1027: 
+  1028:             # Cluster -> Target bridge enrichment.
+  1029:             "cluster_ids": cluster_meta.get("cluster_ids", []),
+  1030:             "cluster_names": cluster_meta.get("cluster_names", []),
+  1031:             "cluster_keywords": cluster_meta.get("cluster_keywords", [])[:30],
+  1032:             "cluster_matched_terms": cluster_meta.get("cluster_matched_terms", [])[:30],
+  1033:             "cluster_score": cluster_meta.get("cluster_score", 0),
+  1034:             "cluster_purity_score": cluster_meta.get("cluster_purity_score", 0),
+  1035: 
+  1036:             # Section -> Target bridge enrichment.
+  1037:             "section_ids": section_meta.get("section_ids", []),
+  1038:             "section_names": section_meta.get("section_names", []),
+  1039:             "section_keywords": section_meta.get("section_keywords", [])[:30],
+  1040:             "section_matched_terms": section_meta.get("section_matched_terms", [])[:30],
+  1041:             "section_score": section_meta.get("section_score", 0),
+  1042: 
+  1043:             # Universal metadata block
+  1044:             "metadata": {
+  1045:                 "builder_version": "live_domain_target_pool_v2",
+  1046:                 "source_file": str(pages_fp),
+  1047:                 "title_fallback_used": title_source == "slug",
+
+MATCH: section_names
+LINE: 1038
+------------------------------------------------------------
+  1031:             "cluster_keywords": cluster_meta.get("cluster_keywords", [])[:30],
+  1032:             "cluster_matched_terms": cluster_meta.get("cluster_matched_terms", [])[:30],
+  1033:             "cluster_score": cluster_meta.get("cluster_score", 0),
+  1034:             "cluster_purity_score": cluster_meta.get("cluster_purity_score", 0),
+  1035: 
+  1036:             # Section -> Target bridge enrichment.
+  1037:             "section_ids": section_meta.get("section_ids", []),
+  1038:             "section_names": section_meta.get("section_names", []),
+  1039:             "section_keywords": section_meta.get("section_keywords", [])[:30],
+  1040:             "section_matched_terms": section_meta.get("section_matched_terms", [])[:30],
+  1041:             "section_score": section_meta.get("section_score", 0),
+  1042: 
+  1043:             # Universal metadata block
+  1044:             "metadata": {
+  1045:                 "builder_version": "live_domain_target_pool_v2",
+  1046:                 "source_file": str(pages_fp),
+  1047:                 "title_fallback_used": title_source == "slug",
+  1048:                 "seed_path_match": seed_match,
+  1049:                 "title_source": title_source,
+  1050:             },
+  1051:         }
+  1052: 
+  1053:         items.append(item)
+  1054: 
+
+MATCH: section_keywords
+LINE: 1039
+------------------------------------------------------------
+  1032:             "cluster_matched_terms": cluster_meta.get("cluster_matched_terms", [])[:30],
+  1033:             "cluster_score": cluster_meta.get("cluster_score", 0),
+  1034:             "cluster_purity_score": cluster_meta.get("cluster_purity_score", 0),
+  1035: 
+  1036:             # Section -> Target bridge enrichment.
+  1037:             "section_ids": section_meta.get("section_ids", []),
+  1038:             "section_names": section_meta.get("section_names", []),
+  1039:             "section_keywords": section_meta.get("section_keywords", [])[:30],
+  1040:             "section_matched_terms": section_meta.get("section_matched_terms", [])[:30],
+  1041:             "section_score": section_meta.get("section_score", 0),
+  1042: 
+  1043:             # Universal metadata block
+  1044:             "metadata": {
+  1045:                 "builder_version": "live_domain_target_pool_v2",
+  1046:                 "source_file": str(pages_fp),
+  1047:                 "title_fallback_used": title_source == "slug",
+  1048:                 "seed_path_match": seed_match,
+  1049:                 "title_source": title_source,
+  1050:             },
+  1051:         }
+  1052: 
+  1053:         items.append(item)
+  1054: 
+  1055:     out: Dict[str, Any] = {
+
+MATCH: active_target_set
+LINE: 1066
+------------------------------------------------------------
+  1059:         "generated_at": datetime.now(timezone.utc).isoformat(),
+  1060:         "source": (
+  1061:             "site_sources.sitemap_urls + "
+  1062:             "english-only quality filtering + "
+  1063:             "seed priority"
+  1064:         ),
+  1065:         "seed_paths": seed_paths,
+  1066:         "active_target_set_used": bool(active_fp.exists()),
+  1067:         "active_filter_applied": bool(active_live_domain_url_set),
+  1068:         "active_live_domain_urls_count": len(active_live_domain_urls),
+  1069:         "active_phrase_pool_used": bool(active_phrases),
+  1070:         "active_phrase_count": len(active_phrases),
+  1071:         "priority_phrase_set_used": bool(priority_phrases),
+  1072:         "priority_phrase_count": len(priority_phrases),
+  1073:         "secondary_phrase_count": len(secondary_phrases),
+  1074: 
+  1075:         "counts": {
+  1076:             "candidate_urls_before_quality_filter": before_quality_filter,
+  1077:             "candidate_urls_after_quality_filter": after_quality_filter,
+  1078:             "candidate_urls_before_active_filter": before_active_filter,
+  1079:             "candidate_urls_after_active_filter": after_active_filter,
+  1080:             "phrase_aware_selection_applied": phrase_aware_selection_applied,
+  1081:             "phrase_promoted_urls_count": phrase_promoted_urls_count,
+  1082:             "priority_phrase_promoted_urls_count": priority_phrase_promoted_urls_count,
+
+MATCH: active_live_domain_urls
+LINE: 1068
+------------------------------------------------------------
+  1061:             "site_sources.sitemap_urls + "
+  1062:             "english-only quality filtering + "
+  1063:             "seed priority"
+  1064:         ),
+  1065:         "seed_paths": seed_paths,
+  1066:         "active_target_set_used": bool(active_fp.exists()),
+  1067:         "active_filter_applied": bool(active_live_domain_url_set),
+  1068:         "active_live_domain_urls_count": len(active_live_domain_urls),
+  1069:         "active_phrase_pool_used": bool(active_phrases),
+  1070:         "active_phrase_count": len(active_phrases),
+  1071:         "priority_phrase_set_used": bool(priority_phrases),
+  1072:         "priority_phrase_count": len(priority_phrases),
+  1073:         "secondary_phrase_count": len(secondary_phrases),
+  1074: 
+  1075:         "counts": {
+  1076:             "candidate_urls_before_quality_filter": before_quality_filter,
+  1077:             "candidate_urls_after_quality_filter": after_quality_filter,
+  1078:             "candidate_urls_before_active_filter": before_active_filter,
+  1079:             "candidate_urls_after_active_filter": after_active_filter,
+  1080:             "phrase_aware_selection_applied": phrase_aware_selection_applied,
+  1081:             "phrase_promoted_urls_count": phrase_promoted_urls_count,
+  1082:             "priority_phrase_promoted_urls_count": priority_phrase_promoted_urls_count,
+  1083:             "secondary_phrase_promoted_urls_count": secondary_phrase_promoted_urls_count,
+  1084:             "rejected_urls": len(rejected),
+
+============================================================
+FILE: backend\server\engine\workspace_topic_cluster_builder.py
+============================================================
+
+MATCH: build_workspace_topic_clusters
+LINE: 504
+------------------------------------------------------------
+   497:         reverse=True,
+   498:     )[:max_clusters]
+   499: 
+   500:     return {c["cluster_id"]: c for c in sorted_clusters}
+   501: 
+   502: 
+   503: 
+   504: def build_workspace_topic_clusters(
+   505:     workspace_id: str,
+   506:     min_token_frequency: int = 3,
+   507:     max_clusters: int = 80,
+   508:     max_urls_per_cluster: int = 80,
+   509: ) -> Dict[str, Any]:
+   510:     ws = _safe_ws(workspace_id)
+   511:     data_dir = _data_dir()
+   512: 
+   513:     live_pool_fp = data_dir / "target_pools" / "live_domain" / f"live_domain_target_pool_{ws}.json"
+   514:     live_pool = _read_json(live_pool_fp, {}).get("items", [])
+   515: 
+   516:     if not isinstance(live_pool, list):
+   517:         live_pool = []
+   518: 
+   519:     phrase_counter: Counter = Counter()
+   520:     token_counter: Counter = Counter()
+
+============================================================
+FILE: backend\server\engine\workspace_section_cluster_builder.py
+============================================================
+
+MATCH: build_workspace_section_clusters
+LINE: 64
+------------------------------------------------------------
+    57:     toks: List[str] = []
+    58:     for part in chosen:
+    59:         toks.extend(_tokens(part))
+    60: 
+    61:     return " ".join(toks[:4]).strip()
+    62: 
+    63: 
+    64: def build_workspace_section_clusters(workspace_id: str, min_urls_per_section: int = 2) -> Dict[str, Any]:
+    65:     ws = _safe_ws(workspace_id)
+    66: 
+    67:     pool_fp = _data_dir() / "target_pools" / "live_domain" / f"live_domain_target_pool_{ws}.json"
+    68:     pool = _read_json(pool_fp, {})
+    69:     items = pool.get("items") if isinstance(pool, dict) else []
+    70: 
+    71:     if not isinstance(items, list):
+    72:         items = []
+    73: 
+    74:     groups: Dict[str, Dict[str, Any]] = {}
+    75: 
+    76:     for item in items:
+    77:         if not isinstance(item, dict):
+    78:             continue
+    79: 
+    80:         url = str(item.get("url") or "").strip()
+
+============================================================
+FILE: backend\server\pools\target_pools\url_pool_manager.py
+============================================================
+
+MATCH: active_target_set
+LINE: 29
+------------------------------------------------------------
+    22:     return DATA_DIR / f"site_sources_{workspace_id}.json"
+    23: 
+    24: 
+    25: def _site_pages_path(workspace_id: str) -> Path:
+    26:     return DATA_DIR / f"site_pages_{workspace_id}.json"
+    27: 
+    28: 
+    29: def _active_target_set_path(workspace_id: str) -> Path:
+    30:     return TARGET_POOLS_DIR / f"active_target_set_{workspace_id}.json"
+    31: 
+    32: 
+    33: def _reserve_urls_path(workspace_id: str) -> Path:
+    34:     return URL_POOL_DIR / f"reserve_urls_{workspace_id}.json"
+    35: 
+    36: 
+    37: def _read_json(path: Path, default: Any) -> Any:
+    38:     try:
+    39:         if path.exists():
+    40:             return json.loads(path.read_text(encoding="utf-8"))
+    41:     except Exception:
+    42:         pass
+    43:     return default
+    44: 
+    45: 
+
+MATCH: active_target_set
+LINE: 30
+------------------------------------------------------------
+    23: 
+    24: 
+    25: def _site_pages_path(workspace_id: str) -> Path:
+    26:     return DATA_DIR / f"site_pages_{workspace_id}.json"
+    27: 
+    28: 
+    29: def _active_target_set_path(workspace_id: str) -> Path:
+    30:     return TARGET_POOLS_DIR / f"active_target_set_{workspace_id}.json"
+    31: 
+    32: 
+    33: def _reserve_urls_path(workspace_id: str) -> Path:
+    34:     return URL_POOL_DIR / f"reserve_urls_{workspace_id}.json"
+    35: 
+    36: 
+    37: def _read_json(path: Path, default: Any) -> Any:
+    38:     try:
+    39:         if path.exists():
+    40:             return json.loads(path.read_text(encoding="utf-8"))
+    41:     except Exception:
+    42:         pass
+    43:     return default
+    44: 
+    45: 
+    46: def _write_json(path: Path, obj: Any) -> Any:
+
+MATCH: active_target_set
+LINE: 199
+------------------------------------------------------------
+   192: 
+   193: 
+   194: def load_all_sitemap_urls(workspace_id: str) -> List[str]:
+   195:     """
+   196:     Returns full usable URL inventory from site_sources.
+   197: 
+   198:     This is for URL Pool Manager lifecycle:
+   199:     - active URLs are in active_target_set
+   200:     - reserve URLs come from full sitemap inventory minus active URLs
+   201:     - this function only applies safety cleanup, not scoring or ranking
+   202:     """
+   203:     obj = _read_json(_site_sources_path(workspace_id), {})
+   204:     urls: List[str] = []
+   205: 
+   206:     for source in obj.get("sources") or []:
+   207:         if not isinstance(source, dict):
+   208:             continue
+   209:         for u in source.get("sitemap_urls") or []:
+   210:             if str(u).strip() and _is_safe_reserve_url(str(u).strip(), workspace_id):
+   211:                 urls.append(str(u).strip())
+   212: 
+   213:     return _unique_clean(urls)
+   214: 
+   215: 
+
+MATCH: active_target_set
+LINE: 217
+------------------------------------------------------------
+   210:             if str(u).strip() and _is_safe_reserve_url(str(u).strip(), workspace_id):
+   211:                 urls.append(str(u).strip())
+   212: 
+   213:     return _unique_clean(urls)
+   214: 
+   215: 
+   216: def load_active_urls(workspace_id: str) -> List[str]:
+   217:     obj = _read_json(_active_target_set_path(workspace_id), {})
+   218:     return _unique_clean(obj.get("active_live_domain_urls") or [])
+   219: 
+   220: 
+   221: def save_active_urls(workspace_id: str, urls: List[str]) -> Dict[str, Any]:
+   222:     path = _active_target_set_path(workspace_id)
+   223:     obj = _read_json(path, {})
+   224: 
+   225:     if not isinstance(obj, dict):
+   226:         obj = {}
+   227: 
+   228:     obj["workspace_id"] = workspace_id
+   229:     obj["active_live_domain_urls"] = _unique_clean(urls)
+   230:     obj["updated_at"] = _now()
+   231: 
+   232:     obj.setdefault("active_document_ids", [])
+   233:     obj.setdefault("active_draft_ids", [])
+
+MATCH: active_live_domain_urls
+LINE: 218
+------------------------------------------------------------
+   211:                 urls.append(str(u).strip())
+   212: 
+   213:     return _unique_clean(urls)
+   214: 
+   215: 
+   216: def load_active_urls(workspace_id: str) -> List[str]:
+   217:     obj = _read_json(_active_target_set_path(workspace_id), {})
+   218:     return _unique_clean(obj.get("active_live_domain_urls") or [])
+   219: 
+   220: 
+   221: def save_active_urls(workspace_id: str, urls: List[str]) -> Dict[str, Any]:
+   222:     path = _active_target_set_path(workspace_id)
+   223:     obj = _read_json(path, {})
+   224: 
+   225:     if not isinstance(obj, dict):
+   226:         obj = {}
+   227: 
+   228:     obj["workspace_id"] = workspace_id
+   229:     obj["active_live_domain_urls"] = _unique_clean(urls)
+   230:     obj["updated_at"] = _now()
+   231: 
+   232:     obj.setdefault("active_document_ids", [])
+   233:     obj.setdefault("active_draft_ids", [])
+   234:     obj.setdefault("active_imported_urls", [])
+
+MATCH: active_target_set
+LINE: 222
+------------------------------------------------------------
+   215: 
+   216: def load_active_urls(workspace_id: str) -> List[str]:
+   217:     obj = _read_json(_active_target_set_path(workspace_id), {})
+   218:     return _unique_clean(obj.get("active_live_domain_urls") or [])
+   219: 
+   220: 
+   221: def save_active_urls(workspace_id: str, urls: List[str]) -> Dict[str, Any]:
+   222:     path = _active_target_set_path(workspace_id)
+   223:     obj = _read_json(path, {})
+   224: 
+   225:     if not isinstance(obj, dict):
+   226:         obj = {}
+   227: 
+   228:     obj["workspace_id"] = workspace_id
+   229:     obj["active_live_domain_urls"] = _unique_clean(urls)
+   230:     obj["updated_at"] = _now()
+   231: 
+   232:     obj.setdefault("active_document_ids", [])
+   233:     obj.setdefault("active_draft_ids", [])
+   234:     obj.setdefault("active_imported_urls", [])
+   235: 
+   236:     return _write_json(path, obj)
+   237: 
+   238: 
+
+MATCH: active_live_domain_urls
+LINE: 229
+------------------------------------------------------------
+   222:     path = _active_target_set_path(workspace_id)
+   223:     obj = _read_json(path, {})
+   224: 
+   225:     if not isinstance(obj, dict):
+   226:         obj = {}
+   227: 
+   228:     obj["workspace_id"] = workspace_id
+   229:     obj["active_live_domain_urls"] = _unique_clean(urls)
+   230:     obj["updated_at"] = _now()
+   231: 
+   232:     obj.setdefault("active_document_ids", [])
+   233:     obj.setdefault("active_draft_ids", [])
+   234:     obj.setdefault("active_imported_urls", [])
+   235: 
+   236:     return _write_json(path, obj)
+   237: 
+   238: 
+   239: def load_reserve_urls(workspace_id: str) -> List[str]:
+   240:     obj = _read_json(_reserve_urls_path(workspace_id), {})
+   241:     return _unique_clean(obj.get("reserve_live_domain_urls") or [])
+   242: 
+   243: 
+   244: def save_reserve_urls(workspace_id: str, urls: List[str]) -> Dict[str, Any]:
+   245:     obj = {
+
+MATCH: initialize_url_pool_from_current_active
+LINE: 254
+------------------------------------------------------------
+   247:         "type": "url_pool_reserve",
+   248:         "updated_at": _now(),
+   249:         "reserve_live_domain_urls": _unique_clean(urls),
+   250:     }
+   251:     return _write_json(_reserve_urls_path(workspace_id), obj)
+   252: 
+   253: 
+   254: def initialize_url_pool_from_current_active(workspace_id: str) -> Dict[str, Any]:
+   255:     all_urls = load_all_sitemap_urls(workspace_id)
+   256:     active_urls = load_active_urls(workspace_id)
+   257: 
+   258:     active_set = set(active_urls)
+   259:     reserve_urls = [u for u in all_urls if u not in active_set]
+   260: 
+   261:     save_reserve_urls(workspace_id, reserve_urls)
+   262: 
+   263:     return {
+   264:         "ok": True,
+   265:         "workspace_id": workspace_id,
+   266:         "all_urls_count": len(all_urls),
+   267:         "active_urls_count": len(active_urls),
+   268:         "reserve_urls_count": len(reserve_urls),
+   269:     }
+   270: 
+
+MATCH: active_target_set
+LINE: 380
+------------------------------------------------------------
+   373:     return {
+   374:         "ok": True,
+   375:         "workspace_id": workspace_id,
+   376:         "all_urls_count": len(all_urls),
+   377:         "active_urls_count": len(active_urls),
+   378:         "reserve_urls_count": len(reserve_urls),
+   379:         "has_site_sources": _site_sources_path(workspace_id).exists(),
+   380:         "has_active_target_set": _active_target_set_path(workspace_id).exists(),
+   381:         "has_reserve_pool": _reserve_urls_path(workspace_id).exists(),
+   382:     }
+
+============================================================
+FILE: backend\server\jobs\universal_knowledge_orchestrator.py
+============================================================
+
+MATCH: website_connection_batch
+LINE: 41
+------------------------------------------------------------
+    34:     "format_detection",
+    35:     "format_router",
+    36:     "upload_document_extraction",
+    37:     "build_uduc",
+    38:     "build_uucd_from_uduc",
+    39: 
+    40:     # Website arm
+    41:     "website_connection_batch",
+    42:     "website_crawl_batch",
+    43:     "site_page_discovery",
+    44:     "raw_html_acquisition",
+    45:     "html_cleaning",
+    46:     "article_extraction",
+    47:     "content_normalization",
+    48:     "build_website_unified_content",
+    49:     "build_uucd_from_website",
+    50: 
+    51:     # Universal canonical layer
+    52:     "build_uucd",
+    53:     "source_authorization",
+    54:     "source_lifecycle",
+    55:     "source_asset_versioning",
+    56:     "build_body_store",
+    57:     "verify_body_store",
+
+MATCH: create_universal_knowledge_job
+LINE: 145
+------------------------------------------------------------
+   138: 
+   139: def append_jsonl(path: Path, row: Dict[str, Any]) -> None:
+   140:     path.parent.mkdir(parents=True, exist_ok=True)
+   141:     with path.open("a", encoding="utf-8") as f:
+   142:         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+   143: 
+   144: 
+   145: def create_universal_knowledge_job(
+   146:     *,
+   147:     workspace_id: str,
+   148:     job_type: str,
+   149:     payload: Dict[str, Any] | None = None,
+   150:     user_id: str = "system",
+   151:     product_id: str = "linkcraftor",
+   152:     pipeline: str = "",
+   153:     stage: str = "",
+   154:     payload_ref: str = "",
+   155:     priority: int = 5,
+   156:     parent_job_id: str = "",
+   157:     batch_id: str = "",
+   158:     enqueue: bool = True,
+   159: ) -> Dict[str, Any]:
+   160:     if (
+   161:         job_type not in SUPPORTED_JOB_TYPES
+
+MATCH: website_connection_batch
+LINE: 406
+------------------------------------------------------------
+   399:         "source_authorization",
+   400:         "source_lifecycle",
+   401:         "source_asset_versioning",
+   402:         "build_body_store",
+   403:         "verify_body_store",
+   404:         "certify_uucd_body_store",
+   405:     ],
+   406:     "website_connection_batch": [
+   407:         "site_page_discovery",
+   408:         "raw_html_acquisition",
+   409:         "html_cleaning",
+   410:         "article_extraction",
+   411:         "content_normalization",
+   412:         "build_website_unified_content",
+   413:         "build_uucd_from_website",
+   414:         "source_authorization",
+   415:         "source_lifecycle",
+   416:         "source_asset_versioning",
+   417:         "build_body_store",
+   418:         "verify_body_store",
+   419:         "certify_uucd_body_store",
+   420:     ],
+   421:     "semantic_pipeline": [
+   422:         "semantic_article_reader",
+
+MATCH: create_universal_knowledge_job
+LINE: 462
+------------------------------------------------------------
+   455:             **(payload or {}),
+   456:             "chain_name": chain_name,
+   457:             "stage_index": idx,
+   458:             "stage_count": len(chain),
+   459:             "requires_previous_stage": idx > 1,
+   460:         }
+   461: 
+   462:         job = create_universal_knowledge_job(
+   463:             workspace_id=workspace_id,
+   464:             job_type=job_type,
+   465:             payload=stage_payload,
+   466:             parent_job_id=parent_job_id,
+   467:             batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}",
+   468:         )
+   469: 
+   470:         jobs.append(job)
+   471: 
+   472:     return jobs
+   473: 
+   474: 
+   475: def create_semantic_pipeline_jobs_if_certified_v1(
+   476:     *,
+   477:     workspace_id: str,
+   478:     certification: Dict[str, Any],
+
+MATCH: website_connection_batch
+LINE: 522
+------------------------------------------------------------
+   515:             "failure registry",
+   516:             "per-workspace isolation",
+   517:             "canonical pipeline orchestration",
+   518:         ],
+   519:         "scaling_rule": "API creates jobs; workers process jobs asynchronously.",
+   520:         "pipeline_chains": {
+   521:             "upload_document_batch": get_pipeline_job_chain_v1("upload_document_batch"),
+   522:             "website_connection_batch": get_pipeline_job_chain_v1("website_connection_batch"),
+   523:             "semantic_pipeline": get_pipeline_job_chain_v1("semantic_pipeline"),
+   524:         },
+   525:         "semantic_gate": "Semantic jobs are created only when certification.semantic_ready is true.",
+   526:         "next_stage": "Job Status API + real stage adapters",
+   527:     }
+   528: 
+   529: def register_universal_runtime_handler(
+   530:     *,
+   531:     job_type: str,
+   532:     handler: Any,
+   533:     pipeline: str = "",
+   534:     stage: str = "",
+   535:     description: str = "",
+   536:     required_payload_fields=None,
+   537:     predecessor_stages=None,
+   538:     successor_stages=None,
+
