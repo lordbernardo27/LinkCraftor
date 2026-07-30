@@ -1,0 +1,930 @@
+PHASE 2.1.2 — JOB CREATION ENGINE
+SINGLE-FILE READ-ONLY INSPECTION
+TARGET: ORCHESTRATION JOB STORE
+========================================================================================
+
+Target: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\job_store.py
+Generated UTC: 2026-07-30T03:01:05.152715+00:00
+Size bytes: 7814
+Line count: 269
+SHA256: C34FC21C2F742F4CE8B8BC33DDC203ACD3F5E321C813D9E369D301E61108BC0F
+UTF-8 BOM: True
+Syntax valid: True
+
+SAFETY
+----------------------------------------------------------------------------------------
+- The target module was not imported.
+- No LinkCraftor code was executed.
+- No job was created.
+- No queue or worker was executed.
+- No source or production data was modified.
+
+IMPORTS
+----------------------------------------------------------------------------------------
+Line 00001: from __future__ import annotations
+Line 00003: import json
+Line 00004: from dataclasses import asdict
+Line 00005: from datetime import datetime
+Line 00006: from pathlib import Path
+Line 00007: from typing import Any
+Line 00007: from typing import Dict
+Line 00007: from typing import List
+Line 00007: from typing import Optional
+Line 00008: from uuid import uuid4
+Line 00010: from models import JOB_STATUS_FAILED
+Line 00010: from models import VALID_JOB_STATUSES
+Line 00010: from models import JobStatusEvent
+Line 00010: from models import OrchestrationJob
+Line 00010: from models import utc_now
+
+MODULE ASSIGNMENTS
+----------------------------------------------------------------------------------------
+Line 00019: DATA_DIR = Path("backend/server/data/orchestration")
+Line 00020: JOBS_FILE = DATA_DIR / "jobs.json"
+Line 00021: EVENTS_FILE = DATA_DIR / "job_events.json"
+
+FUNCTION INVENTORY
+----------------------------------------------------------------------------------------
+Line 00024-00025: def _ensure_dir() -> None
+Line 00028-00031: def _json_default(value: Any) -> Any
+Line 00034-00041: def _read_json(path: Path, default: Any) -> Any [IMPORTANT]
+Line 00044-00049: def _write_json(path: Path, data: Any) -> None [IMPORTANT]
+Line 00052-00060: def _parse_datetime(value: Any) -> Optional[datetime]
+Line 00063-00094: def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob [IMPORTANT]
+Line 00097-00105: def load_jobs() -> Dict[str, OrchestrationJob] [IMPORTANT]
+Line 00108-00109: def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None [IMPORTANT]
+Line 00112-00113: def get_job(job_id: str) -> Optional[OrchestrationJob] [IMPORTANT]
+Line 00116-00136: def create_job(workspace_id: str, job_type: str, payload: Optional[Dict[str, Any]] = None, metadata: Optional[Dict[str, Any]] = None, priority: int = 5) -> OrchestrationJob [IMPORTANT]
+Line 00139-00165: def update_job_status(job_id: str, new_status: str, metadata: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None) -> OrchestrationJob [IMPORTANT]
+Line 00168-00234: def update_job_progress(job_id: str, progress_percent: float, metadata: Optional[Dict[str, Any]] = None, current_step: Optional[str] = None, progress_message: Optional[str] = None, total_steps: Optional[int] = None, processed_count: Optional[int] = None, failed_count: Optional[int] = None, warning_count: Optional[int] = None, total_documents: Optional[int] = None, processed_documents: Optional[int] = None, failed_documents: Optional[int] = None, skipped_documents: Optional[int] = None, current_document_id: Optional[str] = None, current_document_name: Optional[str] = None) -> OrchestrationJob [IMPORTANT]
+Line 00237-00258: def append_job_event(job_id: str, old_status: str, new_status: str, metadata: Optional[Dict[str, Any]] = None) -> JobStatusEvent [IMPORTANT]
+Line 00261-00265: def list_job_events(job_id: str) -> List[Dict[str, Any]] [IMPORTANT]
+
+CLASS INVENTORY
+----------------------------------------------------------------------------------------
+<none>
+
+JOB OBJECT CONSTRUCTIONS
+----------------------------------------------------------------------------------------
+
+Constructor: OrchestrationJob
+Line: 64
+Scope: _job_from_dict
+Keywords: ['assigned_worker_id', 'completed_at', 'created_at', 'current_document_id', 'current_document_name', 'current_step', 'error_message', 'failed_count', 'failed_documents', 'job_id', 'job_type', 'metadata', 'payload', 'priority', 'processed_count', 'processed_documents', 'progress_message', 'progress_percent', 'skipped_documents', 'started_at', 'status', 'total_documents', 'total_steps', 'updated_at', 'warning_count', 'workspace_id']
+Excerpt:
+00056:         return value
+00057:     try:
+00058:         return datetime.fromisoformat(str(value))
+00059:     except Exception:
+00060:         return None
+00061: 
+00062: 
+00063: def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+00064:     return OrchestrationJob(
+00065:         job_id=str(data.get("job_id", "")),
+00066:         workspace_id=str(data.get("workspace_id", "")),
+00067:         job_type=str(data.get("job_type", "")),
+00068:         status=str(data.get("status", "queued")),
+00069:         priority=int(data.get("priority", 5)),
+00070:         created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+00071:         updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+00072:         payload=data.get("payload") or {},
+----------------------------------------------------------------------------------------
+
+Constructor: OrchestrationJob
+Line: 125
+Scope: create_job
+Keywords: ['job_id', 'job_type', 'metadata', 'payload', 'priority', 'workspace_id']
+Excerpt:
+00117:     workspace_id: str,
+00118:     job_type: str,
+00119:     payload: Optional[Dict[str, Any]] = None,
+00120:     metadata: Optional[Dict[str, Any]] = None,
+00121:     priority: int = 5,
+00122: ) -> OrchestrationJob:
+00123:     jobs = load_jobs()
+00124:     job_id = f"job_{uuid4().hex[:16]}"
+00125:     job = OrchestrationJob(
+00126:         job_id=job_id,
+00127:         workspace_id=workspace_id,
+00128:         job_type=job_type,
+00129:         payload=payload or {},
+00130:         metadata=metadata or {},
+00131:         priority=priority,
+00132:     )
+00133:     jobs[job_id] = job
+----------------------------------------------------------------------------------------
+
+Constructor: JobStatusEvent
+Line: 247
+Scope: append_job_event
+Keywords: ['event_id', 'job_id', 'metadata', 'new_status', 'old_status']
+Excerpt:
+00239:     old_status: str,
+00240:     new_status: str,
+00241:     metadata: Optional[Dict[str, Any]] = None,
+00242: ) -> JobStatusEvent:
+00243:     events = _read_json(EVENTS_FILE, {})
+00244:     if not isinstance(events, dict):
+00245:         events = {}
+00246: 
+00247:     event = JobStatusEvent(
+00248:         event_id=f"evt_{uuid4().hex[:16]}",
+00249:         job_id=job_id,
+00250:         old_status=old_status,
+00251:         new_status=new_status,
+00252:         metadata=metadata or {},
+00253:     )
+00254: 
+00255:     events.setdefault(job_id, [])
+----------------------------------------------------------------------------------------
+
+JOB-LIKE DICTIONARY CONSTRUCTIONS
+----------------------------------------------------------------------------------------
+<none>
+
+IDENTITY AND TIMESTAMP GENERATION
+----------------------------------------------------------------------------------------
+
+Call: uuid4
+Line: 124
+Scope: create_job
+Excerpt:
+00119:     payload: Optional[Dict[str, Any]] = None,
+00120:     metadata: Optional[Dict[str, Any]] = None,
+00121:     priority: int = 5,
+00122: ) -> OrchestrationJob:
+00123:     jobs = load_jobs()
+00124:     job_id = f"job_{uuid4().hex[:16]}"
+00125:     job = OrchestrationJob(
+00126:         job_id=job_id,
+00127:         workspace_id=workspace_id,
+00128:         job_type=job_type,
+00129:         payload=payload or {},
+----------------------------------------------------------------------------------------
+
+Call: uuid4
+Line: 248
+Scope: append_job_event
+Excerpt:
+00243:     events = _read_json(EVENTS_FILE, {})
+00244:     if not isinstance(events, dict):
+00245:         events = {}
+00246: 
+00247:     event = JobStatusEvent(
+00248:         event_id=f"evt_{uuid4().hex[:16]}",
+00249:         job_id=job_id,
+00250:         old_status=old_status,
+00251:         new_status=new_status,
+00252:         metadata=metadata or {},
+00253:     )
+----------------------------------------------------------------------------------------
+
+IMPORTANT CALL SITES
+----------------------------------------------------------------------------------------
+
+Call: OrchestrationJob
+Line: 64
+Scope: _job_from_dict
+Keywords: ['assigned_worker_id', 'completed_at', 'created_at', 'current_document_id', 'current_document_name', 'current_step', 'error_message', 'failed_count', 'failed_documents', 'job_id', 'job_type', 'metadata', 'payload', 'priority', 'processed_count', 'processed_documents', 'progress_message', 'progress_percent', 'skipped_documents', 'started_at', 'status', 'total_documents', 'total_steps', 'updated_at', 'warning_count', 'workspace_id']
+Excerpt:
+00059:     except Exception:
+00060:         return None
+00061: 
+00062: 
+00063: def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+00064:     return OrchestrationJob(
+00065:         job_id=str(data.get("job_id", "")),
+00066:         workspace_id=str(data.get("workspace_id", "")),
+00067:         job_type=str(data.get("job_type", "")),
+00068:         status=str(data.get("status", "queued")),
+00069:         priority=int(data.get("priority", 5)),
+----------------------------------------------------------------------------------------
+
+Call: _read_json
+Line: 98
+Scope: load_jobs
+Keywords: []
+Excerpt:
+00093:         error_message=data.get("error_message"),
+00094:     )
+00095: 
+00096: 
+00097: def load_jobs() -> Dict[str, OrchestrationJob]:
+00098:     raw = _read_json(JOBS_FILE, {})
+00099:     if not isinstance(raw, dict):
+00100:         return {}
+00101:     return {
+00102:         job_id: _job_from_dict(item)
+00103:         for job_id, item in raw.items()
+----------------------------------------------------------------------------------------
+
+Call: _write_json
+Line: 109
+Scope: save_jobs
+Keywords: []
+Excerpt:
+00104:         if isinstance(item, dict)
+00105:     }
+00106: 
+00107: 
+00108: def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+00109:     _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+00110: 
+00111: 
+00112: def get_job(job_id: str) -> Optional[OrchestrationJob]:
+00113:     return load_jobs().get(job_id)
+00114: 
+----------------------------------------------------------------------------------------
+
+Call: load_jobs
+Line: 123
+Scope: create_job
+Keywords: []
+Excerpt:
+00118:     job_type: str,
+00119:     payload: Optional[Dict[str, Any]] = None,
+00120:     metadata: Optional[Dict[str, Any]] = None,
+00121:     priority: int = 5,
+00122: ) -> OrchestrationJob:
+00123:     jobs = load_jobs()
+00124:     job_id = f"job_{uuid4().hex[:16]}"
+00125:     job = OrchestrationJob(
+00126:         job_id=job_id,
+00127:         workspace_id=workspace_id,
+00128:         job_type=job_type,
+----------------------------------------------------------------------------------------
+
+Call: OrchestrationJob
+Line: 125
+Scope: create_job
+Keywords: ['job_id', 'job_type', 'metadata', 'payload', 'priority', 'workspace_id']
+Excerpt:
+00120:     metadata: Optional[Dict[str, Any]] = None,
+00121:     priority: int = 5,
+00122: ) -> OrchestrationJob:
+00123:     jobs = load_jobs()
+00124:     job_id = f"job_{uuid4().hex[:16]}"
+00125:     job = OrchestrationJob(
+00126:         job_id=job_id,
+00127:         workspace_id=workspace_id,
+00128:         job_type=job_type,
+00129:         payload=payload or {},
+00130:         metadata=metadata or {},
+----------------------------------------------------------------------------------------
+
+Call: save_jobs
+Line: 134
+Scope: create_job
+Keywords: []
+Excerpt:
+00129:         payload=payload or {},
+00130:         metadata=metadata or {},
+00131:         priority=priority,
+00132:     )
+00133:     jobs[job_id] = job
+00134:     save_jobs(jobs)
+00135:     append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+00136:     return job
+00137: 
+00138: 
+00139: def update_job_status(
+----------------------------------------------------------------------------------------
+
+Call: append_job_event
+Line: 135
+Scope: create_job
+Keywords: []
+Excerpt:
+00130:         metadata=metadata or {},
+00131:         priority=priority,
+00132:     )
+00133:     jobs[job_id] = job
+00134:     save_jobs(jobs)
+00135:     append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+00136:     return job
+00137: 
+00138: 
+00139: def update_job_status(
+00140:     job_id: str,
+----------------------------------------------------------------------------------------
+
+Call: load_jobs
+Line: 148
+Scope: update_job_status
+Keywords: []
+Excerpt:
+00143:     error_message: Optional[str] = None,
+00144: ) -> OrchestrationJob:
+00145:     if new_status not in VALID_JOB_STATUSES:
+00146:         raise ValueError(f"Invalid job status: {new_status}")
+00147: 
+00148:     jobs = load_jobs()
+00149:     if job_id not in jobs:
+00150:         raise KeyError(f"Job not found: {job_id}")
+00151: 
+00152:     job = jobs[job_id]
+00153:     old_status = job.status
+----------------------------------------------------------------------------------------
+
+Call: save_jobs
+Line: 163
+Scope: update_job_status
+Keywords: []
+Excerpt:
+00158:         job.error_message = error_message
+00159:         if new_status == JOB_STATUS_FAILED:
+00160:             job.progress_percent = min(job.progress_percent, 99.0)
+00161: 
+00162:     jobs[job_id] = job
+00163:     save_jobs(jobs)
+00164:     append_job_event(job_id, old_status, new_status, metadata or {})
+00165:     return job
+00166: 
+00167: 
+00168: def update_job_progress(
+----------------------------------------------------------------------------------------
+
+Call: append_job_event
+Line: 164
+Scope: update_job_status
+Keywords: []
+Excerpt:
+00159:         if new_status == JOB_STATUS_FAILED:
+00160:             job.progress_percent = min(job.progress_percent, 99.0)
+00161: 
+00162:     jobs[job_id] = job
+00163:     save_jobs(jobs)
+00164:     append_job_event(job_id, old_status, new_status, metadata or {})
+00165:     return job
+00166: 
+00167: 
+00168: def update_job_progress(
+00169:     job_id: str,
+----------------------------------------------------------------------------------------
+
+Call: load_jobs
+Line: 185
+Scope: update_job_progress
+Keywords: []
+Excerpt:
+00180:     failed_documents: Optional[int] = None,
+00181:     skipped_documents: Optional[int] = None,
+00182:     current_document_id: Optional[str] = None,
+00183:     current_document_name: Optional[str] = None,
+00184: ) -> OrchestrationJob:
+00185:     jobs = load_jobs()
+00186:     if job_id not in jobs:
+00187:         raise KeyError(f"Job not found: {job_id}")
+00188: 
+00189:     job = jobs[job_id]
+00190:     job.progress_percent = max(0.0, min(100.0, float(progress_percent)))
+----------------------------------------------------------------------------------------
+
+Call: save_jobs
+Line: 233
+Scope: update_job_progress
+Keywords: []
+Excerpt:
+00228: 
+00229:     if metadata:
+00230:         job.metadata.update(metadata)
+00231: 
+00232:     jobs[job_id] = job
+00233:     save_jobs(jobs)
+00234:     return job
+00235: 
+00236: 
+00237: def append_job_event(
+00238:     job_id: str,
+----------------------------------------------------------------------------------------
+
+Call: _read_json
+Line: 243
+Scope: append_job_event
+Keywords: []
+Excerpt:
+00238:     job_id: str,
+00239:     old_status: str,
+00240:     new_status: str,
+00241:     metadata: Optional[Dict[str, Any]] = None,
+00242: ) -> JobStatusEvent:
+00243:     events = _read_json(EVENTS_FILE, {})
+00244:     if not isinstance(events, dict):
+00245:         events = {}
+00246: 
+00247:     event = JobStatusEvent(
+00248:         event_id=f"evt_{uuid4().hex[:16]}",
+----------------------------------------------------------------------------------------
+
+Call: JobStatusEvent
+Line: 247
+Scope: append_job_event
+Keywords: ['event_id', 'job_id', 'metadata', 'new_status', 'old_status']
+Excerpt:
+00242: ) -> JobStatusEvent:
+00243:     events = _read_json(EVENTS_FILE, {})
+00244:     if not isinstance(events, dict):
+00245:         events = {}
+00246: 
+00247:     event = JobStatusEvent(
+00248:         event_id=f"evt_{uuid4().hex[:16]}",
+00249:         job_id=job_id,
+00250:         old_status=old_status,
+00251:         new_status=new_status,
+00252:         metadata=metadata or {},
+----------------------------------------------------------------------------------------
+
+Call: _write_json
+Line: 257
+Scope: append_job_event
+Keywords: []
+Excerpt:
+00252:         metadata=metadata or {},
+00253:     )
+00254: 
+00255:     events.setdefault(job_id, [])
+00256:     events[job_id].append(asdict(event))
+00257:     _write_json(EVENTS_FILE, events)
+00258:     return event
+00259: 
+00260: 
+00261: def list_job_events(job_id: str) -> List[Dict[str, Any]]:
+00262:     events = _read_json(EVENTS_FILE, {})
+----------------------------------------------------------------------------------------
+
+Call: _read_json
+Line: 262
+Scope: list_job_events
+Keywords: []
+Excerpt:
+00257:     _write_json(EVENTS_FILE, events)
+00258:     return event
+00259: 
+00260: 
+00261: def list_job_events(job_id: str) -> List[Dict[str, Any]]:
+00262:     events = _read_json(EVENTS_FILE, {})
+00263:     if not isinstance(events, dict):
+00264:         return []
+00265:     return events.get(job_id, [])
+00266: 
+00267: 
+----------------------------------------------------------------------------------------
+
+Call: _job_from_dict
+Line: 102
+Scope: load_jobs
+Keywords: []
+Excerpt:
+00097: def load_jobs() -> Dict[str, OrchestrationJob]:
+00098:     raw = _read_json(JOBS_FILE, {})
+00099:     if not isinstance(raw, dict):
+00100:         return {}
+00101:     return {
+00102:         job_id: _job_from_dict(item)
+00103:         for job_id, item in raw.items()
+00104:         if isinstance(item, dict)
+00105:     }
+00106: 
+00107: 
+----------------------------------------------------------------------------------------
+
+Call: load_jobs
+Line: 113
+Scope: get_job
+Keywords: []
+Excerpt:
+00108: def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+00109:     _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+00110: 
+00111: 
+00112: def get_job(job_id: str) -> Optional[OrchestrationJob]:
+00113:     return load_jobs().get(job_id)
+00114: 
+00115: 
+00116: def create_job(
+00117:     workspace_id: str,
+00118:     job_type: str,
+----------------------------------------------------------------------------------------
+
+FILESYSTEM AND PERSISTENCE CALLS
+----------------------------------------------------------------------------------------
+
+Call: DATA_DIR.mkdir
+Line: 25
+Scope: _ensure_dir
+Excerpt:
+00020: JOBS_FILE = DATA_DIR / "jobs.json"
+00021: EVENTS_FILE = DATA_DIR / "job_events.json"
+00022: 
+00023: 
+00024: def _ensure_dir() -> None:
+00025:     DATA_DIR.mkdir(parents=True, exist_ok=True)
+00026: 
+00027: 
+00028: def _json_default(value: Any) -> Any:
+00029:     if isinstance(value, datetime):
+00030:         return value.isoformat()
+----------------------------------------------------------------------------------------
+
+Call: path.write_text
+Line: 46
+Scope: _write_json
+Excerpt:
+00041:         return default
+00042: 
+00043: 
+00044: def _write_json(path: Path, data: Any) -> None:
+00045:     _ensure_dir()
+00046:     path.write_text(
+00047:         json.dumps(data, indent=2, ensure_ascii=False, default=_json_default),
+00048:         encoding="utf-8",
+00049:     )
+00050: 
+00051: 
+----------------------------------------------------------------------------------------
+
+Call: path.exists
+Line: 36
+Scope: _read_json
+Excerpt:
+00031:     return str(value)
+00032: 
+00033: 
+00034: def _read_json(path: Path, default: Any) -> Any:
+00035:     _ensure_dir()
+00036:     if not path.exists():
+00037:         return default
+00038:     try:
+00039:         return json.loads(path.read_text(encoding="utf-8"))
+00040:     except Exception:
+00041:         return default
+----------------------------------------------------------------------------------------
+
+Call: path.read_text
+Line: 39
+Scope: _read_json
+Excerpt:
+00034: def _read_json(path: Path, default: Any) -> Any:
+00035:     _ensure_dir()
+00036:     if not path.exists():
+00037:         return default
+00038:     try:
+00039:         return json.loads(path.read_text(encoding="utf-8"))
+00040:     except Exception:
+00041:         return default
+00042: 
+00043: 
+00044: def _write_json(path: Path, data: Any) -> None:
+----------------------------------------------------------------------------------------
+
+CREATION REFERENCES
+----------------------------------------------------------------------------------------
+Line 00008: terms=['uuid4'] | from uuid import uuid4
+Line 00014: terms=['OrchestrationJob'] |     OrchestrationJob,
+Line 00063: terms=['OrchestrationJob'] | def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+Line 00064: terms=['OrchestrationJob'] |     return OrchestrationJob(
+Line 00097: terms=['OrchestrationJob'] | def load_jobs() -> Dict[str, OrchestrationJob]:
+Line 00108: terms=['OrchestrationJob'] | def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+Line 00112: terms=['OrchestrationJob'] | def get_job(job_id: str) -> Optional[OrchestrationJob]:
+Line 00116: terms=['create_job'] | def create_job(
+Line 00122: terms=['OrchestrationJob'] | ) -> OrchestrationJob:
+Line 00124: terms=['uuid4'] |     job_id = f"job_{uuid4().hex[:16]}"
+Line 00125: terms=['OrchestrationJob'] |     job = OrchestrationJob(
+Line 00135: terms=['job_created'] |     append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+Line 00144: terms=['OrchestrationJob'] | ) -> OrchestrationJob:
+Line 00184: terms=['OrchestrationJob'] | ) -> OrchestrationJob:
+Line 00248: terms=['uuid4'] |         event_id=f"evt_{uuid4().hex[:16]}",
+
+PERSISTENCE REFERENCES
+----------------------------------------------------------------------------------------
+Line 00044: terms=['_write_json'] | def _write_json(path: Path, data: Any) -> None:
+Line 00046: terms=['write_text'] |     path.write_text(
+Line 00108: terms=['save_jobs'] | def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+Line 00109: terms=['_write_json'] |     _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+Line 00134: terms=['save_jobs'] |     save_jobs(jobs)
+Line 00135: terms=['append_job_event'] |     append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+Line 00163: terms=['save_jobs'] |     save_jobs(jobs)
+Line 00164: terms=['append_job_event'] |     append_job_event(job_id, old_status, new_status, metadata or {})
+Line 00233: terms=['save_jobs'] |     save_jobs(jobs)
+Line 00237: terms=['append_job_event'] | def append_job_event(
+Line 00257: terms=['_write_json'] |     _write_json(EVENTS_FILE, events)
+
+QUEUE REFERENCES
+----------------------------------------------------------------------------------------
+Line 00068: terms=['queue', 'queued'] |         status=str(data.get("status", "queued")),
+
+PHASE 2.1.1 CONTRACT / CREATION ENGINE REFERENCES
+----------------------------------------------------------------------------------------
+<none>
+
+TOP-LEVEL EXECUTABLE CALLS
+----------------------------------------------------------------------------------------
+
+Call: Path
+Line: 19
+Excerpt:
+00014:     OrchestrationJob,
+00015:     utc_now,
+00016: )
+00017: 
+00018: 
+00019: DATA_DIR = Path("backend/server/data/orchestration")
+00020: JOBS_FILE = DATA_DIR / "jobs.json"
+00021: EVENTS_FILE = DATA_DIR / "job_events.json"
+00022: 
+00023: 
+00024: def _ensure_dir() -> None:
+----------------------------------------------------------------------------------------
+
+FULL NUMBERED SOURCE
+========================================================================================
+00001: from __future__ import annotations
+00002: 
+00003: import json
+00004: from dataclasses import asdict
+00005: from datetime import datetime
+00006: from pathlib import Path
+00007: from typing import Any, Dict, List, Optional
+00008: from uuid import uuid4
+00009: 
+00010: from .models import (
+00011:     JOB_STATUS_FAILED,
+00012:     VALID_JOB_STATUSES,
+00013:     JobStatusEvent,
+00014:     OrchestrationJob,
+00015:     utc_now,
+00016: )
+00017: 
+00018: 
+00019: DATA_DIR = Path("backend/server/data/orchestration")
+00020: JOBS_FILE = DATA_DIR / "jobs.json"
+00021: EVENTS_FILE = DATA_DIR / "job_events.json"
+00022: 
+00023: 
+00024: def _ensure_dir() -> None:
+00025:     DATA_DIR.mkdir(parents=True, exist_ok=True)
+00026: 
+00027: 
+00028: def _json_default(value: Any) -> Any:
+00029:     if isinstance(value, datetime):
+00030:         return value.isoformat()
+00031:     return str(value)
+00032: 
+00033: 
+00034: def _read_json(path: Path, default: Any) -> Any:
+00035:     _ensure_dir()
+00036:     if not path.exists():
+00037:         return default
+00038:     try:
+00039:         return json.loads(path.read_text(encoding="utf-8"))
+00040:     except Exception:
+00041:         return default
+00042: 
+00043: 
+00044: def _write_json(path: Path, data: Any) -> None:
+00045:     _ensure_dir()
+00046:     path.write_text(
+00047:         json.dumps(data, indent=2, ensure_ascii=False, default=_json_default),
+00048:         encoding="utf-8",
+00049:     )
+00050: 
+00051: 
+00052: def _parse_datetime(value: Any) -> Optional[datetime]:
+00053:     if not value:
+00054:         return None
+00055:     if isinstance(value, datetime):
+00056:         return value
+00057:     try:
+00058:         return datetime.fromisoformat(str(value))
+00059:     except Exception:
+00060:         return None
+00061: 
+00062: 
+00063: def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+00064:     return OrchestrationJob(
+00065:         job_id=str(data.get("job_id", "")),
+00066:         workspace_id=str(data.get("workspace_id", "")),
+00067:         job_type=str(data.get("job_type", "")),
+00068:         status=str(data.get("status", "queued")),
+00069:         priority=int(data.get("priority", 5)),
+00070:         created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+00071:         updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+00072:         payload=data.get("payload") or {},
+00073:         metadata=data.get("metadata") or {},
+00074:         assigned_worker_id=data.get("assigned_worker_id"),
+00075:         progress_percent=float(data.get("progress_percent", 0.0)),
+00076:         current_step=str(data.get("current_step", "")),
+00077:         total_steps=int(data.get("total_steps", 0)),
+00078:         processed_count=int(data.get("processed_count", 0)),
+00079:         failed_count=int(data.get("failed_count", 0)),
+00080:         warning_count=int(data.get("warning_count", 0)),
+00081: 
+00082:         total_documents=int(data.get("total_documents", 0)),
+00083:         processed_documents=int(data.get("processed_documents", 0)),
+00084:         failed_documents=int(data.get("failed_documents", 0)),
+00085:         skipped_documents=int(data.get("skipped_documents", 0)),
+00086: 
+00087:         current_document_id=str(data.get("current_document_id", "")),
+00088:         current_document_name=str(data.get("current_document_name", "")),
+00089: 
+00090:         progress_message=str(data.get("progress_message", "")),
+00091:         started_at=_parse_datetime(data.get("started_at")),
+00092:         completed_at=_parse_datetime(data.get("completed_at")),
+00093:         error_message=data.get("error_message"),
+00094:     )
+00095: 
+00096: 
+00097: def load_jobs() -> Dict[str, OrchestrationJob]:
+00098:     raw = _read_json(JOBS_FILE, {})
+00099:     if not isinstance(raw, dict):
+00100:         return {}
+00101:     return {
+00102:         job_id: _job_from_dict(item)
+00103:         for job_id, item in raw.items()
+00104:         if isinstance(item, dict)
+00105:     }
+00106: 
+00107: 
+00108: def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+00109:     _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+00110: 
+00111: 
+00112: def get_job(job_id: str) -> Optional[OrchestrationJob]:
+00113:     return load_jobs().get(job_id)
+00114: 
+00115: 
+00116: def create_job(
+00117:     workspace_id: str,
+00118:     job_type: str,
+00119:     payload: Optional[Dict[str, Any]] = None,
+00120:     metadata: Optional[Dict[str, Any]] = None,
+00121:     priority: int = 5,
+00122: ) -> OrchestrationJob:
+00123:     jobs = load_jobs()
+00124:     job_id = f"job_{uuid4().hex[:16]}"
+00125:     job = OrchestrationJob(
+00126:         job_id=job_id,
+00127:         workspace_id=workspace_id,
+00128:         job_type=job_type,
+00129:         payload=payload or {},
+00130:         metadata=metadata or {},
+00131:         priority=priority,
+00132:     )
+00133:     jobs[job_id] = job
+00134:     save_jobs(jobs)
+00135:     append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+00136:     return job
+00137: 
+00138: 
+00139: def update_job_status(
+00140:     job_id: str,
+00141:     new_status: str,
+00142:     metadata: Optional[Dict[str, Any]] = None,
+00143:     error_message: Optional[str] = None,
+00144: ) -> OrchestrationJob:
+00145:     if new_status not in VALID_JOB_STATUSES:
+00146:         raise ValueError(f"Invalid job status: {new_status}")
+00147: 
+00148:     jobs = load_jobs()
+00149:     if job_id not in jobs:
+00150:         raise KeyError(f"Job not found: {job_id}")
+00151: 
+00152:     job = jobs[job_id]
+00153:     old_status = job.status
+00154:     job.status = new_status
+00155:     job.updated_at = utc_now()
+00156: 
+00157:     if error_message:
+00158:         job.error_message = error_message
+00159:         if new_status == JOB_STATUS_FAILED:
+00160:             job.progress_percent = min(job.progress_percent, 99.0)
+00161: 
+00162:     jobs[job_id] = job
+00163:     save_jobs(jobs)
+00164:     append_job_event(job_id, old_status, new_status, metadata or {})
+00165:     return job
+00166: 
+00167: 
+00168: def update_job_progress(
+00169:     job_id: str,
+00170:     progress_percent: float,
+00171:     metadata: Optional[Dict[str, Any]] = None,
+00172:     current_step: Optional[str] = None,
+00173:     progress_message: Optional[str] = None,
+00174:     total_steps: Optional[int] = None,
+00175:     processed_count: Optional[int] = None,
+00176:     failed_count: Optional[int] = None,
+00177:     warning_count: Optional[int] = None,
+00178:     total_documents: Optional[int] = None,
+00179:     processed_documents: Optional[int] = None,
+00180:     failed_documents: Optional[int] = None,
+00181:     skipped_documents: Optional[int] = None,
+00182:     current_document_id: Optional[str] = None,
+00183:     current_document_name: Optional[str] = None,
+00184: ) -> OrchestrationJob:
+00185:     jobs = load_jobs()
+00186:     if job_id not in jobs:
+00187:         raise KeyError(f"Job not found: {job_id}")
+00188: 
+00189:     job = jobs[job_id]
+00190:     job.progress_percent = max(0.0, min(100.0, float(progress_percent)))
+00191:     job.updated_at = utc_now()
+00192: 
+00193:     if current_step is not None:
+00194:         job.current_step = str(current_step)
+00195: 
+00196:     if progress_message is not None:
+00197:         job.progress_message = str(progress_message)
+00198: 
+00199:     if total_steps is not None:
+00200:         job.total_steps = max(0, int(total_steps))
+00201: 
+00202:     if processed_count is not None:
+00203:         job.processed_count = max(0, int(processed_count))
+00204: 
+00205:     if failed_count is not None:
+00206:         job.failed_count = max(0, int(failed_count))
+00207: 
+00208:     if warning_count is not None:
+00209:         job.warning_count = max(0, int(warning_count))
+00210: 
+00211:     if total_documents is not None:
+00212:         job.total_documents = max(0, int(total_documents))
+00213: 
+00214:     if processed_documents is not None:
+00215:         job.processed_documents = max(0, int(processed_documents))
+00216: 
+00217:     if failed_documents is not None:
+00218:         job.failed_documents = max(0, int(failed_documents))
+00219: 
+00220:     if skipped_documents is not None:
+00221:         job.skipped_documents = max(0, int(skipped_documents))
+00222: 
+00223:     if current_document_id is not None:
+00224:         job.current_document_id = str(current_document_id)
+00225: 
+00226:     if current_document_name is not None:
+00227:         job.current_document_name = str(current_document_name)
+00228: 
+00229:     if metadata:
+00230:         job.metadata.update(metadata)
+00231: 
+00232:     jobs[job_id] = job
+00233:     save_jobs(jobs)
+00234:     return job
+00235: 
+00236: 
+00237: def append_job_event(
+00238:     job_id: str,
+00239:     old_status: str,
+00240:     new_status: str,
+00241:     metadata: Optional[Dict[str, Any]] = None,
+00242: ) -> JobStatusEvent:
+00243:     events = _read_json(EVENTS_FILE, {})
+00244:     if not isinstance(events, dict):
+00245:         events = {}
+00246: 
+00247:     event = JobStatusEvent(
+00248:         event_id=f"evt_{uuid4().hex[:16]}",
+00249:         job_id=job_id,
+00250:         old_status=old_status,
+00251:         new_status=new_status,
+00252:         metadata=metadata or {},
+00253:     )
+00254: 
+00255:     events.setdefault(job_id, [])
+00256:     events[job_id].append(asdict(event))
+00257:     _write_json(EVENTS_FILE, events)
+00258:     return event
+00259: 
+00260: 
+00261: def list_job_events(job_id: str) -> List[Dict[str, Any]]:
+00262:     events = _read_json(EVENTS_FILE, {})
+00263:     if not isinstance(events, dict):
+00264:         return []
+00265:     return events.get(job_id, [])
+00266: 
+00267: 
+00268: 
+00269: 
+
+INSPECTION QUESTIONS
+========================================================================================
+1. Does create_job independently construct OrchestrationJob?
+2. How is job_id generated?
+3. Which status is assigned at creation?
+4. Which timestamps are generated?
+5. Which fields exist in OrchestrationJob?
+6. Does this path use the Phase 2.1.1 UniversalJob contract?
+7. Does it validate job types or Runtime Registration?
+8. Does it validate required payload fields?
+9. How are payload, metadata and priority stored?
+10. Does save_jobs rewrite the complete job store?
+11. How are creation and status events persisted?
+12. Can create_job become a compatibility adapter?
+13. Which responsibilities must move into creation_engine.py?
+14. Which existing behavior must be preserved?
+
+END OF REPORT
+========================================================================================

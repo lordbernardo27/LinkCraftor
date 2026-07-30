@@ -1,0 +1,2841 @@
+LINKCRAFTOR PHASE 2.1.2 LIVE SOURCE BUNDLE
+Bundle: 02_ORCHESTRATION_AND_UPLOAD.txt
+Generated: 2026-07-30T01:56:22.3913711Z
+====================================================================================================
+
+BEGIN LIVE FILE
+PATH: backend\server\jobs\universal_knowledge_orchestrator.py
+SIZE_BYTES: 17667
+SHA256: 1C1DC41736FAE5D0C980733491DFCE1DA1BED9D218B1D62D816667CA7CBABFD1
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+from backend.server.runtime.universal_runtime_registration import (
+    get_runtime_registration,
+    is_runtime_job_type_registered,
+    list_runtime_registrations,
+    register_runtime_handler,
+    runtime_registration_snapshot,
+    unregister_runtime_handler,
+)
+
+
+import hashlib
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+
+JOB_SCHEMA_VERSION = "universal_knowledge_job_v1"
+
+DATA_ROOT = Path("backend/server/data")
+QUEUE_DIR = DATA_ROOT / "queues" / "universal_knowledge"
+JOB_STATUS_DIR = DATA_ROOT / "job_status" / "universal_knowledge"
+PROGRESS_DIR = DATA_ROOT / "progress" / "universal_knowledge"
+FAILURE_DIR = DATA_ROOT / "failure_registry" / "universal_knowledge"
+JOB_LEDGER_DIR = DATA_ROOT / "jobs" / "universal_knowledge"
+
+
+SUPPORTED_JOB_TYPES = {
+    # Upload arm
+    "upload_document_batch",
+    "upload_file_route_validation",
+    "format_detection",
+    "format_router",
+    "upload_document_extraction",
+    "build_uduc",
+    "build_uucd_from_uduc",
+
+    # Website arm
+    "website_connection_batch",
+    "website_crawl_batch",
+    "site_page_discovery",
+    "raw_html_acquisition",
+    "html_cleaning",
+    "article_extraction",
+    "content_normalization",
+    "build_website_unified_content",
+    "build_uucd_from_website",
+
+    # Universal canonical layer
+    "build_uucd",
+    "source_authorization",
+    "source_lifecycle",
+    "source_asset_versioning",
+    "build_body_store",
+    "verify_body_store",
+    "certify_uucd_body_store",
+
+    # Semantic pipeline 4.6.1–4.6.9
+    "semantic_article_reader",
+    "semantic_context_builder",
+    "entity_concept_extraction",
+    "phrase_neighborhood_intelligence",
+    "topic_intent_intelligence",
+    "section_evidence_builder",
+    "semantic_relationship_graph",
+    "semantic_learning_export",
+    "semantic_end_to_end_certification",
+    "udare_reconstruction",
+}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_id(value: str | None, fallback: str = "default") -> str:
+    raw = str(value or fallback).strip() or fallback
+    return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in raw)[:160]
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def make_job_id(workspace_id: str, job_type: str, payload: Dict[str, Any]) -> str:
+    raw = json.dumps(
+        {
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "payload": payload,
+            "created_at": now_iso(),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return "ukj_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+def queue_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return QUEUE_DIR / ws / f"queue_{ws}.jsonl"
+
+
+def job_status_path(workspace_id: str, job_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return JOB_STATUS_DIR / ws / f"{safe_id(job_id)}.json"
+
+
+def progress_path(workspace_id: str, job_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return PROGRESS_DIR / ws / f"{safe_id(job_id)}.json"
+
+
+def failure_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return FAILURE_DIR / ws / f"failure_registry_{ws}.jsonl"
+
+
+def job_ledger_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return JOB_LEDGER_DIR / ws / f"job_ledger_{ws}.jsonl"
+
+
+def append_jsonl(path: Path, row: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def create_universal_knowledge_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Dict[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_ref: str = "",
+    priority: int = 5,
+    parent_job_id: str = "",
+    batch_id: str = "",
+    enqueue: bool = True,
+) -> Dict[str, Any]:
+    if (
+        job_type not in SUPPORTED_JOB_TYPES
+        and not is_runtime_job_type_registered(job_type)
+    ):
+        raise ValueError(f"Unsupported universal knowledge job_type: {job_type}")
+
+    ws = safe_id(workspace_id)
+    payload = payload or {}
+    initial_status = "queued" if enqueue else "registered"
+
+    canonical_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or "system"
+    ).strip() or "system"
+
+    canonical_product_id = str(
+        product_id
+        or payload.get("product_id")
+        or "linkcraftor"
+    ).strip() or "linkcraftor"
+
+    canonical_pipeline = str(
+        pipeline
+        or payload.get("pipeline")
+        or payload.get("pipeline_name")
+        or "universal_knowledge"
+    ).strip() or "universal_knowledge"
+
+    canonical_stage = str(
+        stage
+        or payload.get("stage")
+        or payload.get("stage_name")
+        or job_type
+    ).strip() or job_type
+
+    canonical_payload_ref = str(
+        payload_ref
+        or payload.get("payload_ref")
+        or payload.get("payload_reference")
+        or payload.get("source_record_id")
+        or payload.get("html_id")
+        or ""
+    ).strip()
+
+    initial_progress = {
+        "percent": 0,
+        "message": (
+            "Job queued."
+            if enqueue
+            else "Job registered without queue dispatch."
+        ),
+        "steps": [],
+    }
+
+    job_id = make_job_id(ws, job_type, payload)
+
+    job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+    if enqueue:
+        append_jsonl(queue_path(ws), job)
+
+    append_jsonl(job_ledger_path(ws), {"event": "job_created", **job})
+
+    write_json(job_status_path(ws, job_id), job)
+
+    write_json(progress_path(ws, job_id), {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "status": initial_status,
+        "percent": initial_progress["percent"],
+        "message": initial_progress["message"],
+        "steps": initial_progress["steps"],
+        "updated_at": now_iso(),
+    })
+
+    return job
+
+
+def update_job_status(
+    *,
+    workspace_id: str,
+    job_id: str,
+    status: str,
+    message: str = "",
+    result: Dict[str, Any] | None = None,
+    error: str = "",
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    path = job_status_path(ws, job_id)
+    job = read_json(path, {})
+
+    job.update({
+        "workspace_id": ws,
+        "job_id": job_id,
+        "status": status,
+        "message": message,
+        "result": result or job.get("result") or {},
+        "error": error,
+        "updated_at": now_iso(),
+    })
+
+    write_json(path, job)
+    append_jsonl(job_ledger_path(ws), {"event": "job_status_updated", **job})
+
+    return job
+
+
+def update_job_progress(
+    *,
+    workspace_id: str,
+    job_id: str,
+    percent: int,
+    message: str,
+    step: str = "",
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    path = progress_path(ws, job_id)
+    progress = read_json(path, {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "status": "running",
+        "percent": 0,
+        "message": "",
+        "steps": [],
+    })
+
+    progress["percent"] = max(0, min(int(percent), 100))
+    progress["message"] = message
+    progress["updated_at"] = now_iso()
+
+    if step:
+        progress.setdefault("steps", []).append({
+            "step": step,
+            "percent": progress["percent"],
+            "message": message,
+            "created_at": now_iso(),
+        })
+
+    write_json(path, progress)
+    return progress
+
+
+def record_job_failure(
+    *,
+    workspace_id: str,
+    job_id: str,
+    job_type: str,
+    error: str,
+    payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    failure = {
+        "schema_version": "universal_knowledge_failure_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "error": error,
+        "payload": payload or {},
+        "created_at": now_iso(),
+    }
+
+    append_jsonl(failure_path(ws), failure)
+    update_job_status(
+        workspace_id=ws,
+        job_id=job_id,
+        status="failed",
+        message="Job failed.",
+        error=error,
+    )
+
+    return failure
+
+
+def read_job_status(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    return read_json(job_status_path(workspace_id, job_id), {})
+
+
+def read_job_progress(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    return read_json(progress_path(workspace_id, job_id), {})
+
+
+def read_queue(workspace_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+    path = queue_path(workspace_id)
+    if not path.exists():
+        return []
+
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+
+    return rows
+
+
+
+PIPELINE_JOB_CHAIN = {
+    "upload_document_batch": [
+        "upload_file_route_validation",
+        "format_detection",
+        "format_router",
+        "upload_document_extraction",
+        "build_uduc",
+        "build_uucd_from_uduc",
+        "source_authorization",
+        "source_lifecycle",
+        "source_asset_versioning",
+        "build_body_store",
+        "verify_body_store",
+        "certify_uucd_body_store",
+    ],
+    "website_connection_batch": [
+        "site_page_discovery",
+        "raw_html_acquisition",
+        "html_cleaning",
+        "article_extraction",
+        "content_normalization",
+        "build_website_unified_content",
+        "build_uucd_from_website",
+        "source_authorization",
+        "source_lifecycle",
+        "source_asset_versioning",
+        "build_body_store",
+        "verify_body_store",
+        "certify_uucd_body_store",
+    ],
+    "semantic_pipeline": [
+        "semantic_article_reader",
+        "semantic_context_builder",
+        "entity_concept_extraction",
+        "phrase_neighborhood_intelligence",
+        "topic_intent_intelligence",
+        "section_evidence_builder",
+        "semantic_relationship_graph",
+        "semantic_learning_export",
+        "semantic_end_to_end_certification",
+    ],
+}
+
+
+def get_pipeline_job_chain_v1(chain_name: str) -> List[str]:
+    return list(PIPELINE_JOB_CHAIN.get(chain_name, []))
+
+
+def create_pipeline_batch_jobs_v1(
+    *,
+    workspace_id: str,
+    chain_name: str,
+    payload: Dict[str, Any] | None = None,
+    parent_job_id: str = "",
+    batch_id: str = "",
+) -> List[Dict[str, Any]]:
+    jobs: List[Dict[str, Any]] = []
+    chain = get_pipeline_job_chain_v1(chain_name)
+
+    if not chain:
+        raise ValueError(f"Unknown pipeline chain: {chain_name}")
+
+    for idx, job_type in enumerate(chain, start=1):
+        stage_payload = {
+            **(payload or {}),
+            "chain_name": chain_name,
+            "stage_index": idx,
+            "stage_count": len(chain),
+            "requires_previous_stage": idx > 1,
+        }
+
+        job = create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=stage_payload,
+            parent_job_id=parent_job_id,
+            batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}",
+        )
+
+        jobs.append(job)
+
+    return jobs
+
+
+def create_semantic_pipeline_jobs_if_certified_v1(
+    *,
+    workspace_id: str,
+    certification: Dict[str, Any],
+    payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    if certification.get("semantic_ready") is not True:
+        return {
+            "ok": False,
+            "semantic_ready": False,
+            "jobs": [],
+            "reason": "Certification is not semantic_ready=true.",
+        }
+
+    jobs = create_pipeline_batch_jobs_v1(
+        workspace_id=workspace_id,
+        chain_name="semantic_pipeline",
+        payload=payload or {},
+        batch_id=f"{safe_id(workspace_id)}_semantic_pipeline",
+    )
+
+    return {
+        "ok": True,
+        "semantic_ready": True,
+        "jobs": jobs,
+        "job_count": len(jobs),
+    }
+
+
+def explain_universal_knowledge_orchestrator_v1() -> Dict[str, Any]:
+    return {
+        "phase": "Phase 4.5A",
+        "component": "Universal Knowledge Processing Infrastructure",
+        "schema_version": JOB_SCHEMA_VERSION,
+        "supported_job_types": sorted(SUPPORTED_JOB_TYPES),
+        "responsibilities": [
+            "job creation",
+            "queue storage",
+            "worker execution contract",
+            "progress tracking",
+            "failure registry",
+            "per-workspace isolation",
+            "canonical pipeline orchestration",
+        ],
+        "scaling_rule": "API creates jobs; workers process jobs asynchronously.",
+        "pipeline_chains": {
+            "upload_document_batch": get_pipeline_job_chain_v1("upload_document_batch"),
+            "website_connection_batch": get_pipeline_job_chain_v1("website_connection_batch"),
+            "semantic_pipeline": get_pipeline_job_chain_v1("semantic_pipeline"),
+        },
+        "semantic_gate": "Semantic jobs are created only when certification.semantic_ready is true.",
+        "next_stage": "Job Status API + real stage adapters",
+    }
+
+def register_universal_runtime_handler(
+    *,
+    job_type: str,
+    handler: Any,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields=None,
+    predecessor_stages=None,
+    successor_stages=None,
+    idempotency_fields=None,
+    retry_policy=None,
+    concurrency_policy=None,
+    metadata=None,
+    replace: bool = False,
+    persist: bool = False,
+) -> Dict[str, Any]:
+    """Register business logic with the Universal Runtime Infrastructure."""
+
+    return register_runtime_handler(
+        job_type=job_type,
+        handler=handler,
+        pipeline=pipeline,
+        stage=stage,
+        description=description,
+        required_payload_fields=required_payload_fields,
+        predecessor_stages=predecessor_stages,
+        successor_stages=successor_stages,
+        idempotency_fields=idempotency_fields,
+        retry_policy=retry_policy,
+        concurrency_policy=concurrency_policy,
+        metadata=metadata,
+        replace=replace,
+        persist=persist,
+    )
+
+
+def unregister_universal_runtime_handler(
+    job_type: str,
+    *,
+    persist: bool = False,
+) -> Dict[str, Any] | None:
+    return unregister_runtime_handler(
+        job_type,
+        persist=persist,
+    )
+
+
+def read_universal_runtime_registration(
+    job_type: str,
+) -> Dict[str, Any] | None:
+    return get_runtime_registration(
+        job_type
+    )
+
+
+def list_universal_runtime_registrations() -> List[
+    Dict[str, Any]
+]:
+    return list_runtime_registrations()
+
+
+def explain_universal_runtime_registration_v1() -> Dict[str, Any]:
+    snapshot = runtime_registration_snapshot()
+
+    return {
+        "schema_version": (
+            "universal_runtime_registration_explanation_v1"
+        ),
+        "static_supported_job_type_count": len(
+            SUPPORTED_JOB_TYPES
+        ),
+        "static_supported_job_types": sorted(
+            SUPPORTED_JOB_TYPES
+        ),
+        "dynamic_registration_count": snapshot[
+            "registration_count"
+        ],
+        "dynamic_registrations": snapshot[
+            "registrations"
+        ],
+        "registry_sha256": snapshot[
+            "registry_sha256"
+        ],
+        "persistent_registry_path": snapshot[
+            "persistent_registry_path"
+        ],
+        "execution_model": (
+            "Registered handlers execute through the existing "
+            "universal worker, queue, job-status, progress and "
+            "failure contracts."
+        ),
+    }
+
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\orchestration\job_store.py
+SIZE_BYTES: 7814
+SHA256: C34FC21C2F742F4CE8B8BC33DDC203ACD3F5E321C813D9E369D301E61108BC0F
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+import json
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
+from .models import (
+    JOB_STATUS_FAILED,
+    VALID_JOB_STATUSES,
+    JobStatusEvent,
+    OrchestrationJob,
+    utc_now,
+)
+
+
+DATA_DIR = Path("backend/server/data/orchestration")
+JOBS_FILE = DATA_DIR / "jobs.json"
+EVENTS_FILE = DATA_DIR / "job_events.json"
+
+
+def _ensure_dir() -> None:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def _read_json(path: Path, default: Any) -> Any:
+    _ensure_dir()
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def _write_json(path: Path, data: Any) -> None:
+    _ensure_dir()
+    path.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False, default=_json_default),
+        encoding="utf-8",
+    )
+
+
+def _parse_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return None
+
+
+def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+    return OrchestrationJob(
+        job_id=str(data.get("job_id", "")),
+        workspace_id=str(data.get("workspace_id", "")),
+        job_type=str(data.get("job_type", "")),
+        status=str(data.get("status", "queued")),
+        priority=int(data.get("priority", 5)),
+        created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+        updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+        payload=data.get("payload") or {},
+        metadata=data.get("metadata") or {},
+        assigned_worker_id=data.get("assigned_worker_id"),
+        progress_percent=float(data.get("progress_percent", 0.0)),
+        current_step=str(data.get("current_step", "")),
+        total_steps=int(data.get("total_steps", 0)),
+        processed_count=int(data.get("processed_count", 0)),
+        failed_count=int(data.get("failed_count", 0)),
+        warning_count=int(data.get("warning_count", 0)),
+
+        total_documents=int(data.get("total_documents", 0)),
+        processed_documents=int(data.get("processed_documents", 0)),
+        failed_documents=int(data.get("failed_documents", 0)),
+        skipped_documents=int(data.get("skipped_documents", 0)),
+
+        current_document_id=str(data.get("current_document_id", "")),
+        current_document_name=str(data.get("current_document_name", "")),
+
+        progress_message=str(data.get("progress_message", "")),
+        started_at=_parse_datetime(data.get("started_at")),
+        completed_at=_parse_datetime(data.get("completed_at")),
+        error_message=data.get("error_message"),
+    )
+
+
+def load_jobs() -> Dict[str, OrchestrationJob]:
+    raw = _read_json(JOBS_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        job_id: _job_from_dict(item)
+        for job_id, item in raw.items()
+        if isinstance(item, dict)
+    }
+
+
+def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+    _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+
+
+def get_job(job_id: str) -> Optional[OrchestrationJob]:
+    return load_jobs().get(job_id)
+
+
+def create_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+) -> OrchestrationJob:
+    jobs = load_jobs()
+    job_id = f"job_{uuid4().hex[:16]}"
+    job = OrchestrationJob(
+        job_id=job_id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+    jobs[job_id] = job
+    save_jobs(jobs)
+    append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+    return job
+
+
+def update_job_status(
+    job_id: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> OrchestrationJob:
+    if new_status not in VALID_JOB_STATUSES:
+        raise ValueError(f"Invalid job status: {new_status}")
+
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    old_status = job.status
+    job.status = new_status
+    job.updated_at = utc_now()
+
+    if error_message:
+        job.error_message = error_message
+        if new_status == JOB_STATUS_FAILED:
+            job.progress_percent = min(job.progress_percent, 99.0)
+
+    jobs[job_id] = job
+    save_jobs(jobs)
+    append_job_event(job_id, old_status, new_status, metadata or {})
+    return job
+
+
+def update_job_progress(
+    job_id: str,
+    progress_percent: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    current_step: Optional[str] = None,
+    progress_message: Optional[str] = None,
+    total_steps: Optional[int] = None,
+    processed_count: Optional[int] = None,
+    failed_count: Optional[int] = None,
+    warning_count: Optional[int] = None,
+    total_documents: Optional[int] = None,
+    processed_documents: Optional[int] = None,
+    failed_documents: Optional[int] = None,
+    skipped_documents: Optional[int] = None,
+    current_document_id: Optional[str] = None,
+    current_document_name: Optional[str] = None,
+) -> OrchestrationJob:
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    job.progress_percent = max(0.0, min(100.0, float(progress_percent)))
+    job.updated_at = utc_now()
+
+    if current_step is not None:
+        job.current_step = str(current_step)
+
+    if progress_message is not None:
+        job.progress_message = str(progress_message)
+
+    if total_steps is not None:
+        job.total_steps = max(0, int(total_steps))
+
+    if processed_count is not None:
+        job.processed_count = max(0, int(processed_count))
+
+    if failed_count is not None:
+        job.failed_count = max(0, int(failed_count))
+
+    if warning_count is not None:
+        job.warning_count = max(0, int(warning_count))
+
+    if total_documents is not None:
+        job.total_documents = max(0, int(total_documents))
+
+    if processed_documents is not None:
+        job.processed_documents = max(0, int(processed_documents))
+
+    if failed_documents is not None:
+        job.failed_documents = max(0, int(failed_documents))
+
+    if skipped_documents is not None:
+        job.skipped_documents = max(0, int(skipped_documents))
+
+    if current_document_id is not None:
+        job.current_document_id = str(current_document_id)
+
+    if current_document_name is not None:
+        job.current_document_name = str(current_document_name)
+
+    if metadata:
+        job.metadata.update(metadata)
+
+    jobs[job_id] = job
+    save_jobs(jobs)
+    return job
+
+
+def append_job_event(
+    job_id: str,
+    old_status: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobStatusEvent:
+    events = _read_json(EVENTS_FILE, {})
+    if not isinstance(events, dict):
+        events = {}
+
+    event = JobStatusEvent(
+        event_id=f"evt_{uuid4().hex[:16]}",
+        job_id=job_id,
+        old_status=old_status,
+        new_status=new_status,
+        metadata=metadata or {},
+    )
+
+    events.setdefault(job_id, [])
+    events[job_id].append(asdict(event))
+    _write_json(EVENTS_FILE, events)
+    return event
+
+
+def list_job_events(job_id: str) -> List[Dict[str, Any]]:
+    events = _read_json(EVENTS_FILE, {})
+    if not isinstance(events, dict):
+        return []
+    return events.get(job_id, [])
+
+
+
+
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\orchestration\service.py
+SIZE_BYTES: 5748
+SHA256: B54486242620693E8A87735DAF7079856A9431E366D2284060BE927022FD7E5C
+----------------------------------------------------------------------------------------------------
+# backend/server/orchestration/service.py
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Any, Dict, Optional
+
+from .job_store import (
+    create_job,
+    get_job,
+    list_job_events,
+    load_jobs,
+    update_job_progress,
+    update_job_status,
+)
+from .models import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RUNNING,
+    OrchestrationJob,
+)
+from .queue import enqueue_job, queue_snapshot
+
+
+def create_orchestration_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+) -> OrchestrationJob:
+    """Create and enqueue a job.
+
+    NOTE on priority: jobs are served in ascending (priority, created_at)
+    order — a LOWER number means served sooner. The default of 5 leaves
+    room on both sides (e.g. 1 for urgent user-facing work, 9 for bulk
+    background rebuilds).
+    """
+    job = create_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+    # Enqueueing is implicit (queue membership == persisted "queued" status);
+    # enqueue_job is retained as a sanity check that the job landed in the
+    # store correctly.
+    if not enqueue_job(job.job_id):
+        print(f"[ORCHESTRATION_ENQUEUE_WARNING] job {job.job_id} not visible as queued after create")
+    return job
+
+
+def get_orchestration_job(job_id: str) -> Optional[Dict[str, Any]]:
+    job = get_job(job_id)
+    if job is None:
+        return None
+
+    return {
+        "job": asdict(job),
+        "events": list_job_events(job_id),
+    }
+
+
+def list_orchestration_jobs() -> Dict[str, Any]:
+    jobs = load_jobs()
+    return {
+        "jobs": [asdict(job) for job in jobs.values()],
+        "queue": queue_snapshot(),
+    }
+
+
+def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+    """Transition a job to RUNNING.
+
+    FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+    RUNNING atomically, so by the time the worker calls this the job is
+    usually already running. Re-issuing the transition would be harmless in
+    most stores but is wasteful and can clobber claim metadata; if the job is
+    already RUNNING we just return it (merging in the worker_id if it wasn't
+    recorded yet).
+    """
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"unknown job: {job_id}")
+
+    if job.status == JOB_STATUS_RUNNING:
+        if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+            # Record the worker identity without re-transitioning status.
+            return update_job_status(
+                job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+            )
+        return job
+
+    metadata: Dict[str, Any] = {}
+    if worker_id:
+        metadata["worker_id"] = worker_id
+    return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+
+
+def mark_job_completed(
+    job_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    # FIX: metadata was previously passed to BOTH the progress update and the
+    # status update, merging the same dict twice. Progress just records 100%;
+    # metadata rides on the terminal status change.
+    update_job_progress(job_id, 100.0)
+    return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+
+
+def mark_job_failed(
+    job_id: str,
+    error_message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    return update_job_status(
+        job_id,
+        JOB_STATUS_FAILED,
+        metadata=metadata or {},
+        error_message=error_message,
+    )
+
+
+def cancel_job(
+    job_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    return update_job_status(job_id, JOB_STATUS_CANCELLED, metadata=metadata or {})
+
+
+def update_orchestration_progress(
+    job_id: str,
+    progress_percent: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    current_step: Optional[str] = None,
+    progress_message: Optional[str] = None,
+    total_steps: Optional[int] = None,
+    processed_count: Optional[int] = None,
+    failed_count: Optional[int] = None,
+    warning_count: Optional[int] = None,
+    total_documents: Optional[int] = None,
+    processed_documents: Optional[int] = None,
+    failed_documents: Optional[int] = None,
+    skipped_documents: Optional[int] = None,
+    current_document_id: Optional[str] = None,
+    current_document_name: Optional[str] = None,
+) -> OrchestrationJob:
+    return update_job_progress(
+        job_id,
+        progress_percent,
+        metadata=metadata or {},
+        current_step=current_step,
+        progress_message=progress_message,
+        total_steps=total_steps,
+        processed_count=processed_count,
+        failed_count=failed_count,
+        warning_count=warning_count,
+        total_documents=total_documents,
+        processed_documents=processed_documents,
+        failed_documents=failed_documents,
+        skipped_documents=skipped_documents,
+        current_document_id=current_document_id,
+        current_document_name=current_document_name,
+    )
+
+
+def service_health() -> Dict[str, Any]:
+    jobs = load_jobs()
+
+    counts = {
+        JOB_STATUS_QUEUED: 0,
+        JOB_STATUS_RUNNING: 0,
+        JOB_STATUS_COMPLETED: 0,
+        JOB_STATUS_FAILED: 0,
+        JOB_STATUS_CANCELLED: 0,
+    }
+
+    for job in jobs.values():
+        counts[job.status] = counts.get(job.status, 0) + 1
+
+    return {
+        "ok": True,
+        "total_jobs": len(jobs),
+        "status_counts": counts,
+        "queue": queue_snapshot(),
+    }
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\orchestration\models.py
+SIZE_BYTES: 2858
+SHA256: C2D014CF071D34F478F7E4B108F6192A21F4D7AD7958F394D3443BD59C884923
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+
+JOB_STATUS_PENDING = "pending"
+JOB_STATUS_QUEUED = "queued"
+JOB_STATUS_RUNNING = "running"
+JOB_STATUS_COMPLETED = "completed"
+JOB_STATUS_FAILED = "failed"
+JOB_STATUS_CANCELLED = "cancelled"
+
+VALID_JOB_STATUSES = {
+    JOB_STATUS_PENDING,
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_CANCELLED,
+}
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass
+class OrchestrationJob:
+    job_id: str
+    workspace_id: str
+    job_type: str
+    status: str = JOB_STATUS_QUEUED
+    priority: int = 5
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    payload: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    assigned_worker_id: Optional[str] = None
+    progress_percent: float = 0.0
+    current_step: str = ""
+    total_steps: int = 0
+    processed_count: int = 0
+    failed_count: int = 0
+    warning_count: int = 0
+
+    total_documents: int = 0
+    processed_documents: int = 0
+    failed_documents: int = 0
+    skipped_documents: int = 0
+
+    current_document_id: str = ""
+    current_document_name: str = ""
+
+    progress_message: str = ""
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+
+@dataclass
+class JobStep:
+    step_id: str
+    job_id: str
+    step_name: str
+
+    status: str = JOB_STATUS_PENDING
+    progress_percent: float = 0.0
+
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+
+    message: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+@dataclass
+class JobStatusEvent:
+    event_id: str
+    job_id: str
+    old_status: str
+    new_status: str
+    created_at: datetime = field(default_factory=utc_now)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class JobWorkerAssignment:
+    assignment_id: str
+    job_id: str
+    worker_id: str
+    assigned_at: datetime = field(default_factory=utc_now)
+    released_at: Optional[datetime] = None
+
+
+@dataclass
+class JobResult:
+    result_id: str
+    job_id: str
+    success: bool = True
+    output: Dict[str, Any] = field(default_factory=dict)
+    created_at: datetime = field(default_factory=utc_now)
+
+
+@dataclass
+class QueueStats:
+    total_jobs: int = 0
+    queued_jobs: int = 0
+    running_jobs: int = 0
+    completed_jobs: int = 0
+    failed_jobs: int = 0
+
+
+@dataclass
+class WorkerHeartbeat:
+    worker_id: str
+    last_seen_at: datetime = field(default_factory=utc_now)
+    status: str = "online"
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\orchestration\queue.py
+SIZE_BYTES: 6697
+SHA256: 3590DE4CA38A2252ACB8944B39B0AF82EBCB67F2563A7E751E14AA6B00DE9F2F
+----------------------------------------------------------------------------------------------------
+# backend/server/orchestration/queue.py
+from __future__ import annotations
+
+import os
+import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional
+
+from .job_store import get_job, load_jobs, update_job_status
+from .models import JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, OrchestrationJob
+
+# ---------------------------------------------------------------------------
+# Design notes (what changed and why)
+#
+# The previous implementation kept a module-level list (_queue_job_ids) that
+# was rebuilt from the job store on every call via refresh_queue_from_store().
+# Because the store was always authoritative, the list carried no information
+# of its own — but it created two real problems:
+#
+#   1. NON-ATOMIC DEQUEUE: dequeue_job() removed a job from the local list
+#      while its status in the store remained "queued" until the worker later
+#      called mark_job_running(). Any concurrent worker (thread OR separate
+#      process) refreshing from the store in that window would re-discover the
+#      job and dequeue it again -> duplicate processing.
+#
+#   2. STATE DRIFT: two sources of truth that had to be defended against each
+#      other in multiple places (dead "clear()" branch, redundant existence
+#      checks, 2-3 load_jobs() calls per operation).
+#
+# This version deletes the in-memory list entirely. The job store IS the
+# queue: a job is "queued" iff its persisted status is JOB_STATUS_QUEUED.
+# dequeue_job() now CLAIMS the job atomically — it transitions the job to
+# JOB_STATUS_RUNNING inside a cross-process lock before returning it — so a
+# job can be handed to exactly one worker. This also means the queue trivially
+# survives process restarts: anything persisted as "queued" is picked up.
+#
+# Ordering is unchanged: ascending (priority, created_at) — i.e. LOWER
+# priority number is served first, ties broken oldest-first (FIFO). job_id is
+# appended as a final tie-breaker so ordering is fully deterministic.
+# ---------------------------------------------------------------------------
+
+# Cross-process lock file guarding the dequeue critical section
+# (read store -> pick job -> flip status). Lives next to this module by
+# default; override with ORCHESTRATION_QUEUE_LOCK_PATH if the package
+# directory is read-only in your deployment.
+_LOCK_PATH = Path(
+    os.environ.get(
+        "ORCHESTRATION_QUEUE_LOCK_PATH",
+        str(Path(__file__).resolve().parent / ".queue.lock"),
+    )
+)
+
+# In-process lock: cheaper than the file lock for threads within one process,
+# and required anyway because fcntl/msvcrt locks are per-process, not
+# per-thread.
+_thread_lock = threading.Lock()
+
+try:
+    import fcntl  # POSIX
+
+    def _flock(fh) -> None:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+
+    def _funlock(fh) -> None:
+        fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+except ImportError:  # Windows
+    import msvcrt
+
+    def _flock(fh) -> None:
+        msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+
+    def _funlock(fh) -> None:
+        fh.seek(0)
+        msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+@contextmanager
+def _dequeue_lock() -> Iterator[None]:
+    """Serialize the select-and-claim critical section across threads and
+    processes on this machine."""
+    with _thread_lock:
+        _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOCK_PATH, "a+") as fh:
+            _flock(fh)
+            try:
+                yield
+            finally:
+                _funlock(fh)
+
+
+def _sort_key(job: OrchestrationJob):
+    return (job.priority, job.created_at, job.job_id)
+
+
+def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+    """All jobs currently persisted as queued, in service order."""
+    if jobs is None:
+        jobs = load_jobs()
+    queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+    queued.sort(key=_sort_key)
+    return queued
+
+
+def enqueue_job(job_id: str) -> bool:
+    """Kept for API compatibility.
+
+    Enqueueing is now implicit: create_job persists the job with status
+    JOB_STATUS_QUEUED, and that persisted status is the queue membership.
+    This function only verifies the job actually exists in a queued state,
+    which catches caller bugs (e.g. enqueueing an ID that was never created).
+    """
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+
+def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+            if worker_id:
+                metadata["worker_id"] = worker_id
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write —
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+
+def queue_length() -> int:
+    return len(_queued_jobs())
+
+
+def refresh_queue_from_store() -> None:
+    """Kept for API compatibility.
+
+    There is no longer any in-memory queue state to refresh — every read
+    goes straight to the job store — so this is a no-op.
+    """
+    return None
+
+
+def queue_snapshot() -> Dict[str, object]:
+    queued = _queued_jobs()
+
+    return {
+        "queue_length": len(queued),
+        "queued_job_ids": [job.job_id for job in queued],
+        "queued_jobs": [
+            {
+                "job_id": job.job_id,
+                "workspace_id": job.workspace_id,
+                "job_type": job.job_type,
+                "priority": job.priority,
+                "created_at": (
+                    job.created_at.isoformat()
+                    if hasattr(job.created_at, "isoformat")
+                    else str(job.created_at)
+                ),
+            }
+            for job in queued
+        ],
+    }
+
+
+def is_job_queued(job_id: str) -> bool:
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\orchestration\routes.py
+SIZE_BYTES: 2056
+SHA256: 5A24DE1938CFACD5DD308C1BDDB16807524A1E554764DF6CAD13CF12486DDD80
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+from dataclasses import asdict
+from typing import Any, Dict
+
+from fastapi import APIRouter, HTTPException
+
+from .schemas import (
+    CreateJobRequest,
+    CreateJobResponse,
+    JobActionResponse,
+    JobDetailResponse,
+    JobListResponse,
+    WorkerRunResponse,
+)
+from .service import (
+    cancel_job,
+    create_orchestration_job,
+    get_orchestration_job,
+    list_orchestration_jobs,
+    service_health,
+)
+
+
+router = APIRouter(prefix="/api/jobs", tags=["orchestration"])
+
+
+@router.get("/health")
+def orchestration_health() -> Dict[str, Any]:
+    return service_health()
+
+
+
+
+@router.post("/test", response_model=CreateJobResponse)
+def create_test_job(payload: CreateJobRequest) -> CreateJobResponse:
+    job = create_orchestration_job(
+        workspace_id=payload.workspace_id,
+        job_type=payload.job_type,
+        payload=payload.payload,
+        metadata=payload.metadata,
+        priority=payload.priority,
+    )
+
+    return CreateJobResponse(
+        ok=True,
+        job_id=job.job_id,
+        status=job.status,
+        job_type=job.job_type,
+        workspace_id=job.workspace_id,
+    )
+
+
+@router.get("", response_model=JobListResponse)
+def list_jobs() -> JobListResponse:
+    return JobListResponse(ok=True, data=list_orchestration_jobs())
+
+
+@router.get("/{job_id}", response_model=JobDetailResponse)
+def get_job_detail(job_id: str) -> JobDetailResponse:
+    data = get_orchestration_job(job_id)
+
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    return JobDetailResponse(ok=True, data=data)
+
+
+@router.post("/{job_id}/cancel", response_model=JobActionResponse)
+def cancel_job_route(job_id: str) -> JobActionResponse:
+    try:
+        job = cancel_job(job_id, metadata={"reason": "manual_cancel"})
+        return JobActionResponse(ok=True, data={"job": asdict(job)})
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\orchestration\schemas.py
+SIZE_BYTES: 839
+SHA256: 9388AF5CD441904F97BFC6AF822D3CEDC9CCD4722B093AFCAC8363F27B8C70B4
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, Field
+
+
+class CreateJobRequest(BaseModel):
+    workspace_id: str = Field(default="default")
+    job_type: str = Field(default="test_job")
+    payload: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    priority: int = Field(default=5, ge=1, le=10)
+
+
+class CreateJobResponse(BaseModel):
+    ok: bool
+    job_id: str
+    status: str
+    job_type: str
+    workspace_id: str
+
+
+class JobActionResponse(BaseModel):
+    ok: bool
+    data: Dict[str, Any]
+
+
+class JobListResponse(BaseModel):
+    ok: bool
+    data: Dict[str, Any]
+
+
+class JobDetailResponse(BaseModel):
+    ok: bool
+    data: Dict[str, Any]
+
+
+class WorkerRunResponse(BaseModel):
+    ok: bool
+    data: Dict[str, Any]
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\routes\files.py
+SIZE_BYTES: 40892
+SHA256: 68AB4375E831C4E532742E0F5ACD5FDB05680E2410832D33BD1DF37C79210CEF
+----------------------------------------------------------------------------------------------------
+# backend/server/routes/files.py
+from __future__ import annotations
+
+import io
+import os
+import json
+import uuid
+import re
+import html
+import traceback
+from backend.server.stores.rebuild_governance import queue_rebuild_event
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+from fastapi import APIRouter, UploadFile, File, HTTPException, Query, Body
+from fastapi.responses import FileResponse
+
+import mammoth
+
+# Strict DOCX style-based H1 extraction (no fallbacks)
+try:
+    from docx import Document as DocxDocument  # python-docx
+except Exception:
+    DocxDocument = None
+
+
+router = APIRouter(prefix="/api/files", tags=["files"])
+legacy_router = APIRouter(prefix="/api", tags=["legacy"])
+
+ALLOWED_EXT = {".docx", ".txt", ".md", ".html", ".htm"}
+
+BASE_DIR = Path(__file__).resolve().parents[1]  # backend/server
+DATA_DIR = BASE_DIR / "data"
+DOCS_DIR = DATA_DIR / "docs"
+
+TEXT_LIMIT = 200_000
+
+# Workspace-level files that must never be deleted by clear_session's
+# uploaded-file sweep. Uploaded documents are stored as "{doc_id}__{name}".
+_WS_PROTECTED_FILES = {"index.json", "work_index.json"}
+
+
+def _utc_now_iso() -> str:
+    """Timezone-aware UTC timestamp, formatted with a trailing 'Z'.
+
+    Replaces deprecated datetime.utcnow() (removed-path in Python 3.12+).
+    """
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _utc_from_timestamp_iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+# -------------------------
+# STRICT H1 extraction helpers (NO FALLBACKS)
+# -------------------------
+_H1_TAG_RE = re.compile(r"<h1[^>]*>(.*?)</h1>", re.IGNORECASE | re.DOTALL)
+_TAG_STRIP_RE = re.compile(r"<[^>]+>")
+_WS_SAFE_RE = re.compile(r"[^a-z0-9_]+", re.IGNORECASE)
+
+
+def _strip_tags_basic(s: str) -> str:
+    s = _TAG_STRIP_RE.sub(" ", s or "")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def _quality_gate_h1(h: str) -> Tuple[bool, str]:
+    t = (h or "").strip()
+    if len(t) < 4:
+        return False, "too_short"
+    if len(t) > 140:
+        return False, "too_long"
+
+    letters_digits = sum(ch.isalnum() for ch in t)
+    if letters_digits < max(3, int(len(t) * 0.35)):
+        return False, "too_symbolic"
+
+    low = t.lower()
+    generic = {
+        "introduction",
+        "overview",
+        "table of contents",
+        "contents",
+        "home",
+        "welcome",
+        "summary",
+        "conclusion",
+    }
+    if low in generic:
+        return False, "generic_heading"
+
+    return True, ""
+
+
+def _normalize_docx_title_in_place(stored_path: str) -> Dict[str, Any]:
+    if not stored_path:
+        return {"ok": False, "error": "docx_missing_path"}
+    if DocxDocument is None:
+        return {"ok": False, "error": "python_docx_not_available"}
+
+    try:
+        doc = DocxDocument(stored_path)
+    except Exception as e:
+        return {"ok": False, "error": f"docx_read_failed:{str(e)[:120]}"}
+
+    paras = getattr(doc, "paragraphs", []) or []
+    if not paras:
+        return {"ok": True, "changed": False, "reason": "no_paragraphs"}
+
+    first_h2_idx = None
+    for i, p in enumerate(paras):
+        try:
+            sname = (p.style.name or "").strip()
+        except Exception:
+            sname = ""
+        if sname in ("Heading 2", "Heading 3", "Heading 4", "Heading 5", "Heading 6"):
+            first_h2_idx = i
+            break
+
+    search_upto = first_h2_idx if first_h2_idx is not None else len(paras)
+    target_i = None
+    target_p = None
+
+    for i in range(search_upto):
+        p = paras[i]
+        txt = (getattr(p, "text", "") or "").strip()
+        if not txt:
+            continue
+        target_i = i
+        target_p = p
+        break
+
+    if target_p is None:
+        return {"ok": True, "changed": False, "reason": "no_nonempty_para"}
+
+    try:
+        cur_style = (target_p.style.name or "").strip()
+    except Exception:
+        cur_style = ""
+
+    if cur_style in ("Title", "Heading 1"):
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": f"already_{cur_style}",
+            "para_index": target_i,
+        }
+
+    ok, reason = _quality_gate_h1((getattr(target_p, "text", "") or "").strip())
+    if not ok:
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": f"failed_quality_gate:{reason}",
+            "para_index": target_i,
+        }
+
+    try:
+        target_p.style = "Title"
+    except Exception as e:
+        return {"ok": False, "error": f"set_style_failed:{str(e)[:120]}", "para_index": target_i}
+
+    try:
+        doc.save(stored_path)
+    except Exception as e:
+        return {"ok": False, "error": f"docx_save_failed:{str(e)[:120]}", "para_index": target_i}
+
+    return {
+        "ok": True,
+        "changed": True,
+        "reason": "promoted_first_para_to_Title",
+        "para_index": target_i,
+        "from_style": cur_style,
+    }
+
+
+def _strict_h1_from_docx_file(stored_path: str) -> Tuple[str, str, str]:
+    if not stored_path:
+        return "", "", "docx_missing_path"
+    if DocxDocument is None:
+        return "", "", "docx_reader_unavailable"
+
+    try:
+        doc = DocxDocument(stored_path)
+    except Exception as e:
+        return "", "", f"docx_read_failed:{str(e)[:120]}"
+
+    for p in getattr(doc, "paragraphs", []) or []:
+        txt = (getattr(p, "text", "") or "").strip()
+        if not txt:
+            continue
+
+        style_name = ""
+        try:
+            style_name = (p.style.name or "").strip()
+        except Exception:
+            style_name = ""
+
+        if style_name in ("Heading 1", "Title"):
+            ok, reason = _quality_gate_h1(txt)
+            if not ok:
+                return "", "", f"failed_quality_gate:{reason}"
+            return txt, f"docx:{style_name}", ""
+
+    return "", "", "no_strict_h1_found"
+
+
+def _strict_h1_from_html(preview_html: str) -> Tuple[str, str, str]:
+    html_in = preview_html or ""
+    m = _H1_TAG_RE.search(html_in)
+    if not m:
+        return "", "", "no_strict_h1_found"
+
+    cand = _strip_tags_basic(m.group(1) or "")
+    ok, reason = _quality_gate_h1(cand)
+    if not ok:
+        return "", "", f"failed_quality_gate:{reason}"
+    return cand, "html:h1", ""
+
+
+def _strict_h1_from_md(preview_text: str) -> Tuple[str, str, str]:
+    txt = preview_text or ""
+    for line in txt.splitlines():
+        line = (line or "").strip()
+        if line.startswith("# "):
+            cand = line[2:].strip()
+            ok, reason = _quality_gate_h1(cand)
+            if not ok:
+                return "", "", f"failed_quality_gate:{reason}"
+            return cand, "md:#", ""
+    return "", "", "no_strict_h1_found"
+
+
+def _derive_h1_for_index(
+    *,
+    ext: str,
+    preview_html: str,
+    preview_text: str,
+    stored_path: str | None = None,
+) -> Tuple[str, str, str]:
+    e = (ext or "").lower().strip()
+
+    if e == ".docx":
+        return _strict_h1_from_docx_file(stored_path or "")
+
+    if e in (".html", ".htm"):
+        return _strict_h1_from_html(preview_html or "")
+
+    if e in (".md", ".markdown"):
+        # FIX: when markdown2 is installed, preview_text is tag-stripped HTML
+        # (no "# " lines survive), so the raw-markdown scan never matched and
+        # md H1s were silently lost. Try the raw-md scan first (covers the
+        # markdown2-missing fallback path), then the rendered <h1>.
+        h1, src, err = _strict_h1_from_md(preview_text or "")
+        if h1:
+            return h1, src, err
+        h1, src, err = _strict_h1_from_html(preview_html or "")
+        if h1:
+            return h1, "md:rendered_h1", err
+        return "", "", "no_strict_h1_found"
+
+    if e == ".txt":
+        return "", "", "txt_no_structural_h1"
+
+    return "", "", "no_strict_h1_found"
+
+
+# -------------------------
+# Workspace helpers (WS-only)
+# -------------------------
+def _ws(workspace_id: str) -> str:
+    raw = (workspace_id or "default").strip()
+    if not raw:
+        return "default"
+
+    if raw.lower() == "default":
+        return "default"
+
+    raw = raw.lower()
+    if raw.startswith("ws_ws_"):
+        raw = raw[3:]
+
+    if raw.startswith("ws_"):
+        return raw
+
+    s = raw.replace(".", "_").replace("-", "_").replace(" ", "_")
+    s = _WS_SAFE_RE.sub("_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    if not s:
+        return "default"
+    return f"ws_{s}"[:80]
+
+
+def _ws_dir(workspace_id: str) -> Path:
+    return DOCS_DIR / _ws(workspace_id)
+
+
+def _index_path(workspace_id: str) -> Path:
+    return _ws_dir(workspace_id) / "index.json"
+
+
+def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _safe_write_index(path: Path, items: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _guess_ext(filename: str) -> str:
+    return (Path((filename or "").strip()).suffix or "").lower()
+
+
+def _strip_tags(s: str) -> str:
+    s = re.sub(r"<[^>]+>", " ", s or "")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+# -------------------------
+# Work Folder index (backend ledger)
+# -------------------------
+def _work_index_path(workspace_id: str) -> Path:
+    return _ws_dir(workspace_id) / "work_index.json"
+
+
+def _safe_read_work_index(path: Path) -> List[Dict[str, Any]]:
+    if not path.exists():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _safe_write_work_index(path: Path, items: List[Dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def _work_append(workspace_id: str, entry: Dict[str, Any]) -> None:
+    p = _work_index_path(workspace_id)
+    items = _safe_read_work_index(p)
+    items.append(entry)
+    _safe_write_work_index(p, items)
+
+
+# -------------------------
+# Save snapshots
+# -------------------------
+def _snapshot_dir(workspace_id: str) -> Path:
+    p = _ws_dir(workspace_id) / "snapshots"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _safe_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content or "", encoding="utf-8")
+    os.replace(tmp, path)
+
+
+# -------------------------
+# Preview helpers
+# -------------------------
+def _html_escape(s: str) -> str:
+    return html.escape(s or "", quote=False)
+
+
+def _decode_text_bytes(raw: bytes) -> str:
+    try:
+        s = raw.decode("utf-8")
+    except Exception:
+        try:
+            s = raw.decode("utf-8", errors="ignore")
+        except Exception:
+            s = raw.decode(errors="ignore")
+    return (s or "").lstrip("\ufeff")
+
+
+def _extract_preview_from_bytes(filename: str, ext: str, raw: bytes) -> Dict[str, Any]:
+    ext = (ext or "").lower().strip()
+
+    text: str = ""
+    html_out: str = ""
+    is_html: bool = False
+    truncated: bool = False
+
+    if ext == ".txt":
+        text = _decode_text_bytes(raw)
+        html_out = "<pre>" + _html_escape(text) + "</pre>"
+        is_html = False
+
+    elif ext == ".md":
+        md = _decode_text_bytes(raw)
+        try:
+            import markdown2
+            html_out = markdown2.markdown(md)
+            text = _strip_tags(html_out)
+            is_html = True
+        except Exception:
+            text = md
+            html_out = "<pre>" + _html_escape(md) + "</pre>"
+            is_html = False
+
+    elif ext in (".html", ".htm"):
+        html_raw = _decode_text_bytes(raw)
+        html_out = html_raw
+        text = _strip_tags(html_raw)
+        is_html = True
+
+    elif ext == ".docx":
+        html_out = ""
+        text = ""
+        is_html = False
+
+        try:
+            with io.BytesIO(raw) as buff:
+                result = mammoth.convert_to_html(buff)
+                html_out = result.value or ""
+            text = _strip_tags(html_out)
+            is_html = True
+        except Exception:
+            try:
+                text = raw.decode("utf-8", errors="ignore").strip()
+            except Exception:
+                text = ""
+            html_out = "<pre>" + _html_escape(text) + "</pre>" if text else ""
+            is_html = False
+
+    else:
+        try:
+            text = _decode_text_bytes(raw)
+            html_out = "<pre>" + _html_escape(text) + "</pre>"
+            is_html = False
+        except Exception:
+            text = ""
+            html_out = ""
+            is_html = False
+
+    if len(text) > TEXT_LIMIT:
+        text = text[:TEXT_LIMIT]
+        truncated = True
+
+    return {
+        "filename": Path(filename).name,
+        "ext": ext,
+        "text": text,
+        "html": html_out,
+        "is_html": bool(is_html),
+        "truncated": bool(truncated),
+    }
+
+
+def _store_and_index(
+    workspace_id: str,
+    file: UploadFile,
+    raw: bytes,
+    *,
+    preview_html: str,
+    preview_text: str,
+) -> Dict[str, Any]:
+    ext = _guess_ext(file.filename)
+    ws_dir = _ws_dir(workspace_id)
+    ws_dir.mkdir(parents=True, exist_ok=True)
+
+    doc_id = uuid.uuid4().hex
+    safe_name = Path(file.filename).name
+    stored_name = f"{doc_id}__{safe_name}"
+    stored_path = ws_dir / stored_name
+    stored_path.write_bytes(raw)
+
+    normalize_info: Dict[str, Any] = {}
+    if ext == ".docx":
+        normalize_info = _normalize_docx_title_in_place(str(stored_path))
+
+    h1, h1_source, h1_error = _derive_h1_for_index(
+        ext=ext,
+        preview_html=preview_html or "",
+        preview_text=preview_text or "",
+        stored_path=str(stored_path),
+    )
+
+    # Normalization may rewrite the stored .docx; record the size actually
+    # on disk (plus the original upload size) so the index never lies.
+    try:
+        stored_bytes = int(stored_path.stat().st_size)
+    except Exception:
+        stored_bytes = len(raw)
+
+    meta = {
+        "doc_id": doc_id,
+        "filename": safe_name,
+        "ext": ext,
+        "bytes": stored_bytes,
+        "original_bytes": len(raw),
+        "content_type": file.content_type or "",
+        "uploaded_at": _utc_now_iso(),
+        "stored_name": stored_name,
+        "h1": h1,
+        "h1_source": h1_source,
+        "h1_error": h1_error,
+        "docx_normalize": normalize_info if ext == ".docx" else {},
+    }
+
+    idx_path = _index_path(workspace_id)
+    items = _safe_read_index(idx_path)
+    items.append(meta)
+    _safe_write_index(idx_path, items)
+    return meta
+
+
+def _update_index_h1(
+    workspace_id: str,
+    doc_id: str,
+    *,
+    ext: str,
+    html_in: str,
+    text_in: str,
+) -> Dict[str, Any] | None:
+    idxp = _index_path(workspace_id)
+    items = _safe_read_index(idxp)
+
+    ws_dir = _ws_dir(workspace_id)
+
+    for rec in items:
+        if isinstance(rec, dict) and str(rec.get("doc_id") or "") == doc_id:
+            stored_name = str(rec.get("stored_name") or "")
+            stored_path = str(ws_dir / stored_name) if stored_name else None
+
+            if (ext or "").lower().strip() == ".docx" and stored_path:
+                _normalize_docx_title_in_place(stored_path)
+
+            h1, h1_source, h1_error = _derive_h1_for_index(
+                ext=ext,
+                preview_html=html_in or "",
+                preview_text=text_in or "",
+                stored_path=stored_path,
+            )
+            rec["h1"] = h1
+            rec["h1_source"] = h1_source
+            rec["h1_error"] = h1_error
+            rec["h1_updated_at"] = _utc_now_iso()
+            _safe_write_index(idxp, items)
+            return rec
+    return None
+
+
+# NOTE: The former _docs_index_path/_append_to_docs_index helpers were removed.
+# They pointed at the exact same index.json as _index_path/_store_and_index and
+# would have produced duplicate entries if ever called.
+
+
+# -------------------------
+# Active target set helpers (merge-safe)
+# -------------------------
+def _active_target_set_path(workspace_id: str) -> Path:
+    return BASE_DIR / "data" / "target_pools" / f"active_target_set_{_ws(workspace_id)}.json"
+
+
+def _default_active_target_set(workspace_id: str) -> Dict[str, Any]:
+    return {
+        "workspace_id": _ws(workspace_id),
+        "active_document_ids": [],
+        "active_draft_ids": [],
+        "active_imported_urls": [],
+        "active_live_domain_urls": [],
+        "active_upload_ids": [],
+        "updated_at": _utc_now_iso(),
+    }
+
+
+def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
+    ws_norm = _ws(workspace_id)
+    fp = _active_target_set_path(ws_norm)
+    obj = _default_active_target_set(ws_norm)
+
+    if not fp.exists():
+        return obj
+
+    try:
+        raw = json.loads(fp.read_text(encoding="utf-8"))
+    except Exception:
+        return obj
+
+    if not isinstance(raw, dict):
+        return obj
+
+    # FIX: this line was previously indented inside the block above,
+    # making it unreachable dead code.
+    obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
+    obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
+    obj["active_draft_ids"] = list(raw.get("active_draft_ids") or [])
+    obj["active_imported_urls"] = list(
+        raw.get("active_imported_urls") or raw.get("active_import_ids") or []
+    )
+    obj["active_live_domain_urls"] = list(raw.get("active_live_domain_urls") or [])
+
+    raw_upload_ids = raw.get("active_upload_ids")
+    if isinstance(raw_upload_ids, list):
+        obj["active_upload_ids"] = list(raw_upload_ids)
+    else:
+        # Canonical fallback: uploaded docs are doc_ids
+        obj["active_upload_ids"] = list(obj["active_document_ids"])
+
+    obj["updated_at"] = str(raw.get("updated_at") or obj["updated_at"])
+    return obj
+
+
+def _write_active_target_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str, Any]:
+    ws_norm = _ws(workspace_id)
+    fp = _active_target_set_path(ws_norm)
+    fp.parent.mkdir(parents=True, exist_ok=True)
+
+    doc_ids = list(obj.get("active_document_ids") or [])
+    upload_ids = list(obj.get("active_upload_ids") or [])
+
+    if not upload_ids:
+        upload_ids = list(doc_ids)
+
+    out: Dict[str, Any] = {
+        "workspace_id": ws_norm,
+        "active_document_ids": doc_ids,
+        "active_draft_ids": list(obj.get("active_draft_ids") or []),
+        "active_imported_urls": list(obj.get("active_imported_urls") or []),
+        "active_live_domain_urls": list(obj.get("active_live_domain_urls") or []),
+        "active_upload_ids": upload_ids,
+        "updated_at": _utc_now_iso(),
+    }
+
+    # Atomic write (was a plain write_text; a crash mid-write could corrupt the file).
+    tmp = fp.with_suffix(".tmp")
+    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, fp)
+    return out
+
+
+def _merge_active_target_set(
+    workspace_id: str,
+    *,
+    add_document_ids: List[str] | None = None,
+    add_draft_ids: List[str] | None = None,
+    add_imported_urls: List[str] | None = None,
+    add_live_domain_urls: List[str] | None = None,
+    add_upload_ids: List[str] | None = None,
+) -> Dict[str, Any]:
+    obj = _load_active_target_set(workspace_id)
+
+    def _merge_unique(existing: List[str], new_values: List[str] | None) -> List[str]:
+        out = [str(x).strip() for x in existing if str(x).strip()]
+        seen = set(out)
+        for v in new_values or []:
+            s = str(v).strip()
+            if s and s not in seen:
+                out.append(s)
+                seen.add(s)
+        return out
+
+    # Runtime document membership must REPLACE, not merge.
+    # This prevents phrases from multiple uploaded documents being active together.
+    if add_document_ids is not None:
+        obj["active_document_ids"] = [
+            str(x).strip()
+            for x in add_document_ids
+            if str(x).strip()
+        ]
+    else:
+        obj["active_document_ids"] = list(obj.get("active_document_ids") or [])
+
+    # Supporting-intelligence libraries may remain merged.
+    obj["active_draft_ids"] = _merge_unique(
+        obj.get("active_draft_ids") or [],
+        add_draft_ids,
+    )
+
+    obj["active_imported_urls"] = _merge_unique(
+        obj.get("active_imported_urls") or [],
+        add_imported_urls,
+    )
+
+    obj["active_live_domain_urls"] = _merge_unique(
+        obj.get("active_live_domain_urls") or [],
+        add_live_domain_urls,
+    )
+
+    # Upload runtime membership must also REPLACE, not merge.
+    if add_upload_ids is not None:
+        obj["active_upload_ids"] = [
+            str(x).strip()
+            for x in add_upload_ids
+            if str(x).strip()
+        ]
+    else:
+        obj["active_upload_ids"] = list(obj.get("active_upload_ids") or [])
+
+    return _write_active_target_set(workspace_id, obj)
+
+
+# -------------------------
+# API
+# -------------------------
+
+@router.post("/upload")
+async def upload_file(
+    workspace_id: str = Query("ws_betterhealthcheck_com"),
+    file: UploadFile = File(...),
+):
+    if not file or not file.filename:
+        raise HTTPException(status_code=400, detail="No file uploaded.")
+
+    ext = _guess_ext(file.filename)
+    if ext not in ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
+
+    ws_norm = _ws(workspace_id)
+
+    raw = await file.read()
+    preview = _extract_preview_from_bytes(Path(file.filename).name, ext, raw)
+
+    meta = _store_and_index(
+        ws_norm,
+        file,
+        raw,
+        preview_html=str(preview.get("html") or ""),
+        preview_text=str(preview.get("text") or ""),
+    )
+
+    processing_job_id = None
+
+    try:
+        from backend.server.orchestration.service import create_orchestration_job
+
+        stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
+        doc_id = str(meta.get("doc_id") or "").strip()
+
+        processing_job = create_orchestration_job(
+            workspace_id=ws_norm,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": ws_norm,
+                "doc_id": doc_id,
+                "stored_path": stored_path,
+                "stored_name": str(meta.get("stored_name") or ""),
+                "original_name": str(meta.get("filename") or ""),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(meta.get("filename") or ""),
+                "stored_name": str(meta.get("stored_name") or ""),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+
+        processing_job_id = processing_job.job_id
+
+        meta["universal_knowledge_orchestration"] = {
+            "ok": True,
+            "status": "queued",
+            "note": "Phase 2: orchestration job created and queued without blocking upload.",
+            "job_id": processing_job_id,
+        }
+
+    except Exception as e:
+        print("[UPLOAD_ORCHESTRATION_QUEUE_ERROR]", repr(e))
+        traceback.print_exc()
+        meta["universal_knowledge_orchestration"] = {
+            "ok": False,
+            "status": "queue_failed",
+            "error": str(e)[:160],
+            "job_id": None,
+        }
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "doc": meta,
+        "filename": preview.get("filename"),
+        "ext": preview.get("ext"),
+        "text": preview.get("text"),
+        "html": preview.get("html"),
+        "is_html": bool(preview.get("is_html")),
+        "truncated": bool(preview.get("truncated")),
+        "job_id": processing_job_id,
+        "processing_status": "queued" if processing_job_id else "queue_failed",
+    }
+
+
+@router.post("/clear_session")
+def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
+    ws_norm = _ws(workspace_id)
+
+    removed_files: List[str] = []
+
+    paths_to_remove = [
+        BASE_DIR / "data" / f"upload_struct_{ws_norm}.json",
+        BASE_DIR / "data" / f"upload_phrase_index_{ws_norm}.json",
+        BASE_DIR / "data" / "phrase_pools" / "upload" / f"upload_phrase_pool_{ws_norm}.json",
+        BASE_DIR / "data" / "phrase_pools" / "active" / f"active_phrase_pool_{ws_norm}.json",
+    ]
+
+    for fp in paths_to_remove:
+        try:
+            if fp.exists():
+                fp.unlink()
+                removed_files.append(str(fp))
+        except Exception as e:
+            print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
+
+    # Clear uploaded workspace document files for this session.
+    # This prevents re-upload from being blocked as duplicate after Clear Session.
+    # FIX: only remove stored upload files ("{doc_id}__{name}"); previously this
+    # deleted EVERY file in the directory, wiping index.json and work_index.json.
+    try:
+        ws_dir = _ws_dir(ws_norm)
+        if ws_dir.exists() and ws_dir.is_dir():
+            for fp in ws_dir.iterdir():
+                try:
+                    if not fp.is_file():
+                        continue
+                    if fp.name in _WS_PROTECTED_FILES:
+                        continue
+                    if fp.suffix == ".tmp" or "__" in fp.name:
+                        fp.unlink()
+                        removed_files.append(str(fp))
+                except Exception as e:
+                    print("[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]", str(fp), repr(e))
+    except Exception as e:
+        print("[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]", repr(e))
+
+    # Keep the document index consistent with the now-empty upload directory.
+    try:
+        _safe_write_index(_index_path(ws_norm), [])
+    except Exception as e:
+        print("[CLEAR_FILE_SESSION_INDEX_RESET_ERROR]", repr(e))
+
+    try:
+        active_obj = _load_active_target_set(ws_norm)
+        active_obj["active_document_ids"] = []
+        active_obj["active_upload_ids"] = []
+        _write_active_target_set(ws_norm, active_obj)
+    except Exception as e:
+        print("[CLEAR_FILE_SESSION_ACTIVE_SET_ERROR]", repr(e))
+
+    try:
+        queue_rebuild_event(
+            workspace_id=ws_norm,
+            trigger="document_changed",
+            metadata={
+                "source": "clear_session",
+                "reason": "session_cleared",
+            },
+        )
+    except Exception as e:
+        print("[CLEAR_SESSION_REBUILD_QUEUE_ERROR]", repr(e))
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "cleared": {
+            "upload_struct": True,
+            "upload_phrase_index": True,
+            "upload_phrase_pool": True,
+            "active_phrase_pool": True,
+            "document_index": True,
+            "active_document_ids": True,
+            "active_upload_ids": True,
+        },
+        "removed_files": removed_files,
+        "preserved": [
+            "work_index",
+            "snapshots",
+            "draft_intelligence",
+            "imported_urls",
+            "live_domain_intelligence",
+        ],
+    }
+
+
+@router.get("/list")
+def list_files(workspace_id: str = Query("ws_betterhealthcheck_com")):
+    ws_norm = _ws(workspace_id)
+    items = _safe_read_index(_index_path(ws_norm))
+    items.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
+
+    out = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        out.append(
+            {
+                "doc_id": it.get("doc_id"),
+                "filename": it.get("filename"),
+                "stored_name": it.get("stored_name"),
+                "uploaded_at": it.get("uploaded_at"),
+                "h1": it.get("h1") or "",
+                "h1_source": it.get("h1_source") or "",
+                "h1_error": it.get("h1_error") or "",
+            }
+        )
+
+    return {"ok": True, "workspace_id": ws_norm, "items": out}
+
+
+@router.get("/h1s")
+def list_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
+    ws_norm = _ws(workspace_id)
+    items = _safe_read_index(_index_path(ws_norm))
+
+    h1s: List[str] = []
+    seen: set[str] = set()
+
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        h = str(it.get("h1") or "").strip()
+        if not h:
+            continue
+        if h in seen:
+            continue
+        seen.add(h)
+        h1s.append(h)
+
+    return {"ok": True, "workspace_id": ws_norm, "h1s": h1s}
+
+
+# FIX: this route previously lived on `router` (prefix /api/files) with a full
+# path of "/api/site/target_pools/active_target_set", producing the URL
+# /api/files/api/site/target_pools/active_target_set. It now lives on
+# legacy_router (prefix /api) so the effective URL is
+# /api/site/target_pools/active_target_set as intended.
+@legacy_router.get("/site/target_pools/active_target_set")
+def get_active_target_set(
+    workspace_id: str | None = Query(None),
+    workspaceId: str | None = Query(None),
+):
+    try:
+        ws = _ws(workspace_id or workspaceId or "default")
+        data = _load_active_target_set(ws)
+
+        return {
+            "ok": True,
+            "workspace_id": ws,
+            "workspaceId": ws,
+            "exists": _active_target_set_path(ws).exists(),
+            "active_target_set": data,
+        }
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+        }
+
+
+@router.post("/active_target_set/save")
+async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
+    workspace_id = str(payload.get("workspace_id") or "ws_betterhealthcheck_com")
+
+    existing = _load_active_target_set(workspace_id)
+
+    # FIX: use key-presence checks instead of `or` fallbacks. With `or`, a
+    # client sending an explicit empty list (to clear a category) silently
+    # fell back to the existing values and could never clear anything.
+    def _field(key: str) -> List[str]:
+        if key in payload:
+            return list(payload.get(key) or [])
+        return list(existing.get(key) or [])
+
+    obj = {
+        "active_document_ids": _field("active_document_ids"),
+        "active_draft_ids": _field("active_draft_ids"),
+        "active_imported_urls": _field("active_imported_urls"),
+        "active_live_domain_urls": _field("active_live_domain_urls"),
+        "active_upload_ids": _field("active_upload_ids"),
+    }
+
+    saved = _write_active_target_set(workspace_id, obj)
+
+    try:
+        from backend.server.stores.active_phrase_set_store import save_active_phrase_set
+
+        save_active_phrase_set(workspace_id, {
+            "active_document_ids": obj.get("active_document_ids") or [],
+            "active_upload_ids": obj.get("active_upload_ids") or [],
+            "active_draft_ids": obj.get("active_draft_ids") or [],
+            "active_imported_urls": obj.get("active_imported_urls") or [],
+            "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
+        })
+    except Exception as e:
+        print("[ACTIVE_PHRASE_SET_SAVE_ERROR]", repr(e))
+    return {
+        "ok": True,
+        "workspace_id": _ws(workspace_id),
+        "active_target_set": saved,
+    }
+
+
+@router.post("/reindex_h1s")
+def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
+    ws_norm = _ws(workspace_id)
+    ws_dir = _ws_dir(ws_norm)
+    ws_dir.mkdir(parents=True, exist_ok=True)
+
+    entries: List[Dict[str, Any]] = []
+    errors: List[Dict[str, Any]] = []
+
+    for p in ws_dir.iterdir():
+        if not p.is_file():
+            continue
+        name = p.name
+        if name in _WS_PROTECTED_FILES:
+            continue
+        if name.endswith(".tmp"):
+            continue
+        if "__" not in name:
+            continue
+
+        doc_id, safe_name = name.split("__", 1)
+        doc_id = (doc_id or "").strip()
+        safe_name = (safe_name or "").strip()
+        if not doc_id or len(doc_id) < 16:
+            continue
+
+        ext = _guess_ext(safe_name)
+        if ext not in ALLOWED_EXT:
+            continue
+
+        if ext == ".docx":
+            _normalize_docx_title_in_place(str(p))
+
+        try:
+            raw = p.read_bytes()
+        except Exception as e:
+            errors.append({"file": name, "error": "read_failed", "detail": str(e)[:120]})
+            continue
+
+        preview = _extract_preview_from_bytes(safe_name, ext, raw)
+        h1, h1_source, h1_error = _derive_h1_for_index(
+            ext=ext,
+            preview_html=str(preview.get("html") or ""),
+            preview_text=str(preview.get("text") or ""),
+            stored_path=str(p),
+        )
+
+        try:
+            uploaded_at = _utc_from_timestamp_iso(p.stat().st_mtime)
+            size_bytes = int(p.stat().st_size)
+        except Exception:
+            uploaded_at = _utc_now_iso()
+            size_bytes = len(raw)
+
+        entries.append(
+            {
+                "doc_id": doc_id,
+                "filename": safe_name,
+                "ext": ext,
+                "bytes": size_bytes,
+                "content_type": "",
+                "uploaded_at": uploaded_at,
+                "stored_name": name,
+                "h1": h1,
+                "h1_source": h1_source,
+                "h1_error": h1_error,
+            }
+        )
+
+    entries.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
+    idx_path = _index_path(ws_norm)
+    _safe_write_index(idx_path, entries)
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "reindexed": len(entries),
+        "with_h1": sum(1 for e in entries if (e.get("h1") or "").strip()),
+        "missing_h1": sum(1 for e in entries if not (e.get("h1") or "").strip()),
+        "errors": errors,
+        "index_path": str(idx_path),
+    }
+
+
+@router.get("/docx_style_debug")
+def docx_style_debug(
+    workspace_id: str = Query("ws_betterhealthcheck_com"),
+    doc_id: str = Query(...),
+    limit: int = Query(40, ge=1, le=200),
+):
+    ws_norm = _ws(workspace_id)
+
+    items = _safe_read_index(_index_path(ws_norm))
+    hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+    if not hit:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+
+    ext = str(hit.get("ext") or "").lower()
+    if ext != ".docx":
+        raise HTTPException(status_code=400, detail="docx_only")
+
+    stored_name = str(hit.get("stored_name") or "")
+    p = _ws_dir(ws_norm) / stored_name
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="stored_file_missing")
+
+    if DocxDocument is None:
+        raise HTTPException(status_code=500, detail="python_docx_not_available")
+
+    try:
+        doc = DocxDocument(str(p))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"docx_read_failed:{str(e)[:160]}")
+
+    out = []
+    paras = getattr(doc, "paragraphs", []) or []
+    for i, para in enumerate(paras[:limit]):
+        txt = (getattr(para, "text", "") or "").strip()
+        if not txt:
+            continue
+        try:
+            style_name = (para.style.name or "").strip()
+        except Exception:
+            style_name = ""
+        out.append({"i": i, "style": style_name, "text": txt[:200]})
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "doc_id": doc_id,
+        "filename": hit.get("filename"),
+        "items": out,
+    }
+
+
+@router.post("/save")
+async def save_doc(
+    workspace_id: str = Query("ws_betterhealthcheck_com"),
+    doc_id: str = Query(...),
+    payload: Dict[str, Any] = Body(default_factory=dict),
+):
+    ws_norm = _ws(workspace_id)
+
+    doc_id = (doc_id or "").strip()
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+
+    items = _safe_read_index(_index_path(ws_norm))
+    hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+    if not hit:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+
+    html_in = str((payload or {}).get("html") or "").strip()
+    text_in = str((payload or {}).get("text") or "")
+
+    if not html_in:
+        raise HTTPException(status_code=400, detail="html is required")
+
+    ts_compact = _utc_now_iso().replace(":", "").replace("-", "")
+    snap_name = f"{doc_id}__{ts_compact}.html"
+    snap_path = _snapshot_dir(ws_norm) / snap_name
+    _safe_write_text(snap_path, html_in)
+
+    ext = str(hit.get("ext") or "").lower()
+    updated_rec = _update_index_h1(ws_norm, doc_id, ext=ext, html_in=html_in, text_in=text_in)
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "doc_id": doc_id,
+        "snapshot": snap_name,
+        "h1": (updated_rec.get("h1") if isinstance(updated_rec, dict) else ""),
+        "h1_source": (updated_rec.get("h1_source") if isinstance(updated_rec, dict) else ""),
+        "h1_error": (updated_rec.get("h1_error") if isinstance(updated_rec, dict) else ""),
+    }
+
+
+@router.get("/get")
+def get_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+    ws_norm = _ws(workspace_id)
+
+    doc_id = (doc_id or "").strip()
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+
+    items = _safe_read_index(_index_path(ws_norm))
+    hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+    if not hit:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+
+    path = _ws_dir(ws_norm) / (hit.get("stored_name") or "")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Stored file missing on disk")
+
+    return FileResponse(
+        str(path),
+        filename=hit.get("filename") or "document",
+        media_type=hit.get("content_type") or "application/octet-stream",
+    )
+
+
+@router.get("/preview")
+def preview_file(workspace_id: str = Query("ws_betterhealthcheck_com"), doc_id: str = Query(...)):
+    ws_norm = _ws(workspace_id)
+
+    doc_id = (doc_id or "").strip()
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+
+    items = _safe_read_index(_index_path(ws_norm))
+    hit = next((x for x in items if x.get("doc_id") == doc_id), None)
+    if not hit:
+        raise HTTPException(status_code=404, detail="doc_id not found")
+
+    path = _ws_dir(ws_norm) / (hit.get("stored_name") or "")
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Stored file missing on disk")
+
+    raw = path.read_bytes()
+    ext = str(hit.get("ext") or _guess_ext(hit.get("filename") or "")).lower()
+    preview = _extract_preview_from_bytes(hit.get("filename") or "document", ext, raw)
+
+    return {
+        "ok": True,
+        "workspace_id": ws_norm,
+        "doc_id": hit.get("doc_id"),
+        "filename": preview.get("filename"),
+        "ext": preview.get("ext"),
+        "text": preview.get("text"),
+        "html": preview.get("html"),
+        "is_html": bool(preview.get("is_html")),
+        "truncated": bool(preview.get("truncated")),
+        "job_id": None,
+        "processing_status": "not_applicable",
+        "h1": hit.get("h1") or "",
+        "h1_source": hit.get("h1_source") or "",
+        "h1_error": hit.get("h1_error") or "",
+    }
+
+
+@legacy_router.post("/upload")
+async def legacy_upload(
+    workspace_id: str = Query("ws_betterhealthcheck_com"),
+    file: UploadFile = File(...),
+):
+    return await upload_file(workspace_id=workspace_id, file=file)
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+

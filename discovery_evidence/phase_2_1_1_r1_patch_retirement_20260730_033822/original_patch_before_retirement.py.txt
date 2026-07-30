@@ -1,0 +1,912 @@
+﻿from __future__ import annotations
+
+import hashlib
+import importlib
+import py_compile
+import shutil
+import sys
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+PROJECT_ROOT = Path.cwd().resolve()
+
+RUNTIME_DIR = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "runtime"
+)
+
+TARGET = (
+    RUNTIME_DIR
+    / "universal_jobs"
+    / "contract.py"
+)
+
+EXPECTED_BASELINE_SIZE = 38903
+
+EXPECTED_BASELINE_SHA256 = (
+    "769e6ce63d06ea435ca0ee761c83f4068f431a6abacd4d014674b00f4662f655"
+)
+
+TIMESTAMP = datetime.now(
+    timezone.utc
+).strftime("%Y%m%dT%H%M%SZ")
+
+BACKUP = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "data"
+    / "runtime_backups"
+    / f"universal_job_contract_review_{TIMESTAMP}"
+    / TARGET.name
+)
+
+
+OLD_IMPORT_BLOCK = '''import dataclasses
+import enum
+import hashlib
+import json
+import re
+from dataclasses import dataclass, field, fields, replace
+'''
+
+
+NEW_IMPORT_BLOCK = '''import dataclasses
+import enum
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
+from dataclasses import dataclass, field, fields, replace
+'''
+
+
+OLD_VERSION_BLOCK = '''UNIVERSAL_JOB_CONTRACT_VERSION: Final[str] = "universal_job_contract_v2.1.1"
+
+# The canonical field set, in canonical order. This tuple is authoritative:
+'''
+
+
+NEW_VERSION_BLOCK = '''UNIVERSAL_JOB_CONTRACT_ID: Final[str] = (
+    "urn:linkcraftor:runtime:universal-job-contract"
+)
+
+UNIVERSAL_JOB_CONTRACT_VERSION: Final[str] = (
+    "universal_job_contract_v2.1.1"
+)
+
+# The canonical field set, in canonical order. This tuple is authoritative:
+'''
+
+
+OLD_TIMESTAMP_FUNCTION = '''def _normalize_timestamp(value: Any, *, name: str, violations: list) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        violations.append(name + " must be an ISO-8601 string or null")
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if not _TIMESTAMP_RE.match(text):
+        violations.append(name + " must be an ISO-8601 timestamp: " + text)
+    return text
+'''
+
+
+NEW_TIMESTAMP_FUNCTION = '''def _normalize_timestamp(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+) -> Optional[str]:
+    """Validate and normalize an ISO-8601 timestamp to canonical UTC."""
+    if value is None:
+        return None
+
+    if not isinstance(value, str):
+        violations.append(
+            name + " must be an ISO-8601 string or null"
+        )
+        return None
+
+    text = value.strip()
+
+    if not text:
+        return None
+
+    if not _TIMESTAMP_RE.match(text):
+        violations.append(
+            name + " must be an ISO-8601 timestamp: " + text
+        )
+        return text
+
+    parse_text = text
+
+    if parse_text.endswith("Z"):
+        parse_text = (
+            parse_text[:-1]
+            + "+00:00"
+        )
+
+    try:
+        parsed = datetime.fromisoformat(
+            parse_text
+        )
+    except ValueError:
+        violations.append(
+            name + " is not a valid calendar timestamp: " + text
+        )
+        return text
+
+    if parsed.tzinfo is None:
+        violations.append(
+            name + " must include a timezone offset"
+        )
+        return text
+
+    normalized = (
+        parsed
+        .astimezone(timezone.utc)
+        .isoformat(
+            timespec="microseconds"
+        )
+        .replace(
+            "+00:00",
+            "Z",
+        )
+    )
+
+    return normalized
+'''
+
+
+OLD_FROM_DICT = '''    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> "UniversalJob":
+        if not isinstance(data, Mapping):
+            raise UniversalJobContractError("job data must be a mapping")
+        known = _CONTRACT_CONSTRUCTOR_FIELDS
+        kwargs = {key: data[key] for key in data if key in known}
+        if "priority" in kwargs:
+            kwargs["priority"] = UniversalJobPriority.coerce(kwargs["priority"])
+        if "status" in kwargs:
+            kwargs["status"] = UniversalJobStatus.coerce(kwargs["status"])
+        if "progress" in kwargs:
+            kwargs["progress"] = UniversalJobProgress.from_value(kwargs["progress"])
+        if "cost_record" in kwargs:
+            kwargs["cost_record"] = UniversalJobCostRecord.from_value(
+                kwargs["cost_record"])
+        return cls(**kwargs)
+'''
+
+
+NEW_FROM_DICT = '''    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalJob":
+        if not isinstance(
+            data,
+            Mapping,
+        ):
+            raise UniversalJobContractError(
+                "job data must be a mapping"
+            )
+
+        unknown_fields = sorted(
+            set(data)
+            - _CONTRACT_CONSTRUCTOR_FIELDS
+        )
+
+        if unknown_fields:
+            raise UniversalJobContractError(
+                "unknown universal job fields: "
+                + ", ".join(
+                    unknown_fields
+                ),
+                violations=tuple(
+                    "unknown field: " + name
+                    for name in unknown_fields
+                ),
+            )
+
+        missing_fields = tuple(
+            name
+            for name in REQUIRED_UNIVERSAL_JOB_FIELDS
+            if name not in data
+        )
+
+        if missing_fields:
+            raise UniversalJobContractError(
+                "missing required universal job fields: "
+                + ", ".join(
+                    missing_fields
+                ),
+                violations=tuple(
+                    "missing required field: " + name
+                    for name in missing_fields
+                ),
+            )
+
+        kwargs = {
+            key: data[key]
+            for key in data
+        }
+
+        if "priority" in kwargs:
+            kwargs["priority"] = (
+                UniversalJobPriority.coerce(
+                    kwargs["priority"]
+                )
+            )
+
+        if "status" in kwargs:
+            kwargs["status"] = (
+                UniversalJobStatus.coerce(
+                    kwargs["status"]
+                )
+            )
+
+        if "progress" in kwargs:
+            kwargs["progress"] = (
+                UniversalJobProgress.from_value(
+                    kwargs["progress"]
+                )
+            )
+
+        if "cost_record" in kwargs:
+            kwargs["cost_record"] = (
+                UniversalJobCostRecord.from_value(
+                    kwargs["cost_record"]
+                )
+            )
+
+        return cls(
+            **kwargs
+        )
+'''
+
+
+OLD_SERIALIZATION_TAIL = '''    def to_canonical_json(self) -> str:
+        return _canonical_json(self.to_canonical_dict())
+
+    # -- deserialization / reconstruction -----------------------------------
+'''
+
+
+NEW_SERIALIZATION_TAIL = '''    def to_canonical_json(self) -> str:
+        return _canonical_json(
+            self.to_canonical_dict()
+        )
+
+    @classmethod
+    def required_fields(
+        cls,
+    ) -> Tuple[str, ...]:
+        """Return the immutable canonical required-field roster."""
+        return REQUIRED_UNIVERSAL_JOB_FIELDS
+
+    @classmethod
+    def schema(
+        cls,
+    ) -> Mapping[str, Any]:
+        """Return the immutable canonical contract schema identity."""
+        return MappingProxyType(
+            {
+                "contract_id": (
+                    UNIVERSAL_JOB_CONTRACT_ID
+                ),
+                "contract_version": (
+                    UNIVERSAL_JOB_CONTRACT_VERSION
+                ),
+                "required_fields": (
+                    REQUIRED_UNIVERSAL_JOB_FIELDS
+                ),
+            }
+        )
+
+    # -- deserialization / reconstruction -----------------------------------
+'''
+
+
+OLD_FINGERPRINT_BLOCK = '''    def content_fingerprint(self) -> str:
+        """Covers every canonical field of the job."""
+        return _fingerprint(self.to_canonical_json())
+
+    def __hash__(self) -> int:
+        return hash(self.content_fingerprint())
+'''
+
+
+NEW_FINGERPRINT_BLOCK = '''    def contract_fingerprint(self) -> str:
+        """Fingerprint the frozen canonical contract field set."""
+        canonical = self.to_canonical_dict()
+
+        material = {
+            "contract_id": (
+                UNIVERSAL_JOB_CONTRACT_ID
+            ),
+            "contract_version": (
+                self.contract_version
+            ),
+            "fields": {
+                name: canonical[name]
+                for name
+                in REQUIRED_UNIVERSAL_JOB_FIELDS
+            },
+        }
+
+        return _fingerprint(
+            _canonical_json(
+                material
+            )
+        )
+
+    def content_fingerprint(self) -> str:
+        """Cover every canonical serialized field of this job."""
+        return _fingerprint(
+            self.to_canonical_json()
+        )
+
+    def __hash__(self) -> int:
+        """Return a deterministic hash independent of Python hash seeding."""
+        digest = hashlib.sha256(
+            self.to_canonical_json().encode(
+                "utf-8"
+            )
+        ).digest()
+
+        return int.from_bytes(
+            digest[:8],
+            byteorder="big",
+            signed=True,
+        )
+'''
+
+
+OLD_VALIDATION_END = '''    # Reconstruction succeeded; report any absent canonical fields as advisory
+    # violations while still marking structurally valid inputs as valid.
+    return UniversalJobValidationReport(
+        is_valid=True,
+        violations=tuple("field defaulted: " + name for name in missing),
+        checked_field_count=len(REQUIRED_UNIVERSAL_JOB_FIELDS),
+    )
+'''
+
+
+NEW_VALIDATION_END = '''    if missing:
+        return UniversalJobValidationReport(
+            is_valid=False,
+            violations=tuple(
+                "missing required field: " + name
+                for name in missing
+            ),
+            checked_field_count=(
+                len(
+                    REQUIRED_UNIVERSAL_JOB_FIELDS
+                )
+            ),
+        )
+
+    return UniversalJobValidationReport(
+        is_valid=True,
+        violations=_EMPTY_TUPLE,
+        checked_field_count=(
+            len(
+                REQUIRED_UNIVERSAL_JOB_FIELDS
+            )
+        ),
+    )
+'''
+
+
+OLD_ALL_BLOCK = '''__all__ = [
+    "UNIVERSAL_JOB_CONTRACT_VERSION",
+    "REQUIRED_UNIVERSAL_JOB_FIELDS",
+'''
+
+
+NEW_ALL_BLOCK = '''__all__ = [
+    "UNIVERSAL_JOB_CONTRACT_ID",
+    "UNIVERSAL_JOB_CONTRACT_VERSION",
+    "REQUIRED_UNIVERSAL_JOB_FIELDS",
+'''
+
+
+def sha256_file(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open(
+        "rb"
+    ) as handle:
+        for chunk in iter(
+            lambda: handle.read(
+                1024 * 1024
+            ),
+            b"",
+        ):
+            digest.update(
+                chunk
+            )
+
+    return digest.hexdigest()
+
+
+def replace_once(
+    source: str,
+    old: str,
+    new: str,
+    label: str,
+) -> str:
+    count = source.count(
+        old
+    )
+
+    if count != 1:
+        raise RuntimeError(
+            f"{label}: expected exactly one match, "
+            f"found {count}."
+        )
+
+    return source.replace(
+        old,
+        new,
+        1,
+    )
+
+
+def import_target():
+    runtime_path = str(
+        RUNTIME_DIR
+    )
+
+    if runtime_path not in sys.path:
+        sys.path.insert(
+            0,
+            runtime_path,
+        )
+
+    sys.modules.pop(
+        "universal_jobs.contract",
+        None,
+    )
+
+    sys.modules.pop(
+        "universal_jobs",
+        None,
+    )
+
+    importlib.invalidate_caches()
+
+    return importlib.import_module(
+        "universal_jobs.contract"
+    )
+
+
+def full_candidate() -> dict:
+    return {
+        "job_id": "job_001",
+        "workspace_id": "ws_001",
+        "user_id": "user_001",
+        "product_id": "linkcraftor",
+        "pipeline": "certification_pipeline",
+        "stage": "contract_stage",
+        "job_type": "contract_test",
+        "payload_reference": None,
+        "priority": "normal",
+        "status": "created",
+        "attempts": 0,
+        "maximum_attempts": 3,
+        "lease_owner": None,
+        "lease_id": None,
+        "lease_started_at": None,
+        "lease_expires_at": None,
+        "parent_job_id": None,
+        "dependency_job_ids": [],
+        "batch_id": None,
+        "pipeline_run_id": None,
+        "progress": {
+            "percent": 0,
+            "step": "",
+            "message": "",
+            "total_units": None,
+            "completed_units": None,
+            "updated_at": None,
+        },
+        "checkpoint_reference": None,
+        "result_reference": None,
+        "artifact_references": [],
+        "idempotency_key": "idem_001",
+        "AU_reserved": 0,
+        "AU_consumed": 0,
+        "cost_record": {
+            "currency": "USD",
+            "estimated_micros": 0,
+            "actual_micros": 0,
+            "au_rate_micros": 0,
+            "breakdown": {},
+        },
+        "created_at": "2026-07-29T00:00:00Z",
+        "scheduled_at": None,
+        "started_at": None,
+        "completed_at": None,
+        "failed_at": None,
+        "cancelled_at": None,
+        "error_code": None,
+        "error_message": None,
+        "error_details": {},
+    }
+
+
+def expect_rejected(
+    operation,
+    label: str,
+) -> None:
+    try:
+        operation()
+    except Exception:
+        return
+
+    raise AssertionError(
+        label + " was unexpectedly accepted"
+    )
+
+
+def verify_behavior(
+    module,
+) -> None:
+    if (
+        module.UNIVERSAL_JOB_CONTRACT_ID
+        != "urn:linkcraftor:runtime:universal-job-contract"
+    ):
+        raise AssertionError(
+            "Permanent contract ID mismatch."
+        )
+
+    candidate = full_candidate()
+
+    job = module.UniversalJob.from_dict(
+        candidate
+    )
+
+    reconstructed = (
+        module.UniversalJob.from_json(
+            job.to_canonical_json()
+        )
+    )
+
+    if job != reconstructed:
+        raise AssertionError(
+            "Canonical reconstruction changed the job."
+        )
+
+    if (
+        job.contract_fingerprint()
+        != reconstructed.contract_fingerprint()
+    ):
+        raise AssertionError(
+            "Contract fingerprint is not deterministic."
+        )
+
+    if (
+        job.content_fingerprint()
+        != reconstructed.content_fingerprint()
+    ):
+        raise AssertionError(
+            "Content fingerprint is not deterministic."
+        )
+
+    if hash(job) != hash(reconstructed):
+        raise AssertionError(
+            "Deterministic Python hashing failed."
+        )
+
+    if (
+        module.UniversalJob.required_fields()
+        != module.REQUIRED_UNIVERSAL_JOB_FIELDS
+    ):
+        raise AssertionError(
+            "Required-field introspection mismatch."
+        )
+
+    schema = module.UniversalJob.schema()
+
+    if (
+        schema["contract_id"]
+        != module.UNIVERSAL_JOB_CONTRACT_ID
+    ):
+        raise AssertionError(
+            "Schema contract ID mismatch."
+        )
+
+    try:
+        schema["contract_id"] = "changed"
+    except TypeError:
+        pass
+    else:
+        raise AssertionError(
+            "Contract schema is mutable."
+        )
+
+    missing_candidate = dict(
+        candidate
+    )
+
+    missing_candidate.pop(
+        "job_type"
+    )
+
+    expect_rejected(
+        lambda: module.UniversalJob.from_dict(
+            missing_candidate
+        ),
+        "Missing required field",
+    )
+
+    unknown_candidate = dict(
+        candidate
+    )
+
+    unknown_candidate[
+        "legacy_payload"
+    ] = {}
+
+    expect_rejected(
+        lambda: module.UniversalJob.from_dict(
+            unknown_candidate
+        ),
+        "Unknown field",
+    )
+
+    report = (
+        module.validate_universal_job(
+            missing_candidate
+        )
+    )
+
+    if report.is_valid:
+        raise AssertionError(
+            "Missing-field validation report was marked valid."
+        )
+
+    normalized_candidate = dict(
+        candidate
+    )
+
+    normalized_candidate[
+        "created_at"
+    ] = "2026-07-29T02:00:00+02:00"
+
+    normalized = (
+        module.UniversalJob.from_dict(
+            normalized_candidate
+        )
+    )
+
+    if (
+        normalized.created_at
+        != "2026-07-29T00:00:00.000000Z"
+    ):
+        raise AssertionError(
+            "Timestamp was not normalized to canonical UTC."
+        )
+
+    invalid_time_candidate = dict(
+        candidate
+    )
+
+    invalid_time_candidate[
+        "started_at"
+    ] = "2026-07-29T02:00:00Z"
+
+    invalid_time_candidate[
+        "completed_at"
+    ] = "2026-07-29T01:00:00Z"
+
+    expect_rejected(
+        lambda: module.UniversalJob.from_dict(
+            invalid_time_candidate
+        ),
+        "Invalid timestamp ordering",
+    )
+
+
+def rollback() -> None:
+    if BACKUP.exists():
+        shutil.copy2(
+            BACKUP,
+            TARGET,
+        )
+
+
+def main() -> int:
+    print("=" * 78)
+    print("PHASE 2.1.1 — UNIVERSAL JOB CONTRACT")
+    print("CONSOLIDATED ARCHITECTURAL PATCH")
+    print("=" * 78)
+    print(f"Target: {TARGET}")
+    print()
+
+    if not TARGET.exists():
+        raise FileNotFoundError(
+            f"Contract file does not exist: {TARGET}"
+        )
+
+    actual_size = TARGET.stat().st_size
+    actual_sha256 = sha256_file(
+        TARGET
+    )
+
+    if actual_size != EXPECTED_BASELINE_SIZE:
+        raise RuntimeError(
+            "Unexpected Claude baseline size. "
+            f"Expected {EXPECTED_BASELINE_SIZE}, "
+            f"found {actual_size}. No file was modified."
+        )
+
+    if (
+        actual_sha256
+        != EXPECTED_BASELINE_SHA256
+    ):
+        raise RuntimeError(
+            "Unexpected Claude baseline SHA-256. "
+            f"Expected {EXPECTED_BASELINE_SHA256}, "
+            f"found {actual_sha256}. No file was modified."
+        )
+
+    original = TARGET.read_text(
+        encoding="utf-8-sig"
+    )
+
+    BACKUP.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    shutil.copy2(
+        TARGET,
+        BACKUP,
+    )
+
+    try:
+        revised = original
+
+        revised = replace_once(
+            revised,
+            OLD_IMPORT_BLOCK,
+            NEW_IMPORT_BLOCK,
+            "Datetime import",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_VERSION_BLOCK,
+            NEW_VERSION_BLOCK,
+            "Permanent contract identity",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_TIMESTAMP_FUNCTION,
+            NEW_TIMESTAMP_FUNCTION,
+            "Canonical timestamp normalization",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_FROM_DICT,
+            NEW_FROM_DICT,
+            "Strict reconstruction contract",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_SERIALIZATION_TAIL,
+            NEW_SERIALIZATION_TAIL,
+            "Schema introspection",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_FINGERPRINT_BLOCK,
+            NEW_FINGERPRINT_BLOCK,
+            "Deterministic contract hashing",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_VALIDATION_END,
+            NEW_VALIDATION_END,
+            "Missing-field validation",
+        )
+
+        revised = replace_once(
+            revised,
+            OLD_ALL_BLOCK,
+            NEW_ALL_BLOCK,
+            "Public contract exports",
+        )
+
+        TARGET.write_text(
+            revised,
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        py_compile.compile(
+            str(TARGET),
+            doraise=True,
+        )
+
+        module = import_target()
+
+        verify_behavior(
+            module
+        )
+
+    except Exception:
+        rollback()
+
+        print("ROLLBACK COMPLETE")
+        print(
+            "The Universal Job Contract patch failed, "
+            "so Claude's exact baseline was restored."
+        )
+        print()
+        print(
+            traceback.format_exc()
+        )
+
+        return 1
+
+    new_size = TARGET.stat().st_size
+    new_sha256 = sha256_file(
+        TARGET
+    )
+
+    print("Exact Claude baseline size:       PASS")
+    print("Exact Claude baseline SHA-256:    PASS")
+    print("Backup creation:                  PASS")
+    print("Permanent contract ID:            PASS")
+    print("Contract version preservation:    PASS")
+    print("Strict missing-field rejection:   PASS")
+    print("Strict unknown-field rejection:   PASS")
+    print("Canonical UTC timestamps:         PASS")
+    print("Timestamp ordering validation:    PASS")
+    print("Contract fingerprint:             PASS")
+    print("Content fingerprint:              PASS")
+    print("Deterministic Python hash:         PASS")
+    print("Required-field introspection:     PASS")
+    print("Immutable schema introspection:   PASS")
+    print("Validation-report correction:     PASS")
+    print("Canonical reconstruction:         PASS")
+    print("Module compilation:               PASS")
+    print("Module import:                    PASS")
+    print("Behavioral verification:          PASS")
+    print()
+    print(f"New module size:   {new_size}")
+    print(f"New module SHA256: {new_sha256}")
+    print(f"Backup file:       {BACKUP}")
+    print()
+    print(
+        "UNIVERSAL JOB CONTRACT PATCH: PASS"
+    )
+    print(
+        "FORMAL PRODUCTION INSTALLATION: PENDING"
+    )
+    print(
+        "NO QUEUES, WORKERS, PERSISTENCE OR "
+        "RUNTIME REGISTRATION WERE ADDED"
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

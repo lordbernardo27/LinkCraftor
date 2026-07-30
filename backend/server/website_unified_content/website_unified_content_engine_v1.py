@@ -7,6 +7,8 @@ filters by word count, or writes an intermediate content store.
 
 from __future__ import annotations
 
+from backend.server.common.text_statistics import count_words
+
 import hashlib
 import re
 from html.parser import HTMLParser
@@ -50,12 +52,8 @@ def _sha256_text(
 def _word_count(
     value: str,
 ) -> int:
-    return len(
-        re.findall(
-            r"\b[\w’'-]+\b",
-            value,
-            flags=re.UNICODE,
-        )
+    return count_words(
+        value
     )
 
 
@@ -630,3 +628,4 @@ def build_transient_website_unified_content_v1(
                 True,
         },
     }
+

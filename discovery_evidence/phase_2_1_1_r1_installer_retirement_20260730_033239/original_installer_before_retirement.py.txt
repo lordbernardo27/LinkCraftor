@@ -1,0 +1,1267 @@
+﻿from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import json
+import os
+import py_compile
+import shutil
+import sys
+import tempfile
+import time
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Callable
+
+
+PROJECT_ROOT = Path.cwd().resolve()
+
+RUNTIME_DIR = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "runtime"
+)
+
+PACKAGE_DIR = (
+    RUNTIME_DIR
+    / "universal_jobs"
+)
+
+SOURCE = (
+    PACKAGE_DIR
+    / "contract.py"
+)
+
+TARGET = (
+    PACKAGE_DIR
+    / "contract.py"
+)
+
+EXPECTED_SIZE = 42157
+
+EXPECTED_SHA256 = (
+    "dcad494f07492871858f434dc1389897dca13a4204208e38e957549f4072d8de"
+)
+
+TIMESTAMP = datetime.now(
+    timezone.utc
+).strftime(
+    "%Y%m%dT%H%M%SZ"
+)
+
+BACKUP = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "data"
+    / "runtime_backups"
+    / f"universal_job_contract_install_{TIMESTAMP}"
+    / TARGET.name
+)
+
+EVIDENCE_DIR = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "data"
+    / "runtime"
+    / "uri_phase_2"
+    / "2_1_1_universal_job_contract"
+)
+
+EVIDENCE_JSON = (
+    EVIDENCE_DIR
+    / f"universal_job_contract_installation_{TIMESTAMP}.json"
+)
+
+EVIDENCE_TEXT = (
+    EVIDENCE_DIR
+    / f"universal_job_contract_installation_{TIMESTAMP}.txt"
+)
+
+
+REQUIRED_FIELDS = (
+    "job_id",
+    "workspace_id",
+    "user_id",
+    "product_id",
+    "pipeline",
+    "stage",
+    "job_type",
+    "payload_reference",
+    "priority",
+    "status",
+    "attempts",
+    "maximum_attempts",
+    "lease_owner",
+    "lease_id",
+    "lease_started_at",
+    "lease_expires_at",
+    "parent_job_id",
+    "dependency_job_ids",
+    "batch_id",
+    "pipeline_run_id",
+    "progress",
+    "checkpoint_reference",
+    "result_reference",
+    "artifact_references",
+    "idempotency_key",
+    "AU_reserved",
+    "AU_consumed",
+    "cost_record",
+    "created_at",
+    "scheduled_at",
+    "started_at",
+    "completed_at",
+    "failed_at",
+    "cancelled_at",
+    "error_code",
+    "error_message",
+    "error_details",
+)
+
+
+REQUIRED_EXPORTS = (
+    "UNIVERSAL_JOB_CONTRACT_ID",
+    "UNIVERSAL_JOB_CONTRACT_VERSION",
+    "REQUIRED_UNIVERSAL_JOB_FIELDS",
+    "UniversalJob",
+    "UniversalJobValidationReport",
+    "UniversalJobContractError",
+    "UniversalJobStatus",
+    "UniversalJobPriority",
+    "UniversalJobProgress",
+    "UniversalJobCostRecord",
+    "validate_universal_job",
+)
+
+
+PROHIBITED_IMPORT_ROOTS = {
+    "asyncio",
+    "multiprocessing",
+    "socket",
+    "sqlite3",
+    "subprocess",
+    "threading",
+    "requests",
+    "aiohttp",
+    "httpx",
+    "boto3",
+    "redis",
+    "celery",
+    "rq",
+    "kombu",
+    "sqlalchemy",
+}
+
+
+PROHIBITED_SOURCE_TERMS = (
+    "queue.Queue",
+    "asyncio.Queue",
+    "create_worker",
+    "start_worker",
+    "consume_queue",
+    "queue_consumer",
+    "dispatch_job",
+    "background_task",
+    "RuntimeRegistration",
+    "register_runtime",
+    "open(",
+    "Path.write_text",
+    "Path.write_bytes",
+    "requests.",
+    "socket.",
+    "sqlite3.",
+    "subprocess.",
+)
+
+
+class InstallationFailure(RuntimeError):
+    pass
+
+
+def sha256_file(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open(
+        "rb"
+    ) as handle:
+        for chunk in iter(
+            lambda: handle.read(
+                1024 * 1024
+            ),
+            b"",
+        ):
+            digest.update(
+                chunk
+            )
+
+    return digest.hexdigest()
+
+
+def record_check(
+    checks: list[dict[str, Any]],
+    check_id: int,
+    name: str,
+    operation: Callable[[], Any],
+) -> Any:
+    try:
+        result = operation()
+
+    except Exception as exc:
+        checks.append(
+            {
+                "check_id": check_id,
+                "name": name,
+                "status": "FAIL",
+                "detail": (
+                    f"{type(exc).__name__}: {exc}"
+                ),
+            }
+        )
+
+        print(
+            f" [{check_id:>2}] "
+            f"{name:.<52} FAIL"
+        )
+
+        print(
+            f"        -> {type(exc).__name__}: {exc}"
+        )
+
+        raise
+
+    checks.append(
+        {
+            "check_id": check_id,
+            "name": name,
+            "status": "PASS",
+            "detail": None,
+        }
+    )
+
+    print(
+        f" [{check_id:>2}] "
+        f"{name:.<52} PASS"
+    )
+
+    return result
+
+
+def verify_baseline() -> None:
+    if not SOURCE.exists():
+        raise FileNotFoundError(
+            f"Reviewed contract does not exist: {SOURCE}"
+        )
+
+    actual_size = SOURCE.stat().st_size
+
+    if actual_size != EXPECTED_SIZE:
+        raise InstallationFailure(
+            "Reviewed module size mismatch. "
+            f"Expected {EXPECTED_SIZE}, "
+            f"found {actual_size}."
+        )
+
+    actual_hash = sha256_file(
+        SOURCE
+    )
+
+    if actual_hash != EXPECTED_SHA256:
+        raise InstallationFailure(
+            "Reviewed module SHA-256 mismatch. "
+            f"Expected {EXPECTED_SHA256}, "
+            f"found {actual_hash}."
+        )
+
+
+def create_backup() -> None:
+    BACKUP.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    shutil.copy2(
+        TARGET,
+        BACKUP,
+    )
+
+
+def atomic_replace_with_retry(
+    staged_path: Path,
+    target_path: Path,
+    attempts: int = 10,
+    delay_seconds: float = 0.20,
+) -> None:
+    last_error: Exception | None = None
+
+    for attempt in range(
+        1,
+        attempts + 1,
+    ):
+        try:
+            os.replace(
+                staged_path,
+                target_path,
+            )
+
+            return
+
+        except PermissionError as exc:
+            last_error = exc
+
+            if attempt == attempts:
+                break
+
+            time.sleep(
+                delay_seconds
+            )
+
+    if last_error is not None:
+        raise last_error
+
+    raise InstallationFailure(
+        "Atomic replacement failed without an exception."
+    )
+
+
+def transactional_install() -> None:
+    PACKAGE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    source_bytes = SOURCE.read_bytes()
+
+    file_descriptor, temporary_name = (
+        tempfile.mkstemp(
+            prefix=".universal-job-contract-install-",
+            dir=str(
+                PACKAGE_DIR
+            ),
+        )
+    )
+
+    temporary_path = Path(
+        temporary_name
+    )
+
+    try:
+        with os.fdopen(
+            file_descriptor,
+            "wb",
+        ) as handle:
+            handle.write(
+                source_bytes
+            )
+
+            handle.flush()
+
+            os.fsync(
+                handle.fileno()
+            )
+
+        if (
+            sha256_file(
+                temporary_path
+            )
+            != EXPECTED_SHA256
+        ):
+            raise InstallationFailure(
+                "Staged module SHA-256 mismatch."
+            )
+
+        atomic_replace_with_retry(
+            temporary_path,
+            TARGET,
+        )
+
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink(
+                missing_ok=True
+            )
+
+
+def compile_target() -> None:
+    py_compile.compile(
+        str(TARGET),
+        doraise=True,
+    )
+
+
+def import_target():
+    runtime_path = str(
+        RUNTIME_DIR
+    )
+
+    if runtime_path not in sys.path:
+        sys.path.insert(
+            0,
+            runtime_path,
+        )
+
+    sys.modules.pop(
+        "universal_jobs.contract",
+        None,
+    )
+
+    sys.modules.pop(
+        "universal_jobs",
+        None,
+    )
+
+    importlib.invalidate_caches()
+
+    return importlib.import_module(
+        "universal_jobs.contract"
+    )
+
+
+def ast_boundary_scan() -> None:
+    source = TARGET.read_text(
+        encoding="utf-8-sig"
+    )
+
+    tree = ast.parse(
+        source,
+        filename=str(
+            TARGET
+        ),
+    )
+
+    prohibited_imports: list[str] = []
+
+    for node in ast.walk(
+        tree
+    ):
+        if isinstance(
+            node,
+            ast.Import,
+        ):
+            for alias in node.names:
+                root = alias.name.split(
+                    ".",
+                    1,
+                )[0]
+
+                if root in PROHIBITED_IMPORT_ROOTS:
+                    prohibited_imports.append(
+                        alias.name
+                    )
+
+        elif isinstance(
+            node,
+            ast.ImportFrom,
+        ):
+            if node.module:
+                root = node.module.split(
+                    ".",
+                    1,
+                )[0]
+
+                if root in PROHIBITED_IMPORT_ROOTS:
+                    prohibited_imports.append(
+                        node.module
+                    )
+
+    if prohibited_imports:
+        raise InstallationFailure(
+            "Prohibited imports detected: "
+            + ", ".join(
+                sorted(
+                    set(
+                        prohibited_imports
+                    )
+                )
+            )
+        )
+
+    prohibited_terms = [
+        term
+        for term in PROHIBITED_SOURCE_TERMS
+        if term in source
+    ]
+
+    if prohibited_terms:
+        raise InstallationFailure(
+            "Prohibited infrastructure terms detected: "
+            + ", ".join(
+                prohibited_terms
+            )
+        )
+
+
+def full_candidate() -> dict[str, Any]:
+    return {
+        "job_id": "job_certification_001",
+        "workspace_id": "ws_certification",
+        "user_id": "user_certification",
+        "product_id": "linkcraftor",
+        "pipeline": "universal_job_certification",
+        "stage": "contract",
+        "job_type": "contract_verification",
+        "payload_reference": None,
+        "priority": "normal",
+        "status": "created",
+        "attempts": 0,
+        "maximum_attempts": 3,
+        "lease_owner": None,
+        "lease_id": None,
+        "lease_started_at": None,
+        "lease_expires_at": None,
+        "parent_job_id": None,
+        "dependency_job_ids": [],
+        "batch_id": None,
+        "pipeline_run_id": None,
+        "progress": {
+            "percent": 0,
+            "step": "",
+            "message": "",
+            "total_units": None,
+            "completed_units": None,
+            "updated_at": None,
+        },
+        "checkpoint_reference": None,
+        "result_reference": None,
+        "artifact_references": [],
+        "idempotency_key": "idem_certification_001",
+        "AU_reserved": 0,
+        "AU_consumed": 0,
+        "cost_record": {
+            "currency": "USD",
+            "estimated_micros": 0,
+            "actual_micros": 0,
+            "au_rate_micros": 0,
+            "breakdown": {},
+        },
+        "created_at": "2026-07-29T00:00:00Z",
+        "scheduled_at": None,
+        "started_at": None,
+        "completed_at": None,
+        "failed_at": None,
+        "cancelled_at": None,
+        "error_code": None,
+        "error_message": None,
+        "error_details": {},
+    }
+
+
+def expect_rejected(
+    operation: Callable[[], Any],
+    label: str,
+) -> None:
+    try:
+        operation()
+
+    except Exception:
+        return
+
+    raise InstallationFailure(
+        label + " was unexpectedly accepted."
+    )
+
+
+def verify_public_contract(
+    module,
+) -> None:
+    declared = getattr(
+        module,
+        "__all__",
+        None,
+    )
+
+    if not isinstance(
+        declared,
+        list,
+    ):
+        raise InstallationFailure(
+            "__all__ must be an explicit list."
+        )
+
+    missing_exports = [
+        name
+        for name in REQUIRED_EXPORTS
+        if name not in declared
+    ]
+
+    if missing_exports:
+        raise InstallationFailure(
+            "Missing public exports: "
+            + ", ".join(
+                missing_exports
+            )
+        )
+
+    for name in declared:
+        if not hasattr(
+            module,
+            name,
+        ):
+            raise InstallationFailure(
+                f"Declared export does not exist: {name}"
+            )
+
+
+def verify_required_fields(
+    module,
+) -> None:
+    actual = tuple(
+        module.REQUIRED_UNIVERSAL_JOB_FIELDS
+    )
+
+    if actual != REQUIRED_FIELDS:
+        raise InstallationFailure(
+            "Canonical required-field roster mismatch."
+        )
+
+    if (
+        module.UniversalJob.required_fields()
+        != REQUIRED_FIELDS
+    ):
+        raise InstallationFailure(
+            "UniversalJob.required_fields() mismatch."
+        )
+
+    if len(
+        actual
+    ) != 37:
+        raise InstallationFailure(
+            f"Expected 37 required fields, found {len(actual)}."
+        )
+
+
+def verify_contract_identity(
+    module,
+) -> None:
+    if (
+        module.UNIVERSAL_JOB_CONTRACT_ID
+        != "urn:linkcraftor:runtime:universal-job-contract"
+    ):
+        raise InstallationFailure(
+            "Permanent contract ID mismatch."
+        )
+
+    if (
+        module.UNIVERSAL_JOB_CONTRACT_VERSION
+        != "universal_job_contract_v2.1.1"
+    ):
+        raise InstallationFailure(
+            "Contract version mismatch."
+        )
+
+    schema = module.UniversalJob.schema()
+
+    if not isinstance(
+        schema,
+        MappingProxyType,
+    ):
+        raise InstallationFailure(
+            "Contract schema is not immutable."
+        )
+
+    if (
+        schema[
+            "contract_id"
+        ]
+        != module.UNIVERSAL_JOB_CONTRACT_ID
+    ):
+        raise InstallationFailure(
+            "Schema contract ID mismatch."
+        )
+
+
+def verify_reconstruction(
+    module,
+) -> tuple[Any, Any]:
+    candidate = full_candidate()
+
+    first = module.UniversalJob.from_dict(
+        candidate
+    )
+
+    second = module.UniversalJob.from_json(
+        first.to_canonical_json()
+    )
+
+    if first != second:
+        raise InstallationFailure(
+            "Canonical reconstruction changed the job."
+        )
+
+    return first, second
+
+
+def verify_strict_validation(
+    module,
+) -> None:
+    missing = full_candidate()
+
+    missing.pop(
+        "job_type"
+    )
+
+    expect_rejected(
+        lambda: module.UniversalJob.from_dict(
+            missing
+        ),
+        "Missing-field reconstruction",
+    )
+
+    unknown = full_candidate()
+
+    unknown[
+        "legacy_payload"
+    ] = {}
+
+    expect_rejected(
+        lambda: module.UniversalJob.from_dict(
+            unknown
+        ),
+        "Unknown-field reconstruction",
+    )
+
+    report = module.validate_universal_job(
+        missing
+    )
+
+    if report.is_valid:
+        raise InstallationFailure(
+            "Missing-field validation report was marked valid."
+        )
+
+
+def verify_immutability(
+    module,
+    job,
+) -> None:
+    try:
+        job.status = module.UniversalJobStatus.RUNNING
+
+    except Exception:
+        pass
+
+    else:
+        raise InstallationFailure(
+            "UniversalJob is mutable."
+        )
+
+    try:
+        job.error_details[
+            "changed"
+        ] = True
+
+    except TypeError:
+        pass
+
+    else:
+        raise InstallationFailure(
+            "Nested error_details mapping is mutable."
+        )
+
+    try:
+        job.cost_record.breakdown[
+            "changed"
+        ] = True
+
+    except TypeError:
+        pass
+
+    else:
+        raise InstallationFailure(
+            "Nested cost-record mapping is mutable."
+        )
+
+
+def verify_fingerprints(
+    first,
+    second,
+) -> None:
+    fields = (
+        "identity_fingerprint",
+        "contract_fingerprint",
+        "content_fingerprint",
+    )
+
+    for method_name in fields:
+        first_value = getattr(
+            first,
+            method_name,
+        )()
+
+        second_value = getattr(
+            second,
+            method_name,
+        )()
+
+        if first_value != second_value:
+            raise InstallationFailure(
+                f"{method_name} is not deterministic."
+            )
+
+        if not first_value.startswith(
+            "sha256:"
+        ):
+            raise InstallationFailure(
+                f"{method_name} is not SHA-256 based."
+            )
+
+    if hash(
+        first
+    ) != hash(
+        second
+    ):
+        raise InstallationFailure(
+            "Python hash is not deterministic."
+        )
+
+
+def verify_timestamp_normalization(
+    module,
+) -> None:
+    candidate = full_candidate()
+
+    candidate[
+        "created_at"
+    ] = "2026-07-29T02:00:00+02:00"
+
+    job = module.UniversalJob.from_dict(
+        candidate
+    )
+
+    if (
+        job.created_at
+        != "2026-07-29T00:00:00.000000Z"
+    ):
+        raise InstallationFailure(
+            "Timestamp was not normalized to UTC."
+        )
+
+    invalid = full_candidate()
+
+    invalid[
+        "started_at"
+    ] = "2026-07-29T02:00:00Z"
+
+    invalid[
+        "completed_at"
+    ] = "2026-07-29T01:00:00Z"
+
+    expect_rejected(
+        lambda: module.UniversalJob.from_dict(
+            invalid
+        ),
+        "Invalid timestamp ordering",
+    )
+
+
+def verify_no_state_mutation(
+    module,
+) -> None:
+    before_exports = tuple(
+        module.__all__
+    )
+
+    first = module.UniversalJob.from_dict(
+        full_candidate()
+    )
+
+    second = module.UniversalJob.from_dict(
+        full_candidate()
+    )
+
+    after_exports = tuple(
+        module.__all__
+    )
+
+    if before_exports != after_exports:
+        raise InstallationFailure(
+            "Module public state changed during construction."
+        )
+
+    if first != second:
+        raise InstallationFailure(
+            "Repeated construction is not deterministic."
+        )
+
+
+def restore_backup() -> None:
+    if BACKUP.exists():
+        shutil.copy2(
+            BACKUP,
+            TARGET,
+        )
+
+
+def write_evidence(
+    checks: list[dict[str, Any]],
+    result: str,
+    module_size: int,
+    module_sha256: str,
+) -> None:
+    EVIDENCE_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    evidence = {
+        "phase": "2.1.1",
+        "component": "Universal Job Contract",
+        "generated_at": TIMESTAMP,
+        "result": result,
+        "checks_passed": sum(
+            1
+            for item in checks
+            if item[
+                "status"
+            ] == "PASS"
+        ),
+        "checks_total": len(
+            checks
+        ),
+        "module": str(
+            TARGET
+        ),
+        "module_size": module_size,
+        "module_sha256": module_sha256,
+        "contract_id": (
+            "urn:linkcraftor:runtime:"
+            "universal-job-contract"
+        ),
+        "contract_version": (
+            "universal_job_contract_v2.1.1"
+        ),
+        "required_field_count": len(
+            REQUIRED_FIELDS
+        ),
+        "backup": str(
+            BACKUP
+        ),
+        "checks": checks,
+        "production_data_modified": False,
+        "queue_code_added": False,
+        "worker_code_added": False,
+        "persistence_added": False,
+        "runtime_registration_added": False,
+    }
+
+    EVIDENCE_JSON.write_text(
+        json.dumps(
+            evidence,
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    lines = [
+        "=" * 78,
+        "PHASE 2.1.1 UNIVERSAL JOB CONTRACT INSTALLATION",
+        "=" * 78,
+        "",
+        f"Result: {result}",
+        (
+            "Checks: "
+            f"{evidence['checks_passed']}/"
+            f"{evidence['checks_total']}"
+        ),
+        f"Module size: {module_size}",
+        f"Module SHA-256: {module_sha256}",
+        f"Backup: {BACKUP}",
+        "",
+    ]
+
+    for item in checks:
+        lines.append(
+            f"{item['status']:4} "
+            f"{item['check_id']:>2} "
+            f"{item['name']}"
+        )
+
+        if item[
+            "detail"
+        ]:
+            lines.append(
+                "     "
+                + item[
+                    "detail"
+                ]
+            )
+
+    lines.extend(
+        [
+            "",
+            "NO PRODUCTION DATA WAS MODIFIED",
+            "NO QUEUE OR WORKER CODE WAS ADDED",
+            "NO RUNTIME REGISTRATION WAS ADDED",
+        ]
+    )
+
+    EVIDENCE_TEXT.write_text(
+        "\n".join(
+            lines
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    checks: list[dict[str, Any]] = []
+
+    print("=" * 62)
+    print(
+        " Universal Job Contract — Formal Installation"
+    )
+    print("=" * 62)
+
+    try:
+        record_check(
+            checks,
+            1,
+            "verify reviewed SHA-256",
+            verify_baseline,
+        )
+
+        record_check(
+            checks,
+            2,
+            "verify reviewed module size",
+            lambda: (
+                None
+                if SOURCE.stat().st_size
+                == EXPECTED_SIZE
+                else (
+                    _ for _ in ()
+                ).throw(
+                    InstallationFailure(
+                        "Reviewed module size mismatch."
+                    )
+                )
+            ),
+        )
+
+        record_check(
+            checks,
+            3,
+            "create production backup",
+            create_backup,
+        )
+
+        record_check(
+            checks,
+            4,
+            "transactional atomic installation",
+            transactional_install,
+        )
+
+        record_check(
+            checks,
+            5,
+            "compile installed module",
+            compile_target,
+        )
+
+        module = record_check(
+            checks,
+            6,
+            "import installed module",
+            import_target,
+        )
+
+        record_check(
+            checks,
+            7,
+            "AST infrastructure-boundary scan",
+            ast_boundary_scan,
+        )
+
+        record_check(
+            checks,
+            8,
+            "verify explicit public contract",
+            lambda: verify_public_contract(
+                module
+            ),
+        )
+
+        record_check(
+            checks,
+            9,
+            "verify all 37 required fields",
+            lambda: verify_required_fields(
+                module
+            ),
+        )
+
+        record_check(
+            checks,
+            10,
+            "verify permanent contract identity",
+            lambda: verify_contract_identity(
+                module
+            ),
+        )
+
+        first, second = record_check(
+            checks,
+            11,
+            "verify canonical reconstruction",
+            lambda: verify_reconstruction(
+                module
+            ),
+        )
+
+        record_check(
+            checks,
+            12,
+            "verify strict field validation",
+            lambda: verify_strict_validation(
+                module
+            ),
+        )
+
+        record_check(
+            checks,
+            13,
+            "verify deep immutability",
+            lambda: verify_immutability(
+                module,
+                first,
+            ),
+        )
+
+        record_check(
+            checks,
+            14,
+            "verify deterministic fingerprints",
+            lambda: verify_fingerprints(
+                first,
+                second,
+            ),
+        )
+
+        record_check(
+            checks,
+            15,
+            "verify UTC timestamp normalization",
+            lambda: verify_timestamp_normalization(
+                module
+            ),
+        )
+
+        record_check(
+            checks,
+            16,
+            "verify deterministic repeated creation",
+            lambda: verify_no_state_mutation(
+                module
+            ),
+        )
+
+        installed_size = TARGET.stat().st_size
+        installed_sha256 = sha256_file(
+            TARGET
+        )
+
+        if installed_size != EXPECTED_SIZE:
+            raise InstallationFailure(
+                "Installed module size changed."
+            )
+
+        if installed_sha256 != EXPECTED_SHA256:
+            raise InstallationFailure(
+                "Installed module SHA-256 changed."
+            )
+
+        record_check(
+            checks,
+            17,
+            "verify installed binary integrity",
+            lambda: None,
+        )
+
+        record_check(
+            checks,
+            18,
+            "generate installation evidence",
+            lambda: write_evidence(
+                checks,
+                "PASS",
+                installed_size,
+                installed_sha256,
+            ),
+        )
+
+    except Exception:
+        restore_backup()
+
+        try:
+            write_evidence(
+                checks,
+                "FAIL",
+                (
+                    TARGET.stat().st_size
+                    if TARGET.exists()
+                    else 0
+                ),
+                (
+                    sha256_file(
+                        TARGET
+                    )
+                    if TARGET.exists()
+                    else ""
+                ),
+            )
+        except Exception:
+            pass
+
+        print("=" * 62)
+        print(
+            f" RESULT: FAIL "
+            f"({sum(1 for item in checks if item['status'] == 'PASS')}/"
+            f"{len(checks)} checks)"
+        )
+        print(
+            " ROLLBACK: previous module restored"
+        )
+        print("=" * 62)
+        print()
+        print(
+            traceback.format_exc()
+        )
+
+        return 1
+
+    print("=" * 62)
+    print(
+        f" RESULT: PASS "
+        f"({sum(1 for item in checks if item['status'] == 'PASS')}/"
+        f"{len(checks)} checks)"
+    )
+    print("=" * 62)
+    print()
+    print(f"Evidence JSON: {EVIDENCE_JSON}")
+    print(f"Evidence text: {EVIDENCE_TEXT}")
+    print()
+    print(
+        "2.1.1 UNIVERSAL JOB CONTRACT: "
+        "INSTALLED AND APPROVED"
+    )
+    print(
+        "NO PRODUCTION DATA WAS MODIFIED"
+    )
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        main()
+    )

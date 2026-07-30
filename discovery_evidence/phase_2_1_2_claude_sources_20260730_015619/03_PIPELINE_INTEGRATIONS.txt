@@ -1,0 +1,6017 @@
+LINKCRAFTOR PHASE 2.1.2 LIVE SOURCE BUNDLE
+Bundle: 03_PIPELINE_INTEGRATIONS.txt
+Generated: 2026-07-30T01:56:22.8455664Z
+====================================================================================================
+
+BEGIN LIVE FILE
+PATH: backend\server\runtime\website_article_integrity_automation.py
+SIZE_BYTES: 37137
+SHA256: 240F3B76482BEAD72CC6C5A3146A4A1D74A2A5939343A072ED25C7005E263A9E
+----------------------------------------------------------------------------------------------------
+"""Website Article Integrity automatic runtime continuation.
+
+The automation uses the existing Universal Runtime Infrastructure.
+
+Responsibilities:
+- Detect complete UDARE queue drainage.
+- Reconcile the completed UDARE Store.
+- Create the first Website Article Integrity job exactly once.
+- Create each succeeding integrity job exactly once.
+- Derive quarantine counts from the integrity report.
+- Derive certification counts from quarantine output.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import tempfile
+from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+AUTOMATION_VERSION = (
+    "website_article_integrity_automation_v1"
+)
+
+UDARE_JOB_TYPE = "udare_reconstruction"
+
+PIPELINE = "website_article_integrity"
+
+JOB_TYPE_STRUCTURE = (
+    "website_article_structure_validation"
+)
+
+JOB_TYPE_COMPONENTS = (
+    "website_article_component_validation"
+)
+
+JOB_TYPE_CORRUPTION = (
+    "website_article_corruption_truncation"
+)
+
+JOB_TYPE_REPORT = (
+    "website_integrity_report_generation"
+)
+
+JOB_TYPE_QUARANTINE = (
+    "website_article_quarantine"
+)
+
+JOB_TYPE_CERTIFICATION = (
+    "website_article_integrity_certification"
+)
+
+STAGE_STRUCTURE = "structure_validation"
+STAGE_COMPONENTS = "component_validation"
+STAGE_CORRUPTION = "corruption_truncation"
+STAGE_REPORT = "report_generation"
+STAGE_QUARANTINE = "quarantine"
+STAGE_CERTIFICATION = "certification"
+
+STAGE_SUCCESSORS: dict[
+    str,
+    tuple[str, str] | None,
+] = {
+    STAGE_STRUCTURE: (
+        JOB_TYPE_COMPONENTS,
+        STAGE_COMPONENTS,
+    ),
+    STAGE_COMPONENTS: (
+        JOB_TYPE_CORRUPTION,
+        STAGE_CORRUPTION,
+    ),
+    STAGE_CORRUPTION: (
+        JOB_TYPE_REPORT,
+        STAGE_REPORT,
+    ),
+    STAGE_REPORT: (
+        JOB_TYPE_QUARANTINE,
+        STAGE_QUARANTINE,
+    ),
+    STAGE_QUARANTINE: (
+        JOB_TYPE_CERTIFICATION,
+        STAGE_CERTIFICATION,
+    ),
+    STAGE_CERTIFICATION: None,
+}
+
+PROJECT_ROOT = (
+    Path(__file__).resolve().parents[3]
+)
+
+DATA_ROOT = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "data"
+)
+
+AUTOMATION_ROOT = (
+    DATA_ROOT
+    / "runtime"
+    / "website_article_integrity_automation"
+)
+
+
+def utc_now() -> str:
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def safe_id(
+    value: Any,
+) -> str:
+    text = str(
+        value or ""
+    ).strip()
+
+    normalized = "".join(
+        character
+        if (
+            character.isalnum()
+            or character in {"-", "_", "."}
+        )
+        else "_"
+        for character in text
+    )
+
+    normalized = normalized.strip(
+        "._"
+    )
+
+    return normalized or "default"
+
+
+def sha256_file(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as handle:
+        for block in iter(
+            lambda: handle.read(
+                1024 * 1024
+            ),
+            b"",
+        ):
+            digest.update(block)
+
+    return digest.hexdigest()
+
+
+def atomic_write_json(
+    path: Path,
+    value: Mapping[str, Any],
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    descriptor, temporary_name = (
+        tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+    )
+
+    temporary_path = Path(
+        temporary_name
+    )
+
+    try:
+        with os.fdopen(
+            descriptor,
+            "w",
+            encoding="utf-8",
+            newline="\n",
+        ) as handle:
+            json.dump(
+                dict(value),
+                handle,
+                indent=2,
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+
+            handle.write("\n")
+            handle.flush()
+            os.fsync(
+                handle.fileno()
+            )
+
+        os.replace(
+            temporary_path,
+            path,
+        )
+
+    finally:
+        temporary_path.unlink(
+            missing_ok=True,
+        )
+
+
+def load_json(
+    path: Path,
+) -> dict[str, Any]:
+    value = json.loads(
+        path.read_text(
+            encoding="utf-8-sig",
+        )
+    )
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        raise RuntimeError(
+            f"Expected JSON object: {path}"
+        )
+
+    return value
+
+
+def read_jsonl(
+    path: Path,
+) -> list[dict[str, Any]]:
+    if not path.is_file():
+        return []
+
+    records: list[
+        dict[str, Any]
+    ] = []
+
+    with path.open(
+        "r",
+        encoding="utf-8",
+    ) as handle:
+        for line in handle:
+            line = line.strip()
+
+            if not line:
+                continue
+
+            try:
+                value = json.loads(
+                    line
+                )
+            except json.JSONDecodeError:
+                continue
+
+            if isinstance(
+                value,
+                dict,
+            ):
+                records.append(
+                    value
+                )
+
+    return records
+
+
+def _integer_value(
+    value: Any,
+) -> int | None:
+    try:
+        converted = int(value)
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+    if converted < 0:
+        return None
+
+    return converted
+
+
+def _first_integer(
+    mapping: Mapping[str, Any],
+    names: Iterable[str],
+) -> int | None:
+    for name in names:
+        value = _integer_value(
+            mapping.get(name)
+        )
+
+        if value is not None:
+            return value
+
+    return None
+
+
+def _job_type(
+    job: Mapping[str, Any],
+) -> str:
+    return str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+
+def _job_payload(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(
+        value,
+        Mapping,
+    ):
+        return {}
+
+    return dict(value)
+
+
+def _job_metadata(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload = _job_payload(job)
+
+    value = payload.get(
+        "metadata",
+        {},
+    )
+
+    if not isinstance(
+        value,
+        Mapping,
+    ):
+        return {}
+
+    return dict(value)
+
+
+def _marker_root(
+    workspace_id: str,
+) -> Path:
+    return (
+        AUTOMATION_ROOT
+        / safe_id(workspace_id)
+    )
+
+
+def _trigger_marker_path(
+    workspace_id: str,
+) -> Path:
+    return (
+        _marker_root(workspace_id)
+        / "udare_to_integrity_trigger.json"
+    )
+
+
+def _trigger_lock_path(
+    workspace_id: str,
+) -> Path:
+    return (
+        _marker_root(workspace_id)
+        / "udare_to_integrity_trigger.lock"
+    )
+
+
+def _acquire_lock(
+    path: Path,
+) -> int | None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    try:
+        return os.open(
+            path,
+            os.O_CREAT
+            | os.O_EXCL
+            | os.O_WRONLY,
+        )
+    except FileExistsError:
+        return None
+
+
+def _release_lock(
+    path: Path,
+    descriptor: int | None,
+) -> None:
+    if descriptor is not None:
+        try:
+            os.close(
+                descriptor
+            )
+        except OSError:
+            pass
+
+    path.unlink(
+        missing_ok=True,
+    )
+
+
+def _all_runtime_jobs(
+    workspace_id: str,
+) -> list[dict[str, Any]]:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        job_ledger_path,
+        read_queue,
+    )
+
+    queued = read_queue(
+        workspace_id,
+        limit=100000,
+    )
+
+    ledger = read_jsonl(
+        job_ledger_path(
+            workspace_id
+        )
+    )
+
+    combined: list[
+        dict[str, Any]
+    ] = []
+
+    seen_job_ids: set[str] = set()
+
+    for record in [
+        *queued,
+        *ledger,
+    ]:
+        if not isinstance(
+            record,
+            dict,
+        ):
+            continue
+
+        job_id = str(
+            record.get("job_id")
+            or ""
+        ).strip()
+
+        if job_id and job_id in seen_job_ids:
+            continue
+
+        if job_id:
+            seen_job_ids.add(
+                job_id
+            )
+
+        combined.append(
+            record
+        )
+
+    return combined
+
+
+def _find_existing_pipeline_job(
+    *,
+    workspace_id: str,
+    integrity_run_id: str,
+    job_type: str,
+) -> dict[str, Any] | None:
+    for job in _all_runtime_jobs(
+        workspace_id
+    ):
+        if _job_type(job) != job_type:
+            continue
+
+        payload = _job_payload(
+            job
+        )
+
+        if (
+            str(
+                payload.get(
+                    "integrity_run_id"
+                )
+                or ""
+            ).strip()
+            == integrity_run_id
+        ):
+            return job
+
+    return None
+
+
+def _create_pipeline_job_once(
+    *,
+    workspace_id: str,
+    integrity_run_id: str,
+    job_type: str,
+    stage: str,
+    payload: Mapping[str, Any],
+    parent_job_id: str = "",
+    batch_id: str = "",
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    priority: int = 4,
+) -> dict[str, Any]:
+    existing = (
+        _find_existing_pipeline_job(
+            workspace_id=workspace_id,
+            integrity_run_id=(
+                integrity_run_id
+            ),
+            job_type=job_type,
+        )
+    )
+
+    if existing is not None:
+        return {
+            "ok": True,
+            "created": False,
+            "already_exists": True,
+            "job_id": existing.get(
+                "job_id"
+            ),
+            "job_type": job_type,
+            "stage": stage,
+            "status": existing.get(
+                "status"
+            ),
+        }
+
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        create_universal_knowledge_job,
+    )
+
+    job_payload = dict(
+        payload
+    )
+
+    job_payload[
+        "integrity_run_id"
+    ] = integrity_run_id
+
+    job_payload[
+        "pipeline"
+    ] = PIPELINE
+
+    job_payload[
+        "stage"
+    ] = stage
+
+    job_payload[
+        "auto_continue"
+    ] = True
+
+    job = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=job_payload,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=PIPELINE,
+        stage=stage,
+        payload_ref=str(
+            job_payload.get(
+                "payload_ref"
+            )
+            or job_payload.get(
+                "udare_manifest_path"
+            )
+            or integrity_run_id
+        ),
+        priority=priority,
+        parent_job_id=parent_job_id,
+        batch_id=(
+            batch_id
+            or integrity_run_id
+        ),
+        enqueue=True,
+    )
+
+    return {
+        "ok": True,
+        "created": True,
+        "already_exists": False,
+        "job_id": job.get(
+            "job_id"
+        ),
+        "job_type": job_type,
+        "stage": stage,
+        "status": job.get(
+            "status"
+        ),
+        "job": job,
+    }
+
+
+def _derive_expected_upstream_count(
+    *,
+    processed_udare_jobs: list[
+        Mapping[str, Any]
+    ],
+    manifest: Mapping[str, Any],
+    actual_store_count: int,
+) -> int:
+    candidates: list[int] = []
+
+    for job in processed_udare_jobs:
+        payload = _job_payload(
+            job
+        )
+
+        metadata = _job_metadata(
+            job
+        )
+
+        for mapping in (
+            payload,
+            metadata,
+        ):
+            value = _first_integer(
+                mapping,
+                (
+                    "expected_upstream_count",
+                    "population_count",
+                    "source_record_count",
+                    "raw_html_record_count",
+                ),
+            )
+
+            if value is not None:
+                candidates.append(
+                    value
+                )
+
+    manifest_value = _first_integer(
+        manifest,
+        (
+            "expected_upstream_count",
+            "source_record_count",
+            "population_count",
+        ),
+    )
+
+    if manifest_value is not None:
+        candidates.append(
+            manifest_value
+        )
+
+    if candidates:
+        return max(candidates)
+
+    return actual_store_count
+
+
+def _derive_population_batch_id(
+    processed_udare_jobs: list[
+        Mapping[str, Any]
+    ],
+) -> str:
+    for job in reversed(
+        processed_udare_jobs
+    ):
+        payload = _job_payload(
+            job
+        )
+
+        metadata = _job_metadata(
+            job
+        )
+
+        value = str(
+            job.get("batch_id")
+            or metadata.get(
+                "population_batch_id"
+            )
+            or payload.get(
+                "correlation_id"
+            )
+            or ""
+        ).strip()
+
+        if value:
+            return value
+
+    return ""
+
+
+def _manifest_path(
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+        / "udare_store"
+        / safe_id(workspace_id)
+        / "manifests"
+        / "udare_store_manifest.json"
+    )
+
+
+def maybe_trigger_website_article_integrity_after_udare_queue_drain(
+    *,
+    workspace_id: str,
+    processed_jobs: Iterable[
+        Mapping[str, Any]
+    ],
+    execution_results: Iterable[
+        Mapping[str, Any]
+    ],
+    remaining_jobs: Iterable[
+        Mapping[str, Any]
+    ],
+) -> dict[str, Any]:
+    processed_udare_jobs = [
+        job
+        for job in processed_jobs
+        if _job_type(job)
+        == UDARE_JOB_TYPE
+    ]
+
+    if not processed_udare_jobs:
+        return {
+            "ok": True,
+            "status": "NOT_APPLICABLE",
+            "reason": (
+                "No UDARE jobs were processed."
+            ),
+        }
+
+    remaining_udare_jobs = [
+        job
+        for job in remaining_jobs
+        if (
+            _job_type(job)
+            == UDARE_JOB_TYPE
+            and str(
+                job.get("status")
+                or "queued"
+            ).strip().lower()
+            in {
+                "queued",
+                "registered",
+                "running",
+                "retrying",
+            }
+        )
+    ]
+
+    if remaining_udare_jobs:
+        return {
+            "ok": True,
+            "status": "WAITING_FOR_UDARE",
+            "remaining_udare_jobs": len(
+                remaining_udare_jobs
+            ),
+        }
+
+    workspace_id = safe_id(
+        workspace_id
+    )
+
+    manifest_path = _manifest_path(
+        workspace_id
+    )
+
+    if not manifest_path.is_file():
+        return {
+            "ok": False,
+            "status": "BLOCKED",
+            "reason": (
+                "UDARE Store manifest does not exist."
+            ),
+            "manifest_path": str(
+                manifest_path
+            ),
+        }
+
+    manifest = load_json(
+        manifest_path
+    )
+
+    record_count = _first_integer(
+        manifest,
+        (
+            "record_count",
+        ),
+    )
+
+    article_count = _first_integer(
+        manifest,
+        (
+            "article_document_count",
+        ),
+    )
+
+    metadata_count = _first_integer(
+        manifest,
+        (
+            "metadata_record_count",
+        ),
+    )
+
+    if (
+        record_count is None
+        or article_count is None
+        or metadata_count is None
+    ):
+        return {
+            "ok": False,
+            "status": "BLOCKED",
+            "reason": (
+                "UDARE manifest counts are incomplete."
+            ),
+        }
+
+    if not (
+        record_count
+        == article_count
+        == metadata_count
+    ):
+        return {
+            "ok": False,
+            "status": "BLOCKED",
+            "reason": (
+                "UDARE article and metadata counts "
+                "do not reconcile."
+            ),
+            "record_count": record_count,
+            "article_document_count": (
+                article_count
+            ),
+            "metadata_record_count": (
+                metadata_count
+            ),
+        }
+
+    expected_upstream_count = (
+        _derive_expected_upstream_count(
+            processed_udare_jobs=(
+                processed_udare_jobs
+            ),
+            manifest=manifest,
+            actual_store_count=record_count,
+        )
+    )
+
+    if expected_upstream_count < record_count:
+        return {
+            "ok": False,
+            "status": "BLOCKED",
+            "reason": (
+                "UDARE Store contains more records than "
+                "the expected upstream count."
+            ),
+            "expected_upstream_count": (
+                expected_upstream_count
+            ),
+            "record_count": record_count,
+        }
+
+    deferred_upstream_count = (
+        expected_upstream_count
+        - record_count
+    )
+
+    manifest_sha256 = sha256_file(
+        manifest_path
+    )
+
+    population_batch_id = (
+        _derive_population_batch_id(
+            processed_udare_jobs
+        )
+    )
+
+    run_seed = "|".join(
+        (
+            workspace_id,
+            population_batch_id,
+            str(expected_upstream_count),
+            str(record_count),
+            manifest_sha256,
+        )
+    )
+
+    integrity_run_id = (
+        "waini_"
+        + hashlib.sha256(
+            run_seed.encode("utf-8")
+        ).hexdigest()[:24]
+    )
+
+    marker_path = (
+        _trigger_marker_path(
+            workspace_id
+        )
+    )
+
+    if marker_path.is_file():
+        marker = load_json(
+            marker_path
+        )
+
+        if (
+            marker.get(
+                "integrity_run_id"
+            )
+            == integrity_run_id
+            and marker.get("status")
+            == "TRIGGERED"
+        ):
+            existing = (
+                _find_existing_pipeline_job(
+                    workspace_id=workspace_id,
+                    integrity_run_id=(
+                        integrity_run_id
+                    ),
+                    job_type=(
+                        JOB_TYPE_STRUCTURE
+                    ),
+                )
+            )
+
+            return {
+                "ok": True,
+                "status": "ALREADY_TRIGGERED",
+                "created": False,
+                "integrity_run_id": (
+                    integrity_run_id
+                ),
+                "job_id": (
+                    existing.get("job_id")
+                    if existing
+                    else marker.get(
+                        "first_job_id"
+                    )
+                ),
+                "marker_path": str(
+                    marker_path
+                ),
+            }
+
+    lock_path = _trigger_lock_path(
+        workspace_id
+    )
+
+    lock_descriptor = _acquire_lock(
+        lock_path
+    )
+
+    if lock_descriptor is None:
+        return {
+            "ok": True,
+            "status": "TRIGGER_LOCKED",
+            "created": False,
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+        }
+
+    try:
+        existing = (
+            _find_existing_pipeline_job(
+                workspace_id=workspace_id,
+                integrity_run_id=(
+                    integrity_run_id
+                ),
+                job_type=(
+                    JOB_TYPE_STRUCTURE
+                ),
+            )
+        )
+
+        if existing is not None:
+            marker = {
+                "schema_version": (
+                    AUTOMATION_VERSION
+                ),
+                "status": "TRIGGERED",
+                "workspace_id": (
+                    workspace_id
+                ),
+                "integrity_run_id": (
+                    integrity_run_id
+                ),
+                "first_job_id": existing.get(
+                    "job_id"
+                ),
+                "created": False,
+                "recovered_existing_job": True,
+                "expected_upstream_count": (
+                    expected_upstream_count
+                ),
+                "expected_store_count": (
+                    record_count
+                ),
+                "deferred_upstream_count": (
+                    deferred_upstream_count
+                ),
+                "udare_manifest_path": str(
+                    manifest_path
+                ),
+                "udare_manifest_sha256": (
+                    manifest_sha256
+                ),
+                "updated_at": utc_now(),
+            }
+
+            atomic_write_json(
+                marker_path,
+                marker,
+            )
+
+            return {
+                "ok": True,
+                "status": "ALREADY_TRIGGERED",
+                "created": False,
+                "integrity_run_id": (
+                    integrity_run_id
+                ),
+                "job_id": existing.get(
+                    "job_id"
+                ),
+                "marker_path": str(
+                    marker_path
+                ),
+            }
+
+        final_udare_job = (
+            processed_udare_jobs[-1]
+        )
+
+        final_payload = _job_payload(
+            final_udare_job
+        )
+
+        user_id = str(
+            final_udare_job.get(
+                "user_id"
+            )
+            or final_payload.get(
+                "user_id"
+            )
+            or "system"
+        ).strip() or "system"
+
+        product_id = str(
+            final_udare_job.get(
+                "product_id"
+            )
+            or final_payload.get(
+                "product_id"
+            )
+            or "linkcraftor"
+        ).strip() or "linkcraftor"
+
+        failed_execution_count = sum(
+            1
+            for result in execution_results
+            if (
+                isinstance(
+                    result,
+                    Mapping,
+                )
+                and result.get("ok")
+                is not True
+            )
+        )
+
+        payload = {
+            "schema_version": (
+                AUTOMATION_VERSION
+            ),
+            "operation": "execute",
+            "auto_continue": True,
+            "project_root": str(
+                PROJECT_ROOT
+            ),
+            "workspace_id": workspace_id,
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+            "expected_store_count": (
+                record_count
+            ),
+            "expected_store_count_before": (
+                record_count
+            ),
+            "expected_assessed_count": (
+                record_count
+            ),
+            "expected_upstream_count": (
+                expected_upstream_count
+            ),
+            "deferred_upstream_count": (
+                deferred_upstream_count
+            ),
+            "udare_manifest_path": str(
+                manifest_path
+            ),
+            "udare_manifest_sha256": (
+                manifest_sha256
+            ),
+            "payload_ref": str(
+                manifest_path
+            ),
+            "trigger": {
+                "type": (
+                    "udare_queue_drained"
+                ),
+                "source_pipeline": (
+                    "website_reconstruction"
+                ),
+                "source_stage": (
+                    "udare_reconstruction"
+                ),
+                "population_batch_id": (
+                    population_batch_id
+                ),
+                "processed_final_batch_count": (
+                    len(
+                        processed_udare_jobs
+                    )
+                ),
+                "failed_final_batch_count": (
+                    failed_execution_count
+                ),
+                "triggered_at": utc_now(),
+            },
+            "max_attempts": 3,
+        }
+
+        created = (
+            _create_pipeline_job_once(
+                workspace_id=workspace_id,
+                integrity_run_id=(
+                    integrity_run_id
+                ),
+                job_type=(
+                    JOB_TYPE_STRUCTURE
+                ),
+                stage=STAGE_STRUCTURE,
+                payload=payload,
+                parent_job_id=str(
+                    final_udare_job.get(
+                        "job_id"
+                    )
+                    or ""
+                ),
+                batch_id=(
+                    population_batch_id
+                    or integrity_run_id
+                ),
+                user_id=user_id,
+                product_id=product_id,
+                priority=4,
+            )
+        )
+
+        marker = {
+            "schema_version": (
+                AUTOMATION_VERSION
+            ),
+            "status": "TRIGGERED",
+            "workspace_id": workspace_id,
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+            "first_job_id": created.get(
+                "job_id"
+            ),
+            "created": created.get(
+                "created"
+            ),
+            "expected_upstream_count": (
+                expected_upstream_count
+            ),
+            "expected_store_count": (
+                record_count
+            ),
+            "deferred_upstream_count": (
+                deferred_upstream_count
+            ),
+            "udare_manifest_path": str(
+                manifest_path
+            ),
+            "udare_manifest_sha256": (
+                manifest_sha256
+            ),
+            "population_batch_id": (
+                population_batch_id
+            ),
+            "triggered_at": utc_now(),
+        }
+
+        atomic_write_json(
+            marker_path,
+            marker,
+        )
+
+        return {
+            "ok": True,
+            "status": "TRIGGERED",
+            "created": created.get(
+                "created"
+            ),
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+            "job_id": created.get(
+                "job_id"
+            ),
+            "expected_upstream_count": (
+                expected_upstream_count
+            ),
+            "expected_store_count": (
+                record_count
+            ),
+            "deferred_upstream_count": (
+                deferred_upstream_count
+            ),
+            "marker_path": str(
+                marker_path
+            ),
+        }
+
+    finally:
+        _release_lock(
+            lock_path,
+            lock_descriptor,
+        )
+
+
+def _extract_stage_document(
+    stage_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = stage_result.get(
+        "result",
+        {},
+    )
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+        return dict(value)
+
+    return {}
+
+
+def _derive_report_counts(
+    document: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> dict[str, int]:
+    summary_value = document.get(
+        "summary",
+        {},
+    )
+
+    summary = (
+        dict(summary_value)
+        if isinstance(
+            summary_value,
+            Mapping,
+        )
+        else {}
+    )
+
+    assessed = _first_integer(
+        summary,
+        (
+            "articles_assessed",
+            "total_articles",
+            "total_records",
+            "integrity_ledger_count",
+        ),
+    )
+
+    if assessed is None:
+        assessed = _first_integer(
+            payload,
+            (
+                "expected_store_count",
+                "expected_assessed_count",
+            ),
+        )
+
+    failed = _first_integer(
+        summary,
+        (
+            "overall_fail_count",
+            "failed_count",
+            "articles_failed",
+            "quarantine_candidate_count",
+            "distinct_failed_article_count",
+        ),
+    )
+
+    passed = _first_integer(
+        summary,
+        (
+            "overall_pass_count",
+            "pass_count",
+            "articles_passed",
+            "active_pass_count",
+        ),
+    )
+
+    if failed is None:
+        failed = _first_integer(
+            document,
+            (
+                "quarantine_candidate_count",
+                "distinct_failed_article_count",
+            ),
+        )
+
+    if (
+        passed is None
+        and assessed is not None
+        and failed is not None
+    ):
+        passed = assessed - failed
+
+    if (
+        failed is None
+        and assessed is not None
+        and passed is not None
+    ):
+        failed = assessed - passed
+
+    if (
+        assessed is None
+        or passed is None
+        or failed is None
+    ):
+        raise RuntimeError(
+            "Unable to derive quarantine counts "
+            "from the Website Integrity Report."
+        )
+
+    if passed + failed != assessed:
+        raise RuntimeError(
+            "Website Integrity Report PASS and FAIL "
+            "counts do not reconcile."
+        )
+
+    return {
+        "expected_store_count_before": (
+            assessed
+        ),
+        "expected_assessed_count": (
+            assessed
+        ),
+        "expected_active_count_after": (
+            passed
+        ),
+        "expected_active_count": (
+            passed
+        ),
+        "expected_quarantine_count": (
+            failed
+        ),
+    }
+
+
+def _derive_quarantine_counts(
+    document: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> dict[str, int]:
+    active = _first_integer(
+        document,
+        (
+            "active_record_count_after",
+            "active_record_count",
+        ),
+    )
+
+    quarantined = _first_integer(
+        document,
+        (
+            "quarantined_record_count",
+        ),
+    )
+
+    deferred = _first_integer(
+        document,
+        (
+            "deferred_upstream_count",
+        ),
+    )
+
+    assessed = _first_integer(
+        payload,
+        (
+            "expected_assessed_count",
+            "expected_store_count",
+            "expected_store_count_before",
+        ),
+    )
+
+    upstream = _first_integer(
+        payload,
+        (
+            "expected_upstream_count",
+        ),
+    )
+
+    if active is None:
+        active = _first_integer(
+            payload,
+            (
+                "expected_active_count_after",
+                "expected_active_count",
+            ),
+        )
+
+    if quarantined is None:
+        quarantined = _first_integer(
+            payload,
+            (
+                "expected_quarantine_count",
+            ),
+        )
+
+    if deferred is None:
+        deferred = _first_integer(
+            payload,
+            (
+                "deferred_upstream_count",
+            ),
+        )
+
+    if (
+        active is None
+        or quarantined is None
+        or deferred is None
+        or assessed is None
+        or upstream is None
+    ):
+        raise RuntimeError(
+            "Unable to derive certification counts "
+            "from the quarantine output."
+        )
+
+    if active + quarantined != assessed:
+        raise RuntimeError(
+            "Quarantine counts do not reconcile "
+            "with the assessed count."
+        )
+
+    if assessed + deferred != upstream:
+        raise RuntimeError(
+            "Assessed and deferred counts do not "
+            "reconcile with the upstream count."
+        )
+
+    return {
+        "expected_assessed_count": (
+            assessed
+        ),
+        "expected_active_count": (
+            active
+        ),
+        "expected_active_count_after": (
+            active
+        ),
+        "expected_quarantine_count": (
+            quarantined
+        ),
+        "deferred_upstream_count": (
+            deferred
+        ),
+        "expected_upstream_count": (
+            upstream
+        ),
+    }
+
+
+def enqueue_website_article_integrity_successor(
+    *,
+    job: Mapping[str, Any],
+    current_stage: str,
+    stage_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    successor = STAGE_SUCCESSORS.get(
+        current_stage
+    )
+
+    if successor is None:
+        return {
+            "ok": True,
+            "status": (
+                "PIPELINE_COMPLETE"
+            ),
+            "created": False,
+            "current_stage": (
+                current_stage
+            ),
+        }
+
+    payload = _job_payload(
+        job
+    )
+
+    if (
+        payload.get(
+            "auto_continue",
+            True,
+        )
+        is False
+    ):
+        return {
+            "ok": True,
+            "status": (
+                "AUTO_CONTINUATION_DISABLED"
+            ),
+            "created": False,
+            "current_stage": (
+                current_stage
+            ),
+        }
+
+    workspace_id = safe_id(
+        job.get("workspace_id")
+        or payload.get(
+            "workspace_id"
+        )
+        or ""
+    )
+
+    integrity_run_id = str(
+        payload.get(
+            "integrity_run_id"
+        )
+        or ""
+    ).strip()
+
+    if not integrity_run_id:
+        seed = "|".join(
+            (
+                workspace_id,
+                str(
+                    payload.get(
+                        "udare_manifest_sha256"
+                    )
+                    or payload.get(
+                        "payload_ref"
+                    )
+                    or ""
+                ),
+                str(
+                    payload.get(
+                        "expected_store_count"
+                    )
+                    or ""
+                ),
+            )
+        )
+
+        integrity_run_id = (
+            "waini_"
+            + hashlib.sha256(
+                seed.encode("utf-8")
+            ).hexdigest()[:24]
+        )
+
+    successor_job_type, successor_stage = (
+        successor
+    )
+
+    successor_payload = dict(
+        payload
+    )
+
+    successor_payload[
+        "operation"
+    ] = "execute"
+
+    successor_payload[
+        "auto_continue"
+    ] = True
+
+    successor_payload[
+        "integrity_run_id"
+    ] = integrity_run_id
+
+    successor_payload[
+        "previous_stage"
+    ] = current_stage
+
+    successor_payload[
+        "stage"
+    ] = successor_stage
+
+    successor_payload[
+        "job_type"
+    ] = successor_job_type
+
+    document = _extract_stage_document(
+        stage_result
+    )
+
+    if current_stage == STAGE_REPORT:
+        successor_payload.update(
+            _derive_report_counts(
+                document,
+                successor_payload,
+            )
+        )
+
+    if current_stage == STAGE_QUARANTINE:
+        successor_payload.update(
+            _derive_quarantine_counts(
+                document,
+                successor_payload,
+            )
+        )
+
+    created = _create_pipeline_job_once(
+        workspace_id=workspace_id,
+        integrity_run_id=(
+            integrity_run_id
+        ),
+        job_type=successor_job_type,
+        stage=successor_stage,
+        payload=successor_payload,
+        parent_job_id=str(
+            job.get("job_id")
+            or ""
+        ),
+        batch_id=str(
+            job.get("batch_id")
+            or integrity_run_id
+        ),
+        user_id=str(
+            job.get("user_id")
+            or "system"
+        ),
+        product_id=str(
+            job.get("product_id")
+            or "linkcraftor"
+        ),
+        priority=int(
+            job.get("priority")
+            or 4
+        ),
+    )
+
+    return {
+        "ok": True,
+        "status": (
+            "SUCCESSOR_CREATED"
+            if created.get("created")
+            else "SUCCESSOR_ALREADY_EXISTS"
+        ),
+        "created": created.get(
+            "created"
+        ),
+        "current_stage": (
+            current_stage
+        ),
+        "successor_stage": (
+            successor_stage
+        ),
+        "successor_job_type": (
+            successor_job_type
+        ),
+        "successor_job_id": (
+            created.get("job_id")
+        ),
+        "integrity_run_id": (
+            integrity_run_id
+        ),
+    }
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\integrity\website_article_integrity\website_article_integrity_runtime_registration.py
+SIZE_BYTES: 34912
+SHA256: 5605D4613F1F10FE964E5E0C928BF0A12878BF61249DF7DDED52BE3079FC19E2
+----------------------------------------------------------------------------------------------------
+"""Website Article Integrity Universal Runtime Registration.
+
+This module connects the six Website Article Integrity business-logic
+stages to the shared LinkCraftor Universal Runtime Infrastructure.
+
+It does not create separate queues, worker pools, retry systems,
+leases, dead letters, schedulers or job-state infrastructure.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Mapping
+from pathlib import Path
+from typing import Any, Callable
+
+
+REGISTRATION_VERSION = (
+    "website_article_integrity_runtime_registration_v1"
+)
+
+PIPELINE = "website_article_integrity"
+
+DEFAULT_PROJECT_ROOT = (
+    Path(__file__).resolve().parents[4]
+)
+
+JOB_TYPE_STRUCTURE = (
+    "website_article_structure_validation"
+)
+
+JOB_TYPE_COMPONENTS = (
+    "website_article_component_validation"
+)
+
+JOB_TYPE_CORRUPTION = (
+    "website_article_corruption_truncation"
+)
+
+JOB_TYPE_REPORT = (
+    "website_integrity_report_generation"
+)
+
+JOB_TYPE_QUARANTINE = (
+    "website_article_quarantine"
+)
+
+JOB_TYPE_CERTIFICATION = (
+    "website_article_integrity_certification"
+)
+
+REGISTERED_JOB_TYPES = (
+    JOB_TYPE_STRUCTURE,
+    JOB_TYPE_COMPONENTS,
+    JOB_TYPE_CORRUPTION,
+    JOB_TYPE_REPORT,
+    JOB_TYPE_QUARANTINE,
+    JOB_TYPE_CERTIFICATION,
+)
+
+STAGE_STRUCTURE = "structure_validation"
+STAGE_COMPONENTS = "component_validation"
+STAGE_CORRUPTION = "corruption_truncation"
+STAGE_REPORT = "report_generation"
+STAGE_QUARANTINE = "quarantine"
+STAGE_CERTIFICATION = "certification"
+
+VALID_OPERATIONS = {
+    "execute",
+    "preflight",
+    "registration_test",
+}
+
+COMMON_REQUIRED_FIELDS = (
+    "expected_store_count",
+    "expected_upstream_count",
+    "deferred_upstream_count",
+)
+
+QUARANTINE_REQUIRED_FIELDS = (
+    "expected_store_count_before",
+    "expected_active_count_after",
+    "expected_quarantine_count",
+    "deferred_upstream_count",
+)
+
+CERTIFICATION_REQUIRED_FIELDS = (
+    "expected_upstream_count",
+    "expected_assessed_count",
+    "expected_active_count",
+    "expected_quarantine_count",
+    "deferred_upstream_count",
+)
+
+
+def _payload(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    raw_payload = job.get(
+        "payload",
+        {},
+    )
+
+    if raw_payload is None:
+        return {}
+
+    if not isinstance(
+        raw_payload,
+        Mapping,
+    ):
+        raise TypeError(
+            "Website Article Integrity job payload "
+            "must be a mapping."
+        )
+
+    return dict(
+        raw_payload
+    )
+
+
+def _workspace_id(
+    job: Mapping[str, Any],
+    payload: Mapping[str, Any],
+) -> str:
+    value = str(
+        job.get("workspace_id")
+        or payload.get("workspace_id")
+        or ""
+    ).strip()
+
+    if not value:
+        raise ValueError(
+            "Website Article Integrity runtime job "
+            "has no workspace_id."
+        )
+
+    return value
+
+
+def _project_root(
+    payload: Mapping[str, Any],
+) -> Path:
+    value = payload.get(
+        "project_root"
+    )
+
+    if value:
+        return Path(
+            str(value)
+        ).expanduser().resolve()
+
+    return DEFAULT_PROJECT_ROOT
+
+
+def _operation(
+    payload: Mapping[str, Any],
+) -> str:
+    value = str(
+        payload.get("operation")
+        or "execute"
+    ).strip().lower()
+
+    if value not in VALID_OPERATIONS:
+        raise ValueError(
+            "Unsupported Website Article Integrity "
+            f"operation: {value}"
+        )
+
+    return value
+
+
+def _required_integer(
+    payload: Mapping[str, Any],
+    field_name: str,
+) -> int:
+    if field_name not in payload:
+        raise ValueError(
+            f"Missing required payload field: {field_name}"
+        )
+
+    try:
+        value = int(
+            payload[field_name]
+        )
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ValueError(
+            f"Payload field {field_name} must be an integer."
+        ) from exc
+
+    if value < 0:
+        raise ValueError(
+            f"Payload field {field_name} cannot be negative."
+        )
+
+    return value
+
+
+def _load_json(
+    path: Path,
+) -> dict[str, Any] | None:
+    if not path.is_file():
+        return None
+
+    value = json.loads(
+        path.read_text(
+            encoding="utf-8-sig",
+        )
+    )
+
+    if not isinstance(
+        value,
+        dict,
+    ):
+        raise RuntimeError(
+            f"Expected JSON object: {path}"
+        )
+
+    return value
+
+
+def _data_root(
+    project_root: Path,
+) -> Path:
+    return (
+        project_root
+        / "backend"
+        / "server"
+        / "data"
+    )
+
+
+def _udare_root(
+    project_root: Path,
+    workspace_id: str,
+) -> Path:
+    return (
+        _data_root(project_root)
+        / "udare_store"
+        / workspace_id
+    )
+
+
+def _integrity_root(
+    project_root: Path,
+    workspace_id: str,
+) -> Path:
+    return (
+        _data_root(project_root)
+        / "website_article_integrity"
+        / workspace_id
+    )
+
+
+def _required_input_paths(
+    *,
+    stage: str,
+    project_root: Path,
+    workspace_id: str,
+) -> list[Path]:
+    udare_root = _udare_root(
+        project_root,
+        workspace_id,
+    )
+
+    integrity_root = _integrity_root(
+        project_root,
+        workspace_id,
+    )
+
+    structure_root = (
+        integrity_root
+        / "structure"
+    )
+
+    component_root = (
+        integrity_root
+        / "components"
+    )
+
+    corruption_root = (
+        integrity_root
+        / "corruption_truncation"
+    )
+
+    report_root = (
+        integrity_root
+        / "report"
+    )
+
+    quarantine_root = (
+        integrity_root
+        / "quarantine"
+    )
+
+    common_udare_paths = [
+        udare_root / "articles",
+        udare_root / "metadata",
+        (
+            udare_root
+            / "manifests"
+            / "udare_store_manifest.json"
+        ),
+    ]
+
+    if stage == STAGE_STRUCTURE:
+        return common_udare_paths
+
+    if stage == STAGE_COMPONENTS:
+        return [
+            *common_udare_paths,
+            (
+                structure_root
+                / "structure_summary.json"
+            ),
+        ]
+
+    if stage == STAGE_CORRUPTION:
+        return [
+            *common_udare_paths,
+            (
+                component_root
+                / "component_results.jsonl"
+            ),
+            (
+                component_root
+                / "component_summary.json"
+            ),
+        ]
+
+    if stage == STAGE_REPORT:
+        return [
+            (
+                structure_root
+                / "structure_results.jsonl"
+            ),
+            (
+                component_root
+                / "component_results.jsonl"
+            ),
+            (
+                corruption_root
+                / "corruption_truncation_results.jsonl"
+            ),
+        ]
+
+    if stage == STAGE_QUARANTINE:
+        return [
+            (
+                report_root
+                / "website_integrity_report.json"
+            ),
+            (
+                report_root
+                / "website_integrity_ledger.jsonl"
+            ),
+            (
+                report_root
+                / "website_integrity_failures.jsonl"
+            ),
+        ]
+
+    if stage == STAGE_CERTIFICATION:
+        return [
+            *common_udare_paths,
+            (
+                udare_root
+                / "index.html"
+            ),
+            (
+                report_root
+                / "website_integrity_report.json"
+            ),
+            (
+                report_root
+                / "website_integrity_ledger.jsonl"
+            ),
+            (
+                quarantine_root
+                / "manifests"
+                / "quarantine_manifest.json"
+            ),
+            (
+                quarantine_root
+                / "quarantine_records.jsonl"
+            ),
+            (
+                quarantine_root
+                / "quarantine_execution.json"
+            ),
+        ]
+
+    raise ValueError(
+        f"Unknown Website Article Integrity stage: {stage}"
+    )
+
+
+def _registration_test_result(
+    *,
+    job_type: str,
+    stage: str,
+    workspace_id: str,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "operation": "registration_test",
+        "registration_test_passed": True,
+        "registration_version": (
+            REGISTRATION_VERSION
+        ),
+        "pipeline": PIPELINE,
+        "stage": stage,
+        "job_type": job_type,
+        "workspace_id": workspace_id,
+        "business_logic_executed": False,
+        "source_files_modified": False,
+    }
+
+
+def _preflight_result(
+    *,
+    job_type: str,
+    stage: str,
+    project_root: Path,
+    workspace_id: str,
+) -> dict[str, Any]:
+    required_paths = (
+        _required_input_paths(
+            stage=stage,
+            project_root=project_root,
+            workspace_id=workspace_id,
+        )
+    )
+
+    missing_paths = [
+        str(path)
+        for path in required_paths
+        if not path.exists()
+    ]
+
+    udare_root = _udare_root(
+        project_root,
+        workspace_id,
+    )
+
+    integrity_root = _integrity_root(
+        project_root,
+        workspace_id,
+    )
+
+    active_article_count = (
+        sum(
+            1
+            for path in (
+                udare_root
+                / "articles"
+            ).rglob("*.html")
+            if path.is_file()
+        )
+        if (
+            udare_root
+            / "articles"
+        ).is_dir()
+        else 0
+    )
+
+    active_metadata_count = (
+        sum(
+            1
+            for path in (
+                udare_root
+                / "metadata"
+            ).glob("*.json")
+            if path.is_file()
+        )
+        if (
+            udare_root
+            / "metadata"
+        ).is_dir()
+        else 0
+    )
+
+    quarantine_article_root = (
+        integrity_root
+        / "quarantine"
+        / "articles"
+    )
+
+    quarantine_metadata_root = (
+        integrity_root
+        / "quarantine"
+        / "metadata"
+    )
+
+    quarantine_article_count = (
+        sum(
+            1
+            for path in quarantine_article_root.rglob(
+                "*.html"
+            )
+            if path.is_file()
+        )
+        if quarantine_article_root.is_dir()
+        else 0
+    )
+
+    quarantine_metadata_count = (
+        sum(
+            1
+            for path in quarantine_metadata_root.glob(
+                "*.json"
+            )
+            if path.is_file()
+        )
+        if quarantine_metadata_root.is_dir()
+        else 0
+    )
+
+    return {
+        "ok": not missing_paths,
+        "operation": "preflight",
+        "preflight_status": (
+            "READY"
+            if not missing_paths
+            else "BLOCKED"
+        ),
+        "registration_version": (
+            REGISTRATION_VERSION
+        ),
+        "pipeline": PIPELINE,
+        "stage": stage,
+        "job_type": job_type,
+        "workspace_id": workspace_id,
+        "required_input_count": len(
+            required_paths
+        ),
+        "missing_input_count": len(
+            missing_paths
+        ),
+        "missing_inputs": missing_paths,
+        "active_article_count": (
+            active_article_count
+        ),
+        "active_metadata_count": (
+            active_metadata_count
+        ),
+        "quarantine_article_count": (
+            quarantine_article_count
+        ),
+        "quarantine_metadata_count": (
+            quarantine_metadata_count
+        ),
+        "business_logic_executed": False,
+        "source_files_modified": False,
+    }
+
+
+def _existing_completion(
+    *,
+    stage: str,
+    project_root: Path,
+    workspace_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    integrity_root = _integrity_root(
+        project_root,
+        workspace_id,
+    )
+
+    if stage == STAGE_STRUCTURE:
+        path = (
+            integrity_root
+            / "structure"
+            / "structure_summary.json"
+        )
+
+        document = _load_json(path)
+
+        if (
+            document
+            and document.get(
+                "execution_status"
+            )
+            == "COMPLETE"
+            and document.get(
+                "articles_validated"
+            )
+            == _required_integer(
+                payload,
+                "expected_store_count",
+            )
+        ):
+            return {
+                "artifact_path": str(path),
+                "document": document,
+            }
+
+    if stage == STAGE_COMPONENTS:
+        path = (
+            integrity_root
+            / "components"
+            / "component_summary.json"
+        )
+
+        document = _load_json(path)
+
+        if (
+            document
+            and document.get(
+                "execution_status"
+            )
+            == "COMPLETE"
+            and document.get(
+                "articles_validated"
+            )
+            == _required_integer(
+                payload,
+                "expected_store_count",
+            )
+        ):
+            return {
+                "artifact_path": str(path),
+                "document": document,
+            }
+
+    if stage == STAGE_CORRUPTION:
+        path = (
+            integrity_root
+            / "corruption_truncation"
+            / "corruption_truncation_summary.json"
+        )
+
+        document = _load_json(path)
+
+        if (
+            document
+            and document.get(
+                "execution_status"
+            )
+            == "COMPLETE"
+            and document.get(
+                "articles_checked"
+            )
+            == _required_integer(
+                payload,
+                "expected_store_count",
+            )
+        ):
+            return {
+                "artifact_path": str(path),
+                "document": document,
+            }
+
+    if stage == STAGE_REPORT:
+        path = (
+            integrity_root
+            / "report"
+            / "website_integrity_report.json"
+        )
+
+        document = _load_json(path)
+        summary = (
+            document.get("summary", {})
+            if document
+            else {}
+        )
+
+        if (
+            document
+            and document.get(
+                "report_status"
+            )
+            == "COMPLETE"
+            and summary.get(
+                "articles_assessed"
+            )
+            == _required_integer(
+                payload,
+                "expected_store_count",
+            )
+        ):
+            return {
+                "artifact_path": str(path),
+                "document": document,
+            }
+
+    if stage == STAGE_QUARANTINE:
+        path = (
+            integrity_root
+            / "quarantine"
+            / "manifests"
+            / "quarantine_manifest.json"
+        )
+
+        document = _load_json(path)
+
+        if (
+            document
+            and document.get(
+                "execution_status"
+            )
+            == "COMPLETE"
+            and document.get(
+                "active_record_count_after"
+            )
+            == _required_integer(
+                payload,
+                "expected_active_count_after",
+            )
+            and document.get(
+                "quarantined_record_count"
+            )
+            == _required_integer(
+                payload,
+                "expected_quarantine_count",
+            )
+        ):
+            return {
+                "artifact_path": str(path),
+                "document": document,
+            }
+
+    if stage == STAGE_CERTIFICATION:
+        path = (
+            integrity_root
+            / "certification"
+            / "website_article_integrity_certificate.json"
+        )
+
+        document = _load_json(path)
+        coverage = (
+            document.get("coverage", {})
+            if document
+            else {}
+        )
+
+        if (
+            document
+            and document.get(
+                "certification_status"
+            )
+            == "CERTIFIED"
+            and coverage.get(
+                "active_certified_count"
+            )
+            == _required_integer(
+                payload,
+                "expected_active_count",
+            )
+            and coverage.get(
+                "quarantined_count"
+            )
+            == _required_integer(
+                payload,
+                "expected_quarantine_count",
+            )
+        ):
+            return {
+                "artifact_path": str(path),
+                "document": document,
+            }
+
+    return None
+
+
+def _execute_business_stage(
+    *,
+    stage: str,
+    project_root: Path,
+    workspace_id: str,
+    payload: Mapping[str, Any],
+) -> dict[str, Any]:
+    force_rebuild = bool(
+        payload.get("force_rebuild", False)
+    )
+
+    existing = _existing_completion(
+        stage=stage,
+        project_root=project_root,
+        workspace_id=workspace_id,
+        payload=payload,
+    )
+
+    if (
+        existing is not None
+        and not force_rebuild
+    ):
+        return {
+            "ok": True,
+            "operation": "execute",
+            "execution_status": (
+                "ALREADY_COMPLETE"
+            ),
+            "idempotent_reuse": True,
+            "pipeline": PIPELINE,
+            "stage": stage,
+            "workspace_id": workspace_id,
+            "artifact_path": existing[
+                "artifact_path"
+            ],
+            "result": existing["document"],
+        }
+
+    if stage == STAGE_STRUCTURE:
+        from backend.server.integrity.website_article_integrity.website_article_structure_validator import (
+            run_structure_validation,
+        )
+
+        result = run_structure_validation(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            expected_store_count=(
+                _required_integer(
+                    payload,
+                    "expected_store_count",
+                )
+            ),
+            expected_upstream_count=(
+                _required_integer(
+                    payload,
+                    "expected_upstream_count",
+                )
+            ),
+            deferred_upstream_count=(
+                _required_integer(
+                    payload,
+                    "deferred_upstream_count",
+                )
+            ),
+        )
+
+    elif stage == STAGE_COMPONENTS:
+        from backend.server.integrity.website_article_integrity.website_article_component_validator import (
+            run_component_validation,
+        )
+
+        result = run_component_validation(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            expected_store_count=(
+                _required_integer(
+                    payload,
+                    "expected_store_count",
+                )
+            ),
+            expected_upstream_count=(
+                _required_integer(
+                    payload,
+                    "expected_upstream_count",
+                )
+            ),
+            deferred_upstream_count=(
+                _required_integer(
+                    payload,
+                    "deferred_upstream_count",
+                )
+            ),
+        )
+
+    elif stage == STAGE_CORRUPTION:
+        from backend.server.integrity.website_article_integrity.website_article_corruption_truncation_detector import (
+            run_corruption_truncation_detection,
+        )
+
+        result = (
+            run_corruption_truncation_detection(
+                project_root=project_root,
+                workspace_id=workspace_id,
+                expected_store_count=(
+                    _required_integer(
+                        payload,
+                        "expected_store_count",
+                    )
+                ),
+                expected_upstream_count=(
+                    _required_integer(
+                        payload,
+                        "expected_upstream_count",
+                    )
+                ),
+                deferred_upstream_count=(
+                    _required_integer(
+                        payload,
+                        "deferred_upstream_count",
+                    )
+                ),
+            )
+        )
+
+    elif stage == STAGE_REPORT:
+        from backend.server.integrity.website_article_integrity.website_integrity_report_generator import (
+            generate_website_integrity_report,
+        )
+
+        result = generate_website_integrity_report(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            expected_store_count=(
+                _required_integer(
+                    payload,
+                    "expected_store_count",
+                )
+            ),
+            expected_upstream_count=(
+                _required_integer(
+                    payload,
+                    "expected_upstream_count",
+                )
+            ),
+            deferred_upstream_count=(
+                _required_integer(
+                    payload,
+                    "deferred_upstream_count",
+                )
+            ),
+        )
+
+    elif stage == STAGE_QUARANTINE:
+        from backend.server.integrity.website_article_integrity.website_article_quarantine_manager import (
+            execute_quarantine,
+        )
+
+        result = execute_quarantine(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            expected_store_count_before=(
+                _required_integer(
+                    payload,
+                    "expected_store_count_before",
+                )
+            ),
+            expected_active_count_after=(
+                _required_integer(
+                    payload,
+                    "expected_active_count_after",
+                )
+            ),
+            expected_quarantine_count=(
+                _required_integer(
+                    payload,
+                    "expected_quarantine_count",
+                )
+            ),
+            deferred_upstream_count=(
+                _required_integer(
+                    payload,
+                    "deferred_upstream_count",
+                )
+            ),
+        )
+
+    elif stage == STAGE_CERTIFICATION:
+        from backend.server.integrity.website_article_integrity.website_article_integrity_certifier import (
+            certify_website_article_integrity,
+        )
+
+        result = certify_website_article_integrity(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            expected_upstream_count=(
+                _required_integer(
+                    payload,
+                    "expected_upstream_count",
+                )
+            ),
+            expected_assessed_count=(
+                _required_integer(
+                    payload,
+                    "expected_assessed_count",
+                )
+            ),
+            expected_active_count=(
+                _required_integer(
+                    payload,
+                    "expected_active_count",
+                )
+            ),
+            expected_quarantine_count=(
+                _required_integer(
+                    payload,
+                    "expected_quarantine_count",
+                )
+            ),
+            deferred_upstream_count=(
+                _required_integer(
+                    payload,
+                    "deferred_upstream_count",
+                )
+            ),
+        )
+
+    else:
+        raise ValueError(
+            f"Unsupported integrity stage: {stage}"
+        )
+
+    return {
+        "ok": True,
+        "operation": "execute",
+        "execution_status": "COMPLETE",
+        "idempotent_reuse": False,
+        "pipeline": PIPELINE,
+        "stage": stage,
+        "workspace_id": workspace_id,
+        "result": result,
+    }
+
+
+def _handle_stage(
+    *,
+    job: Mapping[str, Any],
+    job_type: str,
+    stage: str,
+) -> dict[str, Any]:
+    if not isinstance(
+        job,
+        Mapping,
+    ):
+        raise TypeError(
+            "Website Article Integrity runtime job "
+            "must be a mapping."
+        )
+
+    payload = _payload(job)
+    workspace_id = _workspace_id(
+        job,
+        payload,
+    )
+    project_root = _project_root(
+        payload
+    )
+    operation = _operation(
+        payload
+    )
+
+    if operation == "registration_test":
+        return _registration_test_result(
+            job_type=job_type,
+            stage=stage,
+            workspace_id=workspace_id,
+        )
+
+    if operation == "preflight":
+        return _preflight_result(
+            job_type=job_type,
+            stage=stage,
+            project_root=project_root,
+            workspace_id=workspace_id,
+        )
+
+    execution_result = (
+        _execute_business_stage(
+            stage=stage,
+            project_root=project_root,
+            workspace_id=workspace_id,
+            payload=payload,
+        )
+    )
+
+    if (
+        execution_result.get("ok")
+        is True
+        and operation == "execute"
+    ):
+        from backend.server.runtime.website_article_integrity_automation import (
+            enqueue_website_article_integrity_successor,
+        )
+
+        continuation = (
+            enqueue_website_article_integrity_successor(
+                job=job,
+                current_stage=stage,
+                stage_result=execution_result,
+            )
+        )
+
+        execution_result[
+            "runtime_continuation"
+        ] = continuation
+
+    return execution_result
+
+
+
+def handle_structure_validation(
+    *,
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _handle_stage(
+        job=job,
+        job_type=JOB_TYPE_STRUCTURE,
+        stage=STAGE_STRUCTURE,
+    )
+
+
+def handle_component_validation(
+    *,
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _handle_stage(
+        job=job,
+        job_type=JOB_TYPE_COMPONENTS,
+        stage=STAGE_COMPONENTS,
+    )
+
+
+def handle_corruption_truncation(
+    *,
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _handle_stage(
+        job=job,
+        job_type=JOB_TYPE_CORRUPTION,
+        stage=STAGE_CORRUPTION,
+    )
+
+
+def handle_report_generation(
+    *,
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _handle_stage(
+        job=job,
+        job_type=JOB_TYPE_REPORT,
+        stage=STAGE_REPORT,
+    )
+
+
+def handle_quarantine(
+    *,
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _handle_stage(
+        job=job,
+        job_type=JOB_TYPE_QUARANTINE,
+        stage=STAGE_QUARANTINE,
+    )
+
+
+def handle_certification(
+    *,
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    return _handle_stage(
+        job=job,
+        job_type=JOB_TYPE_CERTIFICATION,
+        stage=STAGE_CERTIFICATION,
+    )
+
+
+REGISTRATION_DEFINITIONS: tuple[
+    dict[str, Any],
+    ...,
+] = (
+    {
+        "job_type": JOB_TYPE_STRUCTURE,
+        "stage": STAGE_STRUCTURE,
+        "handler": handle_structure_validation,
+        "description": (
+            "Validate the structure of reconstructed "
+            "UDARE article documents."
+        ),
+        "required_payload_fields": (
+            COMMON_REQUIRED_FIELDS
+        ),
+        "predecessor_stages": (
+            "udare_store_completed",
+        ),
+        "successor_stages": (
+            STAGE_COMPONENTS,
+        ),
+        "phase": "4.4.1",
+    },
+    {
+        "job_type": JOB_TYPE_COMPONENTS,
+        "stage": STAGE_COMPONENTS,
+        "handler": handle_component_validation,
+        "description": (
+            "Validate required article components "
+            "and metadata identity resolution."
+        ),
+        "required_payload_fields": (
+            COMMON_REQUIRED_FIELDS
+        ),
+        "predecessor_stages": (
+            STAGE_STRUCTURE,
+        ),
+        "successor_stages": (
+            STAGE_CORRUPTION,
+        ),
+        "phase": "4.4.2",
+    },
+    {
+        "job_type": JOB_TYPE_CORRUPTION,
+        "stage": STAGE_CORRUPTION,
+        "handler": handle_corruption_truncation,
+        "description": (
+            "Detect corruption and truncation in "
+            "reconstructed article documents."
+        ),
+        "required_payload_fields": (
+            COMMON_REQUIRED_FIELDS
+        ),
+        "predecessor_stages": (
+            STAGE_COMPONENTS,
+        ),
+        "successor_stages": (
+            STAGE_REPORT,
+        ),
+        "phase": "4.4.3",
+    },
+    {
+        "job_type": JOB_TYPE_REPORT,
+        "stage": STAGE_REPORT,
+        "handler": handle_report_generation,
+        "description": (
+            "Consolidate Website Article Integrity "
+            "results into the integrity report."
+        ),
+        "required_payload_fields": (
+            COMMON_REQUIRED_FIELDS
+        ),
+        "predecessor_stages": (
+            STAGE_CORRUPTION,
+        ),
+        "successor_stages": (
+            STAGE_QUARANTINE,
+        ),
+        "phase": "4.4.4",
+    },
+    {
+        "job_type": JOB_TYPE_QUARANTINE,
+        "stage": STAGE_QUARANTINE,
+        "handler": handle_quarantine,
+        "description": (
+            "Move failed article and metadata pairs "
+            "into reversible quarantine."
+        ),
+        "required_payload_fields": (
+            QUARANTINE_REQUIRED_FIELDS
+        ),
+        "predecessor_stages": (
+            STAGE_REPORT,
+        ),
+        "successor_stages": (
+            STAGE_CERTIFICATION,
+        ),
+        "phase": "4.4.5",
+    },
+    {
+        "job_type": JOB_TYPE_CERTIFICATION,
+        "stage": STAGE_CERTIFICATION,
+        "handler": handle_certification,
+        "description": (
+            "Certify the active Website Article "
+            "Integrity PASS set."
+        ),
+        "required_payload_fields": (
+            CERTIFICATION_REQUIRED_FIELDS
+        ),
+        "predecessor_stages": (
+            STAGE_QUARANTINE,
+        ),
+        "successor_stages": (
+            "article_validation",
+        ),
+        "phase": "4.4.6",
+    },
+)
+
+
+HANDLER_BY_JOB_TYPE: dict[
+    str,
+    Callable[..., dict[str, Any]],
+] = {
+    definition["job_type"]: definition[
+        "handler"
+    ]
+    for definition in REGISTRATION_DEFINITIONS
+}
+
+
+def register_website_article_integrity_runtime_handlers(
+    *,
+    persist: bool = True,
+    replace: bool = True,
+) -> dict[str, Any]:
+    from backend.server.runtime.universal_runtime_registration import (
+        ensure_persisted_runtime_registrations_loaded,
+        register_runtime_handler,
+        runtime_registration_snapshot,
+    )
+
+    ensure_persisted_runtime_registrations_loaded()
+
+    registrations: list[
+        dict[str, Any]
+    ] = []
+
+    for definition in REGISTRATION_DEFINITIONS:
+        registrations.append(
+            register_runtime_handler(
+                job_type=definition[
+                    "job_type"
+                ],
+                handler=definition[
+                    "handler"
+                ],
+                pipeline=PIPELINE,
+                stage=definition[
+                    "stage"
+                ],
+                description=definition[
+                    "description"
+                ],
+                required_payload_fields=(
+                    definition[
+                        "required_payload_fields"
+                    ]
+                ),
+                predecessor_stages=(
+                    definition[
+                        "predecessor_stages"
+                    ]
+                ),
+                successor_stages=(
+                    definition[
+                        "successor_stages"
+                    ]
+                ),
+                idempotency_fields=(
+                    "workspace_id",
+                    "job_type",
+                    "payload_ref",
+                ),
+                retry_policy={
+                    "max_attempts": (
+                        2
+                        if definition[
+                            "stage"
+                        ]
+                        in {
+                            STAGE_QUARANTINE,
+                            STAGE_CERTIFICATION,
+                        }
+                        else 3
+                    ),
+                    "backoff": "exponential",
+                },
+                concurrency_policy={
+                    "scope": "workspace",
+                    "max_concurrent": 1,
+                },
+                metadata={
+                    "registration_version": (
+                        REGISTRATION_VERSION
+                    ),
+                    "phase": definition[
+                        "phase"
+                    ],
+                    "business_domain": (
+                        "website_article_integrity"
+                    ),
+                    "uses_universal_runtime": True,
+                    "separate_queue_required": False,
+                    "separate_worker_required": False,
+                },
+                replace=replace,
+                persist=persist,
+            )
+        )
+
+    snapshot = (
+        runtime_registration_snapshot()
+    )
+
+    return {
+        "ok": True,
+        "registration_version": (
+            REGISTRATION_VERSION
+        ),
+        "pipeline": PIPELINE,
+        "registered_count": len(
+            registrations
+        ),
+        "registered_job_types": [
+            record["job_type"]
+            for record in registrations
+        ],
+        "registrations": registrations,
+        "registry_sha256": snapshot[
+            "registry_sha256"
+        ],
+        "persistent_registry_path": (
+            snapshot[
+                "persistent_registry_path"
+            ]
+        ),
+        "automatic_trigger_registered": False,
+        "automatic_trigger_note": (
+            "Automatic triggering after UDARE Store "
+            "completion is a separate step."
+        ),
+    }
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\article_validation\article_validation_runtime_registration.py
+SIZE_BYTES: 11274
+SHA256: F061DB57ED3F6EB90555FD8C14D7FAB252F10F1605FE4E97686B48F48AD03C08
+----------------------------------------------------------------------------------------------------
+"""Universal runtime registration for Article Validation v3."""
+
+from __future__ import annotations
+
+import json
+import re
+from pathlib import Path
+from typing import Any, Mapping
+
+from backend.server.article_validation.article_validation_engine_v3 import (
+    ARTICLE_VALIDATION_ENGINE_VERSION,
+)
+from backend.server.article_validation.article_validation_runner_v3 import (
+    RUNNER_VERSION,
+    run_article_validation_population_v3,
+)
+from backend.server.article_validation.certified_article_validation_input import (
+    load_certified_article_validation_input,
+)
+from backend.server.runtime.universal_runtime_registration import (
+    ensure_persisted_runtime_registrations_loaded,
+    register_runtime_handler,
+)
+
+
+REGISTRATION_VERSION = (
+    "article_validation_runtime_registration_v1"
+)
+
+PIPELINE = "website_source_pipeline"
+STAGE = "article_validation"
+
+JOB_TYPE_ARTICLE_VALIDATION = (
+    "article_validation_population_v3"
+)
+
+PREDECESSOR_STAGES = (
+    "website_article_integrity_certification",
+)
+
+SUCCESSOR_STAGES = (
+    "website_unified_content",
+)
+
+HANDLER_REFERENCE = (
+    "backend.server.article_validation."
+    "article_validation_runtime_registration:"
+    "execute_article_validation_runtime_job_v1"
+)
+
+PROJECT_ROOT = Path(
+    __file__
+).resolve().parents[3]
+
+REGISTRATION_EVIDENCE_PATH = (
+    PROJECT_ROOT
+    / "backend"
+    / "server"
+    / "data"
+    / "runtime"
+    / "universal_runtime_registration"
+    / "article_validation"
+    / "article_validation_registration.json"
+)
+
+
+class ArticleValidationRuntimeRegistrationError(
+    RuntimeError
+):
+    """Raised when Article Validation runtime registration is invalid."""
+
+
+def _safe_name(
+    value: Any,
+    *,
+    field_name: str,
+) -> str:
+    normalized = str(
+        value or ""
+    ).strip()
+
+    if not normalized:
+        raise ArticleValidationRuntimeRegistrationError(
+            f"{field_name} is required."
+        )
+
+    if not re.fullmatch(
+        r"[A-Za-z0-9_.:-]+",
+        normalized,
+    ):
+        raise ArticleValidationRuntimeRegistrationError(
+            f"{field_name} contains unsupported characters."
+        )
+
+    return normalized
+
+
+def _positive_integer(
+    value: Any,
+    *,
+    field_name: str,
+) -> int:
+    try:
+        normalized = int(
+            value
+        )
+
+    except (
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise ArticleValidationRuntimeRegistrationError(
+            f"{field_name} must be an integer."
+        ) from exc
+
+    if normalized <= 0:
+        raise ArticleValidationRuntimeRegistrationError(
+            f"{field_name} must be greater than zero."
+        )
+
+    return normalized
+
+
+def _job_payload(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+
+    nested_payload = job.get(
+        "payload"
+    )
+
+    if isinstance(
+        nested_payload,
+        Mapping,
+    ):
+        payload.update(
+            nested_payload
+        )
+
+    for field_name in (
+        "workspace_id",
+        "expected_active_count",
+        "run_id",
+        "batch_size",
+        "payload_ref",
+    ):
+        if (
+            field_name not in payload
+            and field_name in job
+        ):
+            payload[
+                field_name
+            ] = job[
+                field_name
+            ]
+
+    return payload
+
+
+def _certified_active_count(
+    workspace_id: str,
+) -> int:
+    certified_input = (
+        load_certified_article_validation_input(
+            workspace_id
+        )
+    )
+
+    records = certified_input.get(
+        "records"
+    )
+
+    if not isinstance(
+        records,
+        list,
+    ):
+        raise ArticleValidationRuntimeRegistrationError(
+            "Certified Article Validation input records are invalid."
+        )
+
+    if not records:
+        raise ArticleValidationRuntimeRegistrationError(
+            "Certified Article Validation input is empty."
+        )
+
+    return len(
+        records
+    )
+
+
+def execute_article_validation_runtime_job_v1(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Execute all certified Article Validation inputs through runtime."""
+
+    if not isinstance(
+        job,
+        Mapping,
+    ):
+        raise ArticleValidationRuntimeRegistrationError(
+            "Article Validation runtime job must be a mapping."
+        )
+
+    payload = _job_payload(
+        job
+    )
+
+    workspace_id = _safe_name(
+        payload.get(
+            "workspace_id"
+        ),
+        field_name="workspace_id",
+    )
+
+    certified_active_count = (
+        _certified_active_count(
+            workspace_id
+        )
+    )
+
+    supplied_expected_count = payload.get(
+        "expected_active_count"
+    )
+
+    if supplied_expected_count is None:
+        expected_active_count = (
+            certified_active_count
+        )
+
+    else:
+        expected_active_count = (
+            _positive_integer(
+                supplied_expected_count,
+                field_name=(
+                    "expected_active_count"
+                ),
+            )
+        )
+
+        if (
+            expected_active_count
+            != certified_active_count
+        ):
+            raise ArticleValidationRuntimeRegistrationError(
+                "Expected active count does not match "
+                "the certified Integrity input count: "
+                f"{expected_active_count} != "
+                f"{certified_active_count}"
+            )
+
+    batch_size = _positive_integer(
+        payload.get(
+            "batch_size"
+        )
+        or 100,
+        field_name="batch_size",
+    )
+
+    run_id = str(
+        payload.get(
+            "run_id"
+        )
+        or ""
+    ).strip()
+
+    result = (
+        run_article_validation_population_v3(
+            workspace_id=workspace_id,
+            expected_active_count=(
+                expected_active_count
+            ),
+            run_id=run_id,
+            batch_size=batch_size,
+        )
+    )
+
+    return {
+        "runtime_job_type":
+            JOB_TYPE_ARTICLE_VALIDATION,
+
+        "pipeline":
+            PIPELINE,
+
+        "stage":
+            STAGE,
+
+        "workspace_id":
+            workspace_id,
+
+        "expected_active_count":
+            expected_active_count,
+
+        "processed_count":
+            result.get(
+                "processed_count"
+            ),
+
+        "pass_count":
+            result.get(
+                "pass_count"
+            ),
+
+        "fail_count":
+            result.get(
+                "fail_count"
+            ),
+
+        "run_id":
+            result.get(
+                "run_id"
+            ),
+
+        "certificate_id":
+            result.get(
+                "certificate_id"
+            ),
+
+        "artifact_paths":
+            result.get(
+                "artifact_paths"
+            ),
+
+        "article_bodies_stored":
+            False,
+
+        "article_bodies_modified":
+            False,
+
+        "article_bodies_copied":
+            False,
+
+        "intermediate_article_store_created":
+            False,
+    }
+
+
+def _write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    path.write_text(
+        json.dumps(
+            dict(
+                payload
+            ),
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def registration_definition_v1() -> dict[str, Any]:
+    return {
+        "registration_version":
+            REGISTRATION_VERSION,
+
+        "job_type":
+            JOB_TYPE_ARTICLE_VALIDATION,
+
+        "handler_reference":
+            HANDLER_REFERENCE,
+
+        "pipeline":
+            PIPELINE,
+
+        "stage":
+            STAGE,
+
+        "description":
+            (
+                "Validate all Website Article Integrity-certified "
+                "active UDARE articles and produce evidence-only "
+                "Article Validation manifests, reports, ledgers "
+                "and certification."
+            ),
+
+        "required_payload_fields":
+            (
+                "workspace_id",
+            ),
+
+        "predecessor_stages":
+            PREDECESSOR_STAGES,
+
+        "successor_stages":
+            SUCCESSOR_STAGES,
+
+        "idempotency_fields":
+            (
+                "workspace_id",
+                "job_type",
+                "payload_ref",
+            ),
+
+        "retry_policy": {
+            "max_attempts":
+                2,
+
+            "backoff":
+                "exponential",
+        },
+
+        "concurrency_policy": {
+            "scope":
+                "workspace",
+
+            "max_concurrent":
+                1,
+        },
+
+        "metadata": {
+            "business_domain":
+                "article_validation",
+
+            "engine_version":
+                ARTICLE_VALIDATION_ENGINE_VERSION,
+
+            "runner_version":
+                RUNNER_VERSION,
+
+            "uses_universal_runtime":
+                True,
+
+            "separate_queue_required":
+                False,
+
+            "separate_worker_required":
+                False,
+
+            "evidence_only":
+                True,
+
+            "article_body_store_created":
+                False,
+
+            "article_bodies_copied":
+                False,
+
+            "word_count_rule":
+                False,
+
+            "single_paragraph_allowed":
+                True,
+
+            "duplicate_ratio_affects_pass_fail":
+                False,
+        },
+    }
+
+
+def register_article_validation_runtime_v1(
+    *,
+    replace: bool = False,
+    persist: bool = True,
+) -> dict[str, Any]:
+    ensure_persisted_runtime_registrations_loaded()
+
+    definition = registration_definition_v1()
+
+    register_runtime_handler(
+        job_type=definition[
+            "job_type"
+        ],
+        handler=(
+            execute_article_validation_runtime_job_v1
+        ),
+        pipeline=definition[
+            "pipeline"
+        ],
+        stage=definition[
+            "stage"
+        ],
+        description=definition[
+            "description"
+        ],
+        required_payload_fields=definition[
+            "required_payload_fields"
+        ],
+        predecessor_stages=definition[
+            "predecessor_stages"
+        ],
+        successor_stages=definition[
+            "successor_stages"
+        ],
+        idempotency_fields=definition[
+            "idempotency_fields"
+        ],
+        retry_policy=definition[
+            "retry_policy"
+        ],
+        concurrency_policy=definition[
+            "concurrency_policy"
+        ],
+        metadata={
+            **definition[
+                "metadata"
+            ],
+
+            "registration_version":
+                REGISTRATION_VERSION,
+        },
+        replace=replace,
+        persist=persist,
+    )
+
+    evidence = {
+        **definition,
+
+        "registered":
+            True,
+
+        "persisted":
+            bool(
+                persist
+            ),
+
+        "jobs_enqueued":
+            False,
+
+        "workers_started":
+            False,
+
+        "article_validation_executed":
+            False,
+
+        "intermediate_article_store_exists":
+            False,
+    }
+
+    _write_json(
+        REGISTRATION_EVIDENCE_PATH,
+        evidence,
+    )
+
+    return evidence
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\pipelines\connect_domain\coordinator.py
+SIZE_BYTES: 6220
+SHA256: 5C94401ABD7A1D4A0919AFF0936A442B24BF7EB665F443844980EA4402A913C3
+----------------------------------------------------------------------------------------------------
+"""
+LinkCraftor — Canonical Connect Domain Coordinator
+
+CONNECT DOMAIN
+    ├── linking_target_pipeline_batch
+    └── website_connection_batch
+
+The coordinator:
+
+1. validates the complete Domain Workspace modal identity;
+2. persists the canonical workspace profile;
+3. queues both pipelines;
+4. returns immediately.
+
+The pipeline implementation remains outside this coordinator.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict
+
+from fastapi import HTTPException
+
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    create_universal_knowledge_job,
+)
+from backend.server.pipelines.connect_domain.job_types import (
+    LINKING_TARGET_PIPELINE_BATCH,
+)
+from backend.server.pipelines.connect_domain.linking_target_pipeline.runtime_registration import (
+    ensure_linking_target_pipeline_registration,
+)
+from backend.server.pipelines.connect_domain.website_knowledge_pipeline.coordinator import (
+    _normalize_domain,
+    _resolve_workspace_id,
+    run_website_knowledge_pipeline,
+)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_workspace_name(
+    workspace_name: str | None,
+    domain: str,
+) -> str:
+    supplied = str(workspace_name or "").strip()
+
+    if supplied:
+        return supplied
+
+    return (
+        domain
+        .replace("www.", "")
+        .replace(".", " ")
+        .replace("-", " ")
+        .strip()
+        .title()
+    )
+
+
+def _persist_workspace_profile(
+    *,
+    workspace_id: str,
+    workspace_name: str,
+    workspace_mode: str,
+    domain: str,
+    site_url: str | None,
+) -> Path:
+    profile_dir = (
+        Path("backend/server/data/workspaces")
+        / workspace_id
+    )
+
+    profile_path = profile_dir / "workspace_profile.json"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    existing: Dict[str, Any] = {}
+
+    if profile_path.exists():
+        try:
+            loaded = json.loads(
+                profile_path.read_text(encoding="utf-8-sig")
+            )
+
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+
+    now = _now_iso()
+
+    profile = {
+        **existing,
+        "schema_version": "workspace_profile_v2",
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_name,
+        "workspace_mode": workspace_mode,
+        "domain": domain,
+        "site_url": str(site_url or "").strip(),
+        "source_type": "domain",
+        "connection_status": "processing",
+        "created_at": existing.get("created_at") or now,
+        "connected_at": existing.get("connected_at") or now,
+        "updated_at": now,
+    }
+
+    temporary_path = profile_path.with_suffix(".json.tmp")
+
+    temporary_path.write_text(
+        json.dumps(
+            profile,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    temporary_path.replace(profile_path)
+
+    return profile_path
+
+
+def run_connect_domain(
+    *,
+    workspace_id: str | None = None,
+    workspace_name: str | None = None,
+    workspace_mode: str = "domain",
+    domain: str | None = None,
+    site_url: str | None = None,
+    url: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Persist the Domain Workspace identity and queue both pipelines.
+    """
+
+    normalized_mode = str(
+        workspace_mode or "domain"
+    ).strip().lower()
+
+    if normalized_mode != "domain":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The Connect Domain endpoint accepts only "
+                "workspace_mode='domain'."
+            ),
+        )
+
+    clean_domain = _normalize_domain(
+        domain or url or site_url
+    )
+
+    resolved_workspace_id = _resolve_workspace_id(
+        workspace_id,
+        clean_domain,
+    )
+
+    resolved_workspace_name = _normalize_workspace_name(
+        workspace_name,
+        clean_domain,
+    )
+
+    profile_path = _persist_workspace_profile(
+        workspace_id=resolved_workspace_id,
+        workspace_name=resolved_workspace_name,
+        workspace_mode=normalized_mode,
+        domain=clean_domain,
+        site_url=site_url,
+    )
+
+    registration = ensure_linking_target_pipeline_registration()
+
+    pipeline_1_job = create_universal_knowledge_job(
+        workspace_id=resolved_workspace_id,
+        job_type=LINKING_TARGET_PIPELINE_BATCH,
+        pipeline="linking_target_pipeline",
+        stage=LINKING_TARGET_PIPELINE_BATCH,
+        payload={
+            "workspace_id": resolved_workspace_id,
+            "workspace_name": resolved_workspace_name,
+            "workspace_mode": normalized_mode,
+            "domain": clean_domain,
+            "site_url": str(site_url or "").strip(),
+            "source_type": "website",
+            "pipeline": "linking_target_pipeline",
+            "trigger": "canonical_connect_domain_coordinator",
+        },
+    )
+
+    pipeline_2 = run_website_knowledge_pipeline(
+        workspace_id=resolved_workspace_id,
+        domain=clean_domain,
+        url=url,
+    )
+
+    pipeline_1_queued = (
+        pipeline_1_job.get("status") == "queued"
+    )
+
+    overall_ok = bool(
+        pipeline_1_queued
+        and pipeline_2.get("ok")
+    )
+
+    return {
+        "ok": overall_ok,
+        "workspace_id": resolved_workspace_id,
+        "workspace_name": resolved_workspace_name,
+        "workspace_mode": normalized_mode,
+        "domain": clean_domain,
+        "site_url": str(site_url or "").strip(),
+        "connected": overall_ok,
+        "connection_status": (
+            "processing"
+            if overall_ok
+            else "queue_creation_failed"
+        ),
+        "execution_mode": "asynchronous",
+        "workspace_profile": str(profile_path),
+        "pipelines": {
+            "linking_target_pipeline": {
+                "ok": pipeline_1_queued,
+                "execution_status": "QUEUED_AWAITING_WORKER",
+                "job_type": LINKING_TARGET_PIPELINE_BATCH,
+                "job": pipeline_1_job,
+                "runtime_registration": registration,
+            },
+            "website_knowledge_pipeline": pipeline_2,
+        },
+    }
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py
+SIZE_BYTES: 4587
+SHA256: 45CFC6998B2987E86C407CF95C69511C3E5BF8E38CE9C7CF8BF26D7271220FAE
+----------------------------------------------------------------------------------------------------
+"""
+LinkCraftor Connect Domain — Pipeline 2
+
+WEBSITE KNOWLEDGE PIPELINE
+
+CONNECT DOMAIN
+    -> Site Sources
+    -> Site Pages
+    -> Enterprise Raw HTML Acquisition
+    -> Raw HTML Store
+    -> UDARE
+    -> Website Article Integrity
+    -> Article Validation
+    -> Website Unified Content
+    -> UUCD
+    -> Universal Article Body Store
+    -> Certification
+    -> Semantic Ready
+
+This coordinator currently creates the existing
+website_connection_batch job.
+
+Runtime-foundation expansion is intentionally deferred.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict
+
+from fastapi import HTTPException
+
+
+from backend.server.pipelines.connect_domain.job_types import (
+    WEBSITE_CONNECTION_BATCH,
+)
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    create_universal_knowledge_job,
+)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_domain(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="domain or url is required",
+        )
+
+    raw = re.sub(r"^https?://", "", raw, flags=re.IGNORECASE)
+    raw = raw.split("/", 1)[0].strip()
+    raw = raw.rstrip(".")
+
+    if raw.startswith("www."):
+        raw = raw[4:]
+
+    if not raw or "." not in raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid domain",
+        )
+
+    return raw
+
+
+def _workspace_id_from_domain(domain: str) -> str:
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(domain or "").lower(),
+    ).strip("_")
+
+    if not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not derive workspace_id from domain",
+        )
+
+    return f"ws_{normalized}"
+
+
+def _resolve_workspace_id(
+    workspace_id: str | None,
+    domain: str,
+) -> str:
+    supplied = str(workspace_id or "").strip()
+
+    if supplied:
+        if not supplied.startswith("ws_"):
+            raise HTTPException(
+                status_code=400,
+                detail="workspace_id must start with ws_",
+            )
+
+        return supplied
+
+    return _workspace_id_from_domain(domain)
+
+
+def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    path.write_text(
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def run_website_knowledge_pipeline(
+    *,
+    workspace_id: str | None = None,
+    domain: str | None = None,
+    url: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Start Connect Domain Pipeline 2 — Website Knowledge Pipeline.
+
+    This function records the domain connection and creates the existing
+    website_connection_batch job without executing the full workload inside
+    the HTTP route.
+    """
+
+    clean_domain = _normalize_domain(domain or url)
+
+    resolved_workspace_id = _resolve_workspace_id(
+        workspace_id,
+        clean_domain,
+    )
+
+    connected_at = _now_iso()
+
+    live_domain_payload = {
+        "schema_version": "live_domain_connection_v1",
+        "workspace_id": resolved_workspace_id,
+        "domain": clean_domain,
+        "source_type": "website",
+        "status": "queued",
+        "connection_status": "processing",
+        "connected_at": connected_at,
+        "updated_at": connected_at,
+        "pipeline": "website_knowledge_pipeline",
+    }
+
+    live_domain_path = (
+        Path("backend/server/data/live_domains")
+        / f"live_domain_{resolved_workspace_id}.json"
+    )
+
+    _write_json(
+        live_domain_path,
+        live_domain_payload,
+    )
+
+    job = create_universal_knowledge_job(
+        workspace_id=resolved_workspace_id,
+        job_type=WEBSITE_CONNECTION_BATCH,
+        payload={
+            "workspace_id": resolved_workspace_id,
+            "domain": clean_domain,
+            "urls": [],
+            "source_type": "website",
+            "pipeline": "website_knowledge_pipeline",
+            "trigger": "live_connect_domain_route",
+        },
+    )
+
+    return {
+        "ok": True,
+        "workspace_id": resolved_workspace_id,
+        "domain": clean_domain,
+        "connected": True,
+        "connection_status": "processing",
+        "execution_status": "QUEUED_AWAITING_WORKER",
+        "pipeline": "website_knowledge_pipeline",
+        "live_domain_record": str(live_domain_path),
+        "job": job,
+    }
+
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\pipelines\connect_domain\linking_target_pipeline\runtime_registration.py
+SIZE_BYTES: 4089
+SHA256: 399106E8560D84CE10C1E086D61C6700FCB61509799CAB177C4EFD1D56399899
+----------------------------------------------------------------------------------------------------
+"""
+Runtime Registration for Connect Domain Pipeline 1.
+
+Registered job:
+    linking_target_pipeline_batch
+
+This is foundational Runtime Registration only.
+Full Universal Runtime Infrastructure integration remains deferred.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    register_universal_runtime_handler,
+)
+from backend.server.pipelines.connect_domain.job_types import (
+    LINKING_TARGET_PIPELINE_BATCH,
+)
+from backend.server.pipelines.connect_domain.linking_target_pipeline.coordinator import (
+    run_linking_target_pipeline,
+)
+
+
+class _PipelinePayload:
+    def __init__(
+        self,
+        *,
+        workspace_id: str | None,
+        domain: str | None,
+    ) -> None:
+        self.workspace_id = workspace_id
+        self.domain = domain
+
+
+def execute_linking_target_pipeline_job(
+    job: Dict[str, Any] | None = None,
+    payload: Dict[str, Any] | None = None,
+    **kwargs: Any,
+) -> Dict[str, Any]:
+    """
+    Runtime handler for the Linking Target Pipeline.
+
+    The flexible signature supports dispatchers that supply either:
+    - the complete job record;
+    - the payload directly; or
+    - keyword arguments.
+    """
+
+    job_obj = job if isinstance(job, dict) else {}
+    payload_obj = payload if isinstance(payload, dict) else {}
+
+    if not payload_obj:
+        nested_payload = job_obj.get("payload")
+
+        if isinstance(nested_payload, dict):
+            payload_obj = nested_payload
+        elif job_obj:
+            payload_obj = job_obj
+
+    if kwargs:
+        payload_obj = {
+            **payload_obj,
+            **kwargs,
+        }
+
+    workspace_id = str(
+        payload_obj.get("workspace_id")
+        or job_obj.get("workspace_id")
+        or ""
+    ).strip()
+
+    domain = str(
+        payload_obj.get("domain")
+        or payload_obj.get("url")
+        or ""
+    ).strip()
+
+    if not workspace_id:
+        return {
+            "ok": False,
+            "error": "workspace_id_required",
+            "job_type": LINKING_TARGET_PIPELINE_BATCH,
+        }
+
+    if not domain:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "error": "domain_required",
+            "job_type": LINKING_TARGET_PIPELINE_BATCH,
+        }
+
+    result = run_linking_target_pipeline(
+        _PipelinePayload(
+            workspace_id=workspace_id,
+            domain=domain,
+        )
+    )
+
+    return {
+        "ok": bool(result.get("ok")),
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "job_type": LINKING_TARGET_PIPELINE_BATCH,
+        "pipeline": "linking_target_pipeline",
+        "result": result,
+    }
+
+
+def ensure_linking_target_pipeline_registration() -> Dict[str, Any]:
+    """
+    Register or refresh the Pipeline 1 runtime handler.
+
+    replace=True makes repeated application startup and route calls safe.
+    persist=True records the registration for later runtime loading.
+    """
+
+    return register_universal_runtime_handler(
+        job_type=LINKING_TARGET_PIPELINE_BATCH,
+        handler=execute_linking_target_pipeline_job,
+        pipeline="linking_target_pipeline",
+        stage=LINKING_TARGET_PIPELINE_BATCH,
+        description=(
+            "Build Site Sources, Site Pages, target pools, clusters, "
+            "enrichment, Active Target Set, and URL Pool."
+        ),
+        required_payload_fields=[
+            "workspace_id",
+            "domain",
+        ],
+        predecessor_stages=[],
+        successor_stages=[],
+        idempotency_fields=[
+            "workspace_id",
+            "domain",
+        ],
+        retry_policy={
+            "max_attempts": 3,
+            "retryable": True,
+        },
+        concurrency_policy={
+            "scope": "workspace",
+            "max_concurrency": 1,
+        },
+        metadata={
+            "architecture": "connect_domain_pipeline_1",
+            "runtime_layer": "foundational_registration",
+            "full_runtime_infrastructure": "deferred",
+        },
+        replace=True,
+        persist=True,
+    )
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\workers\udare_reconstruction_worker.py
+SIZE_BYTES: 38899
+SHA256: C51B21162BF856932C36CF65CCE8AA7088113767DCFA9F17432F2E6A7F5235B4
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+import os
+
+import inspect
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, Mapping
+
+
+UDARE_JOB_TYPE = (
+    "udare_reconstruction"
+)
+
+UDARE_PIPELINE = (
+    "website_reconstruction"
+)
+
+UDARE_ENGINE = (
+    "universal_dom_article_reconstruction_engine_v1_8"
+)
+
+UDARE_SOURCE_STORE = (
+    "raw_website_html_store_v1"
+)
+
+UDARE_TARGET_STORE = (
+    "udare_store_v1"
+)
+
+UDARE_ARTICLE_FORMAT = (
+    "udare_article_reader_document_v1"
+)
+
+WORKER_NAME = (
+    "udare_reconstruction_worker_v1"
+)
+
+
+from backend.server.stores.udare_store_index_builder import build_udare_store_index_v1
+from backend.server.stores.udare_review_document_builder import build_udare_review_document_v1
+
+class UdareWorkerError(
+    RuntimeError
+):
+    """Raised when an authorized UDARE worker job cannot complete."""
+
+
+def _utc_now_v1() -> str:
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def _call_by_signature_v1(
+    function: Callable[..., Any],
+    values: Mapping[str, Any],
+) -> Any:
+    """
+    Invoke a runtime dependency using only parameters accepted by its
+    active signature. This protects the worker from minor interface
+    differences between runtime adapters.
+    """
+
+    signature = inspect.signature(
+        function
+    )
+
+    positional_arguments: list[Any] = []
+    keyword_arguments: Dict[str, Any] = {}
+
+    consumed: set[str] = set()
+    accepts_extra_keywords = False
+
+    for parameter in (
+        signature.parameters.values()
+    ):
+        if (
+            parameter.kind
+            == inspect.Parameter.VAR_POSITIONAL
+        ):
+            continue
+
+        if (
+            parameter.kind
+            == inspect.Parameter.VAR_KEYWORD
+        ):
+            accepts_extra_keywords = True
+            continue
+
+        name = parameter.name
+
+        if name in values:
+            value = values[
+                name
+            ]
+
+            consumed.add(
+                name
+            )
+
+        elif (
+            parameter.default
+            is not inspect.Parameter.empty
+        ):
+            continue
+
+        else:
+            raise UdareWorkerError(
+                "Missing runtime dependency parameter "
+                f"{name!r} for {function!r}."
+            )
+
+        if (
+            parameter.kind
+            == inspect.Parameter.POSITIONAL_ONLY
+        ):
+            positional_arguments.append(
+                value
+            )
+
+        else:
+            keyword_arguments[
+                name
+            ] = value
+
+    if accepts_extra_keywords:
+        for name, value in values.items():
+            if name not in consumed:
+                keyword_arguments[
+                    name
+                ] = value
+
+    return function(
+        *positional_arguments,
+        **keyword_arguments,
+    )
+
+
+def _default_raw_record_loader_v1(
+    *,
+    workspace_id: str,
+    html_id: str,
+) -> Any:
+    from backend.server.stores.raw_website_html_store import (
+        get_raw_website_html_v1,
+    )
+
+    return _call_by_signature_v1(
+        get_raw_website_html_v1,
+        {
+            "workspace_id":
+                workspace_id,
+
+            "tenant_id":
+                workspace_id,
+
+            "html_id":
+                html_id,
+
+            "record_id":
+                html_id,
+
+            "source_record_id":
+                html_id,
+        },
+    )
+
+
+def _default_reconstruction_engine_v1(
+    *,
+    html_text: str,
+    source_url: str,
+    title: str,
+    metadata: Mapping[str, Any],
+) -> Any:
+    from backend.server.stores.universal_dom_article_reconstruction_engine import (
+        reconstruct_universal_dom_article_v1,
+    )
+
+    return reconstruct_universal_dom_article_v1(
+        html_text=
+            html_text,
+
+        url=
+            source_url,
+
+        title=
+            title,
+
+        metadata=
+            dict(
+                metadata
+            ),
+    )
+
+
+def _default_document_builder_v1(
+    *,
+    reconstruction: Mapping[str, Any],
+    source_url: str,
+    document_id: str,
+    html_id: str,
+) -> Any:
+    from backend.server.stores.udare_article_document_builder import (
+        build_udare_article_reader_document_v1,
+    )
+
+    return (
+        build_udare_article_reader_document_v1(
+            reconstruction=
+                reconstruction,
+
+            source_url=
+                source_url,
+
+            document_id=
+                document_id,
+
+            html_id=
+                html_id,
+        )
+    )
+
+
+def _default_store_persister_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.stores.udare_store import (
+        persist_udare_article_document_v1,
+    )
+
+    return _call_by_signature_v1(
+        persist_udare_article_document_v1,
+        values,
+    )
+
+
+def _default_manifest_refresher_v1(
+    *,
+    workspace_id: str,
+) -> Any:
+    from backend.server.stores.udare_store import (
+        refresh_udare_store_manifest_v1,
+    )
+
+    return refresh_udare_store_manifest_v1(
+        workspace_id
+    )
+
+
+def _default_status_updater_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        update_job_status,
+    )
+
+    return _call_by_signature_v1(
+        update_job_status,
+        values,
+    )
+
+
+def _default_progress_updater_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        update_job_progress,
+    )
+
+    return _call_by_signature_v1(
+        update_job_progress,
+        values,
+    )
+
+
+def _default_failure_recorder_v1(
+    **values: Any,
+) -> Any:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        record_job_failure,
+    )
+
+    return _call_by_signature_v1(
+        record_job_failure,
+        values,
+    )
+
+
+def _default_concurrency_checker_v1(
+    *,
+    workspace_id: str,
+    max_running: int,
+) -> Any:
+    from backend.server.runtime.universal_runtime_infrastructure import (
+        workspace_concurrency_decision,
+    )
+
+    return workspace_concurrency_decision(
+        workspace_id=
+            workspace_id,
+
+        max_running=
+            max_running,
+    )
+
+
+def _as_mapping_v1(
+    value: Any,
+    *,
+    name: str,
+) -> Mapping[str, Any]:
+    if not isinstance(
+        value,
+        Mapping,
+    ):
+        raise UdareWorkerError(
+            f"{name} must be a mapping."
+        )
+
+    return value
+
+
+def _normalize_raw_record_v1(
+    value: Any,
+) -> Mapping[str, Any]:
+    record = _as_mapping_v1(
+        value,
+        name="Raw HTML record",
+    )
+
+    nested_record = record.get(
+        "record"
+    )
+
+    if isinstance(
+        nested_record,
+        Mapping,
+    ):
+        return nested_record
+
+    nested_result = record.get(
+        "result"
+    )
+
+    if isinstance(
+        nested_result,
+        Mapping,
+    ):
+        return nested_result
+
+    return record
+
+
+def _first_non_empty_v1(
+    source: Mapping[str, Any],
+    fields: tuple[str, ...],
+) -> str:
+    for field in fields:
+        value = source.get(
+            field
+        )
+
+        if value is None:
+            continue
+
+        text = str(
+            value
+        )
+
+        if text.strip():
+            return text
+
+    return ""
+
+
+def _heading_values_v1(
+    reconstruction: Mapping[str, Any],
+) -> list[str]:
+    values: list[str] = []
+
+    raw_headings = reconstruction.get(
+        "headings"
+    )
+
+    if not isinstance(
+        raw_headings,
+        list,
+    ):
+        return values
+
+    for heading in raw_headings:
+        if isinstance(
+            heading,
+            Mapping,
+        ):
+            text = str(
+                heading.get(
+                    "text"
+                )
+                or ""
+            ).strip()
+
+        else:
+            text = str(
+                heading or ""
+            ).strip()
+
+        if text:
+            values.append(
+                text
+            )
+
+    return values
+
+
+def _safe_status_update_v1(
+    updater: Callable[..., Any],
+    *,
+    workspace_id: str,
+    job_id: str,
+    status: str,
+    message: str,
+    result: Mapping[str, Any] | None = None,
+    error: str = "",
+) -> Any:
+    return _call_by_signature_v1(
+        updater,
+        {
+            "workspace_id":
+                workspace_id,
+
+            "tenant_id":
+                workspace_id,
+
+            "job_id":
+                job_id,
+
+            "id":
+                job_id,
+
+            "status":
+                status,
+
+            "new_status":
+                status,
+
+            "state":
+                status,
+
+            "message":
+                message,
+
+            "result":
+                dict(
+                    result
+                    or {}
+                ),
+
+            "error":
+                error,
+
+            "error_info":
+                error,
+        },
+    )
+
+
+def _safe_progress_update_v1(
+    updater: Callable[..., Any],
+    *,
+    workspace_id: str,
+    job_id: str,
+    percent: int,
+    message: str,
+    step: str,
+) -> Any:
+    return _call_by_signature_v1(
+        updater,
+        {
+            "workspace_id":
+                workspace_id,
+
+            "tenant_id":
+                workspace_id,
+
+            "job_id":
+                job_id,
+
+            "id":
+                job_id,
+
+            "percent":
+                percent,
+
+            "progress":
+                percent,
+
+            "message":
+                message,
+
+            "step":
+                step,
+        },
+    )
+
+
+def run_udare_reconstruction_job_v1(
+    *,
+    job: Mapping[str, Any],
+    raw_record_loader: Callable[..., Any] | None = None,
+    reconstruction_engine: Callable[..., Any] | None = None,
+    document_builder: Callable[..., Any] | None = None,
+    store_persister: Callable[..., Any] | None = None,
+    manifest_refresher: Callable[..., Any] | None = None,
+    status_updater: Callable[..., Any] | None = None,
+    progress_updater: Callable[..., Any] | None = None,
+    failure_recorder: Callable[..., Any] | None = None,
+    concurrency_checker: Callable[..., Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    Execute exactly one authorized UDARE reconstruction job.
+
+    The handler reads one Raw HTML record, reconstructs it once,
+    builds one complete HTML reader document, and persists that
+    document to the UDARE Store.
+
+    Batch population and queue creation are outside this function.
+    """
+
+    job_mapping = _as_mapping_v1(
+        job,
+        name="job",
+    )
+
+    job_type = str(
+        job_mapping.get(
+            "job_type"
+        )
+        or job_mapping.get(
+            "stage"
+        )
+        or ""
+    ).strip()
+
+    if job_type != UDARE_JOB_TYPE:
+        raise UdareWorkerError(
+            "The UDARE worker received an unsupported job type: "
+            + repr(
+                job_type
+            )
+        )
+
+    payload = _as_mapping_v1(
+        job_mapping.get(
+            "payload"
+        )
+        or {},
+        name="job payload",
+    )
+
+    workspace_id = str(
+        job_mapping.get(
+            "workspace_id"
+        )
+        or payload.get(
+            "workspace_id"
+        )
+        or ""
+    ).strip()
+
+    job_id = str(
+        job_mapping.get(
+            "job_id"
+        )
+        or ""
+    ).strip()
+
+    source_record_id = str(
+        payload.get(
+            "source_record_id"
+        )
+        or ""
+    ).strip()
+
+    html_id = str(
+        payload.get(
+            "html_id"
+        )
+        or ""
+    ).strip()
+
+    payload_source_url = str(
+        payload.get(
+            "source_url"
+        )
+        or ""
+    ).strip()
+
+    required_identity = {
+        "workspace_id":
+            workspace_id,
+
+        "job_id":
+            job_id,
+
+        "source_record_id":
+            source_record_id,
+
+        "html_id":
+            html_id,
+
+        "source_url":
+            payload_source_url,
+    }
+
+    missing_identity = [
+        name
+
+        for name, value
+        in required_identity.items()
+
+        if not value
+    ]
+
+    if missing_identity:
+        raise UdareWorkerError(
+            "Incomplete UDARE job identity: "
+            + ", ".join(
+                missing_identity
+            )
+        )
+
+    expected_values = {
+        "pipeline": (
+            str(
+                job_mapping.get(
+                    "pipeline"
+                )
+                or payload.get(
+                    "pipeline"
+                )
+                or UDARE_PIPELINE
+            )
+        ),
+
+        "stage": (
+            str(
+                job_mapping.get(
+                    "stage"
+                )
+                or job_type
+            )
+        ),
+
+        "source_store_version": (
+            str(
+                payload.get(
+                    "source_store_version"
+                )
+                or ""
+            )
+        ),
+
+        "udare_engine": (
+            str(
+                payload.get(
+                    "udare_engine"
+                )
+                or ""
+            )
+        ),
+
+        "target_store": (
+            str(
+                payload.get(
+                    "target_store"
+                )
+                or ""
+            )
+        ),
+
+        "article_document_format": (
+            str(
+                payload.get(
+                    "article_document_format"
+                )
+                or ""
+            )
+        ),
+    }
+
+    exact_contract = {
+        "pipeline":
+            UDARE_PIPELINE,
+
+        "stage":
+            UDARE_JOB_TYPE,
+
+        "source_store_version":
+            UDARE_SOURCE_STORE,
+
+        "udare_engine":
+            UDARE_ENGINE,
+
+        "target_store":
+            UDARE_TARGET_STORE,
+
+        "article_document_format":
+            UDARE_ARTICLE_FORMAT,
+    }
+
+    mismatches = [
+        (
+            f"{name}={expected_values[name]!r}; "
+            f"expected {expected!r}"
+        )
+
+        for name, expected
+        in exact_contract.items()
+
+        if expected_values[
+            name
+        ]
+        != expected
+    ]
+
+    if mismatches:
+        raise UdareWorkerError(
+            "UDARE job contract mismatch: "
+            + "; ".join(
+                mismatches
+            )
+        )
+
+    execution_controls = payload.get(
+        "execution_controls"
+    )
+
+    if not isinstance(
+        execution_controls,
+        Mapping,
+    ):
+        raise UdareWorkerError(
+            "UDARE execution_controls are missing."
+        )
+
+    if (
+        execution_controls.get(
+            "execute_now"
+        )
+        is not True
+    ):
+        raise UdareWorkerError(
+            "UDARE execution is not authorized for this job."
+        )
+
+    if (
+        execution_controls.get(
+            "store_population_allowed"
+        )
+        is not True
+    ):
+        raise UdareWorkerError(
+            "UDARE Store population is not authorized for this job."
+        )
+
+    raw_record_loader = (
+        raw_record_loader
+        or _default_raw_record_loader_v1
+    )
+
+    reconstruction_engine = (
+        reconstruction_engine
+        or _default_reconstruction_engine_v1
+    )
+
+    document_builder = (
+        document_builder
+        or _default_document_builder_v1
+    )
+
+    store_persister = (
+        store_persister
+        or _default_store_persister_v1
+    )
+
+    manifest_refresher = (
+        manifest_refresher
+        or _default_manifest_refresher_v1
+    )
+
+    status_updater = (
+        status_updater
+        or _default_status_updater_v1
+    )
+
+    progress_updater = (
+        progress_updater
+        or _default_progress_updater_v1
+    )
+
+    failure_recorder = (
+        failure_recorder
+        or _default_failure_recorder_v1
+    )
+
+    concurrency_checker = (
+        concurrency_checker
+        or _default_concurrency_checker_v1
+    )
+
+    max_running = int(
+        execution_controls.get(
+            "workspace_max_running"
+        )
+        or 5
+    )
+
+    attempt = int(
+        job_mapping.get(
+            "attempt_count"
+        )
+        or job_mapping.get(
+            "attempts"
+        )
+        or 0
+    )
+
+    batch_id = str(
+        job_mapping.get(
+            "batch_id"
+        )
+        or ""
+    )
+
+    try:
+        concurrency = _call_by_signature_v1(
+            concurrency_checker,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "tenant_id":
+                    workspace_id,
+
+                "max_running":
+                    max_running,
+
+                "limit":
+                    max_running,
+            },
+        )
+
+        concurrency_mapping = (
+            concurrency
+            if isinstance(
+                concurrency,
+                Mapping,
+            )
+            else {}
+        )
+
+        if (
+            concurrency_mapping.get(
+                "can_start_new_job"
+            )
+            is False
+        ):
+            return {
+                "ok":
+                    False,
+
+                "status":
+                    "throttled",
+
+                "worker":
+                    WORKER_NAME,
+
+                "workspace_id":
+                    workspace_id,
+
+                "job_id":
+                    job_id,
+
+                "concurrency":
+                    dict(
+                        concurrency_mapping
+                    ),
+            }
+
+        _safe_status_update_v1(
+            status_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            status=
+                "running",
+
+            message=
+                "UDARE reconstruction worker started.",
+        )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                10,
+
+            message=
+                "Loading Raw HTML record.",
+
+            step=
+                "load_raw_html",
+        )
+
+        raw_result = _call_by_signature_v1(
+            raw_record_loader,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "tenant_id":
+                    workspace_id,
+
+                "html_id":
+                    html_id,
+
+                "record_id":
+                    source_record_id,
+
+                "source_record_id":
+                    source_record_id,
+            },
+        )
+
+        if raw_result is None:
+            raise UdareWorkerError(
+                "Raw HTML record was not found: "
+                + source_record_id
+            )
+
+        raw_record = _normalize_raw_record_v1(
+            raw_result
+        )
+
+        raw_html = _first_non_empty_v1(
+            raw_record,
+            (
+                "raw_html",
+                "html",
+                "html_text",
+                "source_html",
+                "content",
+            ),
+        )
+
+        if not raw_html:
+            raise UdareWorkerError(
+                "Raw HTML record contains no HTML document."
+            )
+
+        record_url = _first_non_empty_v1(
+            raw_record,
+            (
+                "source_url",
+                "url",
+                "canonical_url",
+                "final_url",
+            ),
+        )
+
+        source_url = (
+            record_url
+            or payload_source_url
+        )
+
+        if (
+            record_url
+            and payload_source_url
+            and record_url
+            != payload_source_url
+        ):
+            raise UdareWorkerError(
+                "Raw HTML record URL does not match "
+                "the queued UDARE payload URL."
+            )
+
+        source_title = _first_non_empty_v1(
+            raw_record,
+            (
+                "title",
+                "page_title",
+                "source_title",
+            ),
+        )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                35,
+
+            message=
+                "Running UDARE v1.7 reconstruction.",
+
+            step=
+                "reconstruct_article",
+        )
+
+        reconstruction_result = (
+            _call_by_signature_v1(
+                reconstruction_engine,
+                {
+                    "html_text":
+                        raw_html,
+
+                    "raw_html":
+                        raw_html,
+
+                    "source_html":
+                        raw_html,
+
+                    "source_url":
+                        source_url,
+
+                    "url":
+                        source_url,
+
+                    "title":
+                        source_title,
+
+                    "metadata": {
+                        "workspace_id":
+                            workspace_id,
+
+                        "job_id":
+                            job_id,
+
+                        "source_record_id":
+                            source_record_id,
+
+                        "html_id":
+                            html_id,
+
+                        "correlation_id":
+                            str(
+                                payload.get(
+                                    "correlation_id"
+                                )
+                                or ""
+                            ),
+                    },
+                },
+            )
+        )
+
+        reconstruction = _as_mapping_v1(
+            reconstruction_result,
+            name="UDARE reconstruction result",
+        )
+
+        if reconstruction.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE reconstruction returned ok=False."
+            )
+
+        if (
+            str(
+                reconstruction.get(
+                    "engine"
+                )
+                or ""
+            )
+            != UDARE_ENGINE
+        ):
+            raise UdareWorkerError(
+                "UDARE reconstruction returned an "
+                "unexpected engine version."
+            )
+
+        document_id = (
+            source_record_id
+            or html_id
+        )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                60,
+
+            message=
+                "Building complete UDARE article document.",
+
+            step=
+                "build_article_document",
+        )
+
+        builder_result = _call_by_signature_v1(
+            document_builder,
+            {
+                "reconstruction":
+                    reconstruction,
+
+                "source_url":
+                    source_url,
+
+                "url":
+                    source_url,
+
+                "document_id":
+                    document_id,
+
+                "html_id":
+                    html_id,
+            },
+        )
+
+        built_document = _as_mapping_v1(
+            builder_result,
+            name="UDARE article-document result",
+        )
+
+        if built_document.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE article-document builder returned ok=False."
+            )
+
+        if (
+            str(
+                built_document.get(
+                    "article_document_format"
+                )
+                or ""
+            )
+            != UDARE_ARTICLE_FORMAT
+        ):
+            raise UdareWorkerError(
+                "UDARE article-document format mismatch."
+            )
+
+        article_document = built_document.get(
+            "article_document_bytes"
+        )
+
+        if article_document is None:
+            article_document = built_document.get(
+                "article_document"
+            )
+
+        if article_document is None:
+            raise UdareWorkerError(
+                "The UDARE builder returned no article document."
+            )
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                80,
+
+            message=
+                "Persisting article in the UDARE Store.",
+
+            step=
+                "persist_udare_article",
+        )
+
+        selected_root = reconstruction.get(
+            "selected_root"
+        )
+
+        selected_tag = (
+            str(
+                selected_root.get(
+                    "tag"
+                )
+                or ""
+            )
+            if isinstance(
+                selected_root,
+                Mapping,
+            )
+            else ""
+        )
+
+        persistence_result = _call_by_signature_v1(
+            store_persister,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "document_id":
+                    document_id,
+
+                "html_id":
+                    html_id,
+
+                "source_url":
+                    source_url,
+
+                "title":
+                    str(
+                        reconstruction.get(
+                            "title"
+                        )
+                        or built_document.get(
+                            "title"
+                        )
+                        or source_title
+                        or ""
+                    ),
+
+                "h1":
+                    str(
+                        reconstruction.get(
+                            "h1"
+                        )
+                        or built_document.get(
+                            "h1"
+                        )
+                        or ""
+                    ),
+
+                "headings":
+                    _heading_values_v1(
+                        reconstruction
+                    ),
+
+                "article_document":
+                    article_document,
+
+                "udare_engine":
+                    UDARE_ENGINE,
+
+                "source_store_version":
+                    UDARE_SOURCE_STORE,
+
+                "source_record_id":
+                    source_record_id,
+
+                "reconstruction_status":
+                    "completed",
+
+                "selected_tag":
+                    selected_tag,
+
+                "udare_article_body_sha256":
+                    str(
+                        built_document.get(
+                            "article_body_sha256"
+                        )
+                        or ""
+                    ),
+
+                "content_block_count":
+                    int(
+                        built_document.get(
+                            "content_block_count"
+                        )
+                        or len(
+                            reconstruction.get(
+                                "content_blocks"
+                            )
+                            or []
+                        )
+                    ),
+
+                "job_id":
+                    job_id,
+
+                "batch_id":
+                    batch_id,
+
+                "attempt":
+                    attempt,
+
+                "operational_metadata": {
+                    "worker":
+                        WORKER_NAME,
+
+                    "pipeline":
+                        UDARE_PIPELINE,
+
+                    "stage":
+                        UDARE_JOB_TYPE,
+
+                    "builder":
+                        str(
+                            built_document.get(
+                                "builder"
+                            )
+                            or ""
+                        ),
+
+                    "correlation_id":
+                        str(
+                            payload.get(
+                                "correlation_id"
+                            )
+                            or ""
+                        ),
+                },
+
+                "expected_document_sha256":
+                    str(
+                        built_document.get(
+                            "article_document_sha256"
+                        )
+                        or ""
+                    ),
+
+                "allow_replace":
+                    False,
+            },
+        )
+
+        persisted = _as_mapping_v1(
+            persistence_result,
+            name="UDARE persistence result",
+        )
+
+        if persisted.get(
+            "ok"
+        ) is not True:
+            raise UdareWorkerError(
+                "UDARE Store persistence returned ok=False."
+            )
+
+        defer_global_artifacts = (
+            str(
+                os.environ.get(
+                    "UDARE_DEFER_GLOBAL_ARTIFACTS",
+                    "",
+                )
+            ).strip().casefold()
+            in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+        )
+
+        review_result = build_udare_review_document_v1(
+            workspace_id=
+                workspace_id,
+
+            metadata_path=
+                str(
+                    persisted.get(
+                        "metadata_path"
+                    )
+                    or ""
+                ),
+        )
+
+        if (
+            not isinstance(
+                review_result,
+                dict,
+            )
+            or review_result.get(
+                "ok"
+            )
+            is not True
+        ):
+            raise UdareWorkerError(
+                "UDARE visual review document generation failed."
+            )
+
+        if defer_global_artifacts:
+            manifest = {
+                "ok":
+                    True,
+
+                "record_count":
+                    0,
+
+                "deferred":
+                    True,
+            }
+
+            index_result = {
+                "ok":
+                    True,
+
+                "index_path":
+                    "",
+
+                "article_count":
+                    0,
+
+                "deferred":
+                    True,
+            }
+
+        else:
+            manifest_result = _call_by_signature_v1(
+                manifest_refresher,
+                {
+                    "workspace_id":
+                        workspace_id,
+
+                    "tenant_id":
+                        workspace_id,
+                },
+            )
+
+            manifest = _as_mapping_v1(
+                manifest_result,
+                name="UDARE manifest refresh result",
+            )
+
+            if manifest.get(
+                "ok"
+            ) is not True:
+                raise UdareWorkerError(
+                    "UDARE Store manifest refresh failed."
+                )
+
+            index_result = build_udare_store_index_v1(
+                workspace_id
+            )
+
+            if (
+                not isinstance(
+                    index_result,
+                    dict,
+                )
+                or index_result.get(
+                    "ok"
+                )
+                is not True
+            ):
+                raise UdareWorkerError(
+                    "UDARE Store index generation failed."
+                )
+
+        result_summary = {
+            "ok":
+                True,
+
+            "status":
+                "completed",
+
+            "worker":
+                WORKER_NAME,
+
+            "pipeline":
+                UDARE_PIPELINE,
+
+            "stage":
+                UDARE_JOB_TYPE,
+
+            "workspace_id":
+                workspace_id,
+
+            "job_id":
+                job_id,
+
+            "document_id":
+                document_id,
+
+            "html_id":
+                html_id,
+
+            "source_record_id":
+                source_record_id,
+
+            "source_url":
+                source_url,
+
+            "udare_engine":
+                UDARE_ENGINE,
+
+            "article_document_format":
+                UDARE_ARTICLE_FORMAT,
+
+            "article_document_sha256":
+                str(
+                    persisted.get(
+                        "document_sha256"
+                    )
+                    or built_document.get(
+                        "article_document_sha256"
+                    )
+                    or ""
+                ),
+
+            "article_path":
+                str(
+                    persisted.get(
+                        "article_path"
+                    )
+                    or ""
+                ),
+
+            "metadata_path":
+                str(
+                    persisted.get(
+                        "metadata_path"
+                    )
+                    or ""
+                ),
+
+            "persistence_status":
+                str(
+                    persisted.get(
+                        "status"
+                    )
+                    or ""
+                ),
+
+            "content_block_count":
+                int(
+                    built_document.get(
+                        "content_block_count"
+                    )
+                    or 0
+                ),
+
+            "manifest_record_count":
+                int(
+                    manifest.get(
+                        "record_count"
+                    )
+                    or 0
+                ),
+
+            "review_path":
+                str(
+                    review_result.get(
+                        "review_path"
+                    )
+                    or ""
+                ),
+
+            "review_format":
+                str(
+                    review_result.get(
+                        "format"
+                    )
+                    or ""
+                ),
+
+            "review_image_count":
+                int(
+                    review_result.get(
+                        "image_count"
+                    )
+                    or 0
+                ),
+
+            "index_path":
+                str(
+                    index_result.get(
+                        "index_path"
+                    )
+                    or ""
+                ),
+
+            "index_article_count":
+                int(
+                    index_result.get(
+                        "article_count"
+                    )
+                    or 0
+                ),
+
+            "global_artifacts_deferred":
+                defer_global_artifacts,
+
+            "completed_at":
+                _utc_now_v1(),
+        }
+
+        _safe_progress_update_v1(
+            progress_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            percent=
+                100,
+
+            message=
+                "UDARE reconstruction job completed.",
+
+            step=
+                "completed",
+        )
+
+        _safe_status_update_v1(
+            status_updater,
+            workspace_id=
+                workspace_id,
+
+            job_id=
+                job_id,
+
+            status=
+                "completed",
+
+            message=
+                "UDARE reconstruction job completed.",
+
+            result=
+                result_summary,
+        )
+
+        return result_summary
+
+    except Exception as exc:
+        error_message = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        try:
+            _call_by_signature_v1(
+                failure_recorder,
+                {
+                    "workspace_id":
+                        workspace_id,
+
+                    "tenant_id":
+                        workspace_id,
+
+                    "job_id":
+                        job_id,
+
+                    "id":
+                        job_id,
+
+                    "job_type":
+                        UDARE_JOB_TYPE,
+
+                    "stage":
+                        UDARE_JOB_TYPE,
+
+                    "error":
+                        error_message,
+
+                    "error_info":
+                        error_message,
+
+                    "payload":
+                        dict(
+                            payload
+                        ),
+                },
+            )
+
+        except Exception:
+            try:
+                _safe_status_update_v1(
+                    status_updater,
+                    workspace_id=
+                        workspace_id,
+
+                    job_id=
+                        job_id,
+
+                    status=
+                        "failed",
+
+                    message=
+                        "UDARE reconstruction job failed.",
+
+                    error=
+                        error_message,
+                )
+
+            except Exception:
+                pass
+
+        raise
+
+
+def explain_udare_reconstruction_worker_v1(
+) -> Dict[str, Any]:
+    return {
+        "worker":
+            WORKER_NAME,
+
+        "job_type":
+            UDARE_JOB_TYPE,
+
+        "pipeline":
+            UDARE_PIPELINE,
+
+        "source_store":
+            UDARE_SOURCE_STORE,
+
+        "engine":
+            UDARE_ENGINE,
+
+        "article_document_format":
+            UDARE_ARTICLE_FORMAT,
+
+        "target_store":
+            UDARE_TARGET_STORE,
+
+        "requires_explicit_execution_authorization":
+            True,
+
+        "requires_explicit_store_authorization":
+            True,
+
+        "reconstructs_each_job_once":
+            True,
+
+        "batch_population_created":
+            False,
+    }
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+

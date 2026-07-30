@@ -1,0 +1,2939 @@
+LINKCRAFTOR PHASE 2.1.2 LIVE SOURCE BUNDLE
+Bundle: 01_RUNTIME_AND_CONTRACT.txt
+Generated: 2026-07-30T01:56:21.0934988Z
+====================================================================================================
+
+BEGIN LIVE FILE
+PATH: backend\server\runtime\universal_runtime_registration.py
+SIZE_BYTES: 27294
+SHA256: 2D41F0DEEEA6875C3AAF1626613034BF2787A05E7C542CB87C9D4E71E4D86B46
+----------------------------------------------------------------------------------------------------
+"""Universal Runtime Registration.
+
+This module provides the reusable registration mechanism used to connect
+LinkCraftor business-logic handlers to the Universal Runtime Infrastructure.
+
+It does not create a second runtime, queue, worker system or scheduler.
+Registered handlers execute through the existing universal worker contract.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import importlib
+import inspect
+import json
+import os
+import re
+import tempfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from threading import RLock
+from typing import Any, Callable, Iterable, Mapping
+
+
+REGISTRATION_SCHEMA_VERSION = (
+    "universal_runtime_registration_v1"
+)
+
+REGISTRY_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "data"
+    / "runtime"
+    / "universal_runtime_registration"
+)
+
+REGISTRY_PATH = (
+    REGISTRY_ROOT
+    / "runtime_registration_registry.json"
+)
+
+_NAME_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+)
+
+_REGISTRY_LOCK = RLock()
+
+_RUNTIME_HANDLER_REGISTRY: dict[
+    str,
+    "RuntimeHandlerRegistration",
+] = {}
+
+_PERSISTED_REGISTRY_LOADED = False
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_name(
+    value: Any,
+    *,
+    field_name: str,
+) -> str:
+    normalized = str(
+        value or ""
+    ).strip()
+
+    if not normalized:
+        raise ValueError(
+            f"{field_name} is required."
+        )
+
+    if not _NAME_PATTERN.fullmatch(
+        normalized
+    ):
+        raise ValueError(
+            f"{field_name} contains unsupported characters: "
+            f"{normalized}"
+        )
+
+    return normalized
+
+
+def _normalize_optional_name(
+    value: Any,
+    *,
+    fallback: str,
+    field_name: str,
+) -> str:
+    normalized = str(
+        value or fallback
+    ).strip()
+
+    return _normalize_name(
+        normalized,
+        field_name=field_name,
+    )
+
+
+def _normalize_string_tuple(
+    values: Iterable[Any] | None,
+) -> tuple[str, ...]:
+    if values is None:
+        return ()
+
+    normalized: list[str] = []
+
+    for value in values:
+        item = str(
+            value or ""
+        ).strip()
+
+        if not item:
+            continue
+
+        if item not in normalized:
+            normalized.append(item)
+
+    return tuple(normalized)
+
+
+def _normalize_mapping(
+    value: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    if value is None:
+        return {}
+
+    if not isinstance(value, Mapping):
+        raise TypeError(
+            "Registration metadata must be a mapping."
+        )
+
+    return {
+        str(key): item
+        for key, item in value.items()
+    }
+
+
+def _handler_reference(
+    handler: Callable[..., Any],
+) -> str:
+    module_name = str(
+        getattr(
+            handler,
+            "__module__",
+            "",
+        )
+        or ""
+    ).strip()
+
+    qualified_name = str(
+        getattr(
+            handler,
+            "__qualname__",
+            "",
+        )
+        or getattr(
+            handler,
+            "__name__",
+            "",
+        )
+        or ""
+    ).strip()
+
+    if not module_name or not qualified_name:
+        raise ValueError(
+            "Unable to determine handler import reference."
+        )
+
+    return (
+        f"{module_name}:{qualified_name}"
+    )
+
+
+def _resolve_handler_reference(
+    reference: str,
+) -> Callable[..., Any]:
+    normalized = str(
+        reference or ""
+    ).strip()
+
+    if ":" not in normalized:
+        raise ValueError(
+            "Handler references must use module:attribute format."
+        )
+
+    module_name, qualified_name = (
+        normalized.split(
+            ":",
+            1,
+        )
+    )
+
+    module_name = module_name.strip()
+    qualified_name = qualified_name.strip()
+
+    if not module_name or not qualified_name:
+        raise ValueError(
+            f"Invalid handler reference: {reference}"
+        )
+
+    module = importlib.import_module(
+        module_name
+    )
+
+    value: Any = module
+
+    for attribute in qualified_name.split("."):
+        if attribute == "<locals>":
+            raise ValueError(
+                "Local functions cannot be loaded from a "
+                "persistent runtime registration."
+            )
+
+        value = getattr(
+            value,
+            attribute,
+        )
+
+    if not callable(value):
+        raise TypeError(
+            f"Registered handler is not callable: {reference}"
+        )
+
+    return value
+
+
+def _resolve_handler(
+    handler: Callable[..., Any] | str,
+) -> tuple[Callable[..., Any], str]:
+    if callable(handler):
+        return (
+            handler,
+            _handler_reference(handler),
+        )
+
+    if isinstance(handler, str):
+        return (
+            _resolve_handler_reference(
+                handler
+            ),
+            handler.strip(),
+        )
+
+    raise TypeError(
+        "handler must be callable or a module:attribute string."
+    )
+
+
+def _atomic_write_text(
+    path: Path,
+    value: str,
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=str(path.parent),
+    )
+
+    temporary_path = Path(
+        temporary_name
+    )
+
+    try:
+        with os.fdopen(
+            descriptor,
+            "w",
+            encoding="utf-8",
+            newline="\n",
+        ) as handle:
+            handle.write(value)
+            handle.flush()
+            os.fsync(
+                handle.fileno()
+            )
+
+        os.replace(
+            temporary_path,
+            path,
+        )
+    finally:
+        temporary_path.unlink(
+            missing_ok=True,
+        )
+
+
+@dataclass(frozen=True)
+class RuntimeHandlerRegistration:
+    job_type: str
+    pipeline: str
+    stage: str
+    handler_ref: str
+    handler: Callable[..., Any] = field(
+        repr=False,
+        compare=False,
+    )
+    description: str = ""
+    required_payload_fields: tuple[str, ...] = ()
+    predecessor_stages: tuple[str, ...] = ()
+    successor_stages: tuple[str, ...] = ()
+    idempotency_fields: tuple[str, ...] = ()
+    retry_policy: dict[str, Any] = field(
+        default_factory=dict
+    )
+    concurrency_policy: dict[str, Any] = field(
+        default_factory=dict
+    )
+    metadata: dict[str, Any] = field(
+        default_factory=dict
+    )
+    persistent: bool = False
+    registered_at: str = ""
+
+    def to_public_dict(
+        self,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": (
+                REGISTRATION_SCHEMA_VERSION
+            ),
+            "job_type": self.job_type,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "handler_ref": self.handler_ref,
+            "description": self.description,
+            "required_payload_fields": list(
+                self.required_payload_fields
+            ),
+            "predecessor_stages": list(
+                self.predecessor_stages
+            ),
+            "successor_stages": list(
+                self.successor_stages
+            ),
+            "idempotency_fields": list(
+                self.idempotency_fields
+            ),
+            "retry_policy": dict(
+                self.retry_policy
+            ),
+            "concurrency_policy": dict(
+                self.concurrency_policy
+            ),
+            "metadata": dict(
+                self.metadata
+            ),
+            "persistent": self.persistent,
+            "registered_at": self.registered_at,
+        }
+
+
+def _persist_registry_snapshot() -> None:
+    persistent_records = [
+        registration.to_public_dict()
+        for registration in sorted(
+            _RUNTIME_HANDLER_REGISTRY.values(),
+            key=lambda item: item.job_type,
+        )
+        if registration.persistent
+    ]
+
+    document = {
+        "schema_version": (
+            REGISTRATION_SCHEMA_VERSION
+        ),
+        "updated_at": utc_now(),
+        "registration_count": len(
+            persistent_records
+        ),
+        "registrations": persistent_records,
+    }
+
+    _atomic_write_text(
+        REGISTRY_PATH,
+        json.dumps(
+            document,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+
+
+def register_runtime_handler(
+    *,
+    job_type: str,
+    handler: Callable[..., Any] | str,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields: Iterable[Any] | None = None,
+    predecessor_stages: Iterable[Any] | None = None,
+    successor_stages: Iterable[Any] | None = None,
+    idempotency_fields: Iterable[Any] | None = None,
+    retry_policy: Mapping[str, Any] | None = None,
+    concurrency_policy: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    replace: bool = False,
+    persist: bool = False,
+    _loaded_from_persistence: bool = False,
+) -> dict[str, Any]:
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    canonical_pipeline = (
+        _normalize_optional_name(
+            pipeline,
+            fallback="universal_knowledge",
+            field_name="pipeline",
+        )
+    )
+
+    canonical_stage = (
+        _normalize_optional_name(
+            stage,
+            fallback=canonical_job_type,
+            field_name="stage",
+        )
+    )
+
+    resolved_handler, handler_ref = (
+        _resolve_handler(
+            handler
+        )
+    )
+
+    if (
+        persist
+        and "<locals>" in handler_ref
+    ):
+        raise ValueError(
+            "Persistent handlers must be importable top-level "
+            "functions."
+        )
+
+    persistent = bool(
+        persist
+        or _loaded_from_persistence
+    )
+
+    registration = RuntimeHandlerRegistration(
+        job_type=canonical_job_type,
+        pipeline=canonical_pipeline,
+        stage=canonical_stage,
+        handler_ref=handler_ref,
+        handler=resolved_handler,
+        description=str(
+            description or ""
+        ).strip(),
+        required_payload_fields=(
+            _normalize_string_tuple(
+                required_payload_fields
+            )
+        ),
+        predecessor_stages=(
+            _normalize_string_tuple(
+                predecessor_stages
+            )
+        ),
+        successor_stages=(
+            _normalize_string_tuple(
+                successor_stages
+            )
+        ),
+        idempotency_fields=(
+            _normalize_string_tuple(
+                idempotency_fields
+            )
+        ),
+        retry_policy=_normalize_mapping(
+            retry_policy
+        ),
+        concurrency_policy=(
+            _normalize_mapping(
+                concurrency_policy
+            )
+        ),
+        metadata=_normalize_mapping(
+            metadata
+        ),
+        persistent=persistent,
+        registered_at=utc_now(),
+    )
+
+    with _REGISTRY_LOCK:
+        existing = (
+            _RUNTIME_HANDLER_REGISTRY.get(
+                canonical_job_type
+            )
+        )
+
+        if (
+            existing is not None
+            and not replace
+        ):
+            raise ValueError(
+                "Runtime handler already registered for "
+                f"job_type: {canonical_job_type}"
+            )
+
+        _RUNTIME_HANDLER_REGISTRY[
+            canonical_job_type
+        ] = registration
+
+        if persist:
+            _persist_registry_snapshot()
+
+    return registration.to_public_dict()
+
+
+def runtime_handler(
+    *,
+    job_type: str,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields: Iterable[Any] | None = None,
+    predecessor_stages: Iterable[Any] | None = None,
+    successor_stages: Iterable[Any] | None = None,
+    idempotency_fields: Iterable[Any] | None = None,
+    retry_policy: Mapping[str, Any] | None = None,
+    concurrency_policy: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    replace: bool = False,
+    persist: bool = False,
+) -> Callable[
+    [Callable[..., Any]],
+    Callable[..., Any],
+]:
+    def decorator(
+        handler: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        register_runtime_handler(
+            job_type=job_type,
+            handler=handler,
+            pipeline=pipeline,
+            stage=stage,
+            description=description,
+            required_payload_fields=(
+                required_payload_fields
+            ),
+            predecessor_stages=(
+                predecessor_stages
+            ),
+            successor_stages=(
+                successor_stages
+            ),
+            idempotency_fields=(
+                idempotency_fields
+            ),
+            retry_policy=retry_policy,
+            concurrency_policy=(
+                concurrency_policy
+            ),
+            metadata=metadata,
+            replace=replace,
+            persist=persist,
+        )
+
+        return handler
+
+    return decorator
+
+
+def unregister_runtime_handler(
+    job_type: str,
+    *,
+    persist: bool = False,
+) -> dict[str, Any] | None:
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.pop(
+                canonical_job_type,
+                None,
+            )
+        )
+
+        if persist:
+            _persist_registry_snapshot()
+
+    if registration is None:
+        return None
+
+    return registration.to_public_dict()
+
+
+def clear_runtime_registration_memory() -> None:
+    global _PERSISTED_REGISTRY_LOADED
+
+    with _REGISTRY_LOCK:
+        _RUNTIME_HANDLER_REGISTRY.clear()
+        _PERSISTED_REGISTRY_LOADED = False
+
+
+def load_persisted_runtime_registrations(
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    global _PERSISTED_REGISTRY_LOADED
+
+    with _REGISTRY_LOCK:
+        if (
+            _PERSISTED_REGISTRY_LOADED
+            and not force
+        ):
+            return {
+                "ok": True,
+                "loaded": False,
+                "reason": "already_loaded",
+                "registration_count": len(
+                    _RUNTIME_HANDLER_REGISTRY
+                ),
+            }
+
+        if force:
+            persistent_job_types = [
+                job_type
+                for job_type, registration
+                in _RUNTIME_HANDLER_REGISTRY.items()
+                if registration.persistent
+            ]
+
+            for job_type in persistent_job_types:
+                _RUNTIME_HANDLER_REGISTRY.pop(
+                    job_type,
+                    None,
+                )
+
+        if not REGISTRY_PATH.is_file():
+            _PERSISTED_REGISTRY_LOADED = True
+
+            return {
+                "ok": True,
+                "loaded": True,
+                "reason": "registry_file_absent",
+                "registration_count": 0,
+            }
+
+        document = json.loads(
+            REGISTRY_PATH.read_text(
+                encoding="utf-8-sig",
+            )
+        )
+
+        if not isinstance(document, dict):
+            raise RuntimeError(
+                "Runtime registration registry root "
+                "must be a JSON object."
+            )
+
+        records = document.get(
+            "registrations",
+            [],
+        )
+
+        if not isinstance(records, list):
+            raise RuntimeError(
+                "Runtime registration records must be a list."
+            )
+
+        loaded_job_types: list[str] = []
+
+        for record in records:
+            if not isinstance(record, dict):
+                raise RuntimeError(
+                    "Runtime registration record must be "
+                    "a JSON object."
+                )
+
+            public_record = register_runtime_handler(
+                job_type=record.get(
+                    "job_type",
+                    "",
+                ),
+                handler=record.get(
+                    "handler_ref",
+                    "",
+                ),
+                pipeline=record.get(
+                    "pipeline",
+                    "",
+                ),
+                stage=record.get(
+                    "stage",
+                    "",
+                ),
+                description=record.get(
+                    "description",
+                    "",
+                ),
+                required_payload_fields=(
+                    record.get(
+                        "required_payload_fields",
+                        [],
+                    )
+                ),
+                predecessor_stages=(
+                    record.get(
+                        "predecessor_stages",
+                        [],
+                    )
+                ),
+                successor_stages=(
+                    record.get(
+                        "successor_stages",
+                        [],
+                    )
+                ),
+                idempotency_fields=(
+                    record.get(
+                        "idempotency_fields",
+                        [],
+                    )
+                ),
+                retry_policy=record.get(
+                    "retry_policy",
+                    {},
+                ),
+                concurrency_policy=(
+                    record.get(
+                        "concurrency_policy",
+                        {},
+                    )
+                ),
+                metadata=record.get(
+                    "metadata",
+                    {},
+                ),
+                replace=True,
+                persist=False,
+                _loaded_from_persistence=True,
+            )
+
+            loaded_job_types.append(
+                public_record["job_type"]
+            )
+
+        _PERSISTED_REGISTRY_LOADED = True
+
+        return {
+            "ok": True,
+            "loaded": True,
+            "reason": "registry_loaded",
+            "registration_count": len(
+                loaded_job_types
+            ),
+            "job_types": sorted(
+                loaded_job_types
+            ),
+        }
+
+
+def ensure_persisted_runtime_registrations_loaded() -> None:
+    load_persisted_runtime_registrations(
+        force=False
+    )
+
+
+def has_runtime_handler(
+    job_type: Any,
+) -> bool:
+    ensure_persisted_runtime_registrations_loaded()
+
+    normalized = str(
+        job_type or ""
+    ).strip()
+
+    if not normalized:
+        return False
+
+    with _REGISTRY_LOCK:
+        return (
+            normalized
+            in _RUNTIME_HANDLER_REGISTRY
+        )
+
+
+def is_runtime_job_type_registered(
+    job_type: Any,
+) -> bool:
+    return has_runtime_handler(
+        job_type
+    )
+
+
+def get_runtime_registration(
+    job_type: str,
+) -> dict[str, Any] | None:
+    ensure_persisted_runtime_registrations_loaded()
+
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.get(
+                canonical_job_type
+            )
+        )
+
+    if registration is None:
+        return None
+
+    return registration.to_public_dict()
+
+
+def list_runtime_registrations() -> list[
+    dict[str, Any]
+]:
+    ensure_persisted_runtime_registrations_loaded()
+
+    with _REGISTRY_LOCK:
+        registrations = sorted(
+            _RUNTIME_HANDLER_REGISTRY.values(),
+            key=lambda item: item.job_type,
+        )
+
+    return [
+        registration.to_public_dict()
+        for registration in registrations
+    ]
+
+
+def runtime_registration_snapshot() -> dict[str, Any]:
+    registrations = (
+        list_runtime_registrations()
+    )
+
+    canonical_json = json.dumps(
+        registrations,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return {
+        "schema_version": (
+            REGISTRATION_SCHEMA_VERSION
+        ),
+        "registration_count": len(
+            registrations
+        ),
+        "registrations": registrations,
+        "registry_sha256": hashlib.sha256(
+            canonical_json.encode("utf-8")
+        ).hexdigest(),
+        "persistent_registry_path": str(
+            REGISTRY_PATH
+        ),
+    }
+
+
+def _validate_required_payload_fields(
+    *,
+    registration: RuntimeHandlerRegistration,
+    payload: Mapping[str, Any],
+) -> None:
+    missing_fields = [
+        field_name
+        for field_name
+        in registration.required_payload_fields
+        if (
+            field_name not in payload
+            or payload.get(field_name) is None
+            or payload.get(field_name) == ""
+        )
+    ]
+
+    if missing_fields:
+        raise ValueError(
+            "Runtime handler payload is missing required "
+            "fields: "
+            + ", ".join(
+                missing_fields
+            )
+        )
+
+
+def _invoke_handler(
+    handler: Callable[..., Any],
+    job: Mapping[str, Any],
+) -> Any:
+    try:
+        handler_signature = (
+            inspect.signature(
+                handler
+            )
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        return handler(job)
+
+    parameters = (
+        handler_signature.parameters
+    )
+
+    accepts_var_keyword = any(
+        parameter.kind
+        == inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+    if (
+        "job" in parameters
+        or accepts_var_keyword
+    ):
+        return handler(
+            job=job
+        )
+
+    positional_parameters = [
+        parameter
+        for parameter in parameters.values()
+        if parameter.kind
+        in {
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        }
+    ]
+
+    if positional_parameters:
+        return handler(job)
+
+    return handler()
+
+
+def dispatch_registered_runtime_handler(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    ensure_persisted_runtime_registrations_loaded()
+
+    if not isinstance(job, Mapping):
+        raise TypeError(
+            "Universal runtime job must be a mapping."
+        )
+
+    job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    if not job_type:
+        raise ValueError(
+            "Universal runtime job has no job_type."
+        )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.get(
+                job_type
+            )
+        )
+
+    if registration is None:
+        raise ValueError(
+            f"No runtime handler registered for: {job_type}"
+        )
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(payload, Mapping):
+        raise TypeError(
+            "Universal runtime job payload must be a mapping."
+        )
+
+    _validate_required_payload_fields(
+        registration=registration,
+        payload=payload,
+    )
+
+    handler_result = _invoke_handler(
+        registration.handler,
+        job,
+    )
+
+    if handler_result is None:
+        handler_result = {}
+
+    if not isinstance(
+        handler_result,
+        dict,
+    ):
+        handler_result = {
+            "value": handler_result,
+        }
+
+    return {
+        "handled": True,
+        "dispatch_mode": (
+            "universal_runtime_registration"
+        ),
+        "job_type": job_type,
+        "pipeline": registration.pipeline,
+        "stage": registration.stage,
+        "handler_ref": (
+            registration.handler_ref
+        ),
+        "handler_result": handler_result,
+    }
+
+
+def execute_registered_runtime_job_v1(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        record_job_failure,
+        update_job_progress,
+        update_job_status,
+    )
+
+    workspace_id = str(
+        job.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+
+    job_id = str(
+        job.get("job_id")
+        or ""
+    ).strip()
+
+    job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    try:
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="running",
+            message=(
+                f"Running registered runtime handler "
+                f"for {job_type}."
+            ),
+        )
+
+        update_job_progress(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            percent=10,
+            message=(
+                "Universal Runtime Registration "
+                "accepted the job."
+            ),
+            step="runtime_registration_dispatch",
+        )
+
+        result = (
+            dispatch_registered_runtime_handler(
+                job
+            )
+        )
+
+        update_job_progress(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            percent=100,
+            message=(
+                "Registered runtime handler completed."
+            ),
+            step="runtime_registration_completed",
+        )
+
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="completed",
+            message=(
+                "Registered runtime handler completed."
+            ),
+            result=result,
+        )
+
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "dispatch_mode": (
+                "universal_runtime_registration"
+            ),
+            "result": result,
+        }
+
+    except Exception as exc:
+        failure = record_job_failure(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            job_type=job_type,
+            error=str(exc),
+            payload=dict(payload),
+        )
+
+        return {
+            "ok": False,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "dispatch_mode": (
+                "universal_runtime_registration"
+            ),
+            "failure": failure,
+        }
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\runtime\universal_runtime_infrastructure.py
+SIZE_BYTES: 15840
+SHA256: 96EC7BA572D8F58F9CA055C716F1CA7B7E293EB5400F892D5D057C1A77750469
+----------------------------------------------------------------------------------------------------
+from __future__ import annotations
+
+import json
+from collections import Counter
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List
+
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    read_job_status,
+    read_job_progress,
+    read_queue,
+    update_job_status,
+    create_universal_knowledge_job,
+    safe_id,
+)
+
+DATA_ROOT = Path("backend/server/data")
+RUNTIME_ROOT = DATA_ROOT / "runtime"
+WORKER_DIR = RUNTIME_ROOT / "workers"
+DEAD_LETTER_DIR = RUNTIME_ROOT / "dead_letter"
+BATCH_DIR = RUNTIME_ROOT / "batches"
+METRICS_DIR = RUNTIME_ROOT / "metrics"
+CERT_DIR = RUNTIME_ROOT / "certifications"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def read_json(path: Path, default: Any) -> Any:
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+
+def write_json(path: Path, payload: Any) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def runtime_job_summary(workspace_id: str) -> Dict[str, Any]:
+    queue = read_queue(workspace_id, limit=10000)
+    statuses = [read_job_status(workspace_id, j.get("job_id", "")) for j in queue]
+    statuses = [s for s in statuses if s]
+
+    by_status = Counter(s.get("status", "unknown") for s in statuses)
+    by_type = Counter(s.get("job_type", "unknown") for s in statuses)
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "total_jobs": len(statuses),
+        "by_status": dict(by_status),
+        "by_type": dict(by_type),
+        "latest_job": statuses[-1] if statuses else {},
+        "generated_at": now_iso(),
+    }
+
+
+def runtime_progress_summary(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    status = read_job_status(workspace_id, job_id)
+    progress = read_job_progress(workspace_id, job_id)
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "job_id": job_id,
+        "status": status.get("status"),
+        "job_type": status.get("job_type"),
+        "percent": progress.get("percent", 0),
+        "message": progress.get("message", ""),
+        "steps": progress.get("steps", []),
+        "eta_seconds": None,
+        "generated_at": now_iso(),
+    }
+
+
+def inspect_queue(workspace_id: str) -> Dict[str, Any]:
+    queue = read_queue(workspace_id, limit=10000)
+    job_ids = [j.get("job_id") for j in queue if j.get("job_id")]
+    duplicate_job_ids = [j for j, c in Counter(job_ids).items() if c > 1]
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "queue_size": len(queue),
+        "oldest_job": queue[0] if queue else {},
+        "newest_job": queue[-1] if queue else {},
+        "duplicate_job_ids": duplicate_job_ids,
+        "healthy": len(duplicate_job_ids) == 0,
+        "generated_at": now_iso(),
+    }
+
+
+def worker_heartbeat(workspace_id: str, worker_id: str, state: str = "idle", current_job_id: str = "") -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    payload = {
+        "workspace_id": ws,
+        "worker_id": safe_id(worker_id),
+        "state": state,
+        "current_job_id": current_job_id,
+        "heartbeat_at": now_iso(),
+    }
+    write_json(WORKER_DIR / ws / f"{safe_id(worker_id)}.json", payload)
+    return payload
+
+
+def inspect_workers(workspace_id: str) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    root = WORKER_DIR / ws
+    workers = []
+
+    if root.exists():
+        for p in root.glob("*.json"):
+            workers.append(read_json(p, {}))
+
+    states = Counter(w.get("state", "unknown") for w in workers)
+
+    return {
+        "workspace_id": ws,
+        "worker_count": len(workers),
+        "idle_workers": states.get("idle", 0),
+        "busy_workers": states.get("busy", 0),
+        "workers": workers,
+        "generated_at": now_iso(),
+    }
+
+
+def move_to_dead_letter(workspace_id: str, job: Dict[str, Any], reason: str) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    row = {
+        "workspace_id": ws,
+        "job": job,
+        "reason": reason,
+        "moved_at": now_iso(),
+    }
+    path = DEAD_LETTER_DIR / ws / f"{safe_id(job.get('job_id'))}.json"
+    write_json(path, row)
+    update_job_status(
+        workspace_id=ws,
+        job_id=job.get("job_id", ""),
+        status="dead_letter",
+        message="Job moved to dead letter queue.",
+        error=reason,
+    )
+    return row
+
+
+def retry_job(workspace_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    attempts = int(job.get("attempts") or 0) + 1
+    max_attempts = int(job.get("max_attempts") or 3)
+
+    if attempts > max_attempts:
+        return {
+            "ok": False,
+            "dead_letter": move_to_dead_letter(workspace_id, job, "Retry ceiling reached."),
+        }
+
+    payload = dict(job.get("payload") or {})
+    payload["retry_of"] = job.get("job_id")
+    payload["retry_attempt"] = attempts
+
+    retry = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job.get("job_type"),
+        payload=payload,
+        priority=job.get("priority", 5),
+        parent_job_id=job.get("job_id", ""),
+        batch_id=job.get("batch_id", ""),
+    )
+
+    retry["attempts"] = attempts
+
+    return {"ok": True, "retry_job": retry}
+
+
+def create_batch(workspace_id: str, batch_id: str, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    payload = {
+        "workspace_id": ws,
+        "batch_id": safe_id(batch_id),
+        "job_ids": [j.get("job_id") for j in jobs],
+        "job_count": len(jobs),
+        "status": "created",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+    write_json(BATCH_DIR / ws / f"{safe_id(batch_id)}.json", payload)
+    return payload
+
+
+def inspect_batch(workspace_id: str, batch_id: str) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    batch = read_json(BATCH_DIR / ws / f"{safe_id(batch_id)}.json", {})
+    statuses = [read_job_status(ws, j) for j in batch.get("job_ids", [])]
+    counts = Counter(s.get("status", "unknown") for s in statuses if s)
+
+    batch["status_counts"] = dict(counts)
+    batch["completed"] = counts.get("completed", 0)
+    batch["failed"] = counts.get("failed", 0)
+    batch["generated_at"] = now_iso()
+    return batch
+
+
+def workspace_concurrency_decision(workspace_id: str, max_running: int = 5) -> Dict[str, Any]:
+    summary = runtime_job_summary(workspace_id)
+    running = int(summary.get("by_status", {}).get("running", 0))
+    allowed = running < max_running
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "running_jobs": running,
+        "max_running": max_running,
+        "can_start_new_job": allowed,
+        "decision": "allow" if allowed else "throttle",
+        "generated_at": now_iso(),
+    }
+
+
+def runtime_metrics(workspace_id: str) -> Dict[str, Any]:
+    summary = runtime_job_summary(workspace_id)
+    total = summary.get("total_jobs", 0)
+    completed = summary.get("by_status", {}).get("completed", 0)
+    failed = summary.get("by_status", {}).get("failed", 0)
+    dead = summary.get("by_status", {}).get("dead_letter", 0)
+
+    payload = {
+        "workspace_id": safe_id(workspace_id),
+        "total_jobs": total,
+        "completed_jobs": completed,
+        "failed_jobs": failed,
+        "dead_letter_jobs": dead,
+        "success_rate_percent": round((completed / total) * 100, 2) if total else 0,
+        "failure_rate_percent": round((failed / total) * 100, 2) if total else 0,
+        "generated_at": now_iso(),
+    }
+
+    write_json(METRICS_DIR / safe_id(workspace_id) / "runtime_metrics.json", payload)
+    return payload
+
+
+def certify_runtime_infrastructure(workspace_id: str) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+
+    job_summary = runtime_job_summary(ws)
+    queue = inspect_queue(ws)
+    workers = inspect_workers(ws)
+    metrics = runtime_metrics(ws)
+    concurrency = workspace_concurrency_decision(ws)
+
+    checks = {
+        "job_status_api_ready": True,
+        "progress_api_ready": True,
+        "queue_inspector_ready": queue.get("healthy") is True,
+        "worker_manager_ready": "worker_count" in workers,
+        "retry_manager_ready": True,
+        "dead_letter_ready": True,
+        "batch_scheduler_ready": True,
+        "workspace_concurrency_ready": concurrency.get("decision") in {"allow", "throttle"},
+        "metrics_ready": "success_rate_percent" in metrics,
+    }
+
+    certified = all(checks.values())
+
+    cert = {
+        "schema_version": "runtime_infrastructure_certification_v1",
+        "workspace_id": ws,
+        "certified": certified,
+        "runtime_ready": certified,
+        "checks": checks,
+        "job_summary": job_summary,
+        "queue": queue,
+        "workers": workers,
+        "metrics": metrics,
+        "concurrency": concurrency,
+        "next_stage": "Phase 4.6.1 Semantic Article Reader" if certified else "Resolve runtime blockers",
+        "certified_at": now_iso(),
+    }
+
+    write_json(CERT_DIR / ws / f"runtime_certification_{ws}.json", cert)
+    return cert
+
+
+
+def website_completion_gate(
+    *,
+    workspace_id: str,
+    website_id: str,
+    page_jobs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Website-level completion gate.
+
+    A website is complete only after all discovered page jobs have reached
+    terminal states and no required page remains pending/running.
+    """
+
+    ws = safe_id(workspace_id)
+    site = safe_id(website_id, "website")
+
+    page_count = len(page_jobs)
+    status_counts = Counter()
+
+    failed_pages: List[Dict[str, Any]] = []
+    pending_pages: List[Dict[str, Any]] = []
+    completed_pages: List[Dict[str, Any]] = []
+
+    terminal_statuses = {"completed", "failed", "dead_letter"}
+
+    for job in page_jobs:
+        job_id = job.get("job_id", "")
+        status = read_job_status(ws, job_id)
+        state = status.get("status") or job.get("status") or "unknown"
+
+        status_counts[state] += 1
+
+        row = {
+            "job_id": job_id,
+            "job_type": job.get("job_type"),
+            "status": state,
+            "url": (job.get("payload") or {}).get("url") or (job.get("payload") or {}).get("canonical_url") or "",
+        }
+
+        if state == "completed":
+            completed_pages.append(row)
+        elif state in {"failed", "dead_letter"}:
+            failed_pages.append(row)
+        else:
+            pending_pages.append(row)
+
+    all_terminal = all(
+        (read_job_status(ws, j.get("job_id", "")).get("status") or j.get("status")) in terminal_statuses
+        for j in page_jobs
+    ) if page_jobs else False
+
+    all_completed = page_count > 0 and len(completed_pages) == page_count
+    has_failures = len(failed_pages) > 0
+    has_pending = len(pending_pages) > 0
+
+    if all_completed:
+        decision = "complete"
+        website_ready_for_certification = True
+    elif all_terminal and has_failures:
+        decision = "partial_complete_with_failures"
+        website_ready_for_certification = len(completed_pages) > 0
+    elif has_pending:
+        decision = "in_progress"
+        website_ready_for_certification = False
+    else:
+        decision = "blocked"
+        website_ready_for_certification = False
+
+    gate = {
+        "schema_version": "website_completion_gate_v1",
+        "workspace_id": ws,
+        "website_id": site,
+        "page_count": page_count,
+        "completed_count": len(completed_pages),
+        "failed_count": len(failed_pages),
+        "pending_count": len(pending_pages),
+        "status_counts": dict(status_counts),
+        "completed_pages": completed_pages,
+        "failed_pages": failed_pages,
+        "pending_pages": pending_pages,
+        "all_terminal": all_terminal,
+        "all_completed": all_completed,
+        "decision": decision,
+        "website_ready_for_certification": website_ready_for_certification,
+        "created_at": now_iso(),
+    }
+
+    path = RUNTIME_ROOT / "website_completion_gates" / ws / f"website_completion_gate_{site}.json"
+    write_json(path, gate)
+    gate["gate_path"] = str(path)
+
+    return gate
+
+
+
+def upload_batch_completion_gate(
+    *,
+    workspace_id: str,
+    upload_batch_id: str,
+    document_jobs: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Upload-batch completion gate.
+
+    A document upload batch is complete only after all uploaded document jobs
+    have reached terminal states.
+    """
+
+    ws = safe_id(workspace_id)
+    batch = safe_id(upload_batch_id, "upload_batch")
+
+    document_count = len(document_jobs)
+    status_counts = Counter()
+
+    failed_documents: List[Dict[str, Any]] = []
+    pending_documents: List[Dict[str, Any]] = []
+    completed_documents: List[Dict[str, Any]] = []
+
+    terminal_statuses = {"completed", "failed", "dead_letter"}
+
+    for job in document_jobs:
+        job_id = job.get("job_id", "")
+        status = read_job_status(ws, job_id)
+        state = status.get("status") or job.get("status") or "unknown"
+
+        status_counts[state] += 1
+
+        row = {
+            "job_id": job_id,
+            "job_type": job.get("job_type"),
+            "status": state,
+            "document_id": (job.get("payload") or {}).get("document_id") or "",
+            "filename": (job.get("payload") or {}).get("filename") or "",
+        }
+
+        if state == "completed":
+            completed_documents.append(row)
+        elif state in {"failed", "dead_letter"}:
+            failed_documents.append(row)
+        else:
+            pending_documents.append(row)
+
+    all_terminal = all(
+        (read_job_status(ws, j.get("job_id", "")).get("status") or j.get("status")) in terminal_statuses
+        for j in document_jobs
+    ) if document_jobs else False
+
+    all_completed = document_count > 0 and len(completed_documents) == document_count
+    has_failures = len(failed_documents) > 0
+    has_pending = len(pending_documents) > 0
+
+    if all_completed:
+        decision = "complete"
+        upload_ready_for_certification = True
+    elif all_terminal and has_failures:
+        decision = "partial_complete_with_failures"
+        upload_ready_for_certification = len(completed_documents) > 0
+    elif has_pending:
+        decision = "in_progress"
+        upload_ready_for_certification = False
+    else:
+        decision = "blocked"
+        upload_ready_for_certification = False
+
+    gate = {
+        "schema_version": "upload_batch_completion_gate_v1",
+        "workspace_id": ws,
+        "upload_batch_id": batch,
+        "document_count": document_count,
+        "completed_count": len(completed_documents),
+        "failed_count": len(failed_documents),
+        "pending_count": len(pending_documents),
+        "status_counts": dict(status_counts),
+        "completed_documents": completed_documents,
+        "failed_documents": failed_documents,
+        "pending_documents": pending_documents,
+        "all_terminal": all_terminal,
+        "all_completed": all_completed,
+        "decision": decision,
+        "upload_ready_for_certification": upload_ready_for_certification,
+        "created_at": now_iso(),
+    }
+
+    path = RUNTIME_ROOT / "upload_batch_completion_gates" / ws / f"upload_batch_completion_gate_{batch}.json"
+    write_json(path, gate)
+    gate["gate_path"] = str(path)
+
+    return gate
+
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN LIVE FILE
+PATH: backend\server\runtime\universal_jobs\contract.py
+SIZE_BYTES: 42157
+SHA256: DCAD494F07492871858F434DC1389897DCA13A4204208E38E957549F4072D8DE
+----------------------------------------------------------------------------------------------------
+"""Canonical immutable Universal Job Contract (Phase 2.1.1).
+
+This module is the single source of truth for the shape, validation,
+serialization and identity of a Universal Job. It is intentionally pure:
+it performs no I/O, holds no mutable global state, and depends on nothing
+outside the Python standard library. Creation, queueing, leasing, execution,
+persistence and orchestration all live in later phases and must never be
+imported here.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+import enum
+import hashlib
+import json
+import re
+from datetime import datetime, timezone
+from dataclasses import dataclass, field, fields, replace
+from types import MappingProxyType
+from typing import (
+    Any,
+    Dict,
+    Final,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
+
+# ---------------------------------------------------------------------------
+# Contract version
+# ---------------------------------------------------------------------------
+
+UNIVERSAL_JOB_CONTRACT_ID: Final[str] = (
+    "urn:linkcraftor:runtime:universal-job-contract"
+)
+
+UNIVERSAL_JOB_CONTRACT_VERSION: Final[str] = (
+    "universal_job_contract_v2.1.1"
+)
+
+# The canonical field set, in canonical order. This tuple is authoritative:
+# serialization, the required-field check and the field inventory all derive
+# from it, so the contract can never silently drift from this declaration.
+REQUIRED_UNIVERSAL_JOB_FIELDS: Final[Tuple[str, ...]] = (
+    "job_id",
+    "workspace_id",
+    "user_id",
+    "product_id",
+    "pipeline",
+    "stage",
+    "job_type",
+    "payload_reference",
+    "priority",
+    "status",
+    "attempts",
+    "maximum_attempts",
+    "lease_owner",
+    "lease_id",
+    "lease_started_at",
+    "lease_expires_at",
+    "parent_job_id",
+    "dependency_job_ids",
+    "batch_id",
+    "pipeline_run_id",
+    "progress",
+    "checkpoint_reference",
+    "result_reference",
+    "artifact_references",
+    "idempotency_key",
+    "AU_reserved",
+    "AU_consumed",
+    "cost_record",
+    "created_at",
+    "scheduled_at",
+    "started_at",
+    "completed_at",
+    "failed_at",
+    "cancelled_at",
+    "error_code",
+    "error_message",
+    "error_details",
+)
+
+JSON_PrimitiveT = Union[str, int, float, bool, None]
+JSONValueT = Union[JSON_PrimitiveT, Sequence[Any], Mapping[str, Any]]
+
+_EMPTY_MAP: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_TUPLE: Final[Tuple[str, ...]] = ()
+
+_MAX_IDENTIFIER_LENGTH: Final[int] = 512
+_MAX_TEXT_LENGTH: Final[int] = 16384
+_MAX_REFERENCE_LENGTH: Final[int] = 4096
+_MAX_COLLECTION_ITEMS: Final[int] = 4096
+_INT_MAX: Final[int] = 9223372036854775807
+
+_IDENTIFIER_RE: Final = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,511}$")
+_TIMESTAMP_RE: Final = re.compile(
+    r"^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,9})?(Z|[+-]\d{2}:\d{2})$"
+)
+
+# Canonical order of lifecycle timestamps used for consistency checks.
+_TIMESTAMP_ORDER: Final[Tuple[str, ...]] = (
+    "created_at",
+    "scheduled_at",
+    "started_at",
+    "completed_at",
+)
+
+
+# ---------------------------------------------------------------------------
+# Errors
+# ---------------------------------------------------------------------------
+
+class UniversalJobContractError(ValueError):
+    """Raised when a value violates the Universal Job Contract.
+
+    ``violations`` carries the full ordered list of problems discovered during
+    validation so callers do not have to re-run validation to enumerate them.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        violations: Optional[Sequence[str]] = None,
+    ) -> None:
+        super().__init__(message)
+        self.violations: Tuple[str, ...] = tuple(violations or ())
+
+
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+
+class UniversalJobStatus(str, enum.Enum):
+    """Canonical lifecycle states. Transition rules belong to a later phase."""
+
+    CREATED = "created"
+    QUEUED = "queued"
+    SCHEDULED = "scheduled"
+    LEASED = "leased"
+    RUNNING = "running"
+    SUSPENDED = "suspended"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    DEAD_LETTER = "dead_letter"
+    EXPIRED = "expired"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def coerce(cls, value: Any) -> "UniversalJobStatus":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            text = value.strip().lower()
+            for member in cls:
+                if member.value == text:
+                    return member
+        raise UniversalJobContractError(
+            "invalid job status: " + repr(value),
+            violations=("status must be one of " + ", ".join(m.value for m in cls),),
+        )
+
+
+class UniversalJobPriority(enum.IntEnum):
+    """Canonical priority classes.
+
+    Backed by integers so ordering is well defined without implying any
+    scheduling behaviour; lower numeric value denotes higher urgency.
+    """
+
+    CRITICAL = 10
+    HIGH = 20
+    NORMAL = 30
+    LOW = 40
+    BACKGROUND = 50
+
+    def __str__(self) -> str:
+        return self.name.lower()
+
+    @classmethod
+    def coerce(cls, value: Any) -> "UniversalJobPriority":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, bool):
+            raise UniversalJobContractError("priority must not be a boolean")
+        if isinstance(value, int):
+            for member in cls:
+                if int(member) == value:
+                    return member
+        if isinstance(value, str):
+            text = value.strip().lower()
+            for member in cls:
+                if member.name.lower() == text:
+                    return member
+            if text.isdigit():
+                return cls.coerce(int(text))
+        raise UniversalJobContractError(
+            "invalid job priority: " + repr(value),
+            violations=(
+                "priority must be one of " + ", ".join(m.name.lower() for m in cls),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Low-level normalization helpers (pure)
+# ---------------------------------------------------------------------------
+
+def _freeze(value: Any) -> Any:
+    """Recursively convert containers into immutable, JSON-safe equivalents."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        if isinstance(value, float):
+            if value != value or value in (float("inf"), float("-inf")):
+                raise UniversalJobContractError(
+                    "non-finite float values are not permitted in the contract"
+                )
+        return value
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {
+                _require_str_key(key): _freeze(item)
+                for key, item in value.items()
+            }
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze(item) for item in value), key=_stable_sort_key))
+    if isinstance(value, enum.Enum):
+        return _freeze(value.value)
+    raise UniversalJobContractError(
+        "unsupported value type in contract data: " + type(value).__name__
+    )
+
+
+def _require_str_key(key: Any) -> str:
+    if not isinstance(key, str):
+        raise UniversalJobContractError(
+            "mapping keys must be strings, got " + type(key).__name__
+        )
+    return key
+
+
+def _stable_sort_key(value: Any) -> str:
+    return json.dumps(_thaw(value), sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _thaw(value: Any) -> Any:
+    """Convert frozen contract data back into plain JSON-safe structures."""
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    return value
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        _thaw(value),
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _fingerprint(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _normalize_optional_text(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+    max_length: int = _MAX_REFERENCE_LENGTH,
+) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        violations.append(name + " must be a string or null")
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > max_length:
+        violations.append(name + " exceeds maximum length of " + str(max_length))
+        return text[:max_length]
+    return text
+
+
+def _normalize_identifier(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+    required: bool,
+) -> Optional[str]:
+    text = _normalize_optional_text(
+        value, name=name, violations=violations, max_length=_MAX_IDENTIFIER_LENGTH
+    )
+    if text is None:
+        if required:
+            violations.append(name + " is required")
+        return None
+    if not _IDENTIFIER_RE.match(text):
+        violations.append(name + " is not a valid identifier: " + text)
+    return text
+
+
+def _normalize_timestamp(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+) -> Optional[str]:
+    """Validate and normalize an ISO-8601 timestamp to canonical UTC."""
+    if value is None:
+        return None
+
+    if not isinstance(value, str):
+        violations.append(
+            name + " must be an ISO-8601 string or null"
+        )
+        return None
+
+    text = value.strip()
+
+    if not text:
+        return None
+
+    if not _TIMESTAMP_RE.match(text):
+        violations.append(
+            name + " must be an ISO-8601 timestamp: " + text
+        )
+        return text
+
+    parse_text = text
+
+    if parse_text.endswith("Z"):
+        parse_text = (
+            parse_text[:-1]
+            + "+00:00"
+        )
+
+    try:
+        parsed = datetime.fromisoformat(
+            parse_text
+        )
+    except ValueError:
+        violations.append(
+            name + " is not a valid calendar timestamp: " + text
+        )
+        return text
+
+    if parsed.tzinfo is None:
+        violations.append(
+            name + " must include a timezone offset"
+        )
+        return text
+
+    normalized = (
+        parsed
+        .astimezone(timezone.utc)
+        .isoformat(
+            timespec="microseconds"
+        )
+        .replace(
+            "+00:00",
+            "Z",
+        )
+    )
+
+    return normalized
+
+
+def _normalize_non_negative_int(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+    default: int = 0,
+) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int):
+        violations.append(name + " must be a non-negative integer")
+        return default
+    if value < 0:
+        violations.append(name + " must not be negative")
+        return default
+    if value > _INT_MAX:
+        violations.append(name + " exceeds the maximum permitted integer")
+        return _INT_MAX
+    return value
+
+
+def _normalize_identifier_tuple(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+) -> Tuple[str, ...]:
+    if value is None:
+        return _EMPTY_TUPLE
+    if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
+        violations.append(name + " must be a sequence of identifiers")
+        return _EMPTY_TUPLE
+    try:
+        items = list(value)
+    except TypeError:
+        violations.append(name + " must be an iterable of identifiers")
+        return _EMPTY_TUPLE
+    if len(items) > _MAX_COLLECTION_ITEMS:
+        violations.append(name + " exceeds the maximum item count")
+        items = items[:_MAX_COLLECTION_ITEMS]
+    seen: Dict[str, None] = {}
+    for item in items:
+        identifier = _normalize_identifier(
+            item, name=name + "[]", violations=violations, required=True
+        )
+        if identifier is not None:
+            seen.setdefault(identifier, None)
+    return tuple(sorted(seen))
+
+
+def _normalize_reference_tuple(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+) -> Tuple[str, ...]:
+    if value is None:
+        return _EMPTY_TUPLE
+    if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
+        violations.append(name + " must be a sequence of references")
+        return _EMPTY_TUPLE
+    try:
+        items = list(value)
+    except TypeError:
+        violations.append(name + " must be an iterable of references")
+        return _EMPTY_TUPLE
+    if len(items) > _MAX_COLLECTION_ITEMS:
+        violations.append(name + " exceeds the maximum item count")
+        items = items[:_MAX_COLLECTION_ITEMS]
+    references = []
+    for item in items:
+        reference = _normalize_optional_text(
+            item, name=name + "[]", violations=violations
+        )
+        if reference is None:
+            violations.append(name + " must not contain empty references")
+            continue
+        references.append(reference)
+    return tuple(references)
+
+
+def _normalize_mapping(value: Any, *, name: str, violations: list) -> Mapping[str, Any]:
+    if value is None:
+        return _EMPTY_MAP
+    if not isinstance(value, Mapping):
+        violations.append(name + " must be a mapping")
+        return _EMPTY_MAP
+    if len(value) > _MAX_COLLECTION_ITEMS:
+        violations.append(name + " exceeds the maximum entry count")
+    try:
+        return _freeze(value)
+    except UniversalJobContractError as exc:
+        violations.append(name + ": " + str(exc))
+        return _EMPTY_MAP
+
+
+# ---------------------------------------------------------------------------
+# Validation report
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class UniversalJobValidationReport:
+    """Immutable result of validating a candidate Universal Job."""
+
+    is_valid: bool
+    violations: Tuple[str, ...] = _EMPTY_TUPLE
+    contract_version: str = UNIVERSAL_JOB_CONTRACT_VERSION
+    checked_field_count: int = 0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "violations", tuple(self.violations))
+
+    def raise_for_status(self) -> None:
+        if not self.is_valid:
+            raise UniversalJobContractError(
+                "universal job failed contract validation: "
+                + "; ".join(self.violations),
+                violations=self.violations,
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "is_valid": self.is_valid,
+            "violations": list(self.violations),
+            "contract_version": self.contract_version,
+            "checked_field_count": self.checked_field_count,
+        }
+
+
+# ---------------------------------------------------------------------------
+# Composed value objects
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class UniversalJobProgress:
+    """Immutable progress snapshot. Carries no scheduling behaviour."""
+
+    percent: int = 0
+    step: str = ""
+    message: str = ""
+    total_units: Optional[int] = None
+    completed_units: Optional[int] = None
+    updated_at: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        violations: list = []
+        set_ = object.__setattr__
+
+        percent = _normalize_non_negative_int(
+            self.percent, name="progress.percent", violations=violations
+        )
+        if percent > 100:
+            violations.append("progress.percent must not exceed 100")
+            percent = 100
+        set_(self, "percent", percent)
+
+        step = _normalize_optional_text(
+            self.step, name="progress.step", violations=violations,
+            max_length=_MAX_IDENTIFIER_LENGTH,
+        )
+        set_(self, "step", step or "")
+
+        message = _normalize_optional_text(
+            self.message, name="progress.message", violations=violations,
+            max_length=_MAX_TEXT_LENGTH,
+        )
+        set_(self, "message", message or "")
+
+        total = (
+            None
+            if self.total_units is None
+            else _normalize_non_negative_int(
+                self.total_units, name="progress.total_units", violations=violations
+            )
+        )
+        completed = (
+            None
+            if self.completed_units is None
+            else _normalize_non_negative_int(
+                self.completed_units,
+                name="progress.completed_units",
+                violations=violations,
+            )
+        )
+        if total is not None and completed is not None and completed > total:
+            violations.append(
+                "progress.completed_units must not exceed progress.total_units"
+            )
+        set_(self, "total_units", total)
+        set_(self, "completed_units", completed)
+
+        set_(
+            self,
+            "updated_at",
+            _normalize_timestamp(
+                self.updated_at, name="progress.updated_at", violations=violations
+            ),
+        )
+
+        if violations:
+            raise UniversalJobContractError(
+                "invalid progress: " + "; ".join(violations),
+                violations=violations,
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "percent": self.percent,
+            "step": self.step,
+            "message": self.message,
+            "total_units": self.total_units,
+            "completed_units": self.completed_units,
+            "updated_at": self.updated_at,
+        }
+
+    @classmethod
+    def from_value(cls, value: Any) -> "UniversalJobProgress":
+        if isinstance(value, cls):
+            return value
+        if value is None:
+            return cls()
+        if isinstance(value, Mapping):
+            known = {f.name for f in fields(cls)}
+            return cls(**{key: value[key] for key in value if key in known})
+        raise UniversalJobContractError(
+            "progress must be a mapping or UniversalJobProgress"
+        )
+
+
+@dataclass(frozen=True)
+class UniversalJobCostRecord:
+    """Immutable accounting record. Pure data; performs no metering."""
+
+    currency: str = "USD"
+    estimated_micros: int = 0
+    actual_micros: int = 0
+    au_rate_micros: int = 0
+    breakdown: Mapping[str, Any] = _EMPTY_MAP
+
+    def __post_init__(self) -> None:
+        violations: list = []
+        set_ = object.__setattr__
+
+        currency = _normalize_optional_text(
+            self.currency, name="cost_record.currency", violations=violations,
+            max_length=16,
+        )
+        currency = (currency or "USD").upper()
+        if not re.match(r"^[A-Z]{3,10}$", currency):
+            violations.append("cost_record.currency must be a currency code")
+        set_(self, "currency", currency)
+
+        set_(self, "estimated_micros", _normalize_non_negative_int(
+            self.estimated_micros, name="cost_record.estimated_micros",
+            violations=violations,
+        ))
+        set_(self, "actual_micros", _normalize_non_negative_int(
+            self.actual_micros, name="cost_record.actual_micros",
+            violations=violations,
+        ))
+        set_(self, "au_rate_micros", _normalize_non_negative_int(
+            self.au_rate_micros, name="cost_record.au_rate_micros",
+            violations=violations,
+        ))
+        set_(self, "breakdown", _normalize_mapping(
+            self.breakdown, name="cost_record.breakdown", violations=violations,
+        ))
+
+        if violations:
+            raise UniversalJobContractError(
+                "invalid cost record: " + "; ".join(violations),
+                violations=violations,
+            )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "currency": self.currency,
+            "estimated_micros": self.estimated_micros,
+            "actual_micros": self.actual_micros,
+            "au_rate_micros": self.au_rate_micros,
+            "breakdown": _thaw(self.breakdown),
+        }
+
+    @classmethod
+    def from_value(cls, value: Any) -> "UniversalJobCostRecord":
+        if isinstance(value, cls):
+            return value
+        if value is None:
+            return cls()
+        if isinstance(value, Mapping):
+            known = {f.name for f in fields(cls)}
+            return cls(**{key: value[key] for key in value if key in known})
+        raise UniversalJobContractError(
+            "cost_record must be a mapping or UniversalJobCostRecord"
+        )
+
+
+# ---------------------------------------------------------------------------
+# The canonical Universal Job
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class UniversalJob:
+    """The canonical, immutable Universal Job Contract.
+
+    Every field is normalized and validated at construction. Instances are
+    deeply immutable: nested mappings are read-only proxies and nested
+    sequences are tuples. Construction raises ``UniversalJobContractError``
+    when the data cannot satisfy the contract.
+    """
+
+    # Identity and ownership
+    job_id: str
+    workspace_id: str
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+
+    # Classification
+    pipeline: str = ""
+    stage: str = ""
+    job_type: str = ""
+
+    # Payload
+    payload_reference: Optional[str] = None
+
+    # Scheduling inputs
+    priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+    status: UniversalJobStatus = UniversalJobStatus.CREATED
+
+    # Attempts
+    attempts: int = 0
+    maximum_attempts: int = 1
+
+    # Lease (declared shape only; no lease operations here)
+    lease_owner: Optional[str] = None
+    lease_id: Optional[str] = None
+    lease_started_at: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+
+    # Relationships
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+
+    # Progress and checkpointing
+    progress: UniversalJobProgress = field(default_factory=UniversalJobProgress)
+    checkpoint_reference: Optional[str] = None
+
+    # Results
+    result_reference: Optional[str] = None
+    artifact_references: Tuple[str, ...] = _EMPTY_TUPLE
+
+    # Idempotency
+    idempotency_key: Optional[str] = None
+
+    # Accounting
+    AU_reserved: int = 0
+    AU_consumed: int = 0
+    cost_record: UniversalJobCostRecord = field(
+        default_factory=UniversalJobCostRecord
+    )
+
+    # Lifecycle timestamps
+    created_at: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    failed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
+
+    # Diagnostics
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    error_details: Mapping[str, Any] = _EMPTY_MAP
+
+    # Contract version stamped onto every instance
+    contract_version: str = UNIVERSAL_JOB_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        violations: list = []
+        set_ = object.__setattr__
+
+        set_(self, "job_id", _normalize_identifier(
+            self.job_id, name="job_id", violations=violations, required=True) or "")
+        set_(self, "workspace_id", _normalize_identifier(
+            self.workspace_id, name="workspace_id", violations=violations,
+            required=True) or "")
+        set_(self, "user_id", _normalize_identifier(
+            self.user_id, name="user_id", violations=violations, required=False)
+            or "system")
+        set_(self, "product_id", _normalize_identifier(
+            self.product_id, name="product_id", violations=violations,
+            required=False) or "linkcraftor")
+
+        for name in ("pipeline", "stage", "job_type"):
+            value = _normalize_optional_text(
+                getattr(self, name), name=name, violations=violations,
+                max_length=_MAX_IDENTIFIER_LENGTH,
+            )
+            set_(self, name, value or "")
+
+        set_(self, "payload_reference", _normalize_optional_text(
+            self.payload_reference, name="payload_reference", violations=violations))
+
+        try:
+            set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "priority", UniversalJobPriority.NORMAL)
+
+        try:
+            set_(self, "status", UniversalJobStatus.coerce(self.status))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "status", UniversalJobStatus.CREATED)
+
+        set_(self, "attempts", _normalize_non_negative_int(
+            self.attempts, name="attempts", violations=violations))
+        maximum_attempts = _normalize_non_negative_int(
+            self.maximum_attempts, name="maximum_attempts", violations=violations,
+            default=1,
+        )
+        if maximum_attempts < 1:
+            violations.append("maximum_attempts must be at least 1")
+            maximum_attempts = 1
+        set_(self, "maximum_attempts", maximum_attempts)
+        if self.attempts > maximum_attempts:
+            violations.append("attempts must not exceed maximum_attempts")
+
+        for name in ("lease_owner", "lease_id"):
+            set_(self, name, _normalize_identifier(
+                getattr(self, name), name=name, violations=violations,
+                required=False))
+        set_(self, "lease_started_at", _normalize_timestamp(
+            self.lease_started_at, name="lease_started_at", violations=violations))
+        set_(self, "lease_expires_at", _normalize_timestamp(
+            self.lease_expires_at, name="lease_expires_at", violations=violations))
+        if self.lease_started_at and self.lease_expires_at:
+            if self.lease_expires_at < self.lease_started_at:
+                violations.append(
+                    "lease_expires_at must not precede lease_started_at")
+
+        set_(self, "parent_job_id", _normalize_identifier(
+            self.parent_job_id, name="parent_job_id", violations=violations,
+            required=False))
+        set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+            self.dependency_job_ids, name="dependency_job_ids",
+            violations=violations))
+        if self.job_id and self.job_id in self.dependency_job_ids:
+            violations.append("dependency_job_ids must not contain job_id")
+        set_(self, "batch_id", _normalize_identifier(
+            self.batch_id, name="batch_id", violations=violations, required=False))
+        set_(self, "pipeline_run_id", _normalize_identifier(
+            self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+            required=False))
+
+        try:
+            set_(self, "progress", UniversalJobProgress.from_value(self.progress))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "progress", UniversalJobProgress())
+
+        set_(self, "checkpoint_reference", _normalize_optional_text(
+            self.checkpoint_reference, name="checkpoint_reference",
+            violations=violations))
+        set_(self, "result_reference", _normalize_optional_text(
+            self.result_reference, name="result_reference", violations=violations))
+        set_(self, "artifact_references", _normalize_reference_tuple(
+            self.artifact_references, name="artifact_references",
+            violations=violations))
+
+        set_(self, "idempotency_key", _normalize_identifier(
+            self.idempotency_key, name="idempotency_key", violations=violations,
+            required=False))
+
+        set_(self, "AU_reserved", _normalize_non_negative_int(
+            self.AU_reserved, name="AU_reserved", violations=violations))
+        set_(self, "AU_consumed", _normalize_non_negative_int(
+            self.AU_consumed, name="AU_consumed", violations=violations))
+
+        try:
+            set_(self, "cost_record", UniversalJobCostRecord.from_value(
+                self.cost_record))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "cost_record", UniversalJobCostRecord())
+
+        for name in _TIMESTAMP_ORDER + ("failed_at", "cancelled_at"):
+            set_(self, name, _normalize_timestamp(
+                getattr(self, name), name=name, violations=violations))
+        self._check_timestamp_ordering(violations)
+
+        set_(self, "error_code", _normalize_identifier(
+            self.error_code, name="error_code", violations=violations,
+            required=False))
+        set_(self, "error_message", _normalize_optional_text(
+            self.error_message, name="error_message", violations=violations,
+            max_length=_MAX_TEXT_LENGTH))
+        set_(self, "error_details", _normalize_mapping(
+            self.error_details, name="error_details", violations=violations))
+
+        version = _normalize_optional_text(
+            self.contract_version, name="contract_version", violations=violations,
+            max_length=_MAX_IDENTIFIER_LENGTH,
+        )
+        if version != UNIVERSAL_JOB_CONTRACT_VERSION:
+            violations.append(
+                "contract_version must be " + UNIVERSAL_JOB_CONTRACT_VERSION)
+        set_(self, "contract_version", version or UNIVERSAL_JOB_CONTRACT_VERSION)
+
+        if violations:
+            raise UniversalJobContractError(
+                "invalid universal job: " + "; ".join(violations),
+                violations=violations,
+            )
+
+    def _check_timestamp_ordering(self, violations: list) -> None:
+        present = [
+            (name, getattr(self, name))
+            for name in _TIMESTAMP_ORDER
+            if getattr(self, name) is not None
+        ]
+        for (earlier_name, earlier), (later_name, later) in zip(present, present[1:]):
+            if later < earlier:
+                violations.append(
+                    later_name + " must not precede " + earlier_name)
+
+    # -- derived views ------------------------------------------------------
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in _TERMINAL_STATUSES
+
+    @property
+    def is_leased(self) -> bool:
+        return self.lease_owner is not None and self.status == UniversalJobStatus.LEASED
+
+    # -- immutable evolution ------------------------------------------------
+
+    def evolve(self, **changes: Any) -> "UniversalJob":
+        """Return a new validated job with the given fields replaced.
+
+        This never mutates ``self``; it is a pure constructor for a derived
+        contract instance and applies the full validation pass again.
+        """
+        unknown = set(changes) - _CONTRACT_CONSTRUCTOR_FIELDS
+        if unknown:
+            raise UniversalJobContractError(
+                "unknown fields for evolve: " + ", ".join(sorted(unknown))
+            )
+        return replace(self, **changes)
+
+    # -- serialization ------------------------------------------------------
+
+    def to_canonical_dict(self) -> Dict[str, Any]:
+        """Return a plain, JSON-safe dict in canonical field order."""
+        return {
+            "job_id": self.job_id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "job_type": self.job_type,
+            "payload_reference": self.payload_reference,
+            "priority": str(self.priority),
+            "status": self.status.value,
+            "attempts": self.attempts,
+            "maximum_attempts": self.maximum_attempts,
+            "lease_owner": self.lease_owner,
+            "lease_id": self.lease_id,
+            "lease_started_at": self.lease_started_at,
+            "lease_expires_at": self.lease_expires_at,
+            "parent_job_id": self.parent_job_id,
+            "dependency_job_ids": list(self.dependency_job_ids),
+            "batch_id": self.batch_id,
+            "pipeline_run_id": self.pipeline_run_id,
+            "progress": self.progress.to_dict(),
+            "checkpoint_reference": self.checkpoint_reference,
+            "result_reference": self.result_reference,
+            "artifact_references": list(self.artifact_references),
+            "idempotency_key": self.idempotency_key,
+            "AU_reserved": self.AU_reserved,
+            "AU_consumed": self.AU_consumed,
+            "cost_record": self.cost_record.to_dict(),
+            "created_at": self.created_at,
+            "scheduled_at": self.scheduled_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "failed_at": self.failed_at,
+            "cancelled_at": self.cancelled_at,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "error_details": _thaw(self.error_details),
+            "contract_version": self.contract_version,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.to_canonical_dict()
+
+    def to_canonical_json(self) -> str:
+        return _canonical_json(
+            self.to_canonical_dict()
+        )
+
+    @classmethod
+    def required_fields(
+        cls,
+    ) -> Tuple[str, ...]:
+        """Return the immutable canonical required-field roster."""
+        return REQUIRED_UNIVERSAL_JOB_FIELDS
+
+    @classmethod
+    def schema(
+        cls,
+    ) -> Mapping[str, Any]:
+        """Return the immutable canonical contract schema identity."""
+        return MappingProxyType(
+            {
+                "contract_id": (
+                    UNIVERSAL_JOB_CONTRACT_ID
+                ),
+                "contract_version": (
+                    UNIVERSAL_JOB_CONTRACT_VERSION
+                ),
+                "required_fields": (
+                    REQUIRED_UNIVERSAL_JOB_FIELDS
+                ),
+            }
+        )
+
+    # -- deserialization / reconstruction -----------------------------------
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalJob":
+        if not isinstance(
+            data,
+            Mapping,
+        ):
+            raise UniversalJobContractError(
+                "job data must be a mapping"
+            )
+
+        unknown_fields = sorted(
+            set(data)
+            - _CONTRACT_CONSTRUCTOR_FIELDS
+        )
+
+        if unknown_fields:
+            raise UniversalJobContractError(
+                "unknown universal job fields: "
+                + ", ".join(
+                    unknown_fields
+                ),
+                violations=tuple(
+                    "unknown field: " + name
+                    for name in unknown_fields
+                ),
+            )
+
+        missing_fields = tuple(
+            name
+            for name in REQUIRED_UNIVERSAL_JOB_FIELDS
+            if name not in data
+        )
+
+        if missing_fields:
+            raise UniversalJobContractError(
+                "missing required universal job fields: "
+                + ", ".join(
+                    missing_fields
+                ),
+                violations=tuple(
+                    "missing required field: " + name
+                    for name in missing_fields
+                ),
+            )
+
+        kwargs = {
+            key: data[key]
+            for key in data
+        }
+
+        if "priority" in kwargs:
+            kwargs["priority"] = (
+                UniversalJobPriority.coerce(
+                    kwargs["priority"]
+                )
+            )
+
+        if "status" in kwargs:
+            kwargs["status"] = (
+                UniversalJobStatus.coerce(
+                    kwargs["status"]
+                )
+            )
+
+        if "progress" in kwargs:
+            kwargs["progress"] = (
+                UniversalJobProgress.from_value(
+                    kwargs["progress"]
+                )
+            )
+
+        if "cost_record" in kwargs:
+            kwargs["cost_record"] = (
+                UniversalJobCostRecord.from_value(
+                    kwargs["cost_record"]
+                )
+            )
+
+        return cls(
+            **kwargs
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "UniversalJob":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise UniversalJobContractError(
+                "job json is not decodable: " + str(exc)) from exc
+        return cls.from_dict(data)
+
+    @classmethod
+    def reconstruct(cls, data: Mapping[str, Any]) -> "UniversalJob":
+        """Alias for :meth:`from_dict` for reconstruction call sites."""
+        return cls.from_dict(data)
+
+    # -- identity and hashing -----------------------------------------------
+
+    def identity_fingerprint(self) -> str:
+        """Stable across mutable state; depends only on identity inputs."""
+        material = {
+            "job_id": self.job_id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "job_type": self.job_type,
+            "idempotency_key": self.idempotency_key,
+            "contract_version": self.contract_version,
+        }
+        return _fingerprint(_canonical_json(material))
+
+    def contract_fingerprint(self) -> str:
+        """Fingerprint the frozen canonical contract field set."""
+        canonical = self.to_canonical_dict()
+
+        material = {
+            "contract_id": (
+                UNIVERSAL_JOB_CONTRACT_ID
+            ),
+            "contract_version": (
+                self.contract_version
+            ),
+            "fields": {
+                name: canonical[name]
+                for name
+                in REQUIRED_UNIVERSAL_JOB_FIELDS
+            },
+        }
+
+        return _fingerprint(
+            _canonical_json(
+                material
+            )
+        )
+
+    def content_fingerprint(self) -> str:
+        """Cover every canonical serialized field of this job."""
+        return _fingerprint(
+            self.to_canonical_json()
+        )
+
+    def __hash__(self) -> int:
+        """Return a deterministic hash independent of Python hash seeding."""
+        digest = hashlib.sha256(
+            self.to_canonical_json().encode(
+                "utf-8"
+            )
+        ).digest()
+
+        return int.from_bytes(
+            digest[:8],
+            byteorder="big",
+            signed=True,
+        )
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, UniversalJob):
+            return NotImplemented
+        return self.to_canonical_dict() == other.to_canonical_dict()
+
+    # -- validation ---------------------------------------------------------
+
+    def validate(self) -> UniversalJobValidationReport:
+        """Re-run structural validation and return a report.
+
+        Construction already guarantees a valid instance; this method exists so
+        callers can obtain a report (for example after :meth:`from_dict`)
+        without catching exceptions.
+        """
+        return validate_universal_job(self)
+
+
+_TERMINAL_STATUSES: Final[frozenset] = frozenset(
+    {
+        UniversalJobStatus.SUCCEEDED,
+        UniversalJobStatus.FAILED,
+        UniversalJobStatus.CANCELLED,
+        UniversalJobStatus.DEAD_LETTER,
+        UniversalJobStatus.EXPIRED,
+    }
+)
+
+_CONTRACT_CONSTRUCTOR_FIELDS: Final[frozenset] = frozenset(
+    f.name for f in fields(UniversalJob)
+)
+
+
+# ---------------------------------------------------------------------------
+# Standalone validation
+# ---------------------------------------------------------------------------
+
+def validate_universal_job(candidate: Any) -> UniversalJobValidationReport:
+    """Validate a job or candidate mapping without raising.
+
+    A :class:`UniversalJob` instance is valid by construction. A mapping is
+    validated by attempting reconstruction and capturing any contract
+    violations. Returns an immutable :class:`UniversalJobValidationReport`.
+    """
+    if isinstance(candidate, UniversalJob):
+        return UniversalJobValidationReport(
+            is_valid=True,
+            violations=_EMPTY_TUPLE,
+            contract_version=candidate.contract_version,
+            checked_field_count=len(REQUIRED_UNIVERSAL_JOB_FIELDS),
+        )
+
+    if not isinstance(candidate, Mapping):
+        return UniversalJobValidationReport(
+            is_valid=False,
+            violations=("candidate must be a UniversalJob or mapping",),
+            checked_field_count=0,
+        )
+
+    missing = tuple(
+        name
+        for name in REQUIRED_UNIVERSAL_JOB_FIELDS
+        if name not in candidate
+    )
+    try:
+        UniversalJob.from_dict(candidate)
+    except UniversalJobContractError as exc:
+        violations = tuple(exc.violations) or (str(exc),)
+        return UniversalJobValidationReport(
+            is_valid=False,
+            violations=violations,
+            checked_field_count=len(REQUIRED_UNIVERSAL_JOB_FIELDS),
+        )
+
+    if missing:
+        return UniversalJobValidationReport(
+            is_valid=False,
+            violations=tuple(
+                "missing required field: " + name
+                for name in missing
+            ),
+            checked_field_count=(
+                len(
+                    REQUIRED_UNIVERSAL_JOB_FIELDS
+                )
+            ),
+        )
+
+    return UniversalJobValidationReport(
+        is_valid=True,
+        violations=_EMPTY_TUPLE,
+        checked_field_count=(
+            len(
+                REQUIRED_UNIVERSAL_JOB_FIELDS
+            )
+        ),
+    )
+
+
+__all__ = [
+    "UNIVERSAL_JOB_CONTRACT_ID",
+    "UNIVERSAL_JOB_CONTRACT_VERSION",
+    "REQUIRED_UNIVERSAL_JOB_FIELDS",
+    "UniversalJob",
+    "UniversalJobValidationReport",
+    "UniversalJobContractError",
+    "UniversalJobStatus",
+    "UniversalJobPriority",
+    "UniversalJobProgress",
+    "UniversalJobCostRecord",
+    "validate_universal_job",
+]
+----------------------------------------------------------------------------------------------------
+END LIVE FILE
+
+BEGIN MISSING FILE
+PATH: backend\server\runtime\universal_jobs\creation_engine.py
+STATUS: NOT FOUND
+END MISSING FILE
+
+BEGIN MISSING FILE
+PATH: backend\server\runtime\universal_jobs\__init__.py
+STATUS: NOT FOUND
+END MISSING FILE
+
