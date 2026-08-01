@@ -1,4 +1,4 @@
- console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
 // ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
@@ -23,7 +23,7 @@ if (typeof window.reloadFromBackend !== "function") {
 
 
 // -------------------------------------------------------------------------------------------
-// app.js — LinkCraftor (Full, updated)  
+// app.js â€” LinkCraftor (Full, updated)  
 // -------------------------------------------------------------------------------------------
 
 import { KEYS, lsGet, lsSet, lsDel } from "./core/storage.js";
@@ -122,7 +122,7 @@ function getCurrentWorkspaceId(fallback = "default") {
 }
 
 // =====================================================
-// Layer 1.3 – UI → Decision Ingestion (canonical Layer 0)
+// Layer 1.3 â€“ UI â†’ Decision Ingestion (canonical Layer 0)
 // Endpoint: POST /api/engine/decision
 // =====================================================
 const API_DECISION = "/api/engine/decision";
@@ -189,7 +189,7 @@ const payload = {
 }
 
 // =====================================================
-// Layer 1.3.1 — Global bridge for IL Modal ? Decision API
+// Layer 1.3.1 â€” Global bridge for IL Modal ? Decision API
 // IL modal calls window.LC_registerLinkFeedback(...)
 // =====================================================
 if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback !== "function") {
@@ -525,11 +525,11 @@ const FLOORS = (PHASE === "publish")
 
 const CAPS = Object.freeze({ MAX_PER_SECTION: 4, MAX_PER_200W: 5, MAX_PER_TOPIC: 3 });
 
-// Spacing radius for mark placement (—words)
+// Spacing radius for mark placement (â€”words)
 const WINDOW_RADIUS_WORDS = 90;
 
 /* ==========================================================================
-   NEW: External V2 (local, rule-based) — mirrors internal placement logic
+   NEW: External V2 (local, rule-based) â€” mirrors internal placement logic
    ========================================================================== */
 const EXT_V2 = Object.freeze({
   ENABLED: true,
@@ -630,7 +630,7 @@ const toggleHighlight = $("toggleHighlight");
 const highlightCountBadge = $("highlightCountBadge");
 
 // ============================================================================
-// Draft + Sitemap Audit (Right Sidebar Card) — no new button
+// Draft + Sitemap Audit (Right Sidebar Card) â€” no new button
 // Combines:
 //  A) Draft ? Sitemap audit (backend truth)
 //  B) Topics NOT matched to a phrase (this doc/run) using LAST_ENGINE_OUTPUT
@@ -684,7 +684,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </h3>
 
   <div id="auditStats" style="font-size:12px;color:#6b7280;margin-top:6px;">
-    Loading—
+    Loadingâ€”
   </div>
 
   <div id="auditList" style="margin-top:10px;">
@@ -692,7 +692,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </div>
 
   <div id="auditHint" style="margin-top:10px;font-size:12px;color:#6b7280;">
-    Tip: Use the filter to switch between draft gaps and sitemap topics that didn—t match any phrase in this doc.
+    Tip: Use the filter to switch between draft gaps and sitemap topics that didnâ€”t match any phrase in this doc.
   </div>
 `;
 
@@ -845,7 +845,7 @@ const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${enc
   `;
 }).join("")
  
-  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} more—</div>` : "");
+  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} moreâ€”</div>` : "");
   }
 
 
@@ -919,7 +919,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
     }).join("");
   } catch(e){
     console.warn("[renderDraftRows] failed:", e?.message || e);
-    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">—</div>`;
+    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">â€”</div>`;
   }
 }
 
@@ -937,7 +937,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
   if (!listEl) return;
 
   try {
-    if (stats) stats.textContent = "Loading—";
+    if (stats) stats.textContent = "Loadingâ€”";
 
     const data = await fetchAudit();
 
@@ -1151,7 +1151,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
   } catch(e){
     console.warn("[AuditCard] refresh failed:", e?.message || e);
     if (stats) stats.textContent = "Audit failed: " + (e?.message || e);
-    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">—</div>`;
+    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">â€”</div>`;
   }
 }
 
@@ -1584,7 +1584,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
 
 
 // ==========================================================================
-// Session format helpers (upload/download lock to one format) — COLLISION-SAFE
+// Session format helpers (upload/download lock to one format) â€” COLLISION-SAFE
 // ==========================================================================
 (function(){
   const W = (typeof window !== "undefined") ? window : globalThis;
@@ -1638,7 +1638,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
       menu.querySelectorAll("button[data-ext]").forEach(btn=>{
         const extAttr = (btn.getAttribute("data-ext") || "").toLowerCase();
 
-        // Never show —original— or —.htm—
+        // Never show â€”originalâ€” or â€”.htmâ€”
         if (kill.has(extAttr)) { btn.style.display = "none"; return; }
 
         // If a session format is locked, show only that matching option
@@ -1703,7 +1703,7 @@ async function loadAndRenderDocByIndex(idx){
 /* ==========================================================================
    HELPERS
    ========================================================================== */
-const rxWord = /[\p{L}\p{N}—'-]+/gu;
+const rxWord = /[\p{L}\p{N}â€”'-]+/gu;
 const norm   = (s)=> String(s||"").toLowerCase().trim().replace(/\s+/g, " ");
 const tokens = (s)=> (String(s||"").toLowerCase().match(rxWord) || []).filter(Boolean);
 const uniq   = (a)=> Array.from(new Set(a));
@@ -1724,7 +1724,7 @@ function extractHtmlPayload(rawHtml = "") {
     }
     doc.documentElement.innerHTML = rawHtml;
 
-    // Collect inline styles from <head> (ignore <link> for now—can—t fetch local files)
+    // Collect inline styles from <head> (ignore <link> for nowâ€”canâ€”t fetch local files)
     const head = doc.querySelector("head");
     let styles = "";
     if (head) {
@@ -1748,7 +1748,7 @@ function markdownToHtml(md = "") {
     return `\uE000CODE${fences.length - 1}\uE000`;
   });
 
-  // 2) Escape HTML (so markdown can—t inject raw tags)
+  // 2) Escape HTML (so markdown canâ€”t inject raw tags)
   const esc = s => String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -2213,7 +2213,7 @@ if (downloadMenu) downloadMenu.querySelectorAll("button").forEach(btn=>{
     hideMenu(downloadMenu, btnDownloadMenu);
 
     try{
-      // Prefer the locked session format; if not set yet, use the button—s request
+      // Prefer the locked session format; if not set yet, use the buttonâ€”s request
       const sess = getSessionFormat(); // ".docx" | ".md" | ".txt" | ".html" | ""
       const requested = (btn.getAttribute("data-ext") || "").toLowerCase();
 
@@ -2374,7 +2374,7 @@ fileInput?.addEventListener("change", async () => {
         errorBox,
         parts.length
           ? parts.join(". ") + "."
-          : `No files uploaded — session is locked to ${sessExt}.`,
+          : `No files uploaded â€” session is locked to ${sessExt}.`,
         2600
       );
 
@@ -2623,11 +2623,11 @@ try {
 } catch {}
 
   // Clear UI.
-  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editing…";
+  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editingâ€¦";
   if (editor) editor.innerHTML = "";
 
   safeSetText(topMeta, "No document loaded", "topMeta");
-  safeSetText(docMeta, "Code: —", "docMeta");
+  safeSetText(docMeta, "Code: â€”", "docMeta");
   safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
 
   if (allDocs) allDocs.innerHTML = "<option value=''>All docs</option>";
@@ -2665,7 +2665,7 @@ btnNextDoc?.addEventListener("click", () => {
 });
 
 /* ==========================================================================
-   BULK APPLY — TURN MARKS INTO UNDERLINED LINKS
+   BULK APPLY â€” TURN MARKS INTO UNDERLINED LINKS
    ========================================================================== */
 
 /**
@@ -2806,7 +2806,7 @@ async function bulkApplyInContainer(root) {
     if (!href) {
       skippedNoHref++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no href) — phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
+        `[BulkApply] MARK #${i}: SKIP (no href) â€” phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
       );
       continue;
     }
@@ -2822,7 +2822,7 @@ async function bulkApplyInContainer(root) {
     if (!text) {
       skippedNoText++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no text) — href="${href}", phrase="${phrase}"`
+        `[BulkApply] MARK #${i}: SKIP (no text) â€” href="${href}", phrase="${phrase}"`
       );
       continue;
     }
@@ -2864,12 +2864,12 @@ async function bulkApplyInContainer(root) {
     applied++;
 
     console.log(
-      `[BulkApply] MARK #${i}: APPLY — href="${href}", text="${text}"`
+      `[BulkApply] MARK #${i}: APPLY â€” href="${href}", text="${text}"`
     );
   }
 
   console.log(
-    "[BulkApply] SUMMARY (container) — applied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApply] SUMMARY (container) â€” applied=%d, skippedNoHref=%d, skippedNoText=%d",
     applied,
     skippedNoHref,
     skippedNoText
@@ -2995,7 +2995,7 @@ async function bulkApplyAllDocs() {
   }
 
   console.log(
-    "[BulkApplyAll] DONE — totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApplyAll] DONE â€” totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
     totalApplied,
     totalSkippedNoHref,
     totalSkippedNoText
@@ -3003,7 +3003,7 @@ async function bulkApplyAllDocs() {
 }
 
 /* ------------------------------------------------------------------
- * Button wiring — ONE CLICK = BULK APPLY ACROSS ALL DOCS
+ * Button wiring â€” ONE CLICK = BULK APPLY ACROSS ALL DOCS
  * ------------------------------------------------------------------ */
 
 async function handleBulkApplyAllClick() {
@@ -3447,7 +3447,7 @@ function underlineLinkedPhrases(){
   }
 }
 
-// Remove keyword marks around/inside headings (h1—h6) so titles are never highlighted
+// Remove keyword marks around/inside headings (h1â€”h6) so titles are never highlighted
 function stripMarksFromHeadings(root) {
   if (!root) return;
 
@@ -3620,13 +3620,13 @@ const acceptBtn = document.createElement("button");
 acceptBtn.type = "button";
 acceptBtn.className = "kw-btn kw-accept";
 acceptBtn.title = "Accept suggestion";
-acceptBtn.textContent = "✓";
+acceptBtn.textContent = "âœ“";
 
 const rejectBtn = document.createElement("button");
 rejectBtn.type = "button";
 rejectBtn.className = "kw-btn kw-reject";
 rejectBtn.title = "Reject suggestion";
-rejectBtn.textContent = "×";
+rejectBtn.textContent = "Ã—";
 
 ctl.appendChild(acceptBtn);
 ctl.appendChild(rejectBtn);
@@ -3702,7 +3702,7 @@ function rebuildEngineHighlightsPanel() {
         <div class="kw-item" data-phrase="${escapeHtml(r.phrase)}" data-mode="${r.mode}" data-i="${i}">
           <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${r.dot};margin-right:6px;"></span>
           <button class="kw-jump" title="Find in doc" style="font-size:12px;">${escapeHtml(r.phrase)}</button>
-          <span class="qty" style="font-size:12px;color:#6b7280;">— ${r.tier} (Bucket)</span>
+          <span class="qty" style="font-size:12px;color:#6b7280;">â€” ${r.tier} (Bucket)</span>
         </div>
       `;
     }).join("");
@@ -3750,7 +3750,7 @@ function rebuildEngineHighlightsPanel() {
       <div class="kw-item" data-i="${i}">
         <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${dot};margin-right:6px;"></span>
         <button class="kw-jump" title="Jump to highlight" style="font-size:12px;">${escapeHtml(phrase)}</button>
-        <span class="qty" style="font-size:12px;color:#6b7280;">— ${tier}</span>
+        <span class="qty" style="font-size:12px;color:#6b7280;">â€” ${tier}</span>
       </div>
     `;
   }).join("");
@@ -3944,7 +3944,7 @@ async function fetchSitemapContent(urls) {
 
 async function downloadDocx() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3962,7 +3962,7 @@ async function downloadDocx() {
 
 function downloadHTML(ext = "html") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -3983,7 +3983,7 @@ function downloadHTML(ext = "html") {
 
 function downloadText(ext = "txt") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -4003,7 +4003,7 @@ function downloadText(ext = "txt") {
 
 async function downloadOriginal() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet — upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -4167,7 +4167,7 @@ function fillExternalReferencesFromMark(markEl) {
   for (const r of list) {
     const opt = document.createElement("option");
     opt.value = r.url || "";
-    opt.textContent = r.title ? `${r.title} — ${r.domainRoot || r.domain || ""}` : (r.url || "");
+    opt.textContent = r.title ? `${r.title} â€” ${r.domainRoot || r.domain || ""}` : (r.url || "");
     opt.dataset.title = r.title || "";
     opt.dataset.provider = r.domainRoot || r.domain || "";
     extReferences.appendChild(opt);
@@ -4175,7 +4175,7 @@ function fillExternalReferencesFromMark(markEl) {
 }
 
 // ==========================================================================
-// HEADING CLEANUP — remove any marks from H1—H6 *and* heading-like <p> tags
+// HEADING CLEANUP â€” remove any marks from H1â€”H6 *and* heading-like <p> tags
 // ==========================================================================
 function cleanupMarksInHeadings(root) {
   if (!root) return;
@@ -4185,7 +4185,7 @@ function cleanupMarksInHeadings(root) {
     " mark.kwd-external, mark.kwd-int, mark.kwd-sem, mark.kwd-ext";
 
   // -------------------------------------------------
-  // A) Real heading tags: <h1>—<h6>
+  // A) Real heading tags: <h1>â€”<h6>
   // -------------------------------------------------
   const headings = root.querySelectorAll("h1, h2, h3, h4, h5, h6");
   headings.forEach(h => {
@@ -4199,7 +4199,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // B) Mark WRAPPING a heading:
-  //    <mark class="kwd-—"><h1>Heading</h1></mark>
+  //    <mark class="kwd-â€”"><h1>Heading</h1></mark>
   // -------------------------------------------------
   const allMarks = root.querySelectorAll(MARK_SELECTOR);
   allMarks.forEach(mark => {
@@ -4211,7 +4211,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // C) "Heading-like" paragraphs (your exact case):
-  //    <p><strong><span><mark —><span class="kw-core">Heading</span>—</mark></span></strong></p>
+  //    <p><strong><span><mark â€”><span class="kw-core">Heading</span>â€”</mark></span></strong></p>
   //    We treat short, mostly-bold <p> as headings and remove marks inside.
   // -------------------------------------------------
   const paras = root.querySelectorAll("p");
@@ -4268,7 +4268,7 @@ async function applyAllThisDoc(){
       await delay(30);
     }
   } finally {
-    showToast(errorBox, `Apply All (this doc) — added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
+    showToast(errorBox, `Apply All (this doc) â€” added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
     applyingAll = false;
     updateHighlightBadge();
     rebuildEngineHighlightsPanel();
@@ -4330,7 +4330,7 @@ async function applyAllAcrossDocs() {
     applyingAll = false;
     showToast(
       errorBox,
-      `Apply All (all docs) — total added ${totalAdded}.`,
+      `Apply All (all docs) â€” total added ${totalAdded}.`,
       2300
     );
     updateHighlightBadge();
@@ -4515,7 +4515,7 @@ btnResetLinked?.addEventListener("click", () => {
 
 /* ==========================================================================
    Suggestion picker (for IL modal)
-   Uses LAST_ENGINE_OUTPUT only — stable and simple.
+   Uses LAST_ENGINE_OUTPUT only â€” stable and simple.
    ========================================================================== */
 function findEngineSuggestionsForPhrase(phrase) {
   const norm = (s) => String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
@@ -4649,7 +4649,7 @@ function buildPhraseContext(phraseText) {
     contextType: null
   };
 
-  // Optional hook — if you later define window.LC_getPhraseContext,
+  // Optional hook â€” if you later define window.LC_getPhraseContext,
   // it can enrich this context (entities, graphVector, contextType, etc.)
   if (typeof window.LC_getPhraseContext === "function") {
     try {
@@ -5067,7 +5067,7 @@ function renderDoc(i){
       } else if (safeText && safeText.trim()) {
         renderFromText(safeText);
       } else {
-        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing—</p></div>`;
+        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingâ€”</p></div>`;
       }
     }
   } catch (e) {
@@ -5091,8 +5091,8 @@ function renderDoc(i){
       if (docs.length === 0) {
         currentIndex = -1;
         // Clear viewer + meta when no docs left
-        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing—</p></div>`;
-        safeSetText(topMeta, "File: —", "topMeta");
+        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingâ€”</p></div>`;
+        safeSetText(topMeta, "File: â€”", "topMeta");
         safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
       } else {
         currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -5117,8 +5117,8 @@ function renderDoc(i){
           docs.splice(j, 1);
           if (docs.length === 0) {
             currentIndex = -1;
-            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editing—</p></div>`;
-            safeSetText(topMeta, "File: —", "topMeta");
+            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingâ€”</p></div>`;
+            safeSetText(topMeta, "File: â€”", "topMeta");
             safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
           } else {
             currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -5198,7 +5198,7 @@ function refreshDropdown(){
 }
 
 // ==========================================================================
-// IMPORTED_URLS storage — BACKEND ONLY (localStorage disabled)
+// IMPORTED_URLS storage â€” BACKEND ONLY (localStorage disabled)
 // ==========================================================================
 
 async function saveImportedUrlsLocal(){
@@ -5229,7 +5229,7 @@ const res = await fetch(`${base}/api/urls/list?workspace_id=${encodeURIComponent
 
 
 // ================================
-// Draft Topics — BACKEND load on startup
+// Draft Topics â€” BACKEND load on startup
 // ================================
 async function loadDraftsFromBackend(workspaceId = "default") {
   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
@@ -5999,7 +5999,7 @@ async function bootExtras() {
 }
 
 // =====================================================
-// Layer 1.3 — Wire ? Accept / ? Reject buttons to /api/engine/decision
+// Layer 1.3 â€” Wire ? Accept / ? Reject buttons to /api/engine/decision
 // (Event delegation on viewerEl; no UI logic changes beyond emitting decisions)
 // =====================================================
 function wireDecisionButtons(){
@@ -6527,6 +6527,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const btnConnectDomain = document.getElementById("btnConnectDomain");
     const workspaceNameInput = document.getElementById("workspaceNameInput");
 
+    const customWorkspaceName = String(
+      workspaceNameInput?.value || ""
+    ).trim();
+
   // LC_WORKSPACE_RESTORE_ON_REFRESH_6_9
   const savedWorkspaceId = localStorage.getItem("lc_workspace_id") || "";
   const savedDomain = localStorage.getItem("lc_domain") || "";
@@ -6571,7 +6575,6 @@ document.addEventListener("DOMContentLoaded", () => {
       // LC_CONTINUE_ROUTING_PHASE_3_2_3_SITE_URL_MODE
       // LC_NORMALIZE_SITE_URL_3_2_4
       let siteUrl = (sitemapInput?.value || "").trim();
-      const customWorkspaceName = (workspaceNameInput?.value || "").trim();
 
       siteUrl = siteUrl
         .replace(/^https?:\/\//i, "")
@@ -6645,7 +6648,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (selectedWorkspaceMode === "blank") {
       // LC_CONTINUE_ROUTING_PHASE_3_3_BLANK_MODE
-      const customWorkspaceName = (workspaceNameInput?.value || "").trim();
 
       const identity = lcMakeNewWorkspaceIdentity("blank-workspace", customWorkspaceName);
       const workspaceId = identity.workspaceId;
@@ -6705,12 +6707,12 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+
     if (selectedWorkspaceMode !== "domain") {
       console.log("[Workspace Continue] Non-domain mode selected; domain pipeline skipped:", selectedWorkspaceMode);
       return;
     }
 
-    const customWorkspaceName = (workspaceNameInput?.value || "").trim();
     const domain = (domainInput.value || "").trim();
 
     if (!domain) {
@@ -6741,7 +6743,6 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-        const customWorkspaceName = (workspaceNameInput?.value || "").trim();
         const identity = lcMakeNewWorkspaceIdentity(data.domain || domain, customWorkspaceName);
 
         // Use backend canonical workspace ID for all runtime engines.
@@ -7089,7 +7090,7 @@ function initSupportTicketForm() {
         throw new Error(data?.detail || "Ticket submission failed");
       }
 
-      setSupportFormStatus(`✅ Ticket submitted successfully: ${data.ticket_number}`, "ok");
+      setSupportFormStatus(`âœ… Ticket submitted successfully: ${data.ticket_number}`, "ok");
       alert(`Ticket submitted successfully: ${data.ticket_number}`);
       form.reset();
 
@@ -8025,6 +8026,32 @@ function lcAutosaveArray(value){
 }
 
 async function lcAutosaveWorkspaceSession(reason){
+
+  const autosaveWorkspaceId = String(
+    window.LC_WORKSPACE_ID ||
+    window.currentWorkspaceId ||
+    localStorage.getItem("lc_workspace_id") ||
+    localStorage.getItem("workspace_id") ||
+    ""
+  ).trim();
+
+  if (
+    !autosaveWorkspaceId ||
+    autosaveWorkspaceId === "default" ||
+    autosaveWorkspaceId === "null" ||
+    autosaveWorkspaceId === "undefined"
+  ) {
+    console.debug(
+      "[LinkCraftor Autosave] skipped: workspace_id unavailable"
+    );
+
+    return {
+      ok: true,
+      skipped: true,
+      reason: "workspace_id_unavailable",
+    };
+  }
+
   if (window.LC_AUTOSAVE_STATE.saving) {
     return {
       ok: false,

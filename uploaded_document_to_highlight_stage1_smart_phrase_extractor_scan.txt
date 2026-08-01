@@ -1,0 +1,1319 @@
+﻿UPLOADED DOCUMENT-TO-HIGHLIGHT PIPELINE
+STAGE 1 — SMART PHRASE EXTRACTOR
+Generated: 2026-07-30 14:44:27
+
+============================================================
+CANONICAL EXTRACTOR FILE
+============================================================
+backend\server\stores\smart_phrase_extractor.py
+
+     1: """
+     2: Smart phrase extractor (corrected, niche-agnostic).
+     3: 
+     4: Produces *complete* anchor phrases — whole noun phrases or intent phrases that
+     5: never hang on a dangling article/preposition/conjunction and are never cut
+     6: mid-constituent.
+     7: 
+     8: Design (and what changed vs. the previous rewrite)
+     9: --------------------------------------------------
+    10: The previous version chunked into constituents and trimmed to content-word
+    11: boundaries — the right idea — but then re-derived grammar from curated
+    12: *noun* vocabulary (UNIVERSAL_HEADS, etc.). That made it implicitly tuned to
+    13: SEO/health niches: any head noun the lists didn't know, and any word that was
+    14: both a noun and a verb ("support", "research", "review", "study"), was thrown
+    15: away. It also over-trimmed adjectival ``-ly`` modifiers ("weekly report",
+    16: "monthly budget") and rejected its own verb-bearing intent phrases
+    17: ("how to calculate ...").
+    18: 
+    19: This version fixes the asymmetry that makes an extractor universal:
+    20: 
+    21:   * VERBS are a (mostly) closed, niche-independent class -> we keep a broad
+    22:     verb lexicon and gate structurally on it.
+    23:   * NOUNS are open and vary by niche -> we never require a head to be in a
+    24:     curated list. When a POS tagger is available we *trust its tag* for the
+    25:     head; otherwise an unknown content word defaults to a valid head.
+    26: 
+    27: Curated domain lists now only *score* (a small bonus); they never gate. So the
+    28: extractor behaves the same for cooking, legal, automotive, gaming, finance,
+    29: travel, SaaS, etc.
+    30: 
+    31: It prefers spaCy, then NLTK, then a self-contained heuristic chunker, so it has
+    32: **no required dependencies**. ``extract_smart_phrases(...)`` keeps the same
+    33: signature and output shape as before (drop-in replacement).
+    34: """
+    35: 
+    36: from __future__ import annotations
+    37: 
+    38: import re
+    39: from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+    40: 
+    41: # ---------------------------------------------------------------------------
+    42: # Optional, soft dependencies. Everything degrades gracefully.
+    43: # ---------------------------------------------------------------------------
+    44: 
+    45: try:  # learning hook — optional
+    46:     from backend.server.stores.dis_pipeline_learning import (  # type: ignore
+    47:         learn_from_pipeline_rejection,
+    48:     )
+    49: except Exception:  # pragma: no cover - fallback when running standalone
+    50:     def learn_from_pipeline_rejection(**_kwargs: Any) -> None:
+    51:         return None
+    52: 
+    53: try:  # extra domain vocabulary — optional (scoring only)
+    54:     from backend.server.stores.universal_noun_families import (  # type: ignore
+    55:         get_all_universal_nouns,
+    56:         get_all_universal_modifiers,
+    57:     )
+    58: except Exception:
+    59:     def get_all_universal_nouns() -> Set[str]:
+    60:         return set()
+    61: 
+    62:     def get_all_universal_modifiers() -> Set[str]:
+    63:         return set()
+    64: 
+    65: 
+    66: # spaCy / NLTK are auto-detected once, lazily.
+    67: _SPACY_NLP = None
+    68: _SPACY_TRIED = False
+    69: _NLTK_OK: Optional[bool] = None
+    70: 
+    71: 
+    72: def _get_spacy():
+    73:     global _SPACY_NLP, _SPACY_TRIED
+    74:     if _SPACY_TRIED:
+    75:         return _SPACY_NLP
+    76:     _SPACY_TRIED = True
+    77:     try:
+    78:         import spacy  # type: ignore
+    79:         try:
+    80:             # Keep the lemmatizer: the action-verb branch relies on tok.lemma_.
+    81:             _SPACY_NLP = spacy.load("en_core_web_sm", disable=["ner"])
+    82:         except Exception:
+    83:             _SPACY_NLP = None
+    84:     except Exception:
+    85:         _SPACY_NLP = None
+    86:     return _SPACY_NLP
+    87: 
+    88: 
+    89: def _have_nltk() -> bool:
+    90:     global _NLTK_OK
+    91:     if _NLTK_OK is not None:
+    92:         return _NLTK_OK
+    93:     try:
+    94:         import nltk  # type: ignore
+    95:         nltk.pos_tag(nltk.word_tokenize("test sentence"))
+    96:         _NLTK_OK = True
+    97:     except Exception:
+    98:         _NLTK_OK = False
+    99:     return _NLTK_OK
+   100: 
+   101: 
+   102: # ---------------------------------------------------------------------------
+   103: # Lexical resources
+   104: # ---------------------------------------------------------------------------
+   105: 
+   106: WORD_RE = re.compile(r"[a-z0-9][a-z0-9'-]*", re.I)
+   107: TAG_RE = re.compile(r"<[^>]+>")
+   108: H_RE = re.compile(r"<h([1-6])[^>]*>(.*?)</h\1>", re.IGNORECASE | re.DOTALL)
+   109: LI_RE = re.compile(r"<li[^>]*>(.*?)</li>", re.IGNORECASE | re.DOTALL)
+   110: P_RE = re.compile(r"<p[^>]*>(.*?)</p>", re.IGNORECASE | re.DOTALL)
+   111: 
+   112: # Sentence splitter that does not break on common abbreviations, single
+   113: # capital initials, decimals, or "e.g."/"i.e."/"U.S.".
+   114: _ABBREV = (
+   115:     r"(?<!\b[A-Z])"                       # not a single capital initial
+   116:     r"(?<!\be\.g)(?<!\bi\.e)(?<!\bvs)"
+   117:     r"(?<!\bMr)(?<!\bMrs)(?<!\bMs)(?<!\bDr)(?<!\bSt)(?<!\bNo)"
+   118:     r"(?<!\bInc)(?<!\bLtd)(?<!\bCo)(?<!\bU\.S)(?<!\bU\.K)"
+   119: )
+   120: SENTENCE_SPLIT_RE = re.compile(
+   121:     r"(?:" + _ABBREV + r"(?<!\d\.\d)[.!?])\s+|\n+"
+   122: )
+   123: 
+   124: DETERMINERS: Set[str] = {
+   125:     "a", "an", "the", "this", "that", "these", "those", "my", "your", "his",
+   126:     "her", "its", "our", "their", "some", "any", "each", "every", "no",
+   127:     "another", "such", "much", "many", "more", "most", "all", "both", "either",
+   128:     "neither", "which", "what", "whose",
+   129: }
+   130: 
+   131: PREPOSITIONS: Set[str] = {
+   132:     "about", "above", "across", "after", "against", "along", "among", "around",
+   133:     "as", "at", "before", "behind", "below", "beneath", "beside", "between",
+   134:     "beyond", "by", "down", "during", "except", "for", "from", "in", "inside",
+   135:     "into", "near", "of", "off", "on", "onto", "out", "outside", "over", "per",
+   136:     "since", "than", "through", "throughout", "to", "toward", "towards",
+   137:     "under", "until", "up", "upon", "via", "with", "within", "without", "like",
+   138: }
+   139: 
+   140: CONJUNCTIONS: Set[str] = {
+   141:     "and", "or", "but", "nor", "so", "yet", "because", "although", "though",
+   142:     "while", "whereas", "unless", "until", "whether", "if", "then",
+   143: }
+   144: 
+   145: PRONOUNS: Set[str] = {
+   146:     "i", "me", "my", "mine", "myself", "you", "yours", "yourself", "he", "him",
+   147:     "his", "she", "her", "hers", "we", "us", "our", "ours", "they", "them",
+   148:     "their", "theirs", "it", "its", "itself", "who", "whom", "whose", "anyone",
+   149:     "someone", "everyone", "everybody", "somebody", "anybody", "nobody",
+   150:     "something", "anything", "everything", "nothing", "one", "ones",
+   151: }
+   152: 
+   153: AUX_VERBS: Set[str] = {
+   154:     "is", "are", "was", "were", "be", "being", "been", "am", "can", "could",
+   155:     "will", "would", "shall", "should", "may", "might", "must", "has", "have",
+   156:     "had", "do", "does", "did", "ought",
+   157: }
+   158: 
+   159: PARTICLES_DEGREE: Set[str] = {
+   160:     "not", "very", "too", "also", "just", "only", "even", "still", "quite",
+   161:     "rather", "really", "almost", "always", "never", "often", "sometimes",
+   162:     "usually", "generally", "typically", "currently", "recently", "soon",
+   163:     "later", "now", "today", "tomorrow", "yesterday", "here", "there",
+   164:     "however", "therefore", "meanwhile", "instead", "anyway", "actually",
+   165:     "basically", "simply", "clearly", "finally", "first", "firstly",
+   166:     "second", "secondly", "lastly", "overall", "especially", "particularly",
+   167: }
+   168: 
+   169: # Function words = closed-class words that should never start/end a phrase.
+   170: FUNCTION_WORDS: Set[str] = (
+   171:     DETERMINERS | PREPOSITIONS | CONJUNCTIONS | PRONOUNS | AUX_VERBS | PARTICLES_DEGREE
+   172: )
+   173: 
+   174: # Adjectival / temporal ``-ly`` words. These modify nouns ("weekly report",
+   175: # "friendly reminder") and must NOT be trimmed or tagged as adverbs.
+   176: ADJECTIVAL_LY: Set[str] = {
+   177:     "weekly", "biweekly", "daily", "monthly", "bimonthly", "quarterly",
+   178:     "yearly", "nightly", "hourly", "early", "friendly", "costly", "deadly",
+   179:     "lively", "lovely", "timely", "orderly", "elderly", "lonely", "ghostly",
+   180:     "lowly", "kindly", "weekly", "leisurely", "scholarly", "worldly",
+   181:     "heavenly", "earthly", "homely", "manly", "womanly", "saintly", "burly",
+   182:     "curly", "wily", "holy", "ugly", "silly",
+   183: }
+   184: 
+   185: # ``-ly`` tokens that are really nouns (so the adverb heuristic skips them).
+   186: LY_NOUN_EXCEPTIONS: Set[str] = {
+   187:     "family", "supply", "assembly", "anomaly", "ally", "rally", "monopoly",
+   188:     "italy", "july", "belly", "jelly", "reply", "duopoly", "homily", "doily",
+   189: }
+   190: 
+   191: 
+   192: def _is_adverb_ly(token: str) -> bool:
+   193:     """True for genuine ``-ly`` adverbs (quickly, easily) but not for
+   194:     adjectival/temporal ``-ly`` words or ``-ly`` nouns."""
+   195:     return (
+   196:         token.endswith("ly")
+   197:         and len(token) > 4
+   198:         and token not in LY_NOUN_EXCEPTIONS
+   199:         and token not in ADJECTIVAL_LY
+   200:     )
+   201: 
+   202: 
+   203: # Comparative / degree adverbs that should never be a phrase head or tail.
+   204: COMPARATIVES: Set[str] = {
+   205:     "faster", "slower", "better", "worse", "easier", "harder", "longer",
+   206:     "shorter", "higher", "lower", "bigger", "smaller", "greater", "sooner",
+   207:     "later", "more", "less", "fewer", "older", "newer", "cheaper", "stronger",
+   208:     "weaker", "wider", "deeper", "closer", "further", "farther", "best",
+   209:     "worst", "fastest", "slowest", "highest", "lowest", "largest", "smallest",
+   210: }
+   211: 
+   212: # Words that may NOT end a phrase (cause "hanging" tails).
+   213: TRAILING_BAN: Set[str] = PREPOSITIONS | CONJUNCTIONS | DETERMINERS | COMPARATIVES
+   214: 
+   215: # Words that may NOT start a phrase.
+   216: LEADING_BAN: Set[str] = FUNCTION_WORDS
+   217: 
+   218: 
+   219: def _verb_forms(lemmas: Set[str]) -> Set[str]:
+   220:     """Expand verb lemmas to common inflected forms (-s/-es/-ed/-ing/-ies)."""
+   221:     forms: Set[str] = set()
+   222:     for v in lemmas:
+   223:         forms.add(v)
+   224:         forms.update({v + "s", v + "es", v + "ed", v + "ing"})
+   225:         if v.endswith("e"):
+   226:             forms.update({v[:-1] + "es", v[:-1] + "ed", v[:-1] + "ing"})
+   227:         if v.endswith("y") and len(v) > 1 and v[-2] not in "aeiou":
+   228:             forms.update({v[:-1] + "ies", v[:-1] + "ied"})
+   229:         # simple final-consonant doubling (run -> running, stop -> stopped)
+   230:         if (len(v) >= 3 and v[-1] not in "aeiouwxy"
+   231:                 and v[-2] in "aeiou" and v[-3] not in "aeiou"):
+   232:             forms.update({v + v[-1] + "ing", v + v[-1] + "ed"})
+   233:     return forms
+   234: 
+   235: 
+   236: # Verbs that head an action/intent anchor ("calculate due date").
+   237: ACTION_VERBS: Set[str] = {
+   238:     "calculate", "track", "confirm", "compare", "choose", "check", "measure",
+   239:     "estimate", "build", "create", "fix", "improve", "optimize", "reduce",
+   240:     "increase", "manage", "treat", "prevent", "diagnose", "review", "audit",
+   241:     "forecast", "plan", "write", "design", "analyze", "monitor", "test",
+   242:     "rank", "score", "publish", "import", "export", "sync", "validate",
+   243:     "protect", "find", "convert", "identify", "select", "schedule", "generate",
+   244:     "lower", "raise", "boost", "grow", "cut", "save", "earn", "spend", "lose",
+   245:     "cook", "bake", "clean", "install", "repair", "paint", "draw", "play",
+   246:     "book", "explore", "visit", "pack", "learn", "master", "understand",
+   247: }
+   248: 
+   249: # Broad, niche-INDEPENDENT lexicon of common English verbs. Verbs (unlike
+   250: # nouns) are a roughly closed class, so a generous list here is what makes the
+   251: # structural filter universal: it recognises clause signals like "boosts",
+   252: # "builds", "offers", "comes" in any domain.
+   253: _COMMON_VERB_LEMMAS: Set[str] = {
+   254:     "run", "fall", "land", "become", "mean", "depend", "explain", "turn",
+   255:     "make", "show", "happen", "rise", "stay", "offer", "work", "hold",
+   256:     "start", "end", "use", "give", "get", "go", "come", "take", "need",
+   257:     "want", "know", "say", "tell", "grow", "affect", "change", "watch",
+   258:     "look", "see", "let", "keep", "try", "read", "note", "avoid", "consider",
+   259:     "remember", "ensure", "pick", "add", "put", "ask", "call", "send",
+   260:     "follow", "apply", "enter", "click", "tap", "open", "close", "share",
+   261:     "help", "allow", "provide", "support", "include", "require", "reveal",
+   262:     "contain", "mention", "combine", "request", "invite", "connect",
+   263:     "complete", "summarize", "interpret", "guide", "unlock", "confuse",
+   264:     "pass", "lean", "bring", "toss", "qualify", "define", "return", "sign",
+   265:     "break", "restore", "extend", "reach", "explore", "discover", "feel",
+   266:     "think", "believe", "seem", "appear", "remain", "leave", "move", "live",
+   267:     "love", "hate", "like", "play", "win", "lose", "buy", "sell", "pay",
+   268:     "cost", "spend", "save", "earn", "invest", "borrow", "lend", "owe",
+   269:     "build", "boost", "drive", "ride", "fly", "walk", "cook", "bake", "mix",
+   270:     "stir", "chop", "slice", "pour", "heat", "cool", "freeze", "serve",
+   271:     "wash", "clean", "fix", "repair", "paint", "cut", "drill", "screw",
+   272:     "charge", "power", "press", "hit", "push", "pull", "lift", "carry",
+   273:     "throw", "catch", "draw", "design", "create", "write", "edit", "delete",
+   274:     "update", "upload", "download", "install", "configure", "deploy", "test",
+   275:     "debug", "compile", "render", "parse", "store", "fetch", "load", "save",
+   276:     "lower", "raise", "reduce", "increase", "improve", "boost", "grow",
+   277:     "shrink", "expand", "scale", "convert", "process", "handle", "execute",
+   278:     "perform", "achieve", "reach", "meet", "exceed", "match", "compare",
+   279:     "rank", "rate", "review", "audit", "monitor", "measure", "calculate",
+   280:     "estimate", "forecast", "predict", "plan", "schedule", "book", "reserve",
+   281:     "order", "ship", "deliver", "track", "trace", "locate", "search", "filter",
+   282:     "sort", "group", "merge", "split", "join", "link", "attach", "remove",
+   283:     "replace", "swap", "toggle", "select", "choose", "decide", "determine",
+   284:     "identify", "detect", "recognize", "classify", "label", "tag", "name",
+   285:     "describe", "summarize", "report", "record", "log", "count", "sum",
+   286:     "treat", "cure", "heal", "prevent", "diagnose", "prescribe", "inject",
+   287:     "absorb", "digest", "burn", "stretch", "train", "exercise", "rest",
+   288:     "sleep", "wake", "breathe", "relax", "focus", "study", "teach", "learn",
+   289:     "practice", "master", "memorize", "recall", "understand", "realize",
+   290:     "notice", "observe", "examine", "inspect", "analyze", "evaluate", "assess",
+   291:     "judge", "rate", "score", "grade", "approve", "reject", "accept", "deny",
+   292:     "confirm", "verify", "validate", "authenticate", "authorize", "grant",
+   293:     "protect", "secure", "encrypt", "decrypt", "block", "allow", "permit",
+   294:     "enable", "disable", "activate", "deactivate", "launch", "release",
+   295:     "publish", "promote", "advertise", "market", "brand", "position", "target",
+   296:     "engage", "retain", "acquire", "onboard", "subscribe", "renew", "cancel",
+   297:     "refund", "charge", "bill", "invoice", "quote", "negotiate", "close",
+   298:     "manage", "lead", "organize", "coordinate", "assign", "delegate",
+   299:     "collaborate", "communicate", "discuss", "present", "pitch", "propose",
+   300:     "recommend", "suggest", "advise", "warn", "remind", "notify", "alert",
+   301:     "happen", "occur", "result", "cause", "lead", "trigger", "drive", "shape",
+   302:     "form", "develop", "evolve", "transform", "adapt", "adjust", "modify",
+   303:     "customize", "personalize", "automate", "streamline", "simplify",
+   304:     "clarify", "highlight", "emphasize", "feature", "include", "exclude",
+   305: }
+   306: 
+   307: # All inflected forms of every verb we know about. Used for reliable verb
+   308: # detection in the boundary / completeness logic and the heuristic tagger.
+   309: VERB_FORMS: Set[str] = _verb_forms(ACTION_VERBS | _COMMON_VERB_LEMMAS)
+   310: 
+   311: # Gerund (-ing) forms frequently act as noun modifiers / nominal heads
+   312: # ("tracking guide", "strength training"), so they are allowed inside / at the
+   313: # end of a noun phrase. Finite and past forms are clause signals.
+   314: GERUND_FORMS: Set[str] = {v for v in VERB_FORMS if v.endswith("ing")}
+   315: FINITE_VERB_FORMS: Set[str] = VERB_FORMS - GERUND_FORMS
+   316: 
+   317: # Interior determiners/possessives are safe to drop from an anchor.
+   318: STRIP_INTERIOR: Set[str] = {
+   319:     "the", "a", "an", "this", "that", "these", "those",
+   320:     "my", "your", "his", "her", "its", "our", "their",
+   321: }
+   322: 
+   323: INTENT_STARTS: Tuple[str, ...] = (
+   324:     "how to", "how many", "how much", "what is", "what are", "when to",
+   325:     "when do", "where to", "why is", "why are", "best way to", "best time to",
+   326:     "best ways to", "signs of", "symptoms of", "causes of", "benefits of",
+   327:     "treatment for", "guide to", "tips for", "ways to", "steps to",
+   328:     "reasons to", "reasons why",
+   329: )
+   330: 
+   331: INTENT_FIRST_WORDS: Set[str] = {
+   332:     "how", "what", "when", "where", "why", "best", "signs", "symptoms",
+   333:     "causes", "benefits", "treatment", "guide", "tips", "ways", "steps",
+   334:     "reasons",
+   335: }
+   336: 
+   337: # Generic heads too weak to stand alone unless well qualified.
+   338: GENERIC_WEAK_HEADS: Set[str] = {
+   339:     "thing", "things", "stuff", "way", "ways", "part", "parts", "case",
+   340:     "cases", "point", "points", "area", "areas", "level", "type", "types",
+   341:     "form", "forms", "kind", "kinds", "sort", "sorts", "lot", "bit",
+   342: }
+   343: 
+   344: # Strong content heads — SCORING ONLY (never a gate). Domain vocab can extend
+   345: # these via the optional import.
+   346: UNIVERSAL_HEADS: Set[str] = {
+   347:     "software", "tool", "tools", "platform", "system", "strategy", "workflow",
+   348:     "automation", "integration", "pipeline", "dashboard", "api", "app",
+   349:     "application", "plugin", "extension", "database", "storage", "security",
+   350:     "keyword", "keywords", "content", "backlink", "audit", "optimization",
+   351:     "conversion", "page", "traffic", "ranking", "analytics", "rate", "rates",
+   352:     "forecast", "tax", "investment", "lease", "agreement", "contract",
+   353:     "review", "property", "mortgage", "insurance", "calculator", "checklist",
+   354:     "service", "services", "pricing", "policy", "menu", "reservation",
+   355:     "restaurant", "hotel", "rental", "product", "customer", "study",
+   356:     "management", "project", "resume", "interview", "course", "lesson",
+   357:     "training", "symptoms", "causes", "treatment", "medication", "dosage",
+   358:     "therapy", "performance", "settings", "guide", "benefits", "estimate",
+   359:     "schedule", "routine", "report", "analysis", "assessment", "plan",
+   360:     "budget", "template", "framework", "model", "engine", "module", "feature",
+   361:     "features", "component", "source", "topic", "topics", "cluster", "score",
+   362:     "window", "cycle", "length", "date", "checkout", "subscription",
+   363: } | set(get_all_universal_nouns())
+   364: 
+   365: UNIVERSAL_MODIFIERS: Set[str] = {
+   366:     "pricing", "landing", "checkout", "subscription", "onboarding",
+   367:     "management", "marketing", "analytics", "email", "project", "technical",
+   368:     "conversion", "setup", "customer", "saas", "enterprise", "security",
+   369:     "billing", "internal", "external", "keyword", "content", "product",
+   370:     "support", "usage", "search", "brand", "branded", "trial", "demo",
+   371: } | set(get_all_universal_modifiers())
+   372: 
+   373: 
+   374: # ---------------------------------------------------------------------------
+   375: # Text utilities
+   376: # ---------------------------------------------------------------------------
+   377: 
+   378: def canonical_phrase(text: str) -> str:
+   379:     s = (text or "").strip().lower()
+   380:     s = s.replace("\u2019", "'").replace("\u2018", "'")
+   381:     s = s.replace("\u201c", '"').replace("\u201d", '"')
+   382:     s = re.sub(r"^\s*(?:\d+[.)]\s+|[\u2022\u2013\u2014\-]\s+)", "", s)
+   383:     s = re.sub(r"^[\"'(\[{]+|[\"')\]}:;,.!?]+$", "", s)
+   384:     s = re.sub(r"\s+", " ", s).strip()
+   385:     return s
+   386: 
+   387: 
+   388: def strip_tags(text: str) -> str:
+   389:     return re.sub(r"\s+", " ", TAG_RE.sub(" ", text or "")).strip()
+   390: 
+   391: 
+   392: def tokenize(text: str) -> List[str]:
+   393:     return [t.lower() for t in WORD_RE.findall(text or "")]
+   394: 
+   395: 
+   396: def split_sentences(text: str) -> List[str]:
+   397:     text = (text or "").strip()
+   398:     if not text:
+   399:         return []
+   400:     return [s.strip() for s in SENTENCE_SPLIT_RE.split(text) if s and s.strip()]
+   401: 
+   402: 
+   403: def extract_paragraphs(html: str = "", text: str = "") -> List[str]:
+   404:     paras = [strip_tags(x) for x in P_RE.findall(html or "")]
+   405:     paras = [p for p in paras if p]
+   406:     if paras:
+   407:         return paras
+   408:     raw = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+   409:     return [x.strip() for x in re.split(r"\n\s*\n+", raw) if x.strip()]
+   410: 
+   411: 
+   412: def extract_headings_and_lists(html: str = "") -> List[Dict[str, Any]]:
+   413:     out: List[Dict[str, Any]] = []
+   414:     for lvl, inner in H_RE.findall(html or ""):
+   415:         txt = strip_tags(inner)
+   416:         if not txt:
+   417:             continue
+   418:         source_type = f"heading_h{int(lvl)}"
+   419:         out.append({
+   420:             "phrase": canonical_phrase(txt),
+   421:             "source_type": source_type,
+   422:             "section_id": f"{source_type}_{len(out)}",
+   423:             "snippet": txt,
+   424:         })
+   425:     for li in [strip_tags(x) for x in LI_RE.findall(html or "")]:
+   426:         if li:
+   427:             out.append({
+   428:                 "phrase": canonical_phrase(li),
+   429:                 "source_type": "list_item",
+   430:                 "section_id": f"list_item_{len(out)}",
+   431:                 "snippet": li,
+   432:             })
+   433:     return out
+   434: 
+   435: 
+   436: # ---------------------------------------------------------------------------
+   437: # POS tagging (spaCy -> NLTK -> heuristic)
+   438: # ---------------------------------------------------------------------------
+   439: 
+   440: _NOUN_SUFFIXES = ("tion", "sion", "ment", "ness", "ity", "ship", "ance",
+   441:                   "ence", "ics", "ism", "age", "ure", "ist", "ery")
+   442: _VERB_SUFFIXES = ("ize", "ise", "ify")
+   443: _ING_ED_NOUNS = {
+   444:     "marketing", "branding", "onboarding", "training", "ranking", "rankings",
+   445:     "pricing", "billing", "listing", "listings", "meeting", "meetings",
+   446:     "setting", "settings", "building", "buildings", "reporting", "advertising",
+   447:     "engineering", "accounting", "funding", "spending", "earnings", "savings",
+   448:     "advanced", "automated", "integrated", "detailed", "dedicated", "related",
+   449:     "recommended", "estimated", "extended", "salted", "cooked", "guided",
+   450:     "cushioned", "creamy",  # adjectival participles seen as NP modifiers
+   451: }
+   452: 
+   453: 
+   454: def _heuristic_tag(word: str) -> str:
+   455:     w = word.lower()
+   456:     if w in FUNCTION_WORDS:
+   457:         if w in DETERMINERS:
+   458:             return "DET"
+   459:         if w in PREPOSITIONS:
+   460:             return "ADP"
+   461:         if w in CONJUNCTIONS:
+   462:             return "CONJ"
+   463:         if w in PRONOUNS:
+   464:             return "PRON"
+   465:         if w in AUX_VERBS:
+   466:             return "AUX"
+   467:         return "ADV"
+   468:     if w.isdigit():
+   469:         return "NUM"
+   470:     if w in ADJECTIVAL_LY:
+   471:         return "ADJ"
+   472:     if w in _ING_ED_NOUNS:
+   473:         return "NOUN"
+   474:     # inflected verb forms (builds, boosts, tracks) are strong clause signals;
+   475:     # the context retag pass can still demote a clause-final one to a plural noun.
+   476:     if _is_inflected_verb(w):
+   477:         return "VERB"
+   478:     if w in GERUND_FORMS:
+   479:         return "NOUN"        # gerunds usually nominal/modifier in NP context
+   480:     # known noun heads / modifiers and noun morphology win over a *bare* lemma
+   481:     # that merely happens to also be a verb (rate, score, support, schedule).
+   482:     if w in UNIVERSAL_HEADS or w in UNIVERSAL_MODIFIERS or w in GENERIC_WEAK_HEADS:
+   483:         return "NOUN"
+   484:     if w.endswith(_NOUN_SUFFIXES):
+   485:         return "NOUN"
+   486:     # remaining bare verb lemmas (make, reduce, build, drive...) are clause verbs
+   487:     if w in FINITE_VERB_FORMS or w in ACTION_VERBS:
+   488:         return "VERB"
+   489:     if w.endswith("ly") and len(w) > 4:
+   490:         return "ADV"
+   491:     if w.endswith(_VERB_SUFFIXES):
+   492:         return "VERB"
+   493:     # default: treat unknown content words as nouns (safer for NP chunking)
+   494:     return "NOUN"
+   495: 
+   496: 
+   497: def pos_tag(tokens: List[str]) -> List[Tuple[str, str]]:
+   498:     """Return [(token, coarse_tag), ...] using the best available tagger."""
+   499:     if not tokens:
+   500:         return []
+   501:     if _have_nltk():
+   502:         try:
+   503:             import nltk  # type: ignore
+   504:             raw = nltk.pos_tag(tokens)
+   505:             return [(w, _coarsen_ptb(t)) for w, t in raw]
+   506:         except Exception:
+   507:             pass
+   508:     return [(t, _heuristic_tag(t)) for t in tokens]
+   509: 
+   510: 
+   511: def _coarsen_ptb(tag: str) -> str:
+   512:     if tag.startswith("NN"):
+   513:         return "NOUN"
+   514:     if tag.startswith("VB"):
+   515:         return "VERB"
+   516:     if tag.startswith("JJ"):
+   517:         return "ADJ"
+   518:     if tag.startswith("RB"):
+   519:         return "ADV"
+   520:     if tag in {"DT", "PDT", "WDT"}:
+   521:         return "DET"
+   522:     if tag == "IN":
+   523:         return "ADP"
+   524:     if tag == "CC":
+   525:         return "CONJ"
+   526:     if tag in {"PRP", "PRP$", "WP", "WP$"}:
+   527:         return "PRON"
+   528:     if tag == "CD":
+   529:         return "NUM"
+   530:     if tag == "MD":
+   531:         return "AUX"
+   532:     return "X"
+   533: 
+   534: 
+   535: # ---------------------------------------------------------------------------
+   536: # Boundary trimming — the core "no hanging phrases" logic
+   537: # ---------------------------------------------------------------------------
+   538: 
+   539: def _trim_boundaries(tokens: Sequence[str]) -> List[str]:
+   540:     """Strip leading/trailing function words so the phrase begins and ends on a
+   541:     content word. Adjectival ``-ly`` modifiers are preserved at the front.
+   542: 
+   543:     Only *inflected* finite verb forms (boosts, builds, tracks) are stripped
+   544:     from the front; bare lemmas that double as nouns (search, lean, feature)
+   545:     are kept, since here they head/modify a noun phrase."""
+   546:     toks = list(tokens)
+   547:     while toks and (
+   548:         toks[0] in LEADING_BAN
+   549:         or (_is_inflected_verb(toks[0]) and toks[0] not in ACTION_VERBS)
+   550:     ):
+   551:         toks.pop(0)
+   552:     while toks and (
+   553:         toks[-1] in TRAILING_BAN
+   554:         or toks[-1] in AUX_VERBS
+   555:         or toks[-1] in PARTICLES_DEGREE
+   556:         or _is_adverb_ly(toks[-1])
+   557:     ):
+   558:         toks.pop()
+   559:     return toks
+   560: 
+   561: 
+   562: def _head_is_noun_like(token: str, tag: Optional[str]) -> bool:
+   563:     """Decide whether ``token`` can be a phrase head. When a tagger supplies a
+   564:     tag we trust it (this is what makes heads niche-agnostic); otherwise we use
+   565:     morphology + the closed verb class."""
+   566:     if token in COMPARATIVES or _is_adverb_ly(token):
+   567:         return False
+   568:     if tag is not None:
+   569:         if tag in {"NOUN", "NUM"}:
+   570:             return True
+   571:         if tag == "ADJ":
+   572:             return False  # adjective tail = hanging ("very large")
+   573:         if tag == "VERB":
+   574:             # gerund / participle used nominally is OK; finite verb is not.
+   575:             return token in _ING_ED_NOUNS or token in GERUND_FORMS
+   576:         return False
+   577:     # ---- no tagger: morphology-based fallback ----
+   578:     if token in _ING_ED_NOUNS or token in GERUND_FORMS:
+   579:         return True
+   580:     if token in GENERIC_WEAK_HEADS or token in UNIVERSAL_HEADS:
+   581:         return True
+   582:     if token in FINITE_VERB_FORMS:
+   583:         return False
+   584:     if token in (AUX_VERBS | PREPOSITIONS | CONJUNCTIONS | PRONOUNS | DETERMINERS):
+   585:         return False
+   586:     if token.endswith("ed") and token not in _ING_ED_NOUNS:
+   587:         return False
+   588:     return True
+   589: 
+   590: 
+   591: def _is_finite_verb(token: str, tag: Optional[str]) -> bool:
+   592:     """Is this token a finite/clause verb (a clause signal), as opposed to a
+   593:     nominal gerund/participle modifier? Tags have already been cleaned by the
+   594:     retag pass, so when a tag is present we trust it."""
+   595:     if _is_gerund(token) or token in _ING_ED_NOUNS or token in GERUND_FORMS:
+   596:         return False
+   597:     if tag == "VERB":
+   598:         return True
+   599:     if tag in {"NOUN", "NUM", "ADJ"}:
+   600:         return False                         # trust the (retagged) tagger
+   601:     # no tag available: fall back to the closed verb class, inflected forms only
+   602:     return _is_inflected_verb(token) or (token in ALL_VERB_LEMMAS
+   603:                                          and token in FINITE_VERB_FORMS
+   604:                                          and token not in _ING_ED_NOUNS)
+   605: 
+   606: 
+   607: def _is_complete_phrase(tokens: Sequence[str],
+   608:                         tags: Optional[Sequence[str]] = None) -> bool:
+   609:     """A phrase is complete iff it is a clean noun-phrase constituent.
+   610: 
+   611:     Tag-aware: when ``tags`` are provided they drive the head and interior-verb
+   612:     decisions, so any niche's head noun is accepted. ``tags`` must align 1:1
+   613:     with ``tokens``.
+   614:     """
+   615:     toks = list(tokens)
+   616:     if not (2 <= len(toks) <= 6):
+   617:         return False
+   618:     tg: List[Optional[str]] = list(tags) if tags is not None else [None] * len(toks)
+   619:     if len(tg) != len(toks):
+   620:         tg = [None] * len(toks)
+   621: 
+   622:     if toks[0] in LEADING_BAN or toks[-1] in TRAILING_BAN:
+   623:         return False
+   624:     if not _head_is_noun_like(toks[-1], tg[-1]):
+   625:         return False
+   626:     if any(t in AUX_VERBS for t in toks):
+   627:         return False
+   628:     if any(t in PRONOUNS for t in toks):
+   629:         return False
+   630:     # leading finite verb (not an action verb) => glued clause ("boosts metabolism")
+   631:     if _is_finite_verb(toks[0], tg[0]) and toks[0] not in ACTION_VERBS:
+   632:         return False
+   633:     # any interior finite verb => glued clause
+   634:     for t, g in zip(toks[1:-1], tg[1:-1]):
+   635:         if _is_finite_verb(t, g):
+   636:             return False
+   637:     if any(t in STRIP_INTERIOR for t in toks[1:-1]):
+   638:         return False
+   639:     # interior conjunctions / non-'of' prepositions => fragment
+   640:     for t in toks[1:-1]:
+   641:         if t in CONJUNCTIONS or (t in PREPOSITIONS and t != "of"):
+   642:             return False
+   643:     content = [t for t in toks if t not in FUNCTION_WORDS]
+   644:     if len(content) < 2:
+   645:         return False
+   646:     if all(t in GENERIC_WEAK_HEADS or t in FUNCTION_WORDS for t in toks):
+   647:         return False
+   648:     return True
+   649: 
+   650: 
+   651: def _is_complete_intent(tokens: Sequence[str],
+   652:                         tags: Optional[Sequence[str]] = None) -> bool:
+   653:     """Validate a verb-bearing intent phrase ("how to calculate fertile window").
+   654: 
+   655:     Intent phrases legitimately contain an interior verb, so they use their own
+   656:     rule: recognised intent prefix, 3..7 tokens, ends on a noun-like head, no
+   657:     dangling boundary, no pronouns."""
+   658:     toks = list(tokens)
+   659:     if not (3 <= len(toks) <= 7):
+   660:         return False
+   661:     if any(t in PRONOUNS for t in toks):
+   662:         return False
+   663:     if toks[-1] in TRAILING_BAN or toks[-1] in AUX_VERBS:
+   664:         return False
+   665:     joined = " ".join(toks)
+   666:     if not any(joined.startswith(p) for p in INTENT_STARTS):
+   667:         return False
+   668:     tg = list(tags) if tags is not None and len(tags) == len(toks) else [None] * len(toks)
+   669:     if not _head_is_noun_like(toks[-1], tg[-1]):
+   670:         return False
+   671:     return True
+   672: 
+   673: 
+   674: # ---------------------------------------------------------------------------
+   675: # Chunkers — yield (phrase, tags) for COMPLETE constituents only
+   676: # ---------------------------------------------------------------------------
+   677: 
+   678: Cand = Tuple[str, str, List[str]]   # (phrase, kind, tags)  kind in {np, action, intent}
+   679: 
+   680: 
+   681: def _spacy_chunks(sent: str) -> List[Cand]:
+   682:     nlp = _get_spacy()
+   683:     if nlp is None:
+   684:         return []
+   685:     out: List[Cand] = []
+   686:     doc = nlp(sent)
+   687:     for nc in doc.noun_chunks:
+   688:         keep: List[str] = []
+   689:         tags: List[str] = []
+   690:         for t in nc:
+   691:             if not WORD_RE.fullmatch(t.text):
+   692:                 continue
+   693:             keep.append(t.text.lower())
+   694:             tags.append(_coarsen_ptb(t.tag_) if t.tag_ else _spacy_coarse(t))
+   695:         # enumerate sub-anchors so compounds yield their inner phrases too
+   696:         out.extend(_windows_from_run(list(zip(keep, tags))))
+   697:     return out
+   698: 
+   699: 
+   700: def _spacy_coarse(tok) -> str:
+   701:     m = {"NOUN": "NOUN", "PROPN": "NOUN", "VERB": "VERB", "ADJ": "ADJ",
+   702:          "ADV": "ADV", "DET": "DET", "ADP": "ADP", "CCONJ": "CONJ",
+   703:          "SCONJ": "CONJ", "PRON": "PRON", "NUM": "NUM", "AUX": "AUX"}
+   704:     return m.get(tok.pos_, "X")
+   705: 
+   706: 
+   707: def _trim_with_tags(tokens: List[str], tags: List[str]) -> Tuple[List[str], List[str]]:
+   708:     toks, tg = list(tokens), list(tags)
+   709:     while toks and (
+   710:         toks[0] in LEADING_BAN
+   711:         or (_confirmed_finite(toks[0], tg[0]) and toks[0] not in ACTION_VERBS)
+   712:     ):
+   713:         toks.pop(0)
+   714:         tg.pop(0)
+   715:     while toks and (
+   716:         toks[-1] in TRAILING_BAN or toks[-1] in AUX_VERBS
+   717:         or toks[-1] in PARTICLES_DEGREE or _is_adverb_ly(toks[-1])
+   718:     ):
+   719:         toks.pop()
+   720:         tg.pop()
+   721:     return toks, tg
+   722: 
+   723: 
+   724: # Verbs (base + inflections) we treat as a roughly closed class.
+   725: ALL_VERB_LEMMAS: Set[str] = ACTION_VERBS | _COMMON_VERB_LEMMAS
+   726: 
+   727: 
+   728: def _is_gerund(w: str) -> bool:
+   729:     """True for -ing forms that act as nominal/participial NP modifiers."""
+   730:     return len(w) > 4 and w.endswith("ing") and w not in AUX_VERBS
+   731: 
+   732: 
+   733: def _confirmed_finite(w: str, t: Optional[str]) -> bool:
+   734:     """A *confirmed* finite verb: an inflected known verb form (strong signal),
+   735:     or a base verb the tagger also calls a VERB. Base forms that are also common
+   736:     nouns (feature, search, rate, ...) are NOT confirmed unless the tagger agrees,
+   737:     so we never shatter a noun compound on an ambiguous word."""
+   738:     if _is_gerund(w) or w in _ING_ED_NOUNS:
+   739:         return False
+   740:     if w in FINITE_VERB_FORMS:
+   741:         if w in ALL_VERB_LEMMAS:        # base form -> need tagger agreement
+   742:             return t == "VERB"
+   743:         return True                      # inflected -s/-es/-ed/-ies -> strong verb
+   744:     return False
+   745: 
+   746: 
+   747: def _np_eligible(w: str, t: Optional[str]) -> bool:
+   748:     """May this token sit *inside* a noun phrase run? Tags are already retagged,
+   749:     so VERB means a real clause verb here."""
+   750:     if w == "to":
+   751:         return False
+   752:     if t in {"DET", "CONJ", "PRON", "AUX"}:
+   753:         return False
+   754:     if t == "ADP" and w != "of":
+   755:         return False
+   756:     if w in DETERMINERS or w in CONJUNCTIONS or w in PRONOUNS or w in AUX_VERBS:
+   757:         return False
+   758:     if w in PREPOSITIONS and w != "of":
+   759:         return False
+   760:     if _is_gerund(w) or w in _ING_ED_NOUNS:
+   761:         return True
+   762:     if t == "VERB":
+   763:         return False
+   764:     return True
+   765: 
+   766: 
+   767: def _is_inflected_verb(w: str) -> bool:
+   768:     """A known verb in an inflected (-s/-es/-ed/-ies) form, i.e. NOT a bare
+   769:     lemma. These are the forms NLTK most often mislabels as NNS in compounds."""
+   770:     return (w in FINITE_VERB_FORMS and w not in ALL_VERB_LEMMAS
+   771:             and not _is_gerund(w) and w not in _ING_ED_NOUNS)
+   772: 
+   773: 
+   774: _OBJECT_STARTERS = {"NOUN", "ADJ", "NUM", "DET", "PRON"}
+   775: 
+   776: 
+   777: def _nominalize_tags(tags: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+   778:     """Context-aware retag that cleans up the two systematic tagger errors that
+   779:     fragment noun compounds, then lets everything downstream simply trust tags:
+   780: 
+   781:     1. Inflected verb forms (builds, tracks, boosts, rates) are decided by
+   782:        right context: a finite verb is followed by an object/predicate; the same
+   783:        form at clause end / before a conjunction or preposition is a plural noun.
+   784:     2. A bare verb lemma the tagger called VERB but which sits inside an object
+   785:        NP after the real clause verb (and not after to/of/det) is a compound
+   786:        noun modifier ('tracks feature adoption')."""
+   787:     out = list(tags)
+   788:     n = len(out)
+   789:     block_left = ({"to"} | PREPOSITIONS | CONJUNCTIONS | AUX_VERBS
+   790:                   | DETERMINERS | PRONOUNS)
+   791:     seen_verb = False
+   792:     for i, (w, t) in enumerate(out):
+   793:         if w in CONJUNCTIONS or w == "to":
+   794:             seen_verb = False
+   795:         rt = out[i + 1] if i + 1 < n else None
+   796: 
+   797:         # (1) resolve inflected known-verb forms by right context
+   798:         if _is_inflected_verb(w):
+   799:             obj_start = (
+   800:                 rt is not None and rt[0] not in CONJUNCTIONS and rt[0] != "to"
+   801:                 and (rt[1] in _OBJECT_STARTERS
+   802:                      or (rt[1] == "VERB" and rt[0] in ALL_VERB_LEMMAS
+   803:                          and not _is_gerund(rt[0])))
+   804:             )
+   805:             out[i] = (w, "VERB" if obj_start else "NOUN")
+   806:             if obj_start:
+   807:                 seen_verb = True
+   808:             continue
+   809: 
+   810:         # (2) demote a bare verb lemma that is really a compound modifier
+   811:         is_base = (w in ALL_VERB_LEMMAS and w not in _ING_ED_NOUNS
+   812:                    and not _is_gerund(w))
+   813:         if is_base and t == "VERB" and seen_verb:
+   814:             lt = out[i - 1] if i > 0 else None
+   815:             right_noun = rt is not None and _head_is_noun_like(rt[0], rt[1])
+   816:             left_ok = lt is not None and lt[0] not in block_left
+   817:             if right_noun and left_ok:
+   818:                 out[i] = (w, "NOUN")
+   819:                 continue
+   820: 
+   821:         # a real present-tense finite verb marks the clause verb as seen;
+   822:         # leading -ed participles (automated, integrated) must NOT count.
+   823:         if (t == "VERB" and not _is_gerund(w) and w not in _ING_ED_NOUNS
+   824:                 and not w.endswith("ed")):
+   825:             seen_verb = True
+   826:     return out
+   827: 
+   828: 
+   829: def _runs_from_tags(tags: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+   830:     runs: List[List[Tuple[str, str]]] = []
+   831:     cur: List[Tuple[str, str]] = []
+   832:     for w, t in tags:
+   833:         if _np_eligible(w, t):
+   834:             cur.append((w, t))
+   835:         else:
+   836:             if cur:
+   837:                 runs.append(cur)
+   838:             cur = []
+   839:     if cur:
+   840:         runs.append(cur)
+   841:     return runs
+   842: 
+   843: 
+   844: def _windows_from_run(run: List[Tuple[str, str]]) -> List[Cand]:
+   845:     """Every contiguous sub-window that ends on a noun head and survives the
+   846:     completeness check. This is what yields both the full compound
+   847:     ('weekly strength training') and its sub-anchors ('strength training')."""
+   848:     out: List[Cand] = []
+   849:     m = len(run)
+   850:     for e in range(m):
+   851:         we, te = run[e]
+   852:         if not _head_is_noun_like(we, te):
+   853:             continue
+   854:         for s in range(e):                       # window length >= 2
+   855:             if e - s + 1 > 6:
+   856:                 continue
+   857:             toks = [w for w, _ in run[s:e + 1]]
+   858:             tgs = [t for _, t in run[s:e + 1]]
+   859:             tt, tg = _trim_with_tags(toks, tgs)
+   860:             if _is_complete_phrase(tt, tg):
+   861:                 out.append((" ".join(tt), "np", tg))
+   862:     return out
+   863: 
+   864: 
+   865: def _noun_chunks_pos(sent: str) -> List[Cand]:
+   866:     tokens = tokenize(sent)
+   867:     if not tokens:
+   868:         return []
+   869:     tags = _nominalize_tags(pos_tag(tokens))
+   870:     out: List[Cand] = []
+   871:     for run in _runs_from_tags(tags):
+   872:         out.extend(_windows_from_run(run))
+   873:     return out
+   874: 
+   875: 
+   876: def _intent_phrases(sent: str) -> List[Cand]:
+   877:     s = canonical_phrase(sent)
+   878:     out: List[Cand] = []
+   879:     for start in INTENT_STARTS:
+   880:         idx = s.find(start)
+   881:         if idx == -1:
+   882:             continue
+   883:         # ensure it's a word boundary start
+   884:         if idx > 0 and s[idx - 1].isalnum():
+   885:             continue
+   886:         tail = tokenize(s[idx:])
+   887:         cand: List[str] = []
+   888:         nstart = len(start.split())
+   889:         for t in tail:
+   890:             # stop at a clause boundary or a trailing prepositional phrase once
+   891:             # the core anchor is captured ("...track cycle length | over time")
+   892:             if len(cand) >= nstart and (
+   893:                 t in CONJUNCTIONS or t in AUX_VERBS
+   894:                 or (t in PREPOSITIONS and t != "of")
+   895:             ):
+   896:                 break
+   897:             cand.append(t)
+   898:             if len(cand) >= 8:
+   899:                 break
+   900:         # drop interior possessives/determiners ("calculate your due date")
+   901:         if len(cand) > nstart:
+   902:             cand = cand[:nstart] + [t for t in cand[nstart:] if t not in STRIP_INTERIOR]
+   903:         while cand and (cand[-1] in TRAILING_BAN or cand[-1] in AUX_VERBS
+   904:                         or not _head_is_noun_like(cand[-1], None)):
+   905:             cand.pop()
+   906:         if _is_complete_intent(cand):
+   907:             out.append((" ".join(cand), "intent", []))
+   908:     return out
+   909: 
+   910: 
+   911: def _candidate_phrases(sent: str) -> List[Cand]:
+   912:     """Dispatch to the best chunker available, plus intent phrases."""
+   913:     if _get_spacy() is not None:
+   914:         chunks = _spacy_chunks(sent)
+   915:     else:
+   916:         chunks = _noun_chunks_pos(sent)
+   917:     chunks.extend(_intent_phrases(sent))
+   918:     seen: Set[str] = set()
+   919:     uniq: List[Cand] = []
+   920:     for phrase, kind, tg in chunks:
+   921:         if phrase and phrase not in seen:
+   922:             seen.add(phrase)
+   923:             uniq.append((phrase, kind, tg))
+   924:     return uniq
+   925: 
+   926: 
+   927: # ---------------------------------------------------------------------------
+   928: # Lightweight, transparent, niche-agnostic quality scoring
+   929: # ---------------------------------------------------------------------------
+   930: 
+   931: SOURCE_WEIGHT: Dict[str, float] = {
+   932:     "title": 0.20, "heading_h1": 0.18, "heading_h2": 0.16, "heading_h3": 0.14,
+   933:     "heading_h4": 0.12, "heading_h5": 0.12, "heading_h6": 0.12,
+   934:     "list_item": 0.10, "intent": 0.14, "action_object": 0.12, "noun_phrase": 0.10,
+   935: }
+   936: 
+   937: ACCEPT_THRESHOLD = 0.50
+   938: 
+   939: 
+   940: def _score_phrase(tokens: Sequence[str], tags: Optional[Sequence[str]],
+   941:                   source_type: str, snippet: str) -> Dict[str, Any]:
+   942:     toks = list(tokens)
+   943:     content = [t for t in toks if t not in FUNCTION_WORDS]
+   944:     n_content = max(1, len(content))
+   945:     tg = list(tags) if tags and len(tags) == len(toks) else [None] * len(toks)
+   946: 
+   947:     # headedness: structural first (tagger/morphology), domain list is a bonus.
+   948:     head_tok, head_tag = toks[-1], tg[-1]
+   949:     if head_tok in GENERIC_WEAK_HEADS:
+   950:         head = 0.30
+   951:     elif head_tok in UNIVERSAL_HEADS:
+   952:         head = 1.0
+   953:     elif head_tag in {"NOUN", "NUM"} or _head_is_noun_like(head_tok, head_tag):
+   954:         head = 0.80                      # any real noun head — niche-agnostic
+   955:     else:
+   956:         head = 0.50
+   957: 
+   958:     # entity density: share of "substantial" content tokens (len>=4) plus a
+   959:     # small bonus for known-strong vocab. Length-based => works in any niche.
+   960:     strong = sum(1 for t in content
+   961:                  if len(t) >= 4 or t in UNIVERSAL_HEADS or t in UNIVERSAL_MODIFIERS)
+   962:     density = strong / n_content
+   963: 
+   964:     # specificity: a modifier + head reads as a real concept.
+   965:     has_modifier = (
+   966:         len(content) >= 2
+   967:         and any((len(t) >= 4) or (t in UNIVERSAL_MODIFIERS) for t in toks[:-1])
+   968:     )
+   969:     specificity = 0.7 if has_modifier else 0.35
+   970: 
+   971:     # length sweet spot (2-4 content words)
+   972:     length = 1.0 if 2 <= len(content) <= 4 else 0.55
+   973: 
+   974:     # coverage in source snippet
+   975:     snip = set(tokenize(snippet))
+   976:     coverage = 1.0 if set(toks).issubset(snip) else 0.6
+   977: 
+   978:     score = (
+   979:         0.30 * head +
+   980:         0.22 * density +
+   981:         0.18 * specificity +
+   982:         0.15 * length +
+   983:         0.15 * coverage +
+   984:         SOURCE_WEIGHT.get(source_type, 0.08)
+   985:     )
+   986:     score = max(0.0, min(1.0, round(score, 4)))
+   987: 
+   988:     return {
+   989:         "score": score,
+   990:         "threshold": ACCEPT_THRESHOLD,
+   991:         "decision": "ACCEPT" if score >= ACCEPT_THRESHOLD else "REJECT",
+   992:         "signals": {
+   993:             "headedness": round(head, 3),
+   994:             "entity_density": round(density, 3),
+   995:             "specificity": round(specificity, 3),
+   996:             "length": round(length, 3),
+   997:             "coverage": round(coverage, 3),
+   998:         },
+   999:     }
+  1000: 
+  1001: 
+  1002: # ---------------------------------------------------------------------------
+  1003: # Candidate assembly
+  1004: # ---------------------------------------------------------------------------
+  1005: 
+  1006: def _reject(candidate: Dict[str, Any], reason: str, seen_rejects: Set[str],
+  1007:             workspace_id: str, doc_id: str, vertical: str) -> None:
+  1008:     # de-duplicate rejection logging so suffix expansion can't spam the hook.
+  1009:     key = f"{reason}:{candidate.get('phrase','')}"
+  1010:     if key in seen_rejects:
+  1011:         return
+  1012:     seen_rejects.add(key)
+  1013:     learn_from_pipeline_rejection(
+  1014:         workspace_id=workspace_id,
+  1015:         document_id=doc_id,
+  1016:         vertical=vertical,
+  1017:         pipeline_stage="smart_extractor",
+  1018:         candidate=candidate,
+  1019:         rejection_reason=reason,
+  1020:     )
+  1021: 
+  1022: 
+  1023: def _add_candidate(
+  1024:     out: List[Dict[str, Any]],
+  1025:     seen: Set[str],
+  1026:     seen_rejects: Set[str],
+  1027:     phrase: str,
+  1028:     kind: str,
+  1029:     tags: Optional[Sequence[str]],
+  1030:     source_type: str,
+  1031:     section_id: str,
+  1032:     snippet: str,
+  1033:     doc_id: str = "",
+  1034:     workspace_id: str = "default",
+  1035:     vertical: str = "general",
+  1036: ) -> None:
+  1037:     p = canonical_phrase(phrase)
+  1038:     tokens = _trim_boundaries(tokenize(p))
+  1039:     # drop interior determiners/possessives ("estimate your due date" -> "estimate due date")
+  1040:     if len(tokens) > 2:
+  1041:         tokens = [tokens[0]] + [t for t in tokens[1:-1] if t not in STRIP_INTERIOR] + [tokens[-1]]
+  1042:         tokens = _trim_boundaries(tokens)
+  1043:     p = " ".join(tokens)
+  1044:     record = {"phrase": p, "source_type": source_type, "section_id": section_id}
+  1045: 
+  1046:     # tags coming from the chunker were aligned to the *pre-canonical* tokens;
+  1047:     # only trust them if they still align, else recompute.
+  1048:     tg: Optional[List[str]] = None
+  1049:     if tags and len(tags) == len(tokens):
+  1050:         tg = list(tags)
+  1051: 
+  1052:     is_intent = kind == "intent" or (tokens and tokens[0] in INTENT_FIRST_WORDS
+  1053:                                       and " ".join(tokens).startswith(INTENT_STARTS))
+  1054:     if is_intent:
+  1055:         if tg is None:
+  1056:             tg = [t for _, t in pos_tag(tokens)]
+  1057:         ok = _is_complete_intent(tokens, tg)
+  1058:     else:
+  1059:         if tg is None:
+  1060:             tg = [t for _, t in pos_tag(tokens)]
+  1061:         ok = _is_complete_phrase(tokens, tg)
+  1062: 
+  1063:     if not ok:
+  1064:         _reject(record, "incomplete_or_hanging_phrase", seen_rejects,
+  1065:                 workspace_id, doc_id, vertical)
+  1066:         return
+  1067: 
+  1068:     scoring = _score_phrase(tokens, tg, source_type, snippet)
+  1069:     if scoring["decision"] != "ACCEPT":
+  1070:         _reject(record, "below_quality_threshold", seen_rejects,
+  1071:                 workspace_id, doc_id, vertical)
+  1072:         return
+  1073: 
+  1074:     key = f"{source_type}:{p}:{section_id}"
+  1075:     if key in seen:
+  1076:         return
+  1077:     seen.add(key)
+  1078: 
+  1079:     out.append({
+  1080:         "phrase": p,
+  1081:         "source_type": source_type,
+  1082:         "section_id": section_id,
+  1083:         "doc_id": doc_id,
+  1084:         "snippet": snippet,
+  1085:         "extractor_intelligence": scoring,
+  1086:     })
+  1087: 
+  1088: 
+  1089: def _classify_source(phrase: str, kind: str) -> str:
+  1090:     first = phrase.split()[0] if phrase else ""
+  1091:     if kind == "intent" or (first in INTENT_FIRST_WORDS
+  1092:                             and phrase.startswith(INTENT_STARTS)):
+  1093:         return "intent"
+  1094:     return "noun_phrase"
+  1095: 
+  1096: 
+  1097: # ---------------------------------------------------------------------------
+  1098: # Public API
+  1099: # ---------------------------------------------------------------------------
+  1100: 
+  1101: def extract_smart_phrases(
+  1102:     *,
+  1103:     text: str = "",
+  1104:     html: str = "",
+  1105:     title: str = "",
+  1106:     doc_id: str = "",
+  1107:     max_candidates: int = 500,
+  1108:     workspace_id: str = "default",
+  1109:     vertical: str = "general",
+  1110: ) -> List[Dict[str, Any]]:
+  1111:     """Extract clean, complete anchor phrases from a document.
+  1112: 
+  1113:     Drop-in replacement for the previous version: same signature, same output
+  1114:     dict shape ({phrase, source_type, section_id, doc_id, snippet,
+  1115:     extractor_intelligence}).
+  1116:     """
+  1117:     out: List[Dict[str, Any]] = []
+  1118:     seen: Set[str] = set()
+  1119:     seen_rejects: Set[str] = set()
+  1120: 
+  1121:     if title:
+  1122:         _add_candidate(out, seen, seen_rejects, title, "np", None,
+  1123:                        "title", "title_0", title, doc_id, workspace_id, vertical)
+  1124:         # also mine sub-anchors from the title ("Residential Lease Agreement
+  1125:         # Basics" -> "lease agreement")
+  1126:         for phrase, kind, tg in _candidate_phrases(title):
+  1127:             _add_candidate(out, seen, seen_rejects, phrase, kind, tg,
+  1128:                            _classify_source(phrase, kind), "title_0", title,
+  1129:                            doc_id, workspace_id, vertical)
+  1130: 
+  1131:     for h in extract_headings_and_lists(html):
+  1132:         whole = h.get("phrase") or ""
+  1133:         src = h.get("source_type") or "list_item"
+  1134:         sec = h.get("section_id") or "section_0"
+  1135:         snip = h.get("snippet") or ""
+  1136:         _add_candidate(out, seen, seen_rejects, whole, "np", None,
+  1137:                        src, sec, snip, doc_id, workspace_id, vertical)
+  1138:         for phrase, kind, tg in _candidate_phrases(snip or whole):
+  1139:             _add_candidate(out, seen, seen_rejects, phrase, kind, tg,
+  1140:                            _classify_source(phrase, kind), sec, snip,
+  1141:                            doc_id, workspace_id, vertical)
+  1142:         if len(out) >= max_candidates:
+  1143:             return out[:max_candidates]
+  1144: 
+  1145:     paragraphs = extract_paragraphs(html=html, text=text)
+  1146:     for pi, para in enumerate(paragraphs):
+  1147:         for si, sent in enumerate(split_sentences(para)):
+  1148:             section_id = f"p{pi}_s{si}"
+  1149:             for phrase, kind, tg in _candidate_phrases(sent):
+  1150:                 source_type = _classify_source(phrase, kind)
+  1151:                 _add_candidate(out, seen, seen_rejects, phrase, kind, tg,
+  1152:                                source_type, section_id, sent,
+  1153:                                doc_id, workspace_id, vertical)
+  1154:                 if len(out) >= max_candidates:
+  1155:                     return out[:max_candidates]
+  1156: 
+  1157:     return out[:max_candidates]
+  1158: 
+  1159: 
+  1160: if __name__ == "__main__":
+  1161:     sample_text = (
+  1162:         "Many people want to calculate their fertile window before trying to "
+  1163:         "conceive. The most accurate ovulation calculator uses your average "
+  1164:         "cycle length and the date of your last period. You can also track "
+  1165:         "cycle length over time. With a 28 day cycle, ovulation usually falls "
+  1166:         "around day 14. This guide explains the simple calendar math. "
+  1167:         "Our keyword research tool helps you build topic clusters and improve "
+  1168:         "search ranking for your landing page."
+  1169:     )
+  1170:     sample_title = "Fertility Tracking Guide"
+  1171:     sample_html = (
+  1172:         "<h1>Ovulation Calculator</h1>"
+  1173:         "<h2>How to calculate your fertile window</h2>"
+  1174:         "<ul><li>Track cycle length</li><li>Estimate your due date</li></ul>"
+  1175:         "<p>The conversion rate optimization checklist improves your "
+  1176:         "landing page performance.</p>"
+  1177:     )
+  1178: 
+  1179:     backend = "spaCy" if _get_spacy() else ("NLTK" if _have_nltk() else "heuristic")
+  1180:     print(f"[chunker backend: {backend}]\n")
+  1181:     results = extract_smart_phrases(
+  1182:         text=sample_text, html=sample_html, title=sample_title, doc_id="demo",
+  1183:     )
+  1184:     for r in results:
+  1185:         print(f"{r['extractor_intelligence']['score']:.2f}  "
+  1186:               f"[{r['source_type']:<13}] {r['phrase']}")
+  1187:     print(f"\nTotal: {len(results)} phrases")
+
+============================================================
+PUBLIC DEFINITIONS
+============================================================
+LINE 72: def _get_spacy():
+LINE 89: def _have_nltk() -> bool:
+LINE 192: def _is_adverb_ly(token: str) -> bool:
+LINE 219: def _verb_forms(lemmas: Set[str]) -> Set[str]:
+LINE 378: def canonical_phrase(text: str) -> str:
+LINE 388: def strip_tags(text: str) -> str:
+LINE 392: def tokenize(text: str) -> List[str]:
+LINE 396: def split_sentences(text: str) -> List[str]:
+LINE 403: def extract_paragraphs(html: str = "", text: str = "") -> List[str]:
+LINE 412: def extract_headings_and_lists(html: str = "") -> List[Dict[str, Any]]:
+LINE 454: def _heuristic_tag(word: str) -> str:
+LINE 497: def pos_tag(tokens: List[str]) -> List[Tuple[str, str]]:
+LINE 511: def _coarsen_ptb(tag: str) -> str:
+LINE 539: def _trim_boundaries(tokens: Sequence[str]) -> List[str]:
+LINE 562: def _head_is_noun_like(token: str, tag: Optional[str]) -> bool:
+LINE 591: def _is_finite_verb(token: str, tag: Optional[str]) -> bool:
+LINE 607: def _is_complete_phrase(tokens: Sequence[str],
+LINE 651: def _is_complete_intent(tokens: Sequence[str],
+LINE 681: def _spacy_chunks(sent: str) -> List[Cand]:
+LINE 700: def _spacy_coarse(tok) -> str:
+LINE 707: def _trim_with_tags(tokens: List[str], tags: List[str]) -> Tuple[List[str], List[str]]:
+LINE 728: def _is_gerund(w: str) -> bool:
+LINE 733: def _confirmed_finite(w: str, t: Optional[str]) -> bool:
+LINE 747: def _np_eligible(w: str, t: Optional[str]) -> bool:
+LINE 767: def _is_inflected_verb(w: str) -> bool:
+LINE 777: def _nominalize_tags(tags: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+LINE 829: def _runs_from_tags(tags: List[Tuple[str, str]]) -> List[List[Tuple[str, str]]]:
+LINE 844: def _windows_from_run(run: List[Tuple[str, str]]) -> List[Cand]:
+LINE 865: def _noun_chunks_pos(sent: str) -> List[Cand]:
+LINE 876: def _intent_phrases(sent: str) -> List[Cand]:
+LINE 911: def _candidate_phrases(sent: str) -> List[Cand]:
+LINE 940: def _score_phrase(tokens: Sequence[str], tags: Optional[Sequence[str]],
+LINE 1006: def _reject(candidate: Dict[str, Any], reason: str, seen_rejects: Set[str],
+LINE 1023: def _add_candidate(
+LINE 1089: def _classify_source(phrase: str, kind: str) -> str:
+LINE 1101: def extract_smart_phrases(
+
+============================================================
+LIVE IMPORTS AND CALLERS
+============================================================
+
+FILE: backend\server\engine\article_body_extractor.py
+LINE: 15
+PATTERN: backend.server.stores.smart_phrase_extractor
+CODE: from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+
+FILE: backend\server\engine\article_body_extractor.py
+LINE: 15
+PATTERN: extract_smart_phrases
+CODE: from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+
+FILE: backend\server\engine\article_body_extractor.py
+LINE: 15
+PATTERN: from backend.server.stores.smart_phrase_extractor import
+CODE: from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+
+FILE: backend\server\engine\article_body_extractor.py
+LINE: 17
+PATTERN: extract_smart_phrases
+CODE: extract_smart_phrases = None
+
+FILE: backend\server\engine\article_body_extractor.py
+LINE: 233
+PATTERN: extract_smart_phrases
+CODE: if extract_smart_phrases is not None:
+
+FILE: backend\server\engine\article_body_extractor.py
+LINE: 235
+PATTERN: extract_smart_phrases
+CODE: smart_rows = extract_smart_phrases(
+
+FILE: backend\server\stores\upload_intel_store_v2.py
+LINE: 13
+PATTERN: backend.server.stores.smart_phrase_extractor
+CODE: from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+
+FILE: backend\server\stores\upload_intel_store_v2.py
+LINE: 13
+PATTERN: extract_smart_phrases
+CODE: from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+
+FILE: backend\server\stores\upload_intel_store_v2.py
+LINE: 13
+PATTERN: from backend.server.stores.smart_phrase_extractor import
+CODE: from backend.server.stores.smart_phrase_extractor import extract_smart_phrases
+
+FILE: backend\server\stores\upload_intel_store_v2.py
+LINE: 678
+PATTERN: extract_smart_phrases
+CODE: candidates = extract_smart_phrases(
+
+FILE: backend\server\stores\upload_phrase_selector.py
+LINE: 15
+PATTERN: backend.server.stores.smart_phrase_extractor
+CODE: from backend.server.stores.smart_phrase_extractor import (
+
+FILE: backend\server\stores\upload_phrase_selector.py
+LINE: 15
+PATTERN: from backend.server.stores.smart_phrase_extractor import
+CODE: from backend.server.stores.smart_phrase_extractor import (
+
+FILE: backend\server\stores\upload_phrase_selector.py
+LINE: 17
+PATTERN: extract_smart_phrases
+CODE: extract_smart_phrases,
+
+FILE: backend\server\stores\upload_phrase_selector.py
+LINE: 778
+PATTERN: extract_smart_phrases
+CODE: candidates = extract_smart_phrases(
+
+============================================================
+RELATED STAGE FILE STATUS
+============================================================
+backend\server\stores\smart_phrase_extractor.py | EXISTS=True
+backend\server\stores\smart_phrase_extractor_backup_before_v2.py | EXISTS=True
+backend\server\stores\upload_phrase_pool_builder.py | EXISTS=True
+backend\server\stores\candidate_window_guard.py | EXISTS=True
+backend\server\stores\phrase_strength_scorer.py | EXISTS=True

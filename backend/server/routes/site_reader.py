@@ -29,8 +29,13 @@ class ActiveTargetSetPayload(BaseModel):
 from backend.server.pools.target_pools.document_registry_pool import build_document_registry_pool
 from backend.server.pools.target_pools.draft_target_pool import build_draft_target_pool
 from backend.server.pools.target_pools.imported_target_pool import build_imported_target_pool
-from backend.server.pools.target_pools.live_domain_target_pool import build_live_domain_target_pool
-from backend.server.engine.workspace_topic_cluster_builder import build_workspace_topic_clusters
+from backend.server.pipelines.connect_domain.linking_target_pipeline.site_pages import (
+    load_site_pages_payload,
+)
+from backend.server.pipelines.connect_domain.linking_target_pipeline.live_domain_target_pool import (
+    build_live_domain_target_pool as build_canonical_live_domain_target_pool,
+    save_live_domain_target_pool as save_canonical_live_domain_target_pool,
+)
 from backend.server.pools.target_pools.url_pool_manager import (
     initialize_url_pool_from_current_active,
     get_url_pool_stats,
@@ -62,6 +67,42 @@ from backend.server.stores.draft_pool_store import (
 )
 
 router = APIRouter(tags=["site-reader"])
+
+def _build_canonical_live_domain_pool_for_route(
+    workspace_id: str,
+) -> dict[str, object]:
+    """Build and persist the certified basic Live Domain Target Pool."""
+
+    site_pages_payload = load_site_pages_payload(
+        workspace_id
+    )
+
+    pages = site_pages_payload.get("pages") or []
+
+    domain = str(
+        site_pages_payload.get("domain")
+        or ""
+    ).strip()
+
+    result = build_canonical_live_domain_target_pool(
+        pages,
+        workspace_id=workspace_id,
+        domain=domain,
+    )
+
+    saved_path = save_canonical_live_domain_target_pool(
+        result
+    )
+
+    return {
+        "counts": {
+            "input_count": result.input_count,
+            "created_count": result.created_count,
+            "rejected_count": result.rejected_count,
+        },
+        "path": str(saved_path),
+    }
+
 
 # ------------------------------------------------------------
 # HTTP hardening (sitemap + page fetch)
@@ -662,7 +703,7 @@ def rebuild_all_target_pools(
         }
 
     try:
-        live_out = build_live_domain_target_pool(ws)
+        live_out = _build_canonical_live_domain_pool_for_route(ws)
         results["live_domain"] = {
             "ok": True,
             "counts": live_out.get("counts", {}),
@@ -954,7 +995,7 @@ def rebuild_live_domain_target_pool(
         return err
 
     try:
-        out = build_live_domain_target_pool(ws)
+        out = _build_canonical_live_domain_pool_for_route(ws)
         return {
             "ok": True,
             "workspace_id": ws,

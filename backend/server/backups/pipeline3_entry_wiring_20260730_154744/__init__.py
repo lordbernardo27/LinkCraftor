@@ -1,0 +1,4 @@
+﻿from .coordinator import run_uploaded_document_registry_to_active_target_set_pipeline
+
+__all__ = ["run_uploaded_document_registry_to_active_target_set_pipeline"]
+

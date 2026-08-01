@@ -721,89 +721,35 @@ async def upload_file(
     workspace_id: str = Query("ws_betterhealthcheck_com"),
     file: UploadFile = File(...),
 ):
-    if not file or not file.filename:
-        raise HTTPException(status_code=400, detail="No file uploaded.")
+    """
+    Canonical Upload Document API entry point.
 
-    ext = _guess_ext(file.filename)
-    if ext not in ALLOWED_EXT:
-        raise HTTPException(status_code=400, detail=f"File type not allowed: {ext}")
+    The HTTP route performs no Pipeline 2 implementation directly.
+    It delegates the upload-intake workflow to the canonical
+    Ingestion and Unified Content Pipeline.
+    """
 
-    ws_norm = _ws(workspace_id)
-
-    raw = await file.read()
-    preview = _extract_preview_from_bytes(Path(file.filename).name, ext, raw)
-
-    meta = _store_and_index(
-        ws_norm,
-        file,
-        raw,
-        preview_html=str(preview.get("html") or ""),
-        preview_text=str(preview.get("text") or ""),
+    from backend.server.pipelines.upload_document import (
+        run_upload_document,
+    )
+    from backend.server.pipelines.upload_document.uploaded_document_to_uduc_pipeline import (
+        UploadIntakeDependencies,
     )
 
-    processing_job_id = None
+    dependencies = UploadIntakeDependencies(
+        guess_extension=_guess_ext,
+        normalize_workspace_id=_ws,
+        extract_preview=_extract_preview_from_bytes,
+        store_and_index=_store_and_index,
+        workspace_directory=_ws_dir,
+        allowed_extensions=ALLOWED_EXT,
+    )
 
-    try:
-        from backend.server.orchestration.service import create_orchestration_job
-
-        stored_path = str(_ws_dir(ws_norm) / (meta.get("stored_name") or ""))
-        doc_id = str(meta.get("doc_id") or "").strip()
-
-        processing_job = create_orchestration_job(
-            workspace_id=ws_norm,
-            job_type="document_upload_job",
-            payload={
-                "workspace_id": ws_norm,
-                "doc_id": doc_id,
-                "stored_path": stored_path,
-                "stored_name": str(meta.get("stored_name") or ""),
-                "original_name": str(meta.get("filename") or ""),
-                "html": str(preview.get("html") or ""),
-                "text": str(preview.get("text") or ""),
-                "source_route": "/upload",
-                "document_count": 1,
-            },
-            metadata={
-                "phase": "phase_2_background_orchestration",
-                "filename": str(meta.get("filename") or ""),
-                "stored_name": str(meta.get("stored_name") or ""),
-                "document_count": 1,
-            },
-            priority=5,
-        )
-
-        processing_job_id = processing_job.job_id
-
-        meta["universal_knowledge_orchestration"] = {
-            "ok": True,
-            "status": "queued",
-            "note": "Phase 2: orchestration job created and queued without blocking upload.",
-            "job_id": processing_job_id,
-        }
-
-    except Exception as e:
-        print("[UPLOAD_ORCHESTRATION_QUEUE_ERROR]", repr(e))
-        traceback.print_exc()
-        meta["universal_knowledge_orchestration"] = {
-            "ok": False,
-            "status": "queue_failed",
-            "error": str(e)[:160],
-            "job_id": None,
-        }
-
-    return {
-        "ok": True,
-        "workspace_id": ws_norm,
-        "doc": meta,
-        "filename": preview.get("filename"),
-        "ext": preview.get("ext"),
-        "text": preview.get("text"),
-        "html": preview.get("html"),
-        "is_html": bool(preview.get("is_html")),
-        "truncated": bool(preview.get("truncated")),
-        "job_id": processing_job_id,
-        "processing_status": "queued" if processing_job_id else "queue_failed",
-    }
+    return await run_upload_document(
+        workspace_id=workspace_id,
+        file=file,
+        dependencies=dependencies,
+    )
 
 
 @router.post("/clear_session")
@@ -1262,3 +1208,5 @@ async def legacy_upload(
     file: UploadFile = File(...),
 ):
     return await upload_file(workspace_id=workspace_id, file=file)
+
+
