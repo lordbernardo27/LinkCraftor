@@ -79,4 +79,18 @@ Production Status: Not Implemented
 
 ---
 
+# Runtime Eligibility
+
+**Current Component:** Product Registry document
+
+**Runtime Eligible:** No
+
+**Reason:** Canonical product-catalog definition and registry architecture only
+
+**URRS Requirement:** Not Applicable
+
+Executable registry loaders, validators, activation controls and entitlement services shall undergo separate URRS assessment before implementation.
+
+---
 End of Product Registry
+
