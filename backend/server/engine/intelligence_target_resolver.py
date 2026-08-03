@@ -43,6 +43,9 @@ from backend.server.engine.resolver_cross_site_intelligence import analyze_cross
 from backend.server.engine.resolver_score_calibration import calibrate_resolver_score_v1
 from backend.server.engine.resolver_debug_payload import build_resolver_debug_payload_v1
 from backend.server.engine.workspace_concept_bridge import bridge_workspace_phrase_to_targets
+from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (
+    load_active_target_set as load_canonical_active_target_set,
+)
 
 
 # ---------------------------------------------------------
@@ -468,20 +471,31 @@ def _resolver_data_dir() -> Path:
     return here.parents[1] / "data"
 
 
-def _active_target_set_path(workspace_id: str) -> Path:
-    ws = str(workspace_id or "default").strip() or "default"
-    return _resolver_data_dir() / "target_pools" / f"active_target_set_{ws}.json"
-
-
 def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
-    fp = _active_target_set_path(workspace_id)
-    if not fp.exists():
-        return {}
+    """
+    Load the complete canonical Active Target Set through its repository.
+
+    Resolver behavior remains membership-index based. Filesystem path
+    ownership and JSON parsing belong exclusively to the repository.
+    """
+    ws = str(
+        workspace_id
+        or "default"
+    ).strip() or "default"
+
     try:
-        obj = json.loads(fp.read_text(encoding="utf-8"))
-        return obj if isinstance(obj, dict) else {}
+        obj = load_canonical_active_target_set(
+            ws
+        )
+    except FileNotFoundError:
+        return {}
     except Exception:
         return {}
+
+    return obj if isinstance(
+        obj,
+        dict,
+    ) else {}
 
 
 def _norm_url_for_active(value: Any) -> str:

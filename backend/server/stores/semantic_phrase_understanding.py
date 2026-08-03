@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -299,13 +299,13 @@ def understand_yellow_semantic_phrase_v1(
     working_phrase["processing_state"] = {
         **(working_phrase.get("processing_state") or {}),
         "current_engine": "semantic_phrase_understanding",
-        "status": "ready_for_target_discovery",
-        "ready_for_target_discovery": True,
-        "next_expected_engine": "semantic_target_discovery",
+        "status": "semantic_understanding_complete",
+        "ready_for_target_discovery": False,
+        "next_expected_engine": None,
     }
 
-    working_phrase["ready_for_target_discovery"] = True
-    working_phrase["next_expected_engine"] = "semantic_target_discovery"
+    working_phrase["ready_for_target_discovery"] = False
+    working_phrase["next_expected_engine"] = None
 
     return working_phrase
 
@@ -363,8 +363,8 @@ def understand_yellow_semantic_phrase_v1(
         },
         "boundary_rule": (
             "Semantic Phrase Understanding identifies what a yellow phrase means using workspace knowledge. "
-            "It does not call the Semantic Linking Reasoning Engine, query Active Target Set, choose target URLs, "
-            "create highlights, write memory, or generate explanations."
+            "It does not query Active Target Set, discover or choose target URLs, create highlights, "
+            "write memory, or generate explanations."
         ),
     }
 
@@ -386,7 +386,7 @@ def understand_yellow_semantic_phrase_v1(
         working_phrase,
         "reasoned",
         source="semantic_phrase_understanding",
-        note="Semantic phrase understood and ready for Active Target Set candidate discovery.",
+        note="Semantic phrase understanding completed; downstream learning-engine routing is not yet assigned.",
     )
 
     
@@ -418,13 +418,13 @@ def understand_yellow_semantic_phrase_v1(
     working_phrase["processing_state"] = {
         **(working_phrase.get("processing_state") or {}),
         "current_engine": "semantic_phrase_understanding",
-        "status": "ready_for_target_discovery",
-        "ready_for_target_discovery": True,
-        "next_expected_engine": "semantic_target_discovery",
+        "status": "semantic_understanding_complete",
+        "ready_for_target_discovery": False,
+        "next_expected_engine": None,
     }
 
-    working_phrase["ready_for_target_discovery"] = True
-    working_phrase["next_expected_engine"] = "semantic_target_discovery"
+    working_phrase["ready_for_target_discovery"] = False
+    working_phrase["next_expected_engine"] = None
 
     return working_phrase
 

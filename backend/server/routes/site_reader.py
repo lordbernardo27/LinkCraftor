@@ -36,14 +36,11 @@ from backend.server.pipelines.connect_domain.linking_target_pipeline.live_domain
     build_live_domain_target_pool as build_canonical_live_domain_target_pool,
     save_live_domain_target_pool as save_canonical_live_domain_target_pool,
 )
-from backend.server.pools.target_pools.url_pool_manager import (
-    initialize_url_pool_from_current_active,
-    get_url_pool_stats,
-    load_active_urls,
-    load_reserve_urls,
-    classify_url_list,
-    promote_url,
-    demote_url,
+from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (
+    active_target_set_path as canonical_active_target_set_path,
+    build_active_target_set as build_canonical_active_target_set,
+    load_active_target_set as load_canonical_active_target_set,
+    save_active_target_set as save_canonical_active_target_set,
 )
 from backend.server.site_reader.html_extract import extract_headings_and_body
 from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
@@ -139,7 +136,8 @@ def _ws_or_error(workspace_id: str) -> tuple[str | None, dict | None]:
 
 
 def _active_target_set_path(ws: str) -> Path:
-    return Path("backend/server/data/target_pools") / f"active_target_set_{ws}.json"
+    """Compatibility wrapper around the canonical repository path."""
+    return canonical_active_target_set_path(ws)
 
 
 def _now_ts() -> float:
@@ -747,23 +745,18 @@ def get_active_target_set(
     if err:
         return err
 
-    fp = _active_target_set_path(ws)
+    fp = canonical_active_target_set_path(ws)
+
     if not fp.exists():
         return {
             "ok": True,
             "workspace_id": ws,
             "exists": False,
-            "active_target_set": {
-                "workspace_id": ws,
-                "active_document_ids": [],
-                "active_draft_ids": [],
-                "active_imported_urls": [],
-                "active_live_domain_urls": [],
-            },
+            "active_target_set": None,
         }
 
     try:
-        obj = json.loads(fp.read_text(encoding="utf-8-sig"))
+        obj = load_canonical_active_target_set(ws)
     except Exception as e:
         return {
             "ok": False,
@@ -776,14 +769,7 @@ def get_active_target_set(
         "ok": True,
         "workspace_id": ws,
         "exists": True,
-        "active_target_set": {
-            "workspace_id": ws,
-            "active_document_ids": obj.get("active_document_ids") or [],
-            "active_draft_ids": obj.get("active_draft_ids") or [],
-            "active_imported_urls": obj.get("active_imported_urls") or [],
-            "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
-            "updated_at": obj.get("updated_at"),
-        },
+        "active_target_set": obj,
     }
 
 
@@ -795,32 +781,29 @@ def clear_active_target_set(
     if err:
         return err
 
-    fp = _active_target_set_path(ws)
-    fp.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        result = build_canonical_active_target_set(
+            workspace_id=ws,
+        )
 
-    obj = {
-        "workspace_id": ws,
-        "active_document_ids": [],
-        "active_draft_ids": [],
-        "active_imported_urls": [],
-        "active_live_domain_urls": [],
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "cleared": True,
-    }
-
-    fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+        fp = save_canonical_active_target_set(
+            result
+        )
+    except Exception as e:
+        return {
+            "ok": False,
+            "workspace_id": ws,
+            "error": "active_target_set_clear_failed",
+            "detail": str(e)[:200],
+        }
 
     return {
         "ok": True,
         "workspace_id": ws,
         "path": str(fp),
         "cleared": True,
-        "counts": {
-            "active_document_ids": 0,
-            "active_draft_ids": 0,
-            "active_imported_urls": 0,
-            "active_live_domain_urls": 0,
-        },
+        "schema_version": result.schema_version,
+        "counts": dict(result.active_counts),
     }
 
 class ConnectDomainPayload(BaseModel):
@@ -851,104 +834,19 @@ def run_linking_target_pipeline(payload: ConnectDomainPayload):
 # -------------------------
 # URL Pool Manager
 # -------------------------
-@router.get("/url_pool/stats")
-def url_pool_stats(workspace_id: str = Query(..., description="Workspace scope (must start with ws_)")):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-    return get_url_pool_stats(ws)
-
-
-@router.post("/url_pool/initialize")
-def url_pool_initialize(workspace_id: str = Query(..., description="Workspace scope (must start with ws_)")):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-    return initialize_url_pool_from_current_active(ws)
-
-
-@router.get("/url_pool/active")
-def url_pool_active(
-    workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-
-    urls = load_active_urls(ws)
-    return {
-        "ok": True,
-        "workspace_id": ws,
-        "total": len(urls),
-        "limit": limit,
-        "offset": offset,
-        "items": urls[offset: offset + limit],
-    }
-
-
-@router.get("/url_pool/reserve")
-def url_pool_reserve(
-    workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-
-    urls = load_reserve_urls(ws)
-    return {
-        "ok": True,
-        "workspace_id": ws,
-        "total": len(urls),
-        "limit": limit,
-        "offset": offset,
-        "items": urls[offset: offset + limit],
-    }
 
 
 
-@router.get("/url_pool/classify")
-def url_pool_classify(
-    workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
-    pool: str = Query("reserve", description="active or reserve"),
-    limit: int = Query(50, ge=1, le=500),
-    offset: int = Query(0, ge=0),
-):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-
-    if pool == "active":
-        urls = load_active_urls(ws)
-    else:
-        urls = load_reserve_urls(ws)
-
-    return classify_url_list(ws, urls, limit=limit, offset=offset)
 
 
-@router.post("/url_pool/promote")
-def url_pool_promote(
-    workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
-    url: str = Query(..., description="URL to promote from reserve to active"),
-):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-    return promote_url(ws, url)
 
 
-@router.post("/url_pool/demote")
-def url_pool_demote(
-    workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
-    url: str = Query(..., description="URL to demote from active to reserve"),
-):
-    ws, err = _ws_or_error(workspace_id)
-    if err:
-        return err
-    return demote_url(ws, url)
+
+
+
+
+
+
 
 
 # -------------------------
@@ -1234,65 +1132,18 @@ def save_active_target_set(payload: ActiveTargetSetPayload):
     if err:
         return err
 
-    fp = _active_target_set_path(ws)
-    fp.parent.mkdir(parents=True, exist_ok=True)
-
-    existing = {
-        "workspace_id": ws,
-        "active_document_ids": [],
-        "active_draft_ids": [],
-        "active_imported_urls": [],
-        "active_live_domain_urls": [],
-    }
-
-    if fp.exists():
-        try:
-            raw = json.loads(fp.read_text(encoding="utf-8"))
-            if isinstance(raw, dict):
-                existing["active_document_ids"] = raw.get("active_document_ids") or []
-                existing["active_draft_ids"] = raw.get("active_draft_ids") or []
-                existing["active_imported_urls"] = raw.get("active_imported_urls") or []
-                existing["active_live_domain_urls"] = raw.get("active_live_domain_urls") or []
-        except Exception:
-            pass
-
-    def clean_list(value):
-        out = []
-        seen = set()
-
-        for x in (value or []):
-            s = str(x).strip()
-            if not s:
-                continue
-            if s in seen:
-                continue
-            out.append(s)
-            seen.add(s)
-
-        return out
-
-    obj = {
-        "workspace_id": ws,
-        "active_document_ids": clean_list(payload.active_document_ids) if payload.active_document_ids is not None else clean_list(existing["active_document_ids"]),
-        "active_draft_ids": clean_list(payload.active_draft_ids) if payload.active_draft_ids is not None else clean_list(existing["active_draft_ids"]),
-        "active_imported_urls": clean_list(payload.active_imported_urls) if payload.active_imported_urls is not None else clean_list(existing["active_imported_urls"]),
-        "active_live_domain_urls": clean_list(payload.active_live_domain_urls) if payload.active_live_domain_urls is not None else clean_list(existing["active_live_domain_urls"]),
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    fp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    return {
-        "ok": True,
-        "workspace_id": ws,
-        "path": str(fp),
-        "counts": {
-            "active_document_ids": len(obj["active_document_ids"]),
-            "active_draft_ids": len(obj["active_draft_ids"]),
-            "active_imported_urls": len(obj["active_imported_urls"]),
-            "active_live_domain_urls": len(obj["active_live_domain_urls"]),
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": "membership_only_active_target_set_write_forbidden",
+            "workspace_id": ws,
+            "message": (
+                "The canonical Active Target Set cannot be persisted from "
+                "membership arrays alone. Rebuild it from the source target "
+                "pools through the canonical Active Target Set stage."
+            ),
         },
-    }
+    )
 
 
 @router.get("/debug/module_paths")

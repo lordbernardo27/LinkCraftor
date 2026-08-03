@@ -5,13 +5,9 @@ LINKING TARGET PIPELINE
 
 CONNECT DOMAIN
     -> Site Sources
+    -> URL Cleaner
     -> Site Pages
     -> Live Domain Target Pool
-    -> Topic Cluster Builder
-    -> Section Cluster Builder
-    -> Cluster -> Target Bridge
-    -> Section -> Target Bridge
-    -> Enriched Live Domain Target Pool
     -> Active Target Set
 
 Runtime registration and Universal Runtime Infrastructure wiring are
@@ -29,6 +25,11 @@ from urllib.parse import urlparse
 from fastapi import HTTPException
 
 from backend.server.pipelines.connect_domain.linking_target_pipeline.url_cleaner import clean_urls
+from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (
+    build_active_target_set,
+    load_optional_source_payload,
+    save_active_target_set,
+)
 
 
 def _site_reader():
@@ -54,12 +55,9 @@ def run_linking_target_pipeline(payload):
     _domain_from_url = sr._domain_from_url
     save_site_sources = sr.save_site_sources
     save_site_pages = sr.save_site_pages
-    _active_target_set_path = sr._active_target_set_path
     load_site_pages_payload = sr.load_site_pages_payload
     build_canonical_live_domain_target_pool = sr.build_canonical_live_domain_target_pool
     save_canonical_live_domain_target_pool = sr.save_canonical_live_domain_target_pool
-    initialize_url_pool_from_current_active = sr.initialize_url_pool_from_current_active
-    get_url_pool_stats = sr.get_url_pool_stats
 
     domain = _normalize_domain(payload.domain)
 
@@ -212,33 +210,6 @@ def run_linking_target_pipeline(payload):
         "pages": pages,
     })
 
-    active_fp = _active_target_set_path(workspace_id)
-    active_fp.parent.mkdir(parents=True, exist_ok=True)
-
-    active_obj = {
-        "workspace_id": workspace_id,
-        "active_document_ids": [],
-        "active_draft_ids": [],
-        "active_imported_urls": [],
-        "active_live_domain_urls": cleaned_urls,
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-    if active_fp.exists():
-        try:
-            old_obj = json.loads(active_fp.read_text(encoding="utf-8"))
-            if isinstance(old_obj, dict):
-                active_obj["active_document_ids"] = old_obj.get("active_document_ids") or []
-                active_obj["active_draft_ids"] = old_obj.get("active_draft_ids") or []
-                active_obj["active_imported_urls"] = old_obj.get("active_imported_urls") or []
-        except Exception:
-            pass
-
-    active_fp.write_text(
-        json.dumps(active_obj, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
     # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
     try:
         workspace_profile_dir = Path("backend/server/data/workspaces") / workspace_id
@@ -307,9 +278,6 @@ def run_linking_target_pipeline(payload):
             "created_count": live_result.created_count,
             "rejected_count": live_result.rejected_count,
         }
-
-        url_pool_out = initialize_url_pool_from_current_active(workspace_id)
-        url_pool_stats = get_url_pool_stats(workspace_id)
     except Exception as e:
         return {
             "ok": False,
@@ -322,6 +290,64 @@ def run_linking_target_pipeline(payload):
             "cleaned_urls_count": len(cleaned_urls),
         }
 
+    try:
+        document_payload = load_optional_source_payload(
+            Path(
+                "backend/server/data/target_pools/document_registry"
+            )
+            / f"document_registry_{workspace_id}.json"
+        )
+
+        imported_payload = load_optional_source_payload(
+            Path(
+                "backend/server/data/target_pools/imported"
+            )
+            / f"imported_target_pool_{workspace_id}.json"
+        )
+
+        draft_payload = load_optional_source_payload(
+            Path(
+                "backend/server/data/target_pools/draft"
+            )
+            / f"draft_target_pool_{workspace_id}.json"
+        )
+
+        active_result = build_active_target_set(
+            workspace_id=workspace_id,
+            live_domain_payload={
+                "workspace_id": workspace_id,
+                "items": live_result.target_dicts(),
+            },
+            document_payload=document_payload,
+            imported_payload=imported_payload,
+            draft_payload=draft_payload,
+        )
+
+        active_target_set_path = save_active_target_set(
+            active_result
+        )
+
+        active_counts = dict(
+            active_result.active_counts
+        )
+
+        active_source_counts = dict(
+            active_result.source_counts
+        )
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "active_target_set_build_failed",
+            "detail": str(e)[:300],
+            "sitemap_url_count": len(all_urls),
+            "cleaned_urls_count": len(cleaned_urls),
+            "live_domain_counts": live_counts,
+        }
+
     return {
         "ok": True,
         "workspace_id": workspace_id,
@@ -331,8 +357,9 @@ def run_linking_target_pipeline(payload):
         "sitemap_used": sitemap_used,
         "sitemap_url_count": len(all_urls),
         "cleaned_urls_count": len(cleaned_urls),
-        "active_live_domain_urls_count": len(active_obj["active_live_domain_urls"]),
+        "active_live_domain_urls_count": active_counts["live_domain"],
+        "active_target_set_path": str(active_target_set_path),
+        "active_target_set_counts": active_counts,
+        "active_target_set_source_counts": active_source_counts,
         "live_domain_counts": live_counts,
-        "url_pool": url_pool_out,
-        "url_pool_stats": url_pool_stats,
     }

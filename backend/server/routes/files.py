@@ -1,4 +1,4 @@
-﻿# backend/server/routes/files.py
+# backend/server/routes/files.py
 from __future__ import annotations
 
 import io
@@ -9,6 +9,13 @@ import re
 import html
 import traceback
 from backend.server.stores.rebuild_governance import queue_rebuild_event
+from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (
+    active_target_set_path as canonical_active_target_set_path,
+    build_active_target_set as build_canonical_active_target_set,
+    load_active_target_set as load_canonical_active_target_set,
+    load_optional_source_payload,
+    save_active_target_set as save_canonical_active_target_set,
+)
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -571,84 +578,52 @@ def _update_index_h1(
 # Active target set helpers (merge-safe)
 # -------------------------
 def _active_target_set_path(workspace_id: str) -> Path:
-    return BASE_DIR / "data" / "target_pools" / f"active_target_set_{_ws(workspace_id)}.json"
+    """Compatibility wrapper around the canonical repository path."""
+    return canonical_active_target_set_path(
+        _ws(workspace_id)
+    )
 
 
 def _default_active_target_set(workspace_id: str) -> Dict[str, Any]:
-    return {
-        "workspace_id": _ws(workspace_id),
-        "active_document_ids": [],
-        "active_draft_ids": [],
-        "active_imported_urls": [],
-        "active_live_domain_urls": [],
-        "active_upload_ids": [],
-        "updated_at": _utc_now_iso(),
-    }
+    """Return an unsaved canonical empty Active Target Set payload."""
+    ws_norm = _ws(workspace_id)
+
+    result = build_canonical_active_target_set(
+        workspace_id=ws_norm,
+    )
+
+    return result.to_dict(
+        generated_at=_utc_now_iso()
+    )
 
 
 def _load_active_target_set(workspace_id: str) -> Dict[str, Any]:
+    """Load the complete canonical Active Target Set."""
     ws_norm = _ws(workspace_id)
-    fp = _active_target_set_path(ws_norm)
-    obj = _default_active_target_set(ws_norm)
+    fp = canonical_active_target_set_path(
+        ws_norm
+    )
 
     if not fp.exists():
-        return obj
+        return _default_active_target_set(
+            ws_norm
+        )
 
-    try:
-        raw = json.loads(fp.read_text(encoding="utf-8"))
-    except Exception:
-        return obj
-
-    if not isinstance(raw, dict):
-        return obj
-
-    # FIX: this line was previously indented inside the block above,
-    # making it unreachable dead code.
-    obj["workspace_id"] = str(raw.get("workspace_id") or ws_norm)
-    obj["active_document_ids"] = list(raw.get("active_document_ids") or [])
-    obj["active_draft_ids"] = list(raw.get("active_draft_ids") or [])
-    obj["active_imported_urls"] = list(
-        raw.get("active_imported_urls") or raw.get("active_import_ids") or []
+    return load_canonical_active_target_set(
+        ws_norm
     )
-    obj["active_live_domain_urls"] = list(raw.get("active_live_domain_urls") or [])
-
-    raw_upload_ids = raw.get("active_upload_ids")
-    if isinstance(raw_upload_ids, list):
-        obj["active_upload_ids"] = list(raw_upload_ids)
-    else:
-        # Canonical fallback: uploaded docs are doc_ids
-        obj["active_upload_ids"] = list(obj["active_document_ids"])
-
-    obj["updated_at"] = str(raw.get("updated_at") or obj["updated_at"])
-    return obj
 
 
-def _write_active_target_set(workspace_id: str, obj: Dict[str, Any]) -> Dict[str, Any]:
-    ws_norm = _ws(workspace_id)
-    fp = _active_target_set_path(ws_norm)
-    fp.parent.mkdir(parents=True, exist_ok=True)
-
-    doc_ids = list(obj.get("active_document_ids") or [])
-    upload_ids = list(obj.get("active_upload_ids") or [])
-
-    if not upload_ids:
-        upload_ids = list(doc_ids)
-
-    out: Dict[str, Any] = {
-        "workspace_id": ws_norm,
-        "active_document_ids": doc_ids,
-        "active_draft_ids": list(obj.get("active_draft_ids") or []),
-        "active_imported_urls": list(obj.get("active_imported_urls") or []),
-        "active_live_domain_urls": list(obj.get("active_live_domain_urls") or []),
-        "active_upload_ids": upload_ids,
-        "updated_at": _utc_now_iso(),
-    }
-
-    # Atomic write (was a plain write_text; a crash mid-write could corrupt the file).
-    tmp = fp.with_suffix(".tmp")
-    tmp.write_text(json.dumps(out, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, fp)
-    return out
+def _write_active_target_set(
+    workspace_id: str,
+    obj: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Block obsolete membership-only persistence."""
+    raise RuntimeError(
+        "Direct Active Target Set writes are forbidden. "
+        "Build from source target pools and persist through "
+        "save_canonical_active_target_set()."
+    )
 
 
 def _merge_active_target_set(
@@ -660,56 +635,11 @@ def _merge_active_target_set(
     add_live_domain_urls: List[str] | None = None,
     add_upload_ids: List[str] | None = None,
 ) -> Dict[str, Any]:
-    obj = _load_active_target_set(workspace_id)
-
-    def _merge_unique(existing: List[str], new_values: List[str] | None) -> List[str]:
-        out = [str(x).strip() for x in existing if str(x).strip()]
-        seen = set(out)
-        for v in new_values or []:
-            s = str(v).strip()
-            if s and s not in seen:
-                out.append(s)
-                seen.add(s)
-        return out
-
-    # Runtime document membership must REPLACE, not merge.
-    # This prevents phrases from multiple uploaded documents being active together.
-    if add_document_ids is not None:
-        obj["active_document_ids"] = [
-            str(x).strip()
-            for x in add_document_ids
-            if str(x).strip()
-        ]
-    else:
-        obj["active_document_ids"] = list(obj.get("active_document_ids") or [])
-
-    # Supporting-intelligence libraries may remain merged.
-    obj["active_draft_ids"] = _merge_unique(
-        obj.get("active_draft_ids") or [],
-        add_draft_ids,
+    """Block obsolete membership-array mutation."""
+    raise RuntimeError(
+        "Membership-array Active Target Set merging is forbidden. "
+        "Rebuild the canonical set from source target pools."
     )
-
-    obj["active_imported_urls"] = _merge_unique(
-        obj.get("active_imported_urls") or [],
-        add_imported_urls,
-    )
-
-    obj["active_live_domain_urls"] = _merge_unique(
-        obj.get("active_live_domain_urls") or [],
-        add_live_domain_urls,
-    )
-
-    # Upload runtime membership must also REPLACE, not merge.
-    if add_upload_ids is not None:
-        obj["active_upload_ids"] = [
-            str(x).strip()
-            for x in add_upload_ids
-            if str(x).strip()
-        ]
-    else:
-        obj["active_upload_ids"] = list(obj.get("active_upload_ids") or [])
-
-    return _write_active_target_set(workspace_id, obj)
 
 
 # -------------------------
@@ -801,12 +731,46 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
         print("[CLEAR_FILE_SESSION_INDEX_RESET_ERROR]", repr(e))
 
     try:
-        active_obj = _load_active_target_set(ws_norm)
-        active_obj["active_document_ids"] = []
-        active_obj["active_upload_ids"] = []
-        _write_active_target_set(ws_norm, active_obj)
+        live_payload = load_optional_source_payload(
+            BASE_DIR
+            / "data"
+            / "target_pools"
+            / "live_domain"
+            / f"live_domain_target_pool_{ws_norm}.json"
+        )
+
+        imported_payload = load_optional_source_payload(
+            BASE_DIR
+            / "data"
+            / "target_pools"
+            / "imported"
+            / f"imported_target_pool_{ws_norm}.json"
+        )
+
+        draft_payload = load_optional_source_payload(
+            BASE_DIR
+            / "data"
+            / "target_pools"
+            / "draft"
+            / f"draft_target_pool_{ws_norm}.json"
+        )
+
+        active_result = build_canonical_active_target_set(
+            workspace_id=ws_norm,
+            live_domain_payload=live_payload,
+            document_payload={},
+            imported_payload=imported_payload,
+            draft_payload=draft_payload,
+        )
+
+        save_canonical_active_target_set(
+            active_result
+        )
     except Exception as e:
-        print("[CLEAR_FILE_SESSION_ACTIVE_SET_ERROR]", repr(e))
+        print(
+            "[CLEAR_FILE_SESSION_ACTIVE_SET_ERROR]",
+            repr(e),
+        )
 
     try:
         queue_rebuild_event(
@@ -830,7 +794,7 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
             "active_phrase_pool": True,
             "document_index": True,
             "active_document_ids": True,
-            "active_upload_ids": True,
+            "canonical_active_target_set_rebuilt": True,
         },
         "removed_files": removed_files,
         "preserved": [
@@ -908,7 +872,7 @@ def get_active_target_set(
             "ok": True,
             "workspace_id": ws,
             "workspaceId": ws,
-            "exists": _active_target_set_path(ws).exists(),
+            "exists": canonical_active_target_set_path(ws).exists(),
             "active_target_set": data,
         }
 
@@ -920,46 +884,30 @@ def get_active_target_set(
 
 
 @router.post("/active_target_set/save")
-async def save_active_target_set_api(payload: Dict[str, Any] = Body(...)):
-    workspace_id = str(payload.get("workspace_id") or "ws_betterhealthcheck_com")
+async def save_active_target_set_api(
+    payload: Dict[str, Any] = Body(...),
+):
+    workspace_id = _ws(
+        str(
+            payload.get("workspace_id")
+            or "ws_betterhealthcheck_com"
+        )
+    )
 
-    existing = _load_active_target_set(workspace_id)
-
-    # FIX: use key-presence checks instead of `or` fallbacks. With `or`, a
-    # client sending an explicit empty list (to clear a category) silently
-    # fell back to the existing values and could never clear anything.
-    def _field(key: str) -> List[str]:
-        if key in payload:
-            return list(payload.get(key) or [])
-        return list(existing.get(key) or [])
-
-    obj = {
-        "active_document_ids": _field("active_document_ids"),
-        "active_draft_ids": _field("active_draft_ids"),
-        "active_imported_urls": _field("active_imported_urls"),
-        "active_live_domain_urls": _field("active_live_domain_urls"),
-        "active_upload_ids": _field("active_upload_ids"),
-    }
-
-    saved = _write_active_target_set(workspace_id, obj)
-
-    try:
-        from backend.server.stores.active_phrase_set_store import save_active_phrase_set
-
-        save_active_phrase_set(workspace_id, {
-            "active_document_ids": obj.get("active_document_ids") or [],
-            "active_upload_ids": obj.get("active_upload_ids") or [],
-            "active_draft_ids": obj.get("active_draft_ids") or [],
-            "active_imported_urls": obj.get("active_imported_urls") or [],
-            "active_live_domain_urls": obj.get("active_live_domain_urls") or [],
-        })
-    except Exception as e:
-        print("[ACTIVE_PHRASE_SET_SAVE_ERROR]", repr(e))
-    return {
-        "ok": True,
-        "workspace_id": _ws(workspace_id),
-        "active_target_set": saved,
-    }
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "error": (
+                "membership_only_active_target_set_write_forbidden"
+            ),
+            "workspace_id": workspace_id,
+            "message": (
+                "The canonical Active Target Set cannot be "
+                "saved from membership arrays. Rebuild it "
+                "from the source target pools."
+            ),
+        },
+    )
 
 
 @router.post("/reindex_h1s")

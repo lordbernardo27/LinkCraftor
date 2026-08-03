@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -238,7 +238,7 @@ def transition_yellow_phrase_state_v1(
     if new_state in ("reasoning_pending", "understanding_pending"):
         processing_state["next_expected_engine"] = "semantic_phrase_understanding"
     elif new_state in ("reasoned", "understood", "ready_for_target_discovery"):
-        processing_state["next_expected_engine"] = "semantic_target_discovery"
+        processing_state["next_expected_engine"] = None
     elif new_state == "target_candidates_found":
         processing_state["next_expected_engine"] = "yellow_semantic_resolver"
     elif new_state == "resolved":
