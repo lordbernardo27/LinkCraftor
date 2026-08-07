@@ -261,19 +261,9 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
     if not isinstance(rows, list):
         rows = []
 
-    active_fp = _data_dir() / "target_pools" / f"active_target_set_{ws}.json"
-    active_obj = _safe_read_json(active_fp) if active_fp.exists() else None
-    active_document_ids: List[str] = []
-
-    if isinstance(active_obj, dict):
-        raw_ids = active_obj.get("active_document_ids") or []
-        if isinstance(raw_ids, list):
-            active_document_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
-
-    # Document Registry is used for editor cross-document linking.
-    # It must include all uploaded workspace documents, not only active target set documents.
-    # Active-target membership is still reported in diagnostics, but it must not filter registry targets.
-    active_filter_skipped_for_document_registry = active_fp.exists()
+    # Document Registry is an upstream target source.
+    # It emits every valid uploaded workspace document.
+    # Active Target Set membership is derived downstream.
 
     docs_dir = _ws_docs_dir(ws)
 
@@ -518,15 +508,9 @@ def build_document_registry_pool(workspace_id: str) -> Dict[str, Any]:
                 "workspace_id": ws,
                 "source_index": str(idx_fp),
                 "output_path": str(_pool_path(ws)),
-                "active_target_set_used": active_fp.exists(),
-        "active_filter_skipped_for_document_registry": active_filter_skipped_for_document_registry,
-                "active_document_ids_count": len(active_document_ids),
             },
         },
         "source": f"docs/{ws}/index.json",
-        "active_target_set_used": active_fp.exists(),
-        "active_filter_skipped_for_document_registry": active_filter_skipped_for_document_registry,
-        "active_document_ids_count": len(active_document_ids),
         "items": items,
     }
 

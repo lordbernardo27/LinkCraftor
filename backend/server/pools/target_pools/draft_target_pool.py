@@ -33,10 +33,6 @@ def _site_sources_path(ws: str) -> Path:
     return _data_dir() / f"site_sources_{ws}.json"
 
 
-def _active_target_set_path(ws: str) -> Path:
-    return _data_dir() / "target_pools" / f"active_target_set_{ws}.json"
-
-
 def _fix_mojibake_text(s: str) -> str:
     s = str(s or "")
     if not s:
@@ -351,7 +347,7 @@ def build_draft_target_pool(
       - generates placeholder URL for each topic during build:
           https://{domain}{drafts_path}/{slug}
       - writes items: {draft_topic_id, topic, url}
-      - if active_target_set_<ws>.json exists, only keeps active draft ids
+      - emits every valid draft target for downstream ATS aggregation
     """
     ws = _clean(workspace_id)
     if not ws:
@@ -415,20 +411,8 @@ def build_draft_target_pool(
     dp = "/" + str(drafts_path or "/drafts").lstrip("/")
     dp = dp.rstrip("/")
 
-    active_fp = _active_target_set_path(ws)
-    active_obj = _safe_read_json(active_fp) if active_fp.exists() else None
-    active_draft_ids: List[str] = []
-
-    if isinstance(active_obj, dict):
-        raw_ids = active_obj.get("active_draft_ids") or []
-        if isinstance(raw_ids, list):
-            active_draft_ids = [str(x).strip() for x in raw_ids if str(x).strip()]
-
-    active_draft_id_set = set(active_draft_ids)
-
     items: List[Dict[str, Any]] = []
     topics_seen = 0
-    items_kept_after_active_filter = 0
     page_type_counts: Dict[str, int] = {}
     priority_bucket_counts: Dict[str, int] = {}
     future_content_count = 0
@@ -437,11 +421,6 @@ def build_draft_target_pool(
     for i, topic in enumerate(uniq, start=1):
         topics_seen += 1
         draft_topic_id = f"draft_{i:04d}"
-
-        # Safety: only filter drafts when active_draft_ids is explicitly populated.
-        # If the active file exists but active_draft_ids is empty, do NOT wipe the draft pool.
-        if active_draft_id_set and draft_topic_id not in active_draft_id_set:
-            continue
 
         clean_topic = _clean(topic)
         slug = _slugify(clean_topic)
@@ -493,7 +472,6 @@ def build_draft_target_pool(
                 },
             }
         )
-        items_kept_after_active_filter += 1
 
     out: Dict[str, Any] = {
         "workspace_id": ws,
@@ -502,14 +480,11 @@ def build_draft_target_pool(
         "source": source_used,
         "drafts_path": dp,
         "domain": domain,
-        "active_target_set_used": active_fp.exists(),
-        "active_draft_ids_count": len(active_draft_ids),
         "counts": {
             "topics_read": len(topics),
             "topics_deduped": len(uniq),
             "topics_seen": topics_seen,
             "items_written": len(items),
-            "items_kept_after_active_filter": items_kept_after_active_filter,
             "rejected_total": sum(rejection_audit.values()),
             "page_type_counts": page_type_counts,
             "priority_bucket_counts": priority_bucket_counts,

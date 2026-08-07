@@ -38,10 +38,6 @@ def _site_sources_path(ws: str) -> Path:
     return _data_dir() / f"site_sources_{ws}.json"
 
 
-def _active_target_set_path(ws: str) -> Path:
-    return _data_dir() / "target_pools" / f"active_target_set_{ws}.json"
-
-
 def _clean(s: str) -> str:
     return str(s or "").strip().strip("\ufeff").strip()
 
@@ -613,7 +609,7 @@ def build_imported_target_pool(
       - Topic-only rows become placeholder URLs under placeholder_path.
       - Dedup by URL; prefer an explicit title/label when duplicates exist.
       - Output items: {url, label}
-      - if active_target_set_<ws>.json exists, only keeps active imported URLs
+      - emits every valid imported target for downstream ATS aggregation
     """
     ws = _clean(workspace_id)
     if not ws:
@@ -659,17 +655,6 @@ def build_imported_target_pool(
             "No imported target inputs found (or all were empty). Looked for: "
             f"{csv_fp.name}, {txt_fp.name}, {xml_fp.name} in backend/server/data/"
         )
-
-    active_fp = _active_target_set_path(ws)
-    active_obj = _safe_read_json(active_fp) if active_fp.exists() else None
-    active_imported_urls: List[str] = []
-
-    if isinstance(active_obj, dict):
-        raw_urls = active_obj.get("active_imported_urls") or []
-        if isinstance(raw_urls, list):
-            active_imported_urls = [_norm_url(str(x).strip()) for x in raw_urls if str(x).strip()]
-
-    active_imported_url_set = set(active_imported_urls)
 
     placeholders_generated = 0
     rejection_audit: List[Dict[str, Any]] = []
@@ -777,12 +762,6 @@ def build_imported_target_pool(
 
     filtered_urls = sorted(url_to_item.keys())
 
-    # Safety rule:
-    # Only restrict by active_imported_urls when the active list actually has URLs.
-    # Never allow an empty active_imported_urls list to wipe the whole imported pool.
-    if active_imported_url_set:
-        filtered_urls = [u for u in filtered_urls if u in active_imported_url_set]
-
     items = [url_to_item[u] for u in filtered_urls]
 
     out: Dict[str, Any] = {
@@ -794,13 +773,10 @@ def build_imported_target_pool(
         "per_source_counts": per_source_counts,
         "placeholder_path": pp,
         "domain": domain,
-        "active_target_set_used": active_fp.exists(),
-        "active_filter_applied": bool(active_imported_url_set),
-        "active_imported_urls_count": len(active_imported_urls),
         "counts": {
             "rows_read_total": len(all_pairs),
             "placeholders_generated": placeholders_generated,
-            "unique_urls_before_active_filter": len(url_to_item),
+            "unique_urls_before_output": len(url_to_item),
             "unique_urls_written": len(items),
             "rejected_rows": len(rejection_audit),
         },
