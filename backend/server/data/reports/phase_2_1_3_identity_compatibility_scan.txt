@@ -1,0 +1,415 @@
+﻿PHASE 2.1.3 ? JOB IDENTITY COMPATIBILITY SCAN
+==============================================================================
+ROOT: C:\Users\HP\Documents\LinkCraftor\backend\server
+
+STATIC SUPPORTED JOB TYPES
+------------------------------------------------------------------------------
+COUNT: 33
+article_extraction
+build_body_store
+build_uduc
+build_uucd
+build_uucd_from_uduc
+build_uucd_from_website
+build_website_unified_content
+certify_uucd_body_store
+content_normalization
+entity_concept_extraction
+format_detection
+format_router
+html_cleaning
+phrase_neighborhood_intelligence
+raw_html_acquisition
+section_evidence_builder
+semantic_article_reader
+semantic_context_builder
+semantic_end_to_end_certification
+semantic_learning_export
+semantic_relationship_graph
+site_page_discovery
+source_asset_versioning
+source_authorization
+source_lifecycle
+topic_intent_intelligence
+udare_reconstruction
+upload_document_batch
+upload_document_extraction
+upload_file_route_validation
+verify_body_store
+website_connection_batch
+website_crawl_batch
+
+RUNTIME REGISTRATION JOB TYPES
+------------------------------------------------------------------------------
+COUNT: 1
+linking_target_pipeline_batch | pipeline=linking_target_pipeline | stage=linking_target_pipeline_batch
+
+JOB TYPE CHARACTER ANALYSIS
+------------------------------------------------------------------------------
+UNIQUE COUNT: 34
+SNAKE_CASE: article_extraction
+SNAKE_CASE: build_body_store
+SNAKE_CASE: build_uduc
+SNAKE_CASE: build_uucd
+SNAKE_CASE: build_uucd_from_uduc
+SNAKE_CASE: build_uucd_from_website
+SNAKE_CASE: build_website_unified_content
+SNAKE_CASE: certify_uucd_body_store
+SNAKE_CASE: content_normalization
+SNAKE_CASE: entity_concept_extraction
+SNAKE_CASE: format_detection
+SNAKE_CASE: format_router
+SNAKE_CASE: html_cleaning
+SNAKE_CASE: linking_target_pipeline_batch
+SNAKE_CASE: phrase_neighborhood_intelligence
+SNAKE_CASE: raw_html_acquisition
+SNAKE_CASE: section_evidence_builder
+SNAKE_CASE: semantic_article_reader
+SNAKE_CASE: semantic_context_builder
+SNAKE_CASE: semantic_end_to_end_certification
+SNAKE_CASE: semantic_learning_export
+SNAKE_CASE: semantic_relationship_graph
+SNAKE_CASE: site_page_discovery
+SNAKE_CASE: source_asset_versioning
+SNAKE_CASE: source_authorization
+SNAKE_CASE: source_lifecycle
+SNAKE_CASE: topic_intent_intelligence
+SNAKE_CASE: udare_reconstruction
+SNAKE_CASE: upload_document_batch
+SNAKE_CASE: upload_document_extraction
+SNAKE_CASE: upload_file_route_validation
+SNAKE_CASE: verify_body_store
+SNAKE_CASE: website_connection_batch
+SNAKE_CASE: website_crawl_batch
+
+CURRENT LEGACY CREATOR SOURCE
+------------------------------------------------------------------------------
+def create_universal_knowledge_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Dict[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_ref: str = "",
+    priority: int = 5,
+    parent_job_id: str = "",
+    batch_id: str = "",
+    enqueue: bool = True,
+) -> Dict[str, Any]:
+    if (
+        job_type not in SUPPORTED_JOB_TYPES
+        and not is_runtime_job_type_registered(job_type)
+    ):
+        raise ValueError(f"Unsupported universal knowledge job_type: {job_type}")
+
+    ws = safe_id(workspace_id)
+    payload = payload or {}
+    initial_status = "queued" if enqueue else "registered"
+
+    canonical_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or "system"
+    ).strip() or "system"
+
+    canonical_product_id = str(
+        product_id
+        or payload.get("product_id")
+        or "linkcraftor"
+    ).strip() or "linkcraftor"
+
+    canonical_pipeline = str(
+        pipeline
+        or payload.get("pipeline")
+        or payload.get("pipeline_name")
+        or "universal_knowledge"
+    ).strip() or "universal_knowledge"
+
+    canonical_stage = str(
+        stage
+        or payload.get("stage")
+        or payload.get("stage_name")
+        or job_type
+    ).strip() or job_type
+
+    canonical_payload_ref = str(
+        payload_ref
+        or payload.get("payload_ref")
+        or payload.get("payload_reference")
+        or payload.get("source_record_id")
+        or payload.get("html_id")
+        or ""
+    ).strip()
+
+    initial_progress = {
+        "percent": 0,
+        "message": (
+            "Job queued."
+            if enqueue
+            else "Job registered without queue dispatch."
+        ),
+        "steps": [],
+    }
+
+    job_id = make_job_id(ws, job_type, payload)
+
+    job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+    if enqueue:
+        append_jsonl(queue_path(ws), job)
+
+    append_jsonl(job_ledger_path(ws), {"event": "job_created", **job})
+
+    write_json(job_status_path(ws, job_id), job)
+
+    write_json(progress_path(ws, job_id), {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "status": initial_status,
+        "percent": initial_progress["percent"],
+        "message": initial_progress["message"],
+        "steps": initial_progress["steps"],
+        "updated_at": now_iso(),
+    })
+
+    return job
+
+
+UNIVERSAL JOB CONTRACT IDENTITY REFERENCES
+------------------------------------------------------------------------------
+0048:     "job_id",
+0049:     "workspace_id",
+0054:     "job_type",
+0064:     "parent_job_id",
+0065:     "dependency_job_ids",
+0066:     "batch_id",
+0067:     "pipeline_run_id",
+0697:     job_id: str
+0698:     workspace_id: str
+0705:     job_type: str = ""
+0725:     parent_job_id: Optional[str] = None
+0726:     dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+0727:     batch_id: Optional[str] = None
+0728:     pipeline_run_id: Optional[str] = None
+0768:         set_(self, "job_id", _normalize_identifier(
+0769:             self.job_id, name="job_id", violations=violations, required=True) or "")
+0770:         set_(self, "workspace_id", _normalize_identifier(
+0771:             self.workspace_id, name="workspace_id", violations=violations,
+0787:         job_type = _normalize_optional_text(
+0788:             self.job_type,
+0789:             name="job_type",
+0793:         if job_type is None:
+0794:             violations.append("job_type is required")
+0795:         set_(self, "job_type", job_type or "")
+0838:         set_(self, "parent_job_id", _normalize_identifier(
+0839:             self.parent_job_id, name="parent_job_id", violations=violations,
+0841:         set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+0842:             self.dependency_job_ids, name="dependency_job_ids",
+0844:         if self.job_id and self.job_id in self.dependency_job_ids:
+0845:             violations.append("dependency_job_ids must not contain job_id")
+0846:         set_(self, "batch_id", _normalize_identifier(
+0847:             self.batch_id, name="batch_id", violations=violations, required=False))
+0848:         set_(self, "pipeline_run_id", _normalize_identifier(
+0849:             self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+0957:             "job_id": self.job_id,
+0958:             "workspace_id": self.workspace_id,
+0963:             "job_type": self.job_type,
+0973:             "parent_job_id": self.parent_job_id,
+0974:             "dependency_job_ids": list(self.dependency_job_ids),
+0975:             "batch_id": self.batch_id,
+0976:             "pipeline_run_id": self.pipeline_run_id,
+1137:             "job_id": self.job_id,
+1138:             "workspace_id": self.workspace_id,
+1143:             "job_type": self.job_type,
+
+SOURCE JOB ID CONSTRUCTION PATTERNS
+------------------------------------------------------------------------------
+MATCHES: 155
+article_validation\article_validation_runner_v3.py:156: + uuid4().hex
+article_validation\article_validation_runner_v3.py:190: + uuid4().hex
+article_validation\article_validation_runner_v3.py:1681: + uuid4().hex
+article_validation\article_validation_runner_v3.py:1848: + uuid4().hex
+crawler\seed_registration_engine.py:81: random_suffix = uuid4().hex[:12]
+crawler\session_coordinator.py:117: random_suffix = uuid4().hex[:12]
+jobs\universal_knowledge_orchestrator.py:215: job_id = make_job_id(ws, job_type, payload)
+jobs\universal_knowledge_orchestrator.py:219: "job_id": job_id,
+jobs\universal_knowledge_orchestrator.py:257: "job_id": job_id,
+jobs\universal_knowledge_orchestrator.py:284: "job_id": job_id,
+jobs\universal_knowledge_orchestrator.py:311: "job_id": job_id,
+jobs\universal_knowledge_orchestrator.py:346: "job_id": job_id,
+orchestration\context_snapshot.py:22: "job_id": job.get("job_id"),
+orchestration\job_store.py:124: job_id = f"job_{uuid4().hex[:16]}"
+orchestration\job_store.py:248: event_id=f"evt_{uuid4().hex[:16]}",
+orchestration\queue.py:169: "job_id": job.job_id,
+routes\files.py:490: doc_id = uuid.uuid4().hex
+routes\files.py:1145: "job_id": None,
+runtime\runtime_boot_process.py:450: f"runtime_boot_{uuid4().hex}"
+runtime\udare_runtime_contract.py:867: "job_id":
+runtime\udare_runtime_contract.py:928: "job_id":
+runtime\universal_runtime_infrastructure.py:72: "job_id": job_id,
+runtime\universal_runtime_infrastructure.py:315: job_id = job.get("job_id", "")
+runtime\universal_runtime_infrastructure.py:322: "job_id": job_id,
+runtime\universal_runtime_infrastructure.py:410: job_id = job.get("job_id", "")
+runtime\universal_runtime_infrastructure.py:417: "job_id": job_id,
+runtime\universal_runtime_registration.py:1038: job_id = str(
+runtime\universal_runtime_registration.py:1107: "job_id": job_id,
+runtime\universal_runtime_registration.py:1127: "job_id": job_id,
+runtime\website_article_integrity_automation.py:444: job_id = str(
+runtime\website_article_integrity_automation.py:522: "job_id": existing.get(
+runtime\website_article_integrity_automation.py:586: "job_id": job.get(
+runtime\website_article_integrity_automation.py:931: "job_id": (
+runtime\website_article_integrity_automation.py:1021: "job_id": existing.get(
+runtime\website_article_integrity_automation.py:1210: "job_id": created.get(
+stores\udare_store.py:1730: "job_id":
+tms\orchestration_governance.py:288: safe_job_id = str(job_id or "unknown").replace(" ", "_")
+tms\orchestration_governance.py:332: job_id = str(job.get("job_id") or "unknown")
+tms\service.py:102: ticket_id = f"tkt_{uuid4().hex}"
+tms\service.py:155: message_id=f"msg_{uuid4().hex}",
+tms\service.py:196: event_id=f"status_{uuid4().hex}",
+tms\service.py:232: assignment_id=f"assign_{uuid4().hex}",
+tms\service.py:300: note_id=f"note_{uuid4().hex}",
+tms\ticket_orchestration.py:90: job_id = f"ticket_job_{ticket_id}_{job_type}_{timestamp}"
+tms\worker_infrastructure.py:52: "job_id": job_id,
+tms\worker_infrastructure.py:100: "job_id": job.get("job_id"),
+tms\worker_infrastructure.py:147: "job_id": job.get("job_id"),
+tms\worker_infrastructure.py:194: "job_id": job.get("job_id"),
+tms\worker_infrastructure.py:244: "job_id": job.get("job_id"),
+tms\worker_infrastructure.py:272: "job_id": job.get("job_id"),
+tms\worker_infrastructure.py:292: "job_id": job.get("job_id"),
+universal_article_body_store\body_store_queue_v1.py:351: normalized_job_id = _require_string(
+universal_article_body_store\body_store_queue_v1.py:498: normalized_job_id = (
+universal_article_body_store\body_store_queue_v1.py:506: + uuid4().hex
+universal_article_body_store\body_store_queue_v1.py:830: + uuid4().hex
+universal_article_body_store\body_store_runtime_registration_v1.py:295: job_id = _require_string(
+universal_article_body_store\body_store_runtime_registration_v1.py:331: "job_id":
+universal_article_body_store\body_store_runtime_v1.py:63: + uuid4().hex
+universal_article_body_store\body_store_state_transition_engine_v1.py:367: + uuid4().hex
+universal_article_body_store\body_store_worker_v1.py:63: + uuid4().hex
+universal_article_body_store\body_store_worker_v1.py:151: "job_id":
+universal_article_body_store\body_store_worker_v1.py:245: "job_id":
+universal_article_body_store\body_store_worker_v1.py:329: job_id = _require_string(
+workers\udare_reconstruction_worker.py:436: "job_id":
+workers\udare_reconstruction_worker.py:487: "job_id":
+workers\udare_reconstruction_worker.py:572: job_id = str(
+workers\udare_reconstruction_worker.py:604: "job_id":
+workers\udare_reconstruction_worker.py:883: "job_id":
+workers\udare_reconstruction_worker.py:1050: "job_id":
+workers\udare_reconstruction_worker.py:1297: "job_id":
+workers\udare_reconstruction_worker.py:1487: "job_id":
+workers\udare_reconstruction_worker.py:1659: "job_id":
+workers\website_raw_html_acquisition_orchestrator.py:144: "job_id": job.get("job_id"),
+runtime\universal_jobs\contract.py:957: "job_id": self.job_id,
+runtime\universal_jobs\contract.py:1137: "job_id": self.job_id,
+runtime\universal_jobs\creation_engine.py:629: job_id = _clean_text(request.job_id) or _make_job_id(
+pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py:100: processing_job_id = None
+pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py:149: processing_job_id = processing_job.job_id
+pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py:158: "job_id": processing_job_id,
+pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py:172: "job_id": None,
+pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py:185: "job_id": processing_job_id,
+data\runtime_backups\files_route_active_target_set_migration_20260803T022117Z\files.py:483: doc_id = uuid.uuid4().hex
+data\runtime_backups\files_route_active_target_set_migration_20260803T022117Z\files.py:1197: "job_id": None,
+data\runtime_backups\raw_html_persistence_recovery_20260714T165746Z\universal_knowledge_worker.py:28: job_id = job.get("job_id") or ""
+data\runtime_backups\raw_html_persistence_recovery_20260714T165746Z\universal_knowledge_worker.py:146: "job_id": job_id,
+data\runtime_backups\raw_html_persistence_recovery_20260714T165746Z\universal_knowledge_worker.py:163: "job_id": job_id,
+data\runtime_backups\universal_job_contract_install_20260729T225417Z\contract.py:942: "job_id": self.job_id,
+data\runtime_backups\universal_job_contract_install_20260729T225417Z\contract.py:1122: "job_id": self.job_id,
+data\runtime_backups\universal_job_contract_review_20260729T224722Z\contract.py:883: "job_id": self.job_id,
+data\runtime_backups\universal_job_contract_review_20260729T224722Z\contract.py:967: "job_id": self.job_id,
+data\runtime_backups\uri_phase1_1_7_runtime_shutdown_20260719T182212Z\backend\server\runtime\runtime_boot_process.py:440: f"runtime_boot_{uuid4().hex}"
+data\runtime_backups\html_cleaner_total_removal_20260714T010610Z\backend\server\workers\website_unified_content_orchestrator.py:144: "job_id": job.get("job_id"),
+backups\article_validation_architecture_correction_20260719_151817\article_validation_store_v3.py:175: + uuid4().hex
+backups\article_validation_architecture_correction_20260719_151817\article_validation_store_v3.py:209: + uuid4().hex
+backups\pipeline2_coordinator_wiring_20260730_153606\files.py:483: doc_id = uuid.uuid4().hex
+backups\pipeline2_coordinator_wiring_20260730_153606\files.py:1195: "job_id": None,
+backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py:100: processing_job_id = None
+backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py:149: processing_job_id = processing_job.job_id
+backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py:158: "job_id": processing_job_id,
+backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py:172: "job_id": None,
+backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py:185: "job_id": processing_job_id,
+backups\pipeline2_route_to_coordinator_20260730_153848\files.py:483: doc_id = uuid.uuid4().hex
+backups\pipeline2_route_to_coordinator_20260730_153848\files.py:1195: "job_id": None,
+backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py:100: processing_job_id = None
+backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py:149: processing_job_id = processing_job.job_id
+backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py:158: "job_id": processing_job_id,
+backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py:172: "job_id": None,
+backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py:185: "job_id": processing_job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py:202: job_id = make_job_id(ws, job_type, payload)
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py:206: "job_id": job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py:244: "job_id": job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py:271: "job_id": job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py:298: "job_id": job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py:333: "job_id": job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_worker.py:30: job_id = job.get("job_id") or ""
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_worker.py:148: "job_id": job_id,
+backups\universal_runtime_registration_20260719_032352\universal_knowledge_worker.py:165: "job_id": job_id,
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:483: doc_id = uuid.uuid4().hex
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:744: processing_job_id = None
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:775: processing_job_id = processing_job.job_id
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:781: "job_id": processing_job_id,
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:791: "job_id": None,
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:804: "job_id": processing_job_id,
+backups\upload_document_pipeline2_intake_20260730_133651\files.py:1251: "job_id": None,
+backups\upload_document_top_coordinator_20260730_155905\files.py:483: doc_id = uuid.uuid4().hex
+backups\upload_document_top_coordinator_20260730_155905\files.py:1195: "job_id": None,
+backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:109: job_id = str(job.get("job_id") or "")
+backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:119: "job_id": job_id,
+backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:152: runner_id = f"runner_{uuid.uuid4().hex[:16]}"
+backups\wuc_full_reset_20260724_215019\backend\server\workers\website_unified_content_orchestrator.py:225: "job_id":
+backups\wuc_final_residual_cleanup_20260724_215757\backend\server\workers\universal_knowledge_worker.py:30: job_id = job.get("job_id") or ""
+backups\wuc_final_residual_cleanup_20260724_215757\backend\server\workers\universal_knowledge_worker.py:148: "job_id": job_id,
+backups\wuc_final_residual_cleanup_20260724_215757\backend\server\workers\universal_knowledge_worker.py:165: "job_id": job_id,
+backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py:100: processing_job_id = None
+backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py:149: processing_job_id = processing_job.job_id
+backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py:158: "job_id": processing_job_id,
+backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py:172: "job_id": None,
+backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py:185: "job_id": processing_job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:30: "job_id": completed.job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:414: "job_id": job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:486: "job_id": completed.job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:582: "job_id": single_result.get("job_id"),
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:769: "job_id": completed.job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:814: "job_id": completed.job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:865: "job_id": completed.job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:892: actual_worker_id = worker_id or f"worker_{uuid4().hex[:10]}"
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\orchestration\worker.py:940: "job_id": failed.job_id,
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\workers\universal_knowledge_worker.py:17: job_id = job.get('job_id') or ''
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\workers\universal_knowledge_worker.py:43: return {'ok': True, 'job_id': job_id, 'workspace_id': workspace_id, 'job_type': job_type, 'result': result}
+backups\remaining_legacy_uucd_workers_retirement_20260726_234014\backend\server\workers\universal_knowledge_worker.py:46: return {'ok': False, 'job_id': job_id, 'workspace_id': workspace_id, 'job_type': job_type, 'failure': failure}
+backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\runtime\live_route_orchestration_hooks.py:32: "job_id": job.get("job_id"),
+backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\runtime\live_route_orchestration_hooks.py:61: "job_id": job.get("job_id"),
+backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py:109: job_id = str(job.get("job_id") or "")
+backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py:119: "job_id": job_id,
+backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py:200: current_job_id = str(

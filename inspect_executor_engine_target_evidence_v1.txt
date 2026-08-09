@@ -1,0 +1,691 @@
+PHASE 9.1.13.2 — TARGET EVIDENCE CONTRACT
+
+============================================================
+EVIDENCE FIELD CONSTANTS / EXECUTION STRATEGIES
+LINES 114-280
+============================================================
+114: 
+115: 
+116: class LifecycleRepairExecutorEngineError(
+117:     ValueError
+118: ):
+119:     """Raised when Lifecycle Repair Executor Engine safety validation fails."""
+120: 
+121: 
+122: def _freeze(
+123:     value: Any,
+124: ) -> Any:
+125: 
+126:     if isinstance(
+127:         value,
+128:         MappingProxyType,
+129:     ):
+130:         return value
+131: 
+132:     if isinstance(
+133:         value,
+134:         Mapping,
+135:     ):
+136:         return MappingProxyType(
+137:             {
+138:                 str(
+139:                     key
+140:                 ):
+141:                     _freeze(
+142:                         item
+143:                     )
+144: 
+145:                 for key, item
+146:                 in value.items()
+147:             }
+148:         )
+149: 
+150:     if isinstance(
+151:         value,
+152:         (
+153:             tuple,
+154:             list,
+155:         ),
+156:     ):
+157:         return tuple(
+158:             _freeze(
+159:                 item
+160:             )
+161: 
+162:             for item
+163:             in value
+164:         )
+165: 
+166:     return value
+167: 
+168: 
+169: def _json_ready(
+170:     value: Any,
+171: ) -> Any:
+172: 
+173:     if isinstance(
+174:         value,
+175:         Mapping,
+176:     ):
+177:         return {
+178:             str(
+179:                 key
+180:             ):
+181:                 _json_ready(
+182:                     item
+183:                 )
+184: 
+185:             for key, item
+186:             in value.items()
+187:         }
+188: 
+189:     if isinstance(
+190:         value,
+191:         (
+192:             tuple,
+193:             list,
+194:         ),
+195:     ):
+196:         return [
+197:             _json_ready(
+198:                 item
+199:             )
+200: 
+201:             for item
+202:             in value
+203:         ]
+204: 
+205:     return value
+206: 
+207: 
+208: def _require_mapping(
+209:     value: Any,
+210:     *,
+211:     field_name: str,
+212: ) -> Mapping[str, Any]:
+213: 
+214:     if not isinstance(
+215:         value,
+216:         Mapping,
+217:     ):
+218:         raise LifecycleRepairExecutorEngineError(
+219:             field_name
+220:             + " must be a mapping."
+221:         )
+222: 
+223:     return value
+224: 
+225: 
+226: def _require_string(
+227:     value: Any,
+228:     *,
+229:     field_name: str,
+230: ) -> str:
+231: 
+232:     if not isinstance(
+233:         value,
+234:         str,
+235:     ):
+236:         raise LifecycleRepairExecutorEngineError(
+237:             field_name
+238:             + " must be a string."
+239:         )
+240: 
+241:     normalized = value.strip()
+242: 
+243:     if not normalized:
+244:         raise LifecycleRepairExecutorEngineError(
+245:             field_name
+246:             + " must not be empty."
+247:         )
+248: 
+249:     return normalized
+250: 
+251: 
+252: def calculate_lifecycle_repair_executor_engine_checksum_v1(
+253:     *,
+254:     payload: Mapping[str, Any],
+255: ) -> str:
+256: 
+257:     _require_mapping(
+258:         payload,
+259:         field_name="payload",
+260:     )
+261: 
+262:     serialized = json.dumps(
+263:         _json_ready(
+264:             payload
+265:         ),
+266:         ensure_ascii=False,
+267:         sort_keys=True,
+268:         separators=(
+269:             ",",
+270:             ":",
+271:         ),
+272:     )
+273: 
+274:     return hashlib.sha256(
+275:         serialized.encode(
+276:             "utf-8"
+277:         )
+278:     ).hexdigest()
+279: 
+280: 
+
+============================================================
+MUTATION INTENT V1 / TARGET DESCRIPTOR V2
+LINES 2184-2696
+============================================================
+2184: def _build_repair_mutation_intent_v1(
+2185:     *,
+2186:     project_root: str | Path,
+2187:     workspace_id: str,
+2188:     repair_action: Mapping[str, Any],
+2189:     source_finding: Mapping[str, Any],
+2190: ) -> Mapping[str, Any]:
+2191: 
+2192:     action = _require_mapping(
+2193:         repair_action,
+2194:         field_name="repair_action",
+2195:     )
+2196: 
+2197:     finding = _require_mapping(
+2198:         source_finding,
+2199:         field_name="source_finding",
+2200:     )
+2201: 
+2202:     action_type = _require_string(
+2203:         action.get(
+2204:             "repair_action_type"
+2205:         ),
+2206:         field_name="repair_action.repair_action_type",
+2207:     ).upper()
+2208: 
+2209:     strategy = ACTION_EXECUTION_STRATEGIES.get(
+2210:         action_type
+2211:     )
+2212: 
+2213:     if strategy is None:
+2214:         raise LifecycleRepairExecutorEngineError(
+2215:             "No execution strategy exists for action type: "
+2216:             + action_type
+2217:         )
+2218: 
+2219:     target = _resolve_repair_target_descriptor_v1(
+2220:         project_root=project_root,
+2221:         workspace_id=workspace_id,
+2222:         repair_action=action,
+2223:         source_finding=finding,
+2224:     )
+2225: 
+2226:     normalized_state = None
+2227:     replacement_record = None
+2228: 
+2229:     sufficient_repair_evidence = False
+2230:     evidence_reason = ""
+2231: 
+2232:     if strategy == "NORMALIZE_STATE":
+2233: 
+2234:         normalized_state = (
+2235:             _extract_normalized_lifecycle_state_v1(
+2236:                 source_finding=finding,
+2237:             )
+2238:         )
+2239: 
+2240:         sufficient_repair_evidence = all(
+2241:             (
+2242:                 target[
+2243:                     "target_path_resolved"
+2244:                 ]
+2245:                 is True,
+2246: 
+2247:                 target[
+2248:                     "target_exists"
+2249:                 ]
+2250:                 is True,
+2251: 
+2252:                 target[
+2253:                     "target_is_file"
+2254:                 ]
+2255:                 is True,
+2256: 
+2257:                 normalized_state
+2258:                 is not None,
+2259:             )
+2260:         )
+2261: 
+2262:         evidence_reason = (
+2263:             "Target lifecycle record and canonical "
+2264:             "normalized state are required."
+2265:         )
+2266: 
+2267:     elif strategy == "REMOVE_TOMBSTONE_CONTENT":
+2268: 
+2269:         sufficient_repair_evidence = all(
+2270:             (
+2271:                 target[
+2272:                     "target_path_resolved"
+2273:                 ]
+2274:                 is True,
+2275: 
+2276:                 target[
+2277:                     "target_exists"
+2278:                 ]
+2279:                 is True,
+2280: 
+2281:                 target[
+2282:                     "target_is_file"
+2283:                 ]
+2284:                 is True,
+2285:             )
+2286:         )
+2287: 
+2288:         evidence_reason = (
+2289:             "Existing tombstone JSON record is required."
+2290:         )
+2291: 
+2292:     elif strategy == "QUARANTINE_FILE":
+2293: 
+2294:         sufficient_repair_evidence = all(
+2295:             (
+2296:                 target[
+2297:                     "target_path_resolved"
+2298:                 ]
+2299:                 is True,
+2300: 
+2301:                 target[
+2302:                     "target_exists"
+2303:                 ]
+2304:                 is True,
+2305: 
+2306:                 target[
+2307:                     "target_is_file"
+2308:                 ]
+2309:                 is True,
+2310:             )
+2311:         )
+2312: 
+2313:         evidence_reason = (
+2314:             "Existing invalid record path is required."
+2315:         )
+2316: 
+2317:     elif strategy == "CONTROLLED_JSON_REBUILD":
+2318: 
+2319:         replacement_record = (
+2320:             _extract_controlled_replacement_record_v1(
+2321:                 source_finding=finding,
+2322:             )
+2323:         )
+2324: 
+2325:         sufficient_repair_evidence = all(
+2326:             (
+2327:                 target[
+2328:                     "target_path_resolved"
+2329:                 ]
+2330:                 is True,
+2331: 
+2332:                 replacement_record
+2333:                 is not None,
+2334:             )
+2335:         )
+2336: 
+2337:         evidence_reason = (
+2338:             "Bound target path and explicit replacement "
+2339:             "record evidence are required."
+2340:         )
+2341: 
+2342:     else:
+2343:         raise LifecycleRepairExecutorEngineError(
+2344:             "Unhandled execution strategy: "
+2345:             + strategy
+2346:         )
+2347: 
+2348:     intent = {
+2349:         "repair_action_id":
+2350:             action.get(
+2351:                 "repair_action_id"
+2352:             ),
+2353: 
+2354:         "source_finding_id":
+2355:             finding.get(
+2356:                 "finding_id"
+2357:             ),
+2358: 
+2359:         "repair_action_type":
+2360:             action_type,
+2361: 
+2362:         "execution_strategy":
+2363:             strategy,
+2364: 
+2365:         "target_store":
+2366:             target[
+2367:                 "target_store"
+2368:             ],
+2369: 
+2370:         "target_path":
+2371:             target[
+2372:                 "target_path"
+2373:             ],
+2374: 
+2375:         "target_path_resolved":
+2376:             target[
+2377:                 "target_path_resolved"
+2378:             ],
+2379: 
+2380:         "target_exists":
+2381:             target[
+2382:                 "target_exists"
+2383:             ],
+2384: 
+2385:         "target_is_file":
+2386:             target[
+2387:                 "target_is_file"
+2388:             ],
+2389: 
+2390:         "target_checksum_before":
+2391:             target[
+2392:                 "target_checksum_before"
+2393:             ],
+2394: 
+2395:         "normalized_lifecycle_state":
+2396:             normalized_state,
+2397: 
+2398:         "replacement_record":
+2399:             replacement_record,
+2400: 
+2401:         "sufficient_repair_evidence":
+2402:             sufficient_repair_evidence,
+2403: 
+2404:         "evidence_requirement":
+2405:             evidence_reason,
+2406: 
+2407:         "mutation_authorized":
+2408:             False,
+2409: 
+2410:         "mutation_attempted":
+2411:             False,
+2412: 
+2413:         "mutation_performed":
+2414:             False,
+2415: 
+2416:         "repair_executed":
+2417:             False,
+2418:     }
+2419: 
+2420:     intent[
+2421:         "mutation_intent_checksum"
+2422:     ] = (
+2423:         calculate_lifecycle_repair_executor_engine_checksum_v1(
+2424:             payload=intent,
+2425:         )
+2426:     )
+2427: 
+2428:     return _freeze(
+2429:         intent
+2430:     )
+2431: DYNAMIC_TARGET_STORE_ACTION_TYPES = (
+2432:     "QUARANTINE_INVALID_RECORD",
+2433:     "REPAIR_REFERENCE_METADATA",
+2434: )
+2435: 
+2436: 
+2437: TARGET_STORE_FIELD_NAMES = (
+2438:     "target_store",
+2439:     "store_name",
+2440:     "source_store",
+2441:     "record_store",
+2442: )
+2443: 
+2444: 
+2445: def _resolve_action_target_store_v1(
+2446:     *,
+2447:     repair_action: Mapping[str, Any],
+2448:     source_finding: Mapping[str, Any],
+2449: ) -> str:
+2450: 
+2451:     action = _require_mapping(
+2452:         repair_action,
+2453:         field_name="repair_action",
+2454:     )
+2455: 
+2456:     finding = _require_mapping(
+2457:         source_finding,
+2458:         field_name="source_finding",
+2459:     )
+2460: 
+2461:     action_type = _require_string(
+2462:         action.get(
+2463:             "repair_action_type"
+2464:         ),
+2465:         field_name="repair_action.repair_action_type",
+2466:     ).upper()
+2467: 
+2468:     evidence_store = (
+2469:         _find_first_evidence_value_v1(
+2470:             source_finding=finding,
+2471:             field_names=TARGET_STORE_FIELD_NAMES,
+2472:         )
+2473:     )
+2474: 
+2475:     if (
+2476:         action_type
+2477:         in DYNAMIC_TARGET_STORE_ACTION_TYPES
+2478:     ):
+2479:         if not isinstance(
+2480:             evidence_store,
+2481:             str,
+2482:         ):
+2483:             raise LifecycleRepairExecutorEngineError(
+2484:                 "Repair action "
+2485:                 + action_type
+2486:                 + " requires explicit target-store evidence."
+2487:             )
+2488: 
+2489:         normalized_store = (
+2490:             evidence_store
+2491:             .strip()
+2492:             .upper()
+2493:         )
+2494: 
+2495:         aliases = {
+2496:             "LIFECYCLE_STORE":
+2497:                 "LIFECYCLE",
+2498: 
+2499:             "ARCHIVE_STORE":
+2500:                 "ARCHIVE",
+2501: 
+2502:             "TOMBSTONE_STORE":
+2503:                 "TOMBSTONE",
+2504: 
+2505:             "BODY":
+2506:                 "BODY_STORE",
+2507: 
+2508:             "ARTICLE_BODY_STORE":
+2509:                 "BODY_STORE",
+2510:         }
+2511: 
+2512:         normalized_store = aliases.get(
+2513:             normalized_store,
+2514:             normalized_store,
+2515:         )
+2516: 
+2517:         if (
+2518:             normalized_store
+2519:             not in SUPPORTED_TARGET_STORES
+2520:         ):
+2521:             raise LifecycleRepairExecutorEngineError(
+2522:                 "Unsupported target-store evidence: "
+2523:                 + normalized_store
+2524:             )
+2525: 
+2526:         return normalized_store
+2527: 
+2528:     target_store = ACTION_TARGET_STORE.get(
+2529:         action_type
+2530:     )
+2531: 
+2532:     if target_store is None:
+2533:         raise LifecycleRepairExecutorEngineError(
+2534:             "Repair action has no target-store mapping: "
+2535:             + action_type
+2536:         )
+2537: 
+2538:     return target_store
+2539: 
+2540: 
+2541: def _resolve_repair_target_descriptor_v2(
+2542:     *,
+2543:     project_root: str | Path,
+2544:     workspace_id: str,
+2545:     repair_action: Mapping[str, Any],
+2546:     source_finding: Mapping[str, Any],
+2547: ) -> Mapping[str, Any]:
+2548: 
+2549:     action = _require_mapping(
+2550:         repair_action,
+2551:         field_name="repair_action",
+2552:     )
+2553: 
+2554:     finding = _require_mapping(
+2555:         source_finding,
+2556:         field_name="source_finding",
+2557:     )
+2558: 
+2559:     action_type = _require_string(
+2560:         action.get(
+2561:             "repair_action_type"
+2562:         ),
+2563:         field_name="repair_action.repair_action_type",
+2564:     ).upper()
+2565: 
+2566:     target_store = (
+2567:         _resolve_action_target_store_v1(
+2568:             repair_action=action,
+2569:             source_finding=finding,
+2570:         )
+2571:     )
+2572: 
+2573:     workspace_store_root = (
+2574:         _resolve_workspace_store_root_v1(
+2575:             project_root=project_root,
+2576:             workspace_id=workspace_id,
+2577:             store_name=target_store,
+2578:         )
+2579:     )
+2580: 
+2581:     raw_target_path = (
+2582:         _find_first_evidence_value_v1(
+2583:             source_finding=finding,
+2584:             field_names=TARGET_PATH_FIELD_NAMES,
+2585:         )
+2586:     )
+2587: 
+2588:     target_path: Path | None = None
+2589:     target_path_resolved = False
+2590:     target_path_error: str | None = None
+2591: 
+2592:     if isinstance(
+2593:         raw_target_path,
+2594:         str,
+2595:     ) and raw_target_path.strip():
+2596: 
+2597:         try:
+2598:             target_path = (
+2599:                 _normalize_evidence_path_v1(
+2600:                     raw_path=raw_target_path,
+2601:                     workspace_store_root=(
+2602:                         workspace_store_root
+2603:                     ),
+2604:                 )
+2605:             )
+2606: 
+2607:             target_path_resolved = True
+2608: 
+2609:         except LifecycleRepairExecutorEngineError as exc:
+2610:             target_path_error = str(
+2611:                 exc
+2612:             )
+2613: 
+2614:     target_exists = (
+2615:         target_path is not None
+2616:         and target_path.exists()
+2617:     )
+2618: 
+2619:     target_is_file = (
+2620:         target_path is not None
+2621:         and target_path.is_file()
+2622:     )
+2623: 
+2624:     if (
+2625:         target_path is not None
+2626:         and target_exists
+2627:         and target_is_file
+2628:     ):
+2629:         target_checksum_before = (
+2630:             _calculate_file_checksum_v1(
+2631:                 path=target_path,
+2632:             )
+2633:         )
+2634: 
+2635:     elif target_path is not None:
+2636:         target_checksum_before = "ABSENT"
+2637: 
+2638:     else:
+2639:         target_checksum_before = None
+2640: 
+2641:     return _freeze(
+2642:         {
+2643:             "repair_action_id":
+2644:                 action.get(
+2645:                     "repair_action_id"
+2646:                 ),
+2647: 
+2648:             "source_finding_id":
+2649:                 finding.get(
+2650:                     "finding_id"
+2651:                 ),
+2652: 
+2653:             "repair_action_type":
+2654:                 action_type,
+2655: 
+2656:             "target_store":
+2657:                 target_store,
+2658: 
+2659:             "workspace_store_root":
+2660:                 str(
+2661:                     workspace_store_root
+2662:                 ),
+2663: 
+2664:             "raw_target_path":
+2665:                 raw_target_path,
+2666: 
+2667:             "target_path":
+2668:                 (
+2669:                     str(
+2670:                         target_path
+2671:                     )
+2672:                     if target_path is not None
+2673:                     else None
+2674:                 ),
+2675: 
+2676:             "target_path_resolved":
+2677:                 target_path_resolved,
+2678: 
+2679:             "target_path_error":
+2680:                 target_path_error,
+2681: 
+2682:             "target_exists":
+2683:                 target_exists,
+2684: 
+2685:             "target_is_file":
+2686:                 target_is_file,
+2687: 
+2688:             "target_checksum_before":
+2689:                 target_checksum_before,
+2690: 
+2691:             "mutation_performed":
+2692:                 False,
+2693:         }
+2694:     )
+2695: 
+2696: 

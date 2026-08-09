@@ -1,0 +1,144 @@
+PHASE 9.1.13.2 — NORMALIZE STATE EXECUTION
+3040:     )
+3041: 
+3042: 
+3043: def _validate_replacement_record_boundary_v1(
+3044:     *,
+3045:     replacement_record: Mapping[str, Any],
+3046:     workspace_id: str,
+3047: ) -> None:
+3048: 
+3049:     replacement = _require_mapping(
+3050:         replacement_record,
+3051:         field_name="replacement_record",
+3052:     )
+3053: 
+3054:     replacement_workspace_id = (
+3055:         replacement.get(
+3056:             "workspace_id"
+3057:         )
+3058:     )
+3059: 
+3060:     if (
+3061:         replacement_workspace_id
+3062:         is not None
+3063:         and replacement_workspace_id
+3064:         != workspace_id
+3065:     ):
+3066:         raise LifecycleRepairExecutorEngineError(
+3067:             "Replacement record workspace_id does not "
+3068:             "match the authorized workspace."
+3069:         )
+3070: 
+3071: 
+3072: def _execute_json_rebuild_v1(
+3073:     *,
+3074:     target_path: Path,
+3075:     replacement_record: Mapping[str, Any],
+3076:     workspace_id: str,
+3077: ) -> Mapping[str, Any]:
+3078: 
+3079:     _validate_replacement_record_boundary_v1(
+3080:         replacement_record=replacement_record,
+3081:         workspace_id=workspace_id,
+3082:     )
+3083: 
+3084:     _write_json_atomic_v1(
+3085:         path=target_path,
+3086:         payload=replacement_record,
+3087:     )
+3088: 
+3089:     checksum_after = (
+3090:         _calculate_file_checksum_v1(
+3091:             path=target_path,
+3092:         )
+3093:     )
+3094: 
+3095:     return _freeze(
+3096:         {
+3097:             "mutation_performed":
+3098:                 True,
+3099: 
+3100:             "target_checksum_after":
+3101:                 checksum_after,
+3102: 
+3103:             "removed_fields":
+3104:                 (),
+3105:         }
+3106:     )
+3107: 
+3108: 
+3109: def _execute_normalize_state_v1(
+3110:     *,
+3111:     target_path: Path,
+3112:     normalized_state: str,
+3113: ) -> Mapping[str, Any]:
+3114: 
+3115:     record = dict(
+3116:         _load_json_mapping_v1(
+3117:             path=target_path,
+3118:         )
+3119:     )
+3120: 
+3121:     if (
+3122:         normalized_state
+3123:         not in CANONICAL_LIFECYCLE_STATES
+3124:     ):
+3125:         raise LifecycleRepairExecutorEngineError(
+3126:             "Refusing non-canonical lifecycle state."
+3127:         )
+3128: 
+3129:     if "lifecycle_state" in record:
+3130:         state_field = "lifecycle_state"
+3131: 
+3132:     elif "state" in record:
+3133:         state_field = "state"
+3134: 
+3135:     else:
+3136:         raise LifecycleRepairExecutorEngineError(
+3137:             "Lifecycle record does not expose an existing "
+3138:             "lifecycle_state or state field."
+3139:         )
+3140: 
+3141:     previous_state = record.get(
+3142:         state_field
+3143:     )
+3144: 
+3145:     record[
+3146:         state_field
+3147:     ] = normalized_state
+3148: 
+3149:     _write_json_atomic_v1(
+3150:         path=target_path,
+3151:         payload=record,
+3152:     )
+3153: 
+3154:     checksum_after = (
+3155:         _calculate_file_checksum_v1(
+3156:             path=target_path,
+3157:         )
+3158:     )
+3159: 
+3160:     return _freeze(
+3161:         {
+3162:             "mutation_performed":
+3163:                 True,
+3164: 
+3165:             "state_field":
+3166:                 state_field,
+3167: 
+3168:             "previous_state":
+3169:                 previous_state,
+3170: 
+3171:             "normalized_state":
+3172:                 normalized_state,
+3173: 
+3174:             "target_checksum_after":
+3175:                 checksum_after,
+3176: 
+3177:             "removed_fields":
+3178:                 (),
+3179:         }
+3180:     )
+3181: 
+3182: 
