@@ -3862,111 +3862,6 @@ def _validate_mutation_intent_checksum_v1(
     )
 
 
-def _validate_target_descriptor_checksum_v1(
-    *,
-    mutation_intent: Mapping[str, Any],
-) -> bool:
-
-    intent = _require_mapping(
-        mutation_intent,
-        field_name="mutation_intent",
-    )
-
-    stored_checksum = intent.get(
-        "target_descriptor_checksum"
-    )
-
-    if (
-        not isinstance(
-            stored_checksum,
-            str,
-        )
-        or not stored_checksum.strip()
-    ):
-        return False
-
-    descriptor_source = {
-        "repair_action_id":
-            intent.get(
-                "repair_action_id"
-            ),
-
-        "source_finding_id":
-            intent.get(
-                "source_finding_id"
-            ),
-
-        "repair_action_type":
-            intent.get(
-                "repair_action_type"
-            ),
-
-        "workspace_id":
-            intent.get(
-                "workspace_id"
-            ),
-
-        "target_store":
-            intent.get(
-                "target_store"
-            ),
-
-        "workspace_store_root":
-            intent.get(
-                "workspace_store_root"
-            ),
-
-        "raw_target_path":
-            None,
-
-        "target_path":
-            intent.get(
-                "target_path"
-            ),
-
-        "target_path_resolved":
-            intent.get(
-                "target_path_resolved"
-            ),
-
-        "target_path_error":
-            None,
-
-        "target_exists":
-            intent.get(
-                "target_exists"
-            ),
-
-        "target_is_file":
-            intent.get(
-                "target_is_file"
-            ),
-
-        "target_checksum_before":
-            intent.get(
-                "target_checksum_before"
-            ),
-
-        "mutation_authorized":
-            False,
-
-        "mutation_attempted":
-            False,
-
-        "mutation_performed":
-            False,
-    }
-
-    calculated_checksum = (
-        calculate_lifecycle_repair_executor_engine_checksum_v1(
-            payload=descriptor_source,
-        )
-    )
-
-    return (
-        calculated_checksum
-        == stored_checksum
-    )
 
 
 def prepare_lifecycle_repair_execution_v1(
@@ -7887,6 +7782,535 @@ EXECUTOR_ACTION_RESULT_STATUSES = (
 )
 
 
+
+def _cleanup_executor_backup_root_v1(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    execution_request_id: str,
+) -> Mapping[str, Any]:
+
+    import os as _os
+    import time as _time
+
+
+    normalized_workspace_id = (
+        _require_string(
+            workspace_id,
+            field_name="workspace_id",
+        )
+    )
+
+    normalized_execution_request_id = (
+        _require_string(
+            execution_request_id,
+            field_name="execution_request_id",
+        )
+    )
+
+
+    safe_backup_root = (
+        _resolve_executor_backup_root_v1(
+            project_root=project_root,
+            workspace_id=normalized_workspace_id,
+            execution_request_id=(
+                normalized_execution_request_id
+            ),
+        )
+    )
+
+
+    safe_workspace_backup_root = (
+        safe_backup_root.parent.resolve(
+            strict=False
+        )
+    )
+
+
+    if (
+        safe_backup_root
+        == safe_workspace_backup_root
+    ):
+
+        raise LifecycleRepairExecutorEngineError(
+            "Executor backup cleanup may not target "
+            "the workspace backup root itself."
+        )
+
+
+    if not safe_backup_root.exists():
+
+        return _freeze(
+            {
+                "backup_cleanup_required":
+                    False,
+
+                "backup_cleanup_performed":
+                    False,
+
+                "backup_cleanup_verified":
+                    True,
+
+                "backup_preserved_for_recovery":
+                    False,
+
+                "backup_root":
+                    str(
+                        safe_backup_root
+                    ),
+
+                "cleanup_failure_reason":
+                    None,
+            }
+        )
+
+
+    if not safe_backup_root.is_dir():
+
+        return _freeze(
+            {
+                "backup_cleanup_required":
+                    True,
+
+                "backup_cleanup_performed":
+                    False,
+
+                "backup_cleanup_verified":
+                    False,
+
+                "backup_preserved_for_recovery":
+                    True,
+
+                "backup_root":
+                    str(
+                        safe_backup_root
+                    ),
+
+                "cleanup_failure_reason":
+                    (
+                        "Executor backup root is not "
+                        "a directory."
+                    ),
+            }
+        )
+
+
+    # ========================================================
+    # LEGACY STAGING GUARD
+    #
+    # The new cleanup path does not create or use staging.
+    # If an old staging directory exists, fail closed.
+    # ========================================================
+
+    legacy_staging_path = (
+        safe_backup_root.with_name(
+            safe_backup_root.name
+            + ".cleanup_pending"
+        )
+    )
+
+
+    legacy_staging_path = (
+        _assert_path_within_root_v1(
+            candidate_path=(
+                legacy_staging_path
+            ),
+            allowed_root=(
+                safe_workspace_backup_root
+            ),
+        )
+    )
+
+
+    if legacy_staging_path.exists():
+
+        return _freeze(
+            {
+                "backup_cleanup_required":
+                    True,
+
+                "backup_cleanup_performed":
+                    False,
+
+                "backup_cleanup_verified":
+                    False,
+
+                "backup_preserved_for_recovery":
+                    True,
+
+                "backup_root":
+                    str(
+                        safe_backup_root
+                    ),
+
+                "cleanup_failure_reason":
+                    (
+                        "Legacy backup cleanup staging "
+                        "directory exists."
+                    ),
+            }
+        )
+
+
+    retry_attempts = 10
+
+    retry_delay_seconds = 0.01
+
+
+    # ========================================================
+    # SAFE FILE DELETE
+    # ========================================================
+
+    def _remove_file(
+        file_path: Path,
+    ) -> None:
+
+        last_error = None
+
+
+        for attempt in range(
+            retry_attempts
+        ):
+
+            try:
+
+                file_path.unlink()
+
+                return
+
+            except FileNotFoundError:
+
+                return
+
+            except PermissionError as exc:
+
+                last_error = exc
+
+                try:
+
+                    file_path.chmod(
+                        0o600
+                    )
+
+                except Exception as chmod_exc:
+
+                    last_error = (
+                        chmod_exc
+                    )
+
+            except OSError as exc:
+
+                last_error = exc
+
+
+            if (
+                attempt + 1
+                < retry_attempts
+            ):
+
+                _time.sleep(
+                    retry_delay_seconds
+                )
+
+
+        raise LifecycleRepairExecutorEngineError(
+            "Executor backup cleanup could not "
+            "remove file after bounded retry: "
+            + str(
+                file_path
+            )
+            + " :: "
+            + str(
+                last_error
+            )
+        )
+
+
+    # ========================================================
+    # SAFE DIRECTORY DELETE
+    # ========================================================
+
+    def _remove_directory(
+        directory_path: Path,
+    ) -> None:
+
+        last_error = None
+
+
+        for attempt in range(
+            retry_attempts
+        ):
+
+            try:
+
+                directory_path.rmdir()
+
+                return
+
+            except FileNotFoundError:
+
+                return
+
+            except OSError as exc:
+
+                last_error = exc
+
+
+            if (
+                attempt + 1
+                < retry_attempts
+            ):
+
+                _time.sleep(
+                    retry_delay_seconds
+                )
+
+
+        raise LifecycleRepairExecutorEngineError(
+            "Executor backup cleanup could not "
+            "remove directory after bounded retry: "
+            + str(
+                directory_path
+            )
+            + " :: "
+            + str(
+                last_error
+            )
+        )
+
+
+    cleanup_entries = []
+
+    pending_directories = [
+        safe_backup_root
+    ]
+
+
+    cleanup_failure_reason = None
+
+    cleanup_performed = False
+
+
+    try:
+
+        # ====================================================
+        # PREFLIGHT ENTIRE TREE BEFORE MUTATION
+        # ====================================================
+
+        while pending_directories:
+
+            directory_path = (
+                pending_directories.pop()
+            )
+
+
+            try:
+
+                directory_path.relative_to(
+                    safe_backup_root
+                )
+
+            except ValueError as exc:
+
+                raise LifecycleRepairExecutorEngineError(
+                    "Executor backup cleanup directory "
+                    "escaped the transaction backup root: "
+                    + str(
+                        directory_path
+                    )
+                ) from exc
+
+
+            with _os.scandir(
+                directory_path
+            ) as iterator:
+
+                directory_entries = tuple(
+                    iterator
+                )
+
+
+            for entry in directory_entries:
+
+                child_path = Path(
+                    entry.path
+                )
+
+
+                try:
+
+                    child_path.relative_to(
+                        safe_backup_root
+                    )
+
+                except ValueError as exc:
+
+                    raise LifecycleRepairExecutorEngineError(
+                        "Executor backup cleanup entry "
+                        "escaped the transaction backup root: "
+                        + str(
+                            child_path
+                        )
+                    ) from exc
+
+
+                if entry.is_symlink():
+
+                    raise LifecycleRepairExecutorEngineError(
+                        "Executor backup cleanup refuses "
+                        "symbolic links: "
+                        + str(
+                            child_path
+                        )
+                    )
+
+
+                if entry.is_file(
+                    follow_symlinks=False
+                ):
+
+                    cleanup_entries.append(
+                        (
+                            child_path,
+                            "FILE",
+                        )
+                    )
+
+
+                elif entry.is_dir(
+                    follow_symlinks=False
+                ):
+
+                    cleanup_entries.append(
+                        (
+                            child_path,
+                            "DIRECTORY",
+                        )
+                    )
+
+                    pending_directories.append(
+                        child_path
+                    )
+
+
+                else:
+
+                    raise LifecycleRepairExecutorEngineError(
+                        "Executor backup cleanup found an "
+                        "unsupported filesystem object: "
+                        + str(
+                            child_path
+                        )
+                    )
+
+
+        # ====================================================
+        # DELETE DEEPEST ENTRIES FIRST
+        # ====================================================
+
+        cleanup_entries.sort(
+            key=lambda item: (
+                len(
+                    item[0].parts
+                ),
+                1
+                if item[1] == "FILE"
+                else 0,
+            ),
+            reverse=True,
+        )
+
+
+        for (
+            cleanup_path,
+            cleanup_type,
+        ) in cleanup_entries:
+
+            if cleanup_type == "FILE":
+
+                _remove_file(
+                    cleanup_path
+                )
+
+            else:
+
+                _remove_directory(
+                    cleanup_path
+                )
+
+
+        # ====================================================
+        # TRANSACTION ROOT LAST
+        # ====================================================
+
+        _remove_directory(
+            safe_backup_root
+        )
+
+
+        if safe_backup_root.exists():
+
+            raise LifecycleRepairExecutorEngineError(
+                "Executor backup cleanup could not "
+                "verify backup-root removal."
+            )
+
+
+        if legacy_staging_path.exists():
+
+            raise LifecycleRepairExecutorEngineError(
+                "Executor backup cleanup unexpectedly "
+                "created a staging directory."
+            )
+
+
+        cleanup_performed = True
+
+
+    except Exception as exc:
+
+        cleanup_failure_reason = str(
+            exc
+        )
+
+
+    cleanup_verified = (
+        cleanup_performed
+        and not safe_backup_root.exists()
+        and not legacy_staging_path.exists()
+    )
+
+
+    backup_preserved_for_recovery = (
+        safe_backup_root.exists()
+    )
+
+
+    return _freeze(
+        {
+            "backup_cleanup_required":
+                True,
+
+            "backup_cleanup_performed":
+                cleanup_performed,
+
+            "backup_cleanup_verified":
+                cleanup_verified,
+
+            "backup_preserved_for_recovery":
+                backup_preserved_for_recovery,
+
+            "backup_root":
+                str(
+                    safe_backup_root
+                ),
+
+            "cleanup_failure_reason":
+                cleanup_failure_reason,
+        }
+    )
+
+
 def _remove_quarantine_artifact_for_rollback_v1(
     *,
     project_root: str | Path,
@@ -9211,6 +9635,76 @@ def execute_lifecycle_repair_plan_v1(
 
 
             # -------------------------------------------------
+            # 6A.1. Content-specific safety validation before backup.
+            #
+            # CONTROLLED_JSON_REBUILD replacement content must
+            # cross its complete action/store/workspace/content
+            # boundary BEFORE _create_file_backup_v1() is allowed.
+            #
+            # This prevents an invalid replacement action from
+            # creating any transaction backup artifact before the
+            # action itself is proven safe to execute.
+            # -------------------------------------------------
+
+            if (
+                mutation_intent.get(
+                    "execution_strategy"
+                )
+                == "CONTROLLED_JSON_REBUILD"
+            ):
+
+                replacement_record = (
+                    mutation_intent.get(
+                        "replacement_record"
+                    )
+                )
+
+
+                if not isinstance(
+                    replacement_record,
+                    Mapping,
+                ):
+
+                    raise LifecycleRepairExecutorEngineError(
+                        "CONTROLLED_JSON_REBUILD failed "
+                        "pre-backup content safety: "
+                        "replacement_record is missing "
+                        "or is not a mapping."
+                    )
+
+
+                replacement_validation = (
+                    _validate_controlled_replacement_record_v1(
+                        repair_action_type=(
+                            current_action_type
+                        ),
+                        target_store=(
+                            current_target_store
+                        ),
+                        replacement_record=(
+                            replacement_record
+                        ),
+                        workspace_id=(
+                            workspace_id
+                        ),
+                    )
+                )
+
+
+                if (
+                    replacement_validation[
+                        "replacement_record_valid"
+                    ]
+                    is not True
+                ):
+
+                    raise LifecycleRepairExecutorEngineError(
+                        "CONTROLLED_JSON_REBUILD failed "
+                        "pre-backup content safety."
+                    )
+
+
+            # -------------------------------------------------
             # 6B. Independently reconstruct store root again.
             # -------------------------------------------------
 
@@ -9682,6 +10176,69 @@ def execute_lifecycle_repair_plan_v1(
 
 
         # =====================================================
+        # 7A. TRANSACTION BACKUP LIFECYCLE
+        #
+        # Backups are disposable only when:
+        #
+        # - there was no rollback requirement, or
+        # - every required rollback was verified.
+        #
+        # An unverified rollback MUST preserve backups.
+        # =====================================================
+
+        if (
+            rollback_required
+            and rollback_verified
+            is not True
+        ):
+
+            backup_root_exists = (
+                backup_root.exists()
+            )
+
+            backup_cleanup = _freeze(
+                {
+                    "backup_cleanup_required":
+                        backup_root_exists,
+
+                    "backup_cleanup_performed":
+                        False,
+
+                    "backup_cleanup_verified":
+                        not backup_root_exists,
+
+                    "backup_preserved_for_recovery":
+                        backup_root_exists,
+
+                    "backup_root":
+                        str(
+                            backup_root
+                        ),
+
+                    "cleanup_failure_reason":
+                        (
+                            "BACKUP_PRESERVED_DUE_TO_"
+                            "UNVERIFIED_ROLLBACK"
+                            if backup_root_exists
+                            else None
+                        ),
+                }
+            )
+
+        else:
+
+            backup_cleanup = (
+                _cleanup_executor_backup_root_v1(
+                    project_root=project_root,
+                    workspace_id=workspace_id,
+                    execution_request_id=(
+                        execution_request_id
+                    ),
+                )
+            )
+
+
+        # =====================================================
         # 8. REBUILD PRIOR ACTION RESULTS THAT WERE ROLLED BACK
         # =====================================================
 
@@ -10038,6 +10595,21 @@ def execute_lifecycle_repair_plan_v1(
             "rollback_verified":
                 rollback_verified,
 
+            "backup_cleanup":
+                backup_cleanup,
+
+            "backup_cleanup_verified":
+                backup_cleanup[
+                    "backup_cleanup_verified"
+                ]
+                is True,
+
+            "backup_preserved_for_recovery":
+                backup_cleanup[
+                    "backup_preserved_for_recovery"
+                ]
+                is True,
+
             "mutation_outcome_uncertain_action_ids":
                 tuple(
                     mutation_outcome_uncertain_action_ids
@@ -10105,6 +10677,24 @@ def execute_lifecycle_repair_plan_v1(
             "execution_status"
         )
         == "EXECUTED"
+    )
+
+
+    # =========================================================
+    # 11A. SUCCESSFUL TRANSACTION BACKUP CLEANUP
+    #
+    # Transaction backups are no longer recovery-authoritative
+    # after a fully successful authorized transaction.
+    # =========================================================
+
+    backup_cleanup = (
+        _cleanup_executor_backup_root_v1(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            execution_request_id=(
+                execution_request_id
+            ),
+        )
     )
 
 
@@ -10194,6 +10784,21 @@ def execute_lifecycle_repair_plan_v1(
 
         "rollback_verified":
             None,
+
+        "backup_cleanup":
+            backup_cleanup,
+
+        "backup_cleanup_verified":
+            backup_cleanup[
+                "backup_cleanup_verified"
+            ]
+            is True,
+
+        "backup_preserved_for_recovery":
+            backup_cleanup[
+                "backup_preserved_for_recovery"
+            ]
+            is True,
 
         "mutation_outcome_uncertain_action_ids":
             (),

@@ -1,11 +1,12 @@
 ﻿# LinkCraftor Availability Zone Strategy
 
-Version: 1.0
+Version: 1.1
 Status: Canonical
 Phase: Cloud Infrastructure Architecture
 Section: 1.1.5 Availability Zone Strategy
 Cloud Provider: Amazon Web Services
-Primary Region: eu-west-1
+Primary Production Region: eu-west-1
+Disaster-Recovery Region: us-east-1
 Runtime Eligibility: Not Runtime Eligible / N/A
 
 ---
@@ -22,8 +23,18 @@ scalability, and controlled recovery.
 
 # Canonical Availability Zone Model
 
-LinkCraftor shall use a minimum three-zone architecture for production where
-the selected AWS services support it.
+LinkCraftor shall use a minimum three-zone architecture for normal production
+workloads in the canonical primary production Region where the selected AWS
+services support it.
+
+This three-zone production requirement applies to the primary Ireland Region
+(eu-west-1).
+
+The designated N. Virginia disaster-recovery Region (us-east-1) does not
+automatically require a fully active three-zone production footprint at launch.
+Its Availability Zone topology shall be determined by the certified Disaster
+Recovery Architecture, recovery tier, workload requirements, and activation
+model.
 
 Canonical logical zone identifiers:
 
@@ -72,15 +83,90 @@ before production certification.
 
 ## Production
 
-Production shall use at least three Availability Zones where supported.
+Normal production workloads in the primary Ireland Region shall use at least
+three Availability Zones where supported.
 
-A production workload must not depend on one Availability Zone unless:
+A primary production workload must not depend on one Availability Zone unless:
 
 1. The service itself is regionally managed.
 2. No multi-zone alternative exists.
 3. The risk is documented.
 4. Recovery controls are defined.
 5. Architecture approval is recorded.
+
+The disaster-recovery Region is governed separately.
+
+Before failover activation, its topology may use backup-only, recovery-only,
+pilot-light, warm-standby, or other approved recovery infrastructure rather
+than a permanently active copy of the primary three-zone production topology.
+
+If the N. Virginia Region becomes production-serving during an approved
+regional failover, the activated recovery topology must meet the availability
+requirements defined by the Disaster Recovery Architecture for that recovery
+tier.
+
+---
+
+# Regional Availability Zone Responsibilities
+
+## Primary Production Region
+
+Region:
+
+eu-west-1 — Europe (Ireland)
+
+Role:
+
+Normal production-serving Region.
+
+Required topology:
+
+- Minimum three logical Availability Zones where supported
+- Multi-zone application infrastructure
+- Multi-zone runtime and worker infrastructure
+- Multi-zone data subnet design
+- Multi-zone database capability where supported
+- Zone-resilient load balancing
+- Capacity sufficient to tolerate one-zone loss
+- Tested zone-failure recovery
+
+## Disaster-Recovery Region
+
+Region:
+
+us-east-1 — US East (N. Virginia)
+
+Role:
+
+Backup, recovery, recovery testing, emergency failover, and future approved
+replication.
+
+Initial topology:
+
+The disaster-recovery Region shall not be assumed to run the same permanently
+active three-zone workload footprint as Ireland from day one.
+
+Its initial Availability Zone footprint shall be selected according to:
+
+- Recovery architecture
+- Recovery tier
+- RPO and RTO requirements
+- Backup and replication design
+- Database recovery design
+- Application recovery requirements
+- Cost controls
+- Security requirements
+- Data-residency and compliance controls
+- Recovery testing requirements
+
+When recovery infrastructure is activated to serve production traffic, it must
+use sufficient independent failure domains for the certified recovery mode.
+
+## Future Regions
+
+Any future production Region, including a future African deployment, must
+define its own certified Availability Zone topology before serving production
+traffic.
 
 ---
 
@@ -361,6 +447,14 @@ LINKCRAFTOR_AZ_B
 
 LINKCRAFTOR_AZ_C
 
+These aliases represent logical failure-domain positions within a Region.
+They must not be treated as globally identifying the same physical AWS
+Availability Zones across different Regions or accounts.
+
+Each Region must receive its own Infrastructure as Code mapping from logical
+aliases to the actual AWS Availability Zones or Availability Zone IDs available
+to the target account.
+
 Actual values must be assigned during the Infrastructure as Code phase.
 
 ---
@@ -432,9 +526,13 @@ Registration Standard assessment.
 
 # Canonical Decision
 
+Primary Production Region:
+
+eu-west-1 — Europe (Ireland)
+
 Primary production topology:
 
-- Minimum three logical Availability Zones
+- Minimum three logical Availability Zones where supported
 - Multi-zone public, private application, runtime, and data subnets
 - Multi-zone stateless compute
 - Multi-zone worker distribution
@@ -442,8 +540,22 @@ Primary production topology:
 - Zone-independent durable object storage
 - Sufficient healthy-zone capacity to withstand one-zone loss
 
-Specific Availability Zone names and IDs must be assigned dynamically during
-Infrastructure as Code implementation.
+Disaster-Recovery Region:
+
+us-east-1 — US East (N. Virginia)
+
+Disaster-recovery topology:
+
+- Not required to duplicate the complete active Ireland topology at launch
+- Provisioned according to the certified recovery tier and Disaster Recovery
+  Architecture
+- May begin with backup, recovery, pilot-light, or approved standby resources
+- Must use sufficient independent failure domains when activated for
+  production-serving recovery
+- Must be tested before being certified as a production failover target
+
+Specific Availability Zone names and IDs for every Region must be assigned
+dynamically during Infrastructure as Code implementation.
 
 ---
 
@@ -452,3 +564,4 @@ LinkCraftor Architecture
 
 Status:
 CANONICAL
+

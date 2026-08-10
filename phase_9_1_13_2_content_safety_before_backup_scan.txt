@@ -1,0 +1,3118 @@
+============================================================================
+PHASE 9.1.13.2 - CONTENT SAFETY BEFORE BACKUP SCAN
+============================================================================
+
+============================================================================
+FUNCTION: _validate_controlled_replacement_record_v1
+LINES: 5009-5157
+============================================================================
+05009:                 replacement_checksum,
+05010:         }
+05011:     )
+05012: 
+05013: 
+05014: def _validate_controlled_replacement_record_v1(
+05015:     *,
+05016:     repair_action_type: str,
+05017:     target_store: str,
+05018:     replacement_record: Mapping[str, Any],
+05019:     workspace_id: str,
+05020: ) -> Mapping[str, Any]:
+05021: 
+05022:     action_type = (
+05023:         _assert_supported_executor_action_type_v1(
+05024:             repair_action_type
+05025:         )
+05026:     )
+05027: 
+05028:     normalized_target_store = (
+05029:         _require_string(
+05030:             target_store,
+05031:             field_name="target_store",
+05032:         ).upper()
+05033:     )
+05034: 
+05035:     replacement = _require_mapping(
+05036:         replacement_record,
+05037:         field_name="replacement_record",
+05038:     )
+05039: 
+05040: 
+05041:     # ---------------------------------------------------------
+05042:     # Action/store authorization boundary.
+05043:     # ---------------------------------------------------------
+05044: 
+05045:     _validate_action_target_store_boundary_v1(
+05046:         repair_action_type=action_type,
+05047:         target_store=normalized_target_store,
+05048:     )
+05049: 
+05050: 
+05051:     # ---------------------------------------------------------
+05052:     # Workspace and JSON boundary.
+05053:     # ---------------------------------------------------------
+05054: 
+05055:     replacement_boundary = (
+05056:         _validate_replacement_record_boundary_v1(
+05057:             replacement_record=replacement,
+05058:             workspace_id=workspace_id,
+05059:         )
+05060:     )
+05061: 
+05062: 
+05063:     prohibited_content_fields = (
+05064:         _find_prohibited_content_field_paths_v1(
+05065:             payload=replacement,
+05066:         )
+05067:     )
+05068: 
+05069: 
+05070:     metadata_only_action = (
+05071:         action_type
+05072:         in METADATA_ONLY_REPAIR_ACTION_TYPES
+05073:     )
+05074: 
+05075: 
+05076:     tombstone_target = (
+05077:         normalized_target_store
+05078:         == "TOMBSTONE"
+05079:     )
+05080: 
+05081: 
+05082:     # ---------------------------------------------------------
+05083:     # Metadata-only repair actions may never introduce
+05084:     # article body content.
+05085:     #
+05086:     # Tombstone records may never contain article body
+05087:     # content, regardless of repair action.
+05088:     # ---------------------------------------------------------
+05089: 
+05090:     content_boundary_valid = (
+05091:         not prohibited_content_fields
+05092:         if (
+05093:             metadata_only_action
+05094:             or tombstone_target
+05095:         )
+05096:         else True
+05097:     )
+05098: 
+05099: 
+05100:     if not content_boundary_valid:
+05101: 
+05102:         boundary_name = (
+05103:             "Tombstone"
+05104:             if tombstone_target
+05105:             else "Metadata repair"
+05106:         )
+05107: 
+05108:         raise LifecycleRepairExecutorEngineError(
+05109:             boundary_name
+05110:             + " replacement record contains prohibited "
+05111:             "article-body content fields: "
+05112:             + ", ".join(
+05113:                 prohibited_content_fields
+05114:             )
+05115:         )
+05116: 
+05117: 
+05118:     return _freeze(
+05119:         {
+05120:             "replacement_record_valid":
+05121:                 True,
+05122: 
+05123:             "repair_action_type":
+05124:                 action_type,
+05125: 
+05126:             "target_store":
+05127:                 normalized_target_store,
+05128: 
+05129:             "workspace_id":
+05130:                 workspace_id,
+05131: 
+05132:             "replacement_boundary":
+05133:                 replacement_boundary,
+05134: 
+05135:             "replacement_record_checksum":
+05136:                 replacement_boundary[
+05137:                     "replacement_record_checksum"
+05138:                 ],
+05139: 
+05140:             "metadata_only_action":
+05141:                 metadata_only_action,
+05142: 
+05143:             "tombstone_target":
+05144:                 tombstone_target,
+05145: 
+05146:             "prohibited_content_fields":
+05147:                 prohibited_content_fields,
+05148: 
+05149:             "content_boundary_valid":
+05150:                 content_boundary_valid,
+05151:         }
+05152:     )
+05153: def _execute_json_rebuild_v1(
+05154:     *,
+05155:     target_path: Path,
+05156:     workspace_store_root: Path,
+05157:     replacement_record: Mapping[str, Any],
+
+============================================================================
+FUNCTION: _build_repair_mutation_intent_v1
+LINES: 3423-3819
+============================================================================
+03423:     return _freeze(
+03424:         dict(
+03425:             value
+03426:         )
+03427:     )
+03428: def _build_repair_mutation_intent_v1(
+03429:     *,
+03430:     project_root: str | Path,
+03431:     workspace_id: str,
+03432:     repair_action: Mapping[str, Any],
+03433:     source_finding: Mapping[str, Any],
+03434: ) -> Mapping[str, Any]:
+03435: 
+03436:     normalized_workspace_id = (
+03437:         _require_string(
+03438:             workspace_id,
+03439:             field_name="workspace_id",
+03440:         )
+03441:     )
+03442: 
+03443:     action = _require_mapping(
+03444:         repair_action,
+03445:         field_name="repair_action",
+03446:     )
+03447: 
+03448:     finding = _require_mapping(
+03449:         source_finding,
+03450:         field_name="source_finding",
+03451:     )
+03452: 
+03453:     action_type = (
+03454:         _assert_supported_executor_action_type_v1(
+03455:             action.get(
+03456:                 "repair_action_type"
+03457:             )
+03458:         )
+03459:     )
+03460: 
+03461:     strategy = (
+03462:         ACTION_EXECUTION_STRATEGIES.get(
+03463:             action_type
+03464:         )
+03465:     )
+03466: 
+03467:     if strategy is None:
+03468:         raise LifecycleRepairExecutorEngineError(
+03469:             "No execution strategy exists for action type: "
+03470:             + action_type
+03471:         )
+03472: 
+03473:     target = (
+03474:         _resolve_repair_target_descriptor_v1(
+03475:             project_root=project_root,
+03476:             workspace_id=normalized_workspace_id,
+03477:             repair_action=action,
+03478:             source_finding=finding,
+03479:         )
+03480:     )
+03481: 
+03482: 
+03483:     normalized_state: str | None = None
+03484: 
+03485:     replacement_record: Mapping[str, Any] | None = None
+03486: 
+03487:     sufficient_repair_evidence = False
+03488: 
+03489:     evidence_requirement = ""
+03490: 
+03491:     evidence_failures: list[str] = []
+03492: 
+03493: 
+03494:     # ---------------------------------------------------------
+03495:     # NORMALIZE_STATE
+03496:     # ---------------------------------------------------------
+03497: 
+03498:     if strategy == "NORMALIZE_STATE":
+03499: 
+03500:         normalized_state = (
+03501:             _extract_normalized_lifecycle_state_v1(
+03502:                 source_finding=finding,
+03503:             )
+03504:         )
+03505: 
+03506:         if (
+03507:             target[
+03508:                 "target_path_resolved"
+03509:             ]
+03510:             is not True
+03511:         ):
+03512:             evidence_failures.append(
+03513:                 "TARGET_PATH_NOT_RESOLVED"
+03514:             )
+03515: 
+03516:         if (
+03517:             target[
+03518:                 "target_exists"
+03519:             ]
+03520:             is not True
+03521:         ):
+03522:             evidence_failures.append(
+03523:                 "TARGET_DOES_NOT_EXIST"
+03524:             )
+03525: 
+03526:         if (
+03527:             target[
+03528:                 "target_is_file"
+03529:             ]
+03530:             is not True
+03531:         ):
+03532:             evidence_failures.append(
+03533:                 "TARGET_IS_NOT_FILE"
+03534:             )
+03535: 
+03536:         if normalized_state is None:
+03537:             evidence_failures.append(
+03538:                 "CANONICAL_LIFECYCLE_STATE_MISSING"
+03539:             )
+03540: 
+03541:         sufficient_repair_evidence = (
+03542:             not evidence_failures
+03543:         )
+03544: 
+03545:         evidence_requirement = (
+03546:             "An existing lifecycle record and a "
+03547:             "canonical normalized lifecycle state "
+03548:             "are required."
+03549:         )
+03550: 
+03551: 
+03552:     # ---------------------------------------------------------
+03553:     # REMOVE_TOMBSTONE_CONTENT
+03554:     # ---------------------------------------------------------
+03555: 
+03556:     elif strategy == "REMOVE_TOMBSTONE_CONTENT":
+03557: 
+03558:         if (
+03559:             target[
+03560:                 "target_store"
+03561:             ]
+03562:             != "TOMBSTONE"
+03563:         ):
+03564:             evidence_failures.append(
+03565:                 "TARGET_STORE_NOT_TOMBSTONE"
+03566:             )
+03567: 
+03568:         if (
+03569:             target[
+03570:                 "target_path_resolved"
+03571:             ]
+03572:             is not True
+03573:         ):
+03574:             evidence_failures.append(
+03575:                 "TARGET_PATH_NOT_RESOLVED"
+03576:             )
+03577: 
+03578:         if (
+03579:             target[
+03580:                 "target_exists"
+03581:             ]
+03582:             is not True
+03583:         ):
+03584:             evidence_failures.append(
+03585:                 "TARGET_DOES_NOT_EXIST"
+03586:             )
+03587: 
+03588:         if (
+03589:             target[
+03590:                 "target_is_file"
+03591:             ]
+03592:             is not True
+03593:         ):
+03594:             evidence_failures.append(
+03595:                 "TARGET_IS_NOT_FILE"
+03596:             )
+03597: 
+03598:         sufficient_repair_evidence = (
+03599:             not evidence_failures
+03600:         )
+03601: 
+03602:         evidence_requirement = (
+03603:             "An existing tombstone record inside "
+03604:             "the authorized Tombstone Store is required."
+03605:         )
+03606: 
+03607: 
+03608:     # ---------------------------------------------------------
+03609:     # QUARANTINE_FILE
+03610:     # ---------------------------------------------------------
+03611: 
+03612:     elif strategy == "QUARANTINE_FILE":
+03613: 
+03614:         if (
+03615:             target[
+03616:                 "target_path_resolved"
+03617:             ]
+03618:             is not True
+03619:         ):
+03620:             evidence_failures.append(
+03621:                 "TARGET_PATH_NOT_RESOLVED"
+03622:             )
+03623: 
+03624:         if (
+03625:             target[
+03626:                 "target_exists"
+03627:             ]
+03628:             is not True
+03629:         ):
+03630:             evidence_failures.append(
+03631:                 "TARGET_DOES_NOT_EXIST"
+03632:             )
+03633: 
+03634:         if (
+03635:             target[
+03636:                 "target_is_file"
+03637:             ]
+03638:             is not True
+03639:         ):
+03640:             evidence_failures.append(
+03641:                 "TARGET_IS_NOT_FILE"
+03642:             )
+03643: 
+03644:         sufficient_repair_evidence = (
+03645:             not evidence_failures
+03646:         )
+03647: 
+03648:         evidence_requirement = (
+03649:             "An existing invalid record and an "
+03650:             "authorized target store are required."
+03651:         )
+03652: 
+03653: 
+03654:     # ---------------------------------------------------------
+03655:     # CONTROLLED_JSON_REBUILD
+03656:     # ---------------------------------------------------------
+03657: 
+03658:     elif strategy == "CONTROLLED_JSON_REBUILD":
+03659: 
+03660:         replacement_record = (
+03661:             _extract_controlled_replacement_record_v1(
+03662:                 source_finding=finding,
+03663:             )
+03664:         )
+03665: 
+03666:         if (
+03667:             target[
+03668:                 "target_path_resolved"
+03669:             ]
+03670:             is not True
+03671:         ):
+03672:             evidence_failures.append(
+03673:                 "TARGET_PATH_NOT_RESOLVED"
+03674:             )
+03675: 
+03676:         if replacement_record is None:
+03677:             evidence_failures.append(
+03678:                 "REPLACEMENT_RECORD_MISSING"
+03679:             )
+03680: 
+03681:         sufficient_repair_evidence = (
+03682:             not evidence_failures
+03683:         )
+03684: 
+03685:         evidence_requirement = (
+03686:             "A workspace-bound target path and an "
+03687:             "explicit controlled replacement record "
+03688:             "are required."
+03689:         )
+03690: 
+03691: 
+03692:     else:
+03693:         raise LifecycleRepairExecutorEngineError(
+03694:             "Unhandled execution strategy: "
+03695:             + strategy
+03696:         )
+03697: 
+03698: 
+03699:     intent = {
+03700:         "schema":
+03701:             "body_store_lifecycle_repair_mutation_intent.v1",
+03702: 
+03703:         "executor_engine_schema":
+03704:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+03705: 
+03706:         "executor_engine_version":
+03707:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+03708: 
+03709:         "workspace_id":
+03710:             normalized_workspace_id,
+03711: 
+03712:         "repair_action_id":
+03713:             action.get(
+03714:                 "repair_action_id"
+03715:             ),
+03716: 
+03717:         "source_finding_id":
+03718:             finding.get(
+03719:                 "finding_id"
+03720:             ),
+03721: 
+03722:         "repair_action_type":
+03723:             action_type,
+03724: 
+03725:         "execution_strategy":
+03726:             strategy,
+03727: 
+03728:         "target_store":
+03729:             target[
+03730:                 "target_store"
+03731:             ],
+03732: 
+03733:         "workspace_store_root":
+03734:             target[
+03735:                 "workspace_store_root"
+03736:             ],
+03737: 
+03738:         "target_path":
+03739:             target[
+03740:                 "target_path"
+03741:             ],
+03742: 
+03743:         "target_path_resolved":
+03744:             target[
+03745:                 "target_path_resolved"
+03746:             ],
+03747: 
+03748:         "target_exists":
+03749:             target[
+03750:                 "target_exists"
+03751:             ],
+03752: 
+03753:         "target_is_file":
+03754:             target[
+03755:                 "target_is_file"
+03756:             ],
+03757: 
+03758:         "target_checksum_before":
+03759:             target[
+03760:                 "target_checksum_before"
+03761:             ],
+03762: 
+03763:         "target_descriptor_checksum":
+03764:             target[
+03765:                 "target_descriptor_checksum"
+03766:             ],
+03767: 
+03768:         "normalized_lifecycle_state":
+03769:             normalized_state,
+03770: 
+03771:         "replacement_record":
+03772:             replacement_record,
+03773: 
+03774:         "sufficient_repair_evidence":
+03775:             sufficient_repair_evidence,
+03776: 
+03777:         "evidence_requirement":
+03778:             evidence_requirement,
+03779: 
+03780:         "evidence_failures":
+03781:             tuple(
+03782:                 evidence_failures
+03783:             ),
+03784: 
+03785:         "mutation_authorized":
+03786:             False,
+03787: 
+03788:         "mutation_attempted":
+03789:             False,
+03790: 
+03791:         "mutation_performed":
+03792:             False,
+03793: 
+03794:         "repair_executed":
+03795:             False,
+03796: 
+03797:         "runtime_job_created":
+03798:             False,
+03799: 
+03800:         "queue_job_created":
+03801:             False,
+03802:     }
+03803: 
+03804:     intent[
+03805:         "mutation_intent_checksum"
+03806:     ] = (
+03807:         calculate_lifecycle_repair_executor_engine_checksum_v1(
+03808:             payload=intent,
+03809:         )
+03810:     )
+03811: 
+03812:     return _freeze(
+03813:         intent
+03814:     )
+03815: 
+03816: 
+03817: def _validate_mutation_intent_checksum_v1(
+03818:     *,
+03819:     mutation_intent: Mapping[str, Any],
+
+FUNCTION NOT FOUND: _validate_prepared_action_preflight_v1
+
+FUNCTION NOT FOUND: _validate_prepared_action_v1
+
+============================================================================
+FUNCTION: _create_file_backup_v1
+LINES: 1962-2130
+============================================================================
+01962:             )
+01963: 
+01964:     return digest.hexdigest()
+01965: 
+01966: 
+01967: def _create_file_backup_v1(
+01968:     *,
+01969:     source_path: Path,
+01970:     backup_root: Path,
+01971:     workspace_store_root: Path,
+01972: ) -> Mapping[str, Any]:
+01973: 
+01974:     safe_source_path = (
+01975:         _assert_path_within_root_v1(
+01976:             candidate_path=source_path,
+01977:             allowed_root=workspace_store_root,
+01978:         )
+01979:     )
+01980: 
+01981:     safe_backup_root = (
+01982:         backup_root.resolve(
+01983:             strict=False
+01984:         )
+01985:     )
+01986: 
+01987:     if not safe_source_path.exists():
+01988: 
+01989:         return _freeze(
+01990:             {
+01991:                 "source_path":
+01992:                     str(
+01993:                         safe_source_path
+01994:                     ),
+01995: 
+01996:                 "source_existed":
+01997:                     False,
+01998: 
+01999:                 "source_checksum_before":
+02000:                     "ABSENT",
+02001: 
+02002:                 "backup_created":
+02003:                     False,
+02004: 
+02005:                 "backup_path":
+02006:                     None,
+02007: 
+02008:                 "backup_checksum":
+02009:                     None,
+02010: 
+02011:                 "backup_verified":
+02012:                     True,
+02013:             }
+02014:         )
+02015: 
+02016:     if not safe_source_path.is_file():
+02017:         raise LifecycleRepairExecutorEngineError(
+02018:             "Repair target is not a file: "
+02019:             + str(
+02020:                 safe_source_path
+02021:             )
+02022:         )
+02023: 
+02024:     resolved_workspace_root = (
+02025:         workspace_store_root.resolve(
+02026:             strict=False
+02027:         )
+02028:     )
+02029: 
+02030:     relative_path = (
+02031:         safe_source_path.relative_to(
+02032:             resolved_workspace_root
+02033:         )
+02034:     )
+02035: 
+02036:     backup_path = (
+02037:         safe_backup_root
+02038:         / relative_path
+02039:     )
+02040: 
+02041:     safe_backup_path = (
+02042:         _assert_path_within_root_v1(
+02043:             candidate_path=backup_path,
+02044:             allowed_root=safe_backup_root,
+02045:         )
+02046:     )
+02047: 
+02048:     if safe_backup_path.exists():
+02049:         raise LifecycleRepairExecutorEngineError(
+02050:             "Executor backup already exists for "
+02051:             "this repair target: "
+02052:             + str(
+02053:                 safe_backup_path
+02054:             )
+02055:         )
+02056: 
+02057:     source_checksum = (
+02058:         _calculate_file_checksum_v1(
+02059:             path=safe_source_path,
+02060:         )
+02061:     )
+02062: 
+02063:     safe_backup_path.parent.mkdir(
+02064:         parents=True,
+02065:         exist_ok=True,
+02066:     )
+02067: 
+02068:     shutil.copy2(
+02069:         safe_source_path,
+02070:         safe_backup_path,
+02071:     )
+02072: 
+02073:     backup_checksum = (
+02074:         _calculate_file_checksum_v1(
+02075:             path=safe_backup_path,
+02076:         )
+02077:     )
+02078: 
+02079:     backup_verified = (
+02080:         source_checksum
+02081:         == backup_checksum
+02082:     )
+02083: 
+02084:     if not backup_verified:
+02085: 
+02086:         try:
+02087:             safe_backup_path.unlink(
+02088:                 missing_ok=True
+02089:             )
+02090: 
+02091:         except Exception:
+02092:             pass
+02093: 
+02094:         raise LifecycleRepairExecutorEngineError(
+02095:             "Repair backup checksum mismatch."
+02096:         )
+02097: 
+02098:     return _freeze(
+02099:         {
+02100:             "source_path":
+02101:                 str(
+02102:                     safe_source_path
+02103:                 ),
+02104: 
+02105:             "source_existed":
+02106:                 True,
+02107: 
+02108:             "source_checksum_before":
+02109:                 source_checksum,
+02110: 
+02111:             "backup_created":
+02112:                 True,
+02113: 
+02114:             "backup_path":
+02115:                 str(
+02116:                     safe_backup_path
+02117:                 ),
+02118: 
+02119:             "backup_checksum":
+02120:                 backup_checksum,
+02121: 
+02122:             "backup_verified":
+02123:                 True,
+02124:         }
+02125:     )
+02126: 
+02127: 
+02128: def _restore_file_backup_v1(
+02129:     *,
+02130:     backup_record: Mapping[str, Any],
+
+============================================================================
+FUNCTION: execute_lifecycle_repair_plan_v1
+LINES: 9199-10865
+============================================================================
+09199:                 True,
+09200:         }
+09201:     )
+09202: 
+09203: 
+09204: def execute_lifecycle_repair_plan_v1(
+09205:     *,
+09206:     project_root: str | Path,
+09207:     repair_plan: Mapping[str, Any],
+09208:     planner_certification: Mapping[str, Any],
+09209:     authorization: Mapping[str, Any],
+09210:     execution_request: Mapping[str, Any],
+09211:     findings: tuple[Mapping[str, Any], ...]
+09212:     | list[Mapping[str, Any]],
+09213: ) -> Mapping[str, Any]:
+09214: 
+09215:     plan = _require_mapping(
+09216:         repair_plan,
+09217:         field_name="repair_plan",
+09218:     )
+09219: 
+09220:     request = _require_mapping(
+09221:         execution_request,
+09222:         field_name="execution_request",
+09223:     )
+09224: 
+09225:     execution_mode = (
+09226:         _normalize_execution_mode_v1(
+09227:             request.get(
+09228:                 "execution_mode"
+09229:             )
+09230:         )
+09231:     )
+09232: 
+09233:     workspace_id = (
+09234:         _require_string(
+09235:             request.get(
+09236:                 "workspace_id"
+09237:             ),
+09238:             field_name=(
+09239:                 "execution_request.workspace_id"
+09240:             ),
+09241:         )
+09242:     )
+09243: 
+09244:     execution_request_id = (
+09245:         _require_string(
+09246:             request.get(
+09247:                 "execution_request_id"
+09248:             ),
+09249:             field_name=(
+09250:                 "execution_request.execution_request_id"
+09251:             ),
+09252:         )
+09253:     )
+09254: 
+09255: 
+09256:     # =========================================================
+09257:     # 1. PREPARE EXECUTION
+09258:     # =========================================================
+09259: 
+09260:     preflight = (
+09261:         prepare_lifecycle_repair_execution_v1(
+09262:             project_root=project_root,
+09263:             repair_plan=plan,
+09264:             planner_certification=planner_certification,
+09265:             authorization=authorization,
+09266:             execution_request=request,
+09267:             findings=findings,
+09268:         )
+09269:     )
+09270: 
+09271: 
+09272:     # =========================================================
+09273:     # 2. INDEPENDENT PREFLIGHT VALIDATION
+09274:     # =========================================================
+09275: 
+09276:     preflight_validation = (
+09277:         validate_lifecycle_repair_execution_preflight_v1(
+09278:             project_root=project_root,
+09279:             preflight=preflight,
+09280:         )
+09281:     )
+09282: 
+09283: 
+09284:     if (
+09285:         preflight_validation[
+09286:             "preflight_valid"
+09287:         ]
+09288:         is not True
+09289:     ):
+09290:         raise LifecycleRepairExecutorEngineError(
+09291:             "Lifecycle Repair Executor preflight "
+09292:             "validation failed."
+09293:         )
+09294: 
+09295: 
+09296:     if (
+09297:         _validate_preflight_checksum_v1(
+09298:             preflight=preflight,
+09299:         )
+09300:         is not True
+09301:     ):
+09302:         raise LifecycleRepairExecutorEngineError(
+09303:             "Lifecycle Repair Executor preflight "
+09304:             "checksum validation failed."
+09305:         )
+09306: 
+09307: 
+09308:     prepared_actions = tuple(
+09309:         preflight[
+09310:             "prepared_actions"
+09311:         ]
+09312:     )
+09313: 
+09314: 
+09315:     if not prepared_actions:
+09316:         raise LifecycleRepairExecutorEngineError(
+09317:             "Executor preflight produced no prepared actions."
+09318:         )
+09319: 
+09320: 
+09321:     # =========================================================
+09322:     # 3. DRY RUN
+09323:     # =========================================================
+09324: 
+09325:     if execution_mode == "DRY_RUN":
+09326: 
+09327:         dry_run_results: list[
+09328:             Mapping[str, Any]
+09329:         ] = []
+09330: 
+09331: 
+09332:         for prepared_action in prepared_actions:
+09333: 
+09334:             action = _require_mapping(
+09335:                 prepared_action,
+09336:                 field_name="prepared_action",
+09337:             )
+09338: 
+09339: 
+09340:             # -------------------------------------------------
+09341:             # Even a dry run must not report against a target
+09342:             # that changed after preflight.
+09343:             #
+09344:             # This remains fully read-only.
+09345:             # -------------------------------------------------
+09346: 
+09347:             transaction_gate = (
+09348:                 _verify_prepared_action_transaction_gate_v1(
+09349:                     project_root=project_root,
+09350:                     workspace_id=workspace_id,
+09351:                     prepared_action=action,
+09352:                 )
+09353:             )
+09354: 
+09355: 
+09356:             if (
+09357:                 transaction_gate[
+09358:                     "gate_passed"
+09359:                 ]
+09360:                 is not True
+09361:             ):
+09362:                 raise LifecycleRepairExecutorEngineError(
+09363:                     "DRY_RUN transaction gate failed for "
+09364:                     "repair action: "
+09365:                     + str(
+09366:                         action.get(
+09367:                             "repair_action_id"
+09368:                         )
+09369:                     )
+09370:                 )
+09371: 
+09372: 
+09373:             mutation_intent = (
+09374:                 _require_mapping(
+09375:                     action.get(
+09376:                         "mutation_intent"
+09377:                     ),
+09378:                     field_name=(
+09379:                         "prepared_action.mutation_intent"
+09380:                     ),
+09381:                 )
+09382:             )
+09383: 
+09384: 
+09385:             dry_run_result = (
+09386:                 _build_dry_run_action_result_v1(
+09387:                     repair_action={
+09388:                         "repair_action_id":
+09389:                             action[
+09390:                                 "repair_action_id"
+09391:                             ],
+09392: 
+09393:                         "repair_action_type":
+09394:                             action[
+09395:                                 "repair_action_type"
+09396:                             ],
+09397:                     },
+09398:                     source_finding={
+09399:                         "finding_id":
+09400:                             action[
+09401:                                 "source_finding_id"
+09402:                             ],
+09403:                     },
+09404:                     target_store=(
+09405:                         mutation_intent[
+09406:                             "target_store"
+09407:                         ]
+09408:                     ),
+09409:                     target_path=(
+09410:                         mutation_intent[
+09411:                             "target_path"
+09412:                         ]
+09413:                     ),
+09414:                 )
+09415:             )
+09416: 
+09417: 
+09418:             dry_run_results.append(
+09419:                 dry_run_result
+09420:             )
+09421: 
+09422: 
+09423:         result = {
+09424:             "schema":
+09425:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTION_RESULT_SCHEMA,
+09426: 
+09427:             "executor_engine_schema":
+09428:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+09429: 
+09430:             "executor_engine_version":
+09431:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+09432: 
+09433:             "executor_contract_version":
+09434:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_CONTRACT_VERSION,
+09435: 
+09436:             "execution_request_id":
+09437:                 execution_request_id,
+09438: 
+09439:             "workspace_id":
+09440:                 workspace_id,
+09441: 
+09442:             "repair_plan_id":
+09443:                 plan.get(
+09444:                     "repair_plan_id"
+09445:                 ),
+09446: 
+09447:             "execution_mode":
+09448:                 "DRY_RUN",
+09449: 
+09450:             "context_valid":
+09451:                 True,
+09452: 
+09453:             "preflight_valid":
+09454:                 True,
+09455: 
+09456:             "execution_authorized":
+09457:                 False,
+09458: 
+09459:             "execution_started":
+09460:                 True,
+09461: 
+09462:             "execution_completed":
+09463:                 True,
+09464: 
+09465:             "execution_succeeded":
+09466:                 True,
+09467: 
+09468:             "requested_action_count":
+09469:                 len(
+09470:                     prepared_actions
+09471:                 ),
+09472: 
+09473:             "executed_action_count":
+09474:                 0,
+09475: 
+09476:             "committed_mutation_count":
+09477:                 0,
+09478: 
+09479:             "dry_run_validated_action_count":
+09480:                 len(
+09481:                     dry_run_results
+09482:                 ),
+09483: 
+09484:             "skipped_action_count":
+09485:                 0,
+09486: 
+09487:             "failed_action_count":
+09488:                 0,
+09489: 
+09490:             "rolled_back_action_count":
+09491:                 0,
+09492: 
+09493:             "action_results":
+09494:                 tuple(
+09495:                     dry_run_results
+09496:                 ),
+09497: 
+09498:             "repair_executed":
+09499:                 False,
+09500: 
+09501:             "mutation_performed":
+09502:                 False,
+09503: 
+09504:             "rollback_required":
+09505:                 False,
+09506: 
+09507:             "rollback_performed":
+09508:                 False,
+09509: 
+09510:             "rollback_verified":
+09511:                 None,
+09512: 
+09513:             "mutation_outcome_uncertain_action_ids":
+09514:                 (),
+09515: 
+09516:             "runtime_job_created":
+09517:                 False,
+09518: 
+09519:             "queue_job_created":
+09520:                 False,
+09521:         }
+09522: 
+09523: 
+09524:         result[
+09525:             "execution_result_checksum"
+09526:         ] = (
+09527:             calculate_lifecycle_repair_executor_engine_checksum_v1(
+09528:                 payload=result,
+09529:             )
+09530:         )
+09531: 
+09532: 
+09533:         return _freeze(
+09534:             result
+09535:         )
+09536: 
+09537: 
+09538:     # =========================================================
+09539:     # 4. AUTHORIZED APPLY ONLY BEYOND THIS POINT
+09540:     # =========================================================
+09541: 
+09542:     if execution_mode != "AUTHORIZED_APPLY":
+09543: 
+09544:         raise LifecycleRepairExecutorEngineError(
+09545:             "Unsupported execution mode: "
+09546:             + execution_mode
+09547:         )
+09548: 
+09549: 
+09550:     authorization_item = (
+09551:         _require_mapping(
+09552:             authorization,
+09553:             field_name="authorization",
+09554:         )
+09555:     )
+09556: 
+09557: 
+09558:     if (
+09559:         authorization_item.get(
+09560:             "authorization_state"
+09561:         )
+09562:         != "AUTHORIZED"
+09563:     ):
+09564:         raise LifecycleRepairExecutorEngineError(
+09565:             "AUTHORIZED_APPLY requires an "
+09566:             "AUTHORIZED authorization state."
+09567:         )
+09568: 
+09569: 
+09570:     if (
+09571:         authorization_item.get(
+09572:             "explicitly_authorized"
+09573:         )
+09574:         is not True
+09575:     ):
+09576:         raise LifecycleRepairExecutorEngineError(
+09577:             "AUTHORIZED_APPLY requires explicit "
+09578:             "execution authorization."
+09579:         )
+09580: 
+09581: 
+09582:     # =========================================================
+09583:     # 5. TRANSACTION FOUNDATION
+09584:     # =========================================================
+09585: 
+09586:     backup_root = (
+09587:         _resolve_executor_backup_root_v1(
+09588:             project_root=project_root,
+09589:             workspace_id=workspace_id,
+09590:             execution_request_id=execution_request_id,
+09591:         )
+09592:     )
+09593: 
+09594: 
+09595:     action_results: list[
+09596:         Mapping[str, Any]
+09597:     ] = []
+09598: 
+09599: 
+09600:     transaction_stack: list[
+09601:         dict[str, Any]
+09602:     ] = []
+09603: 
+09604: 
+09605:     transaction_entries_by_action_id: dict[
+09606:         str,
+09607:         dict[str, Any],
+09608:     ] = {}
+09609: 
+09610: 
+09611:     failed_action_id: str | None = None
+09612: 
+09613:     failure_reason: str | None = None
+09614: 
+09615: 
+09616:     current_action_id: str | None = None
+09617: 
+09618:     current_source_finding_id: str | None = None
+09619: 
+09620:     current_action_type: str | None = None
+09621: 
+09622:     current_target_store: str | None = None
+09623: 
+09624:     current_target_path: str | None = None
+09625: 
+09626:     current_transaction_entry: (
+09627:         dict[str, Any]
+09628:         | None
+09629:     ) = None
+09630: 
+09631: 
+09632:     # =========================================================
+09633:     # 6. AUTHORIZED TRANSACTION LOOP
+09634:     # =========================================================
+09635: 
+09636:     try:
+09637: 
+09638:         for prepared_action in prepared_actions:
+09639: 
+09640:             action = _require_mapping(
+09641:                 prepared_action,
+09642:                 field_name="prepared_action",
+09643:             )
+09644: 
+09645: 
+09646:             current_action_id = (
+09647:                 _require_string(
+09648:                     action.get(
+09649:                         "repair_action_id"
+09650:                     ),
+09651:                     field_name=(
+09652:                         "prepared_action.repair_action_id"
+09653:                     ),
+09654:                 )
+09655:             )
+09656: 
+09657: 
+09658:             current_source_finding_id = (
+09659:                 _require_string(
+09660:                     action.get(
+09661:                         "source_finding_id"
+09662:                     ),
+09663:                     field_name=(
+09664:                         "prepared_action.source_finding_id"
+09665:                     ),
+09666:                 )
+09667:             )
+09668: 
+09669: 
+09670:             current_action_type = (
+09671:                 _assert_supported_executor_action_type_v1(
+09672:                     action.get(
+09673:                         "repair_action_type"
+09674:                     )
+09675:                 )
+09676:             )
+09677: 
+09678: 
+09679:             mutation_intent = (
+09680:                 _require_mapping(
+09681:                     action.get(
+09682:                         "mutation_intent"
+09683:                     ),
+09684:                     field_name=(
+09685:                         "prepared_action.mutation_intent"
+09686:                     ),
+09687:                 )
+09688:             )
+09689: 
+09690: 
+09691:             current_target_store = (
+09692:                 _require_string(
+09693:                     mutation_intent.get(
+09694:                         "target_store"
+09695:                     ),
+09696:                     field_name=(
+09697:                         "mutation_intent.target_store"
+09698:                     ),
+09699:                 ).upper()
+09700:             )
+09701: 
+09702: 
+09703:             current_target_path = (
+09704:                 _require_string(
+09705:                     mutation_intent.get(
+09706:                         "target_path"
+09707:                     ),
+09708:                     field_name=(
+09709:                         "mutation_intent.target_path"
+09710:                     ),
+09711:                 )
+09712:             )
+09713: 
+09714: 
+09715:             # -------------------------------------------------
+09716:             # 6A. Final transaction gate immediately before
+09717:             # backup/mutation.
+09718:             # -------------------------------------------------
+09719: 
+09720:             transaction_gate = (
+09721:                 _verify_prepared_action_transaction_gate_v1(
+09722:                     project_root=project_root,
+09723:                     workspace_id=workspace_id,
+09724:                     prepared_action=action,
+09725:                 )
+09726:             )
+09727: 
+09728: 
+09729:             if (
+09730:                 transaction_gate[
+09731:                     "gate_passed"
+09732:                 ]
+09733:                 is not True
+09734:             ):
+09735:                 raise LifecycleRepairExecutorEngineError(
+09736:                     "Final transaction gate failed "
+09737:                     "for repair action: "
+09738:                     + current_action_id
+09739:                 )
+09740: 
+09741: 
+09742:             # -------------------------------------------------
+09743:             # 6B. Independently reconstruct store root again.
+09744:             # -------------------------------------------------
+09745: 
+09746:             workspace_store_root = (
+09747:                 _resolve_verified_workspace_store_root_v1(
+09748:                     project_root=project_root,
+09749:                     workspace_id=workspace_id,
+09750:                     target_store=current_target_store,
+09751:                 )
+09752:             )
+09753: 
+09754: 
+09755:             target_path = (
+09756:                 _assert_path_within_root_v1(
+09757:                     candidate_path=Path(
+09758:                         current_target_path
+09759:                     ),
+09760:                     allowed_root=workspace_store_root,
+09761:                 )
+09762:             )
+09763: 
+09764: 
+09765:             if target_path == workspace_store_root:
+09766: 
+09767:                 raise LifecycleRepairExecutorEngineError(
+09768:                     "Repair action attempted to target "
+09769:                     "the workspace store root itself."
+09770:                 )
+09771: 
+09772: 
+09773:             # -------------------------------------------------
+09774:             # 6C. Create per-store backup root.
+09775:             # -------------------------------------------------
+09776: 
+09777:             action_backup_root = (
+09778:                 backup_root
+09779:                 / current_target_store.lower()
+09780:             )
+09781: 
+09782: 
+09783:             action_backup_root = (
+09784:                 _assert_path_within_root_v1(
+09785:                     candidate_path=action_backup_root,
+09786:                     allowed_root=backup_root,
+09787:                 )
+09788:             )
+09789: 
+09790: 
+09791:             # -------------------------------------------------
+09792:             # 6D. Backup BEFORE any mutation attempt.
+09793:             #
+09794:             # Missing targets are recorded as source_existed
+09795:             # False so rollback can remove newly created files.
+09796:             # -------------------------------------------------
+09797: 
+09798:             backup_record = (
+09799:                 _create_file_backup_v1(
+09800:                     source_path=target_path,
+09801:                     backup_root=action_backup_root,
+09802:                     workspace_store_root=workspace_store_root,
+09803:                 )
+09804:             )
+09805: 
+09806: 
+09807:             # -------------------------------------------------
+09808:             # 6E. Prepare conservative rollback metadata.
+09809:             #
+09810:             # For quarantine, calculate the expected
+09811:             # quarantine path before mutation begins.
+09812:             # -------------------------------------------------
+09813: 
+09814:             expected_mutation_result: Mapping[
+09815:                 str,
+09816:                 Any,
+09817:             ] = _freeze(
+09818:                 {
+09819:                     "target_store":
+09820:                         current_target_store,
+09821: 
+09822:                     "mutation_performed":
+09823:                         False,
+09824:                 }
+09825:             )
+09826: 
+09827: 
+09828:             if (
+09829:                 mutation_intent.get(
+09830:                     "execution_strategy"
+09831:                 )
+09832:                 == "QUARANTINE_FILE"
+09833:             ):
+09834: 
+09835:                 expected_mutation_result = (
+09836:                     _build_expected_quarantine_rollback_stub_v1(
+09837:                         project_root=project_root,
+09838:                         workspace_id=workspace_id,
+09839:                         target_store=current_target_store,
+09840:                         target_path=target_path,
+09841:                         workspace_store_root=workspace_store_root,
+09842:                     )
+09843:                 )
+09844: 
+09845: 
+09846:             # -------------------------------------------------
+09847:             # 6F. Register current action BEFORE mutation.
+09848:             #
+09849:             # This is critical:
+09850:             # if the handler throws halfway through mutation,
+09851:             # this action is already in the rollback stack.
+09852:             # -------------------------------------------------
+09853: 
+09854:             transaction_entry: dict[
+09855:                 str,
+09856:                 Any,
+09857:             ] = {
+09858:                 "repair_action_id":
+09859:                     current_action_id,
+09860: 
+09861:                 "source_finding_id":
+09862:                     current_source_finding_id,
+09863: 
+09864:                 "repair_action_type":
+09865:                     current_action_type,
+09866: 
+09867:                 "target_store":
+09868:                     current_target_store,
+09869: 
+09870:                 "target_path":
+09871:                     str(
+09872:                         target_path
+09873:                     ),
+09874: 
+09875:                 "workspace_store_root":
+09876:                     workspace_store_root,
+09877: 
+09878:                 "backup_root":
+09879:                     action_backup_root,
+09880: 
+09881:                 "backup_record":
+09882:                     backup_record,
+09883: 
+09884:                 "mutation_result":
+09885:                     expected_mutation_result,
+09886: 
+09887:                 "mutation_attempted":
+09888:                     False,
+09889: 
+09890:                 "mutation_completed":
+09891:                     False,
+09892: 
+09893:                 "mutation_performed":
+09894:                     False,
+09895:             }
+09896: 
+09897: 
+09898:             current_transaction_entry = (
+09899:                 transaction_entry
+09900:             )
+09901: 
+09902: 
+09903:             transaction_stack.append(
+09904:                 transaction_entry
+09905:             )
+09906: 
+09907: 
+09908:             transaction_entries_by_action_id[
+09909:                 current_action_id
+09910:             ] = transaction_entry
+09911: 
+09912: 
+09913:             # -------------------------------------------------
+09914:             # 6G. Mutation begins.
+09915:             # -------------------------------------------------
+09916: 
+09917:             transaction_entry[
+09918:                 "mutation_attempted"
+09919:             ] = True
+09920: 
+09921: 
+09922:             mutation_result = (
+09923:                 _dispatch_authorized_mutation_v1(
+09924:                     project_root=project_root,
+09925:                     workspace_id=workspace_id,
+09926:                     mutation_intent=mutation_intent,
+09927:                     execution_authorized=True,
+09928:                 )
+09929:             )
+09930: 
+09931: 
+09932:             transaction_entry[
+09933:                 "mutation_result"
+09934:             ] = mutation_result
+09935: 
+09936: 
+09937:             transaction_entry[
+09938:                 "mutation_completed"
+09939:             ] = True
+09940: 
+09941: 
+09942:             mutation_performed = (
+09943:                 mutation_result.get(
+09944:                     "mutation_performed"
+09945:                 )
+09946:                 is True
+09947:             )
+09948: 
+09949: 
+09950:             transaction_entry[
+09951:                 "mutation_performed"
+09952:             ] = mutation_performed
+09953: 
+09954: 
+09955:             execution_status = (
+09956:                 "EXECUTED"
+09957:                 if mutation_performed
+09958:                 else "SKIPPED"
+09959:             )
+09960: 
+09961: 
+09962:             action_result = (
+09963:                 _build_executor_action_result_v1(
+09964:                     repair_action_id=(
+09965:                         current_action_id
+09966:                     ),
+09967:                     source_finding_id=(
+09968:                         current_source_finding_id
+09969:                     ),
+09970:                     repair_action_type=(
+09971:                         current_action_type
+09972:                     ),
+09973:                     target_store=(
+09974:                         current_target_store
+09975:                     ),
+09976:                     target_path=(
+09977:                         str(
+09978:                             target_path
+09979:                         )
+09980:                     ),
+09981:                     execution_mode=(
+09982:                         "AUTHORIZED_APPLY"
+09983:                     ),
+09984:                     execution_status=(
+09985:                         execution_status
+09986:                     ),
+09987:                     execution_authorized=True,
+09988:                     mutation_attempted=True,
+09989:                     mutation_performed=(
+09990:                         mutation_performed
+09991:                     ),
+09992:                     backup_record=(
+09993:                         backup_record
+09994:                     ),
+09995:                     mutation_result=(
+09996:                         mutation_result
+09997:                     ),
+09998:                 )
+09999:             )
+10000: 
+10001: 
+10002:             action_results.append(
+10003:                 action_result
+10004:             )
+10005: 
+10006: 
+10007:             # -------------------------------------------------
+10008:             # No-op actions changed nothing.
+10009:             # They must not remain in rollback stack.
+10010:             # -------------------------------------------------
+10011: 
+10012:             if not mutation_performed:
+10013: 
+10014:                 transaction_stack.pop()
+10015: 
+10016:                 transaction_entries_by_action_id.pop(
+10017:                     current_action_id,
+10018:                     None,
+10019:                 )
+10020: 
+10021: 
+10022:             current_transaction_entry = None
+10023: 
+10024: 
+10025:     # =========================================================
+10026:     # 7. FAILURE → TRANSACTION ROLLBACK
+10027:     # =========================================================
+10028: 
+10029:     except Exception as exc:
+10030: 
+10031:         failed_action_id = (
+10032:             current_action_id
+10033:         )
+10034: 
+10035: 
+10036:         failure_reason = str(
+10037:             exc
+10038:         )
+10039: 
+10040: 
+10041:         rollback_results: list[
+10042:             Mapping[str, Any]
+10043:         ] = []
+10044: 
+10045: 
+10046:         rollback_failures: list[
+10047:             str
+10048:         ] = []
+10049: 
+10050: 
+10051:         rollback_by_action_id: dict[
+10052:             str,
+10053:             Mapping[str, Any],
+10054:         ] = {}
+10055: 
+10056: 
+10057:         mutation_outcome_uncertain_action_ids: list[
+10058:             str
+10059:         ] = []
+10060: 
+10061: 
+10062:         # -----------------------------------------------------
+10063:         # If a mutation handler threw before returning,
+10064:         # mutation completion cannot be trusted.
+10065:         # -----------------------------------------------------
+10066: 
+10067:         for transaction_entry in (
+10068:             transaction_stack
+10069:         ):
+10070: 
+10071:             if (
+10072:                 transaction_entry.get(
+10073:                     "mutation_attempted"
+10074:                 )
+10075:                 is True
+10076:                 and transaction_entry.get(
+10077:                     "mutation_completed"
+10078:                 )
+10079:                 is not True
+10080:             ):
+10081: 
+10082:                 mutation_outcome_uncertain_action_ids.append(
+10083:                     transaction_entry[
+10084:                         "repair_action_id"
+10085:                     ]
+10086:                 )
+10087: 
+10088: 
+10089:         # -----------------------------------------------------
+10090:         # Roll back in reverse mutation order.
+10091:         # -----------------------------------------------------
+10092: 
+10093:         for transaction_entry in reversed(
+10094:             transaction_stack
+10095:         ):
+10096: 
+10097:             rollback_action_id = (
+10098:                 transaction_entry[
+10099:                     "repair_action_id"
+10100:                 ]
+10101:             )
+10102: 
+10103: 
+10104:             try:
+10105: 
+10106:                 rollback_result = (
+10107:                     _rollback_executed_action_v1(
+10108:                         project_root=project_root,
+10109:                         workspace_id=workspace_id,
+10110:                         backup_record=(
+10111:                             transaction_entry[
+10112:                                 "backup_record"
+10113:                             ]
+10114:                         ),
+10115:                         mutation_result=(
+10116:                             transaction_entry[
+10117:                                 "mutation_result"
+10118:                             ]
+10119:                         ),
+10120:                         backup_root=(
+10121:                             transaction_entry[
+10122:                                 "backup_root"
+10123:                             ]
+10124:                         ),
+10125:                         workspace_store_root=(
+10126:                             transaction_entry[
+10127:                                 "workspace_store_root"
+10128:                             ]
+10129:                         ),
+10130:                     )
+10131:                 )
+10132: 
+10133: 
+10134:                 rollback_by_action_id[
+10135:                     rollback_action_id
+10136:                 ] = rollback_result
+10137: 
+10138: 
+10139:                 rollback_results.append(
+10140:                     _freeze(
+10141:                         {
+10142:                             "repair_action_id":
+10143:                                 rollback_action_id,
+10144: 
+10145:                             "rollback_result":
+10146:                                 rollback_result,
+10147:                         }
+10148:                     )
+10149:                 )
+10150: 
+10151: 
+10152:                 if (
+10153:                     rollback_result[
+10154:                         "rollback_verified"
+10155:                     ]
+10156:                     is not True
+10157:                 ):
+10158: 
+10159:                     rollback_failures.append(
+10160:                         rollback_action_id
+10161:                     )
+10162: 
+10163: 
+10164:             except Exception as rollback_exc:
+10165: 
+10166:                 rollback_failures.append(
+10167:                     rollback_action_id
+10168:                     + ": "
+10169:                     + str(
+10170:                         rollback_exc
+10171:                     )
+10172:                 )
+10173: 
+10174: 
+10175:         rollback_required = bool(
+10176:             transaction_stack
+10177:         )
+10178: 
+10179: 
+10180:         rollback_performed = bool(
+10181:             rollback_results
+10182:         )
+10183: 
+10184: 
+10185:         if rollback_required:
+10186: 
+10187:             rollback_verified: bool | None = (
+10188:                 not rollback_failures
+10189:                 and len(
+10190:                     rollback_results
+10191:                 )
+10192:                 == len(
+10193:                     transaction_stack
+10194:                 )
+10195:                 and all(
+10196:                     rollback_item[
+10197:                         "rollback_result"
+10198:                     ][
+10199:                         "rollback_verified"
+10200:                     ]
+10201:                     is True
+10202: 
+10203:                     for rollback_item
+10204:                     in rollback_results
+10205:                 )
+10206:             )
+10207: 
+10208:         else:
+10209: 
+10210:             rollback_verified = None
+10211: 
+10212: 
+10213:         # =====================================================
+10214:         # 7A. TRANSACTION BACKUP LIFECYCLE
+10215:         #
+10216:         # Backups are disposable only when:
+10217:         #
+10218:         # - there was no rollback requirement, or
+10219:         # - every required rollback was verified.
+10220:         #
+10221:         # An unverified rollback MUST preserve backups.
+10222:         # =====================================================
+10223: 
+10224:         if (
+10225:             rollback_required
+10226:             and rollback_verified
+10227:             is not True
+10228:         ):
+10229: 
+10230:             backup_root_exists = (
+10231:                 backup_root.exists()
+10232:             )
+10233: 
+10234:             backup_cleanup = _freeze(
+10235:                 {
+10236:                     "backup_cleanup_required":
+10237:                         backup_root_exists,
+10238: 
+10239:                     "backup_cleanup_performed":
+10240:                         False,
+10241: 
+10242:                     "backup_cleanup_verified":
+10243:                         not backup_root_exists,
+10244: 
+10245:                     "backup_preserved_for_recovery":
+10246:                         backup_root_exists,
+10247: 
+10248:                     "backup_root":
+10249:                         str(
+10250:                             backup_root
+10251:                         ),
+10252: 
+10253:                     "cleanup_failure_reason":
+10254:                         (
+10255:                             "BACKUP_PRESERVED_DUE_TO_"
+10256:                             "UNVERIFIED_ROLLBACK"
+10257:                             if backup_root_exists
+10258:                             else None
+10259:                         ),
+10260:                 }
+10261:             )
+10262: 
+10263:         else:
+10264: 
+10265:             backup_cleanup = (
+10266:                 _cleanup_executor_backup_root_v1(
+10267:                     project_root=project_root,
+10268:                     workspace_id=workspace_id,
+10269:                     execution_request_id=(
+10270:                         execution_request_id
+10271:                     ),
+10272:                 )
+10273:             )
+10274: 
+10275: 
+10276:         # =====================================================
+10277:         # 8. REBUILD PRIOR ACTION RESULTS THAT WERE ROLLED BACK
+10278:         # =====================================================
+10279: 
+10280:         rebuilt_action_results: list[
+10281:             Mapping[str, Any]
+10282:         ] = []
+10283: 
+10284: 
+10285:         existing_result_ids: set[
+10286:             str
+10287:         ] = set()
+10288: 
+10289: 
+10290:         for existing_result in action_results:
+10291: 
+10292:             existing_action_id = (
+10293:                 existing_result[
+10294:                     "repair_action_id"
+10295:                 ]
+10296:             )
+10297: 
+10298: 
+10299:             existing_result_ids.add(
+10300:                 existing_action_id
+10301:             )
+10302: 
+10303: 
+10304:             rollback_result = (
+10305:                 rollback_by_action_id.get(
+10306:                     existing_action_id
+10307:                 )
+10308:             )
+10309: 
+10310: 
+10311:             if rollback_result is None:
+10312: 
+10313:                 rebuilt_action_results.append(
+10314:                     existing_result
+10315:                 )
+10316: 
+10317:                 continue
+10318: 
+10319: 
+10320:             transaction_entry = (
+10321:                 transaction_entries_by_action_id[
+10322:                     existing_action_id
+10323:                 ]
+10324:             )
+10325: 
+10326: 
+10327:             rebuilt_action_results.append(
+10328:                 _build_executor_action_result_v1(
+10329:                     repair_action_id=(
+10330:                         existing_action_id
+10331:                     ),
+10332:                     source_finding_id=(
+10333:                         transaction_entry[
+10334:                             "source_finding_id"
+10335:                         ]
+10336:                     ),
+10337:                     repair_action_type=(
+10338:                         transaction_entry[
+10339:                             "repair_action_type"
+10340:                         ]
+10341:                     ),
+10342:                     target_store=(
+10343:                         transaction_entry[
+10344:                             "target_store"
+10345:                         ]
+10346:                     ),
+10347:                     target_path=(
+10348:                         transaction_entry[
+10349:                             "target_path"
+10350:                         ]
+10351:                     ),
+10352:                     execution_mode=(
+10353:                         "AUTHORIZED_APPLY"
+10354:                     ),
+10355:                     execution_status="FAILED",
+10356:                     execution_authorized=True,
+10357:                     mutation_attempted=(
+10358:                         transaction_entry[
+10359:                             "mutation_attempted"
+10360:                         ]
+10361:                         is True
+10362:                     ),
+10363:                     mutation_performed=(
+10364:                         transaction_entry[
+10365:                             "mutation_performed"
+10366:                         ]
+10367:                         is True
+10368:                     ),
+10369:                     backup_record=(
+10370:                         transaction_entry[
+10371:                             "backup_record"
+10372:                         ]
+10373:                     ),
+10374:                     mutation_result=(
+10375:                         transaction_entry[
+10376:                             "mutation_result"
+10377:                         ]
+10378:                     ),
+10379:                     rollback_result=(
+10380:                         rollback_result
+10381:                     ),
+10382:                     failure_reason=(
+10383:                         "Transaction rolled back because "
+10384:                         "repair action "
+10385:                         + str(
+10386:                             failed_action_id
+10387:                         )
+10388:                         + " failed: "
+10389:                         + failure_reason
+10390:                     ),
+10391:                 )
+10392:             )
+10393: 
+10394: 
+10395:         # =====================================================
+10396:         # 9. ADD FAILED CURRENT ACTION IF IT NEVER PRODUCED
+10397:         # AN ACTION RESULT
+10398:         # =====================================================
+10399: 
+10400:         if (
+10401:             failed_action_id is not None
+10402:             and failed_action_id
+10403:             not in existing_result_ids
+10404:             and current_source_finding_id
+10405:             is not None
+10406:             and current_action_type
+10407:             is not None
+10408:             and current_target_store
+10409:             is not None
+10410:         ):
+10411: 
+10412:             failed_transaction_entry = (
+10413:                 transaction_entries_by_action_id.get(
+10414:                     failed_action_id
+10415:                 )
+10416:             )
+10417: 
+10418: 
+10419:             if failed_transaction_entry is not None:
+10420: 
+10421:                 failed_rollback_result = (
+10422:                     rollback_by_action_id.get(
+10423:                         failed_action_id
+10424:                     )
+10425:                 )
+10426: 
+10427: 
+10428:                 rebuilt_action_results.append(
+10429:                     _build_executor_action_result_v1(
+10430:                         repair_action_id=(
+10431:                             failed_action_id
+10432:                         ),
+10433:                         source_finding_id=(
+10434:                             current_source_finding_id
+10435:                         ),
+10436:                         repair_action_type=(
+10437:                             current_action_type
+10438:                         ),
+10439:                         target_store=(
+10440:                             current_target_store
+10441:                         ),
+10442:                         target_path=(
+10443:                             failed_transaction_entry[
+10444:                                 "target_path"
+10445:                             ]
+10446:                         ),
+10447:                         execution_mode=(
+10448:                             "AUTHORIZED_APPLY"
+10449:                         ),
+10450:                         execution_status="FAILED",
+10451:                         execution_authorized=True,
+10452:                         mutation_attempted=(
+10453:                             failed_transaction_entry[
+10454:                                 "mutation_attempted"
+10455:                             ]
+10456:                             is True
+10457:                         ),
+10458:                         mutation_performed=(
+10459:                             failed_transaction_entry[
+10460:                                 "mutation_performed"
+10461:                             ]
+10462:                             is True
+10463:                         ),
+10464:                         backup_record=(
+10465:                             failed_transaction_entry[
+10466:                                 "backup_record"
+10467:                             ]
+10468:                         ),
+10469:                         mutation_result=(
+10470:                             failed_transaction_entry[
+10471:                                 "mutation_result"
+10472:                             ]
+10473:                         ),
+10474:                         rollback_result=(
+10475:                             failed_rollback_result
+10476:                         ),
+10477:                         failure_reason=(
+10478:                             failure_reason
+10479:                         ),
+10480:                     )
+10481:                 )
+10482: 
+10483: 
+10484:             else:
+10485: 
+10486:                 # Failure occurred before backup/mutation.
+10487:                 rebuilt_action_results.append(
+10488:                     _build_executor_action_result_v1(
+10489:                         repair_action_id=(
+10490:                             failed_action_id
+10491:                         ),
+10492:                         source_finding_id=(
+10493:                             current_source_finding_id
+10494:                         ),
+10495:                         repair_action_type=(
+10496:                             current_action_type
+10497:                         ),
+10498:                         target_store=(
+10499:                             current_target_store
+10500:                         ),
+10501:                         target_path=(
+10502:                             current_target_path
+10503:                         ),
+10504:                         execution_mode=(
+10505:                             "AUTHORIZED_APPLY"
+10506:                         ),
+10507:                         execution_status="FAILED",
+10508:                         execution_authorized=True,
+10509:                         mutation_attempted=False,
+10510:                         mutation_performed=False,
+10511:                         failure_reason=(
+10512:                             failure_reason
+10513:                         ),
+10514:                     )
+10515:                 )
+10516: 
+10517: 
+10518:         # =====================================================
+10519:         # 10. TRANSACTION FAILURE RESULT
+10520:         # =====================================================
+10521: 
+10522:         persistent_mutation_possible = (
+10523:             rollback_required
+10524:             and rollback_verified
+10525:             is not True
+10526:         )
+10527: 
+10528: 
+10529:         failed_result = {
+10530:             "schema":
+10531:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTION_RESULT_SCHEMA,
+10532: 
+10533:             "executor_engine_schema":
+10534:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+10535: 
+10536:             "executor_engine_version":
+10537:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+10538: 
+10539:             "executor_contract_version":
+10540:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_CONTRACT_VERSION,
+10541: 
+10542:             "execution_request_id":
+10543:                 execution_request_id,
+10544: 
+10545:             "workspace_id":
+10546:                 workspace_id,
+10547: 
+10548:             "repair_plan_id":
+10549:                 plan.get(
+10550:                     "repair_plan_id"
+10551:                 ),
+10552: 
+10553:             "execution_mode":
+10554:                 "AUTHORIZED_APPLY",
+10555: 
+10556:             "context_valid":
+10557:                 True,
+10558: 
+10559:             "preflight_valid":
+10560:                 True,
+10561: 
+10562:             "execution_authorized":
+10563:                 True,
+10564: 
+10565:             "execution_started":
+10566:                 True,
+10567: 
+10568:             "execution_completed":
+10569:                 True,
+10570: 
+10571:             "execution_succeeded":
+10572:                 False,
+10573: 
+10574:             "failed_action_id":
+10575:                 failed_action_id,
+10576: 
+10577:             "failure_reason":
+10578:                 failure_reason,
+10579: 
+10580:             "requested_action_count":
+10581:                 len(
+10582:                     prepared_actions
+10583:                 ),
+10584: 
+10585:             "completed_action_result_count":
+10586:                 len(
+10587:                     action_results
+10588:                 ),
+10589: 
+10590:             "failed_action_count":
+10591:                 1,
+10592: 
+10593:             "committed_mutation_count":
+10594:                 0,
+10595: 
+10596:             "rolled_back_action_count":
+10597:                 len(
+10598:                     rollback_results
+10599:                 ),
+10600: 
+10601:             "action_results":
+10602:                 tuple(
+10603:                     rebuilt_action_results
+10604:                 ),
+10605: 
+10606:             "rollback_results":
+10607:                 tuple(
+10608:                     rollback_results
+10609:                 ),
+10610: 
+10611:             "rollback_failures":
+10612:                 tuple(
+10613:                     rollback_failures
+10614:                 ),
+10615: 
+10616:             "repair_executed":
+10617:                 False,
+10618: 
+10619:             # True here means an unverified mutation may still
+10620:             # remain after a rollback failure.
+10621:             "mutation_performed":
+10622:                 persistent_mutation_possible,
+10623: 
+10624:             "rollback_required":
+10625:                 rollback_required,
+10626: 
+10627:             "rollback_performed":
+10628:                 rollback_performed,
+10629: 
+10630:             "rollback_verified":
+10631:                 rollback_verified,
+10632: 
+10633:             "backup_cleanup":
+10634:                 backup_cleanup,
+10635: 
+10636:             "backup_cleanup_verified":
+10637:                 backup_cleanup[
+10638:                     "backup_cleanup_verified"
+10639:                 ]
+10640:                 is True,
+10641: 
+10642:             "backup_preserved_for_recovery":
+10643:                 backup_cleanup[
+10644:                     "backup_preserved_for_recovery"
+10645:                 ]
+10646:                 is True,
+10647: 
+10648:             "mutation_outcome_uncertain_action_ids":
+10649:                 tuple(
+10650:                     mutation_outcome_uncertain_action_ids
+10651:                 ),
+10652: 
+10653:             "runtime_job_created":
+10654:                 False,
+10655: 
+10656:             "queue_job_created":
+10657:                 False,
+10658:         }
+10659: 
+10660: 
+10661:         failed_result[
+10662:             "execution_result_checksum"
+10663:         ] = (
+10664:             calculate_lifecycle_repair_executor_engine_checksum_v1(
+10665:                 payload=failed_result,
+10666:             )
+10667:         )
+10668: 
+10669: 
+10670:         return _freeze(
+10671:             failed_result
+10672:         )
+10673: 
+10674: 
+10675:     # =========================================================
+10676:     # 11. SUCCESSFUL AUTHORIZED TRANSACTION
+10677:     # =========================================================
+10678: 
+10679:     committed_mutations = sum(
+10680:         1
+10681: 
+10682:         for action_result
+10683:         in action_results
+10684: 
+10685:         if action_result.get(
+10686:             "mutation_performed"
+10687:         )
+10688:         is True
+10689:     )
+10690: 
+10691: 
+10692:     skipped_actions = sum(
+10693:         1
+10694: 
+10695:         for action_result
+10696:         in action_results
+10697: 
+10698:         if action_result.get(
+10699:             "execution_status"
+10700:         )
+10701:         == "SKIPPED"
+10702:     )
+10703: 
+10704: 
+10705:     executed_actions = sum(
+10706:         1
+10707: 
+10708:         for action_result
+10709:         in action_results
+10710: 
+10711:         if action_result.get(
+10712:             "execution_status"
+10713:         )
+10714:         == "EXECUTED"
+10715:     )
+10716: 
+10717: 
+10718:     # =========================================================
+10719:     # 11A. SUCCESSFUL TRANSACTION BACKUP CLEANUP
+10720:     #
+10721:     # Transaction backups are no longer recovery-authoritative
+10722:     # after a fully successful authorized transaction.
+10723:     # =========================================================
+10724: 
+10725:     backup_cleanup = (
+10726:         _cleanup_executor_backup_root_v1(
+10727:             project_root=project_root,
+10728:             workspace_id=workspace_id,
+10729:             execution_request_id=(
+10730:                 execution_request_id
+10731:             ),
+10732:         )
+10733:     )
+10734: 
+10735: 
+10736:     successful_result = {
+10737:         "schema":
+10738:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTION_RESULT_SCHEMA,
+10739: 
+10740:         "executor_engine_schema":
+10741:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+10742: 
+10743:         "executor_engine_version":
+10744:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+10745: 
+10746:         "executor_contract_version":
+10747:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_CONTRACT_VERSION,
+10748: 
+10749:         "execution_request_id":
+10750:             execution_request_id,
+10751: 
+10752:         "workspace_id":
+10753:             workspace_id,
+10754: 
+10755:         "repair_plan_id":
+10756:             plan.get(
+10757:                 "repair_plan_id"
+10758:             ),
+10759: 
+10760:         "execution_mode":
+10761:             "AUTHORIZED_APPLY",
+10762: 
+10763:         "context_valid":
+10764:             True,
+10765: 
+10766:         "preflight_valid":
+10767:             True,
+10768: 
+10769:         "execution_authorized":
+10770:             True,
+10771: 
+10772:         "execution_started":
+10773:             True,
+10774: 
+10775:         "execution_completed":
+10776:             True,
+10777: 
+10778:         "execution_succeeded":
+10779:             True,
+10780: 
+10781:         "requested_action_count":
+10782:             len(
+10783:                 prepared_actions
+10784:             ),
+10785: 
+10786:         "executed_action_count":
+10787:             executed_actions,
+10788: 
+10789:         "skipped_action_count":
+10790:             skipped_actions,
+10791: 
+10792:         "committed_mutation_count":
+10793:             committed_mutations,
+10794: 
+10795:         "failed_action_count":
+10796:             0,
+10797: 
+10798:         "rolled_back_action_count":
+10799:             0,
+10800: 
+10801:         "action_results":
+10802:             tuple(
+10803:                 action_results
+10804:             ),
+10805: 
+10806:         "repair_executed":
+10807:             committed_mutations
+10808:             > 0,
+10809: 
+10810:         "mutation_performed":
+10811:             committed_mutations
+10812:             > 0,
+10813: 
+10814:         "rollback_required":
+10815:             False,
+10816: 
+10817:         "rollback_performed":
+10818:             False,
+10819: 
+10820:         "rollback_verified":
+10821:             None,
+10822: 
+10823:         "backup_cleanup":
+10824:             backup_cleanup,
+10825: 
+10826:         "backup_cleanup_verified":
+10827:             backup_cleanup[
+10828:                 "backup_cleanup_verified"
+10829:             ]
+10830:             is True,
+10831: 
+10832:         "backup_preserved_for_recovery":
+10833:             backup_cleanup[
+10834:                 "backup_preserved_for_recovery"
+10835:             ]
+10836:             is True,
+10837: 
+10838:         "mutation_outcome_uncertain_action_ids":
+10839:             (),
+10840: 
+10841:         "runtime_job_created":
+10842:             False,
+10843: 
+10844:         "queue_job_created":
+10845:             False,
+10846:     }
+10847: 
+10848: 
+10849:     successful_result[
+10850:         "execution_result_checksum"
+10851:     ] = (
+10852:         calculate_lifecycle_repair_executor_engine_checksum_v1(
+10853:             payload=successful_result,
+10854:         )
+10855:     )
+10856: 
+10857: 
+10858:     return _freeze(
+10859:         successful_result
+10860:     )
+10861: def summarize_lifecycle_repair_executor_engine_v1(
+10862: ) -> Mapping[str, Any]:
+10863: 
+10864:     return _freeze(
+10865:         {
+
+============================================================================
+CALL-SITE SEARCH
+============================================================================
+
+SEARCH: _validate_controlled_replacement_record_v1(
+  MATCH AT LINE 5014
+05002:             "workspace_identity_present":
+05003:                 workspace_identity_present,
+05004: 
+05005:             "workspace_identity_matches":
+05006:                 workspace_identity_matches,
+05007: 
+05008:             "replacement_record_checksum":
+05009:                 replacement_checksum,
+05010:         }
+05011:     )
+05012: 
+05013: 
+05014: def _validate_controlled_replacement_record_v1(
+05015:     *,
+05016:     repair_action_type: str,
+05017:     target_store: str,
+05018:     replacement_record: Mapping[str, Any],
+05019:     workspace_id: str,
+05020: ) -> Mapping[str, Any]:
+05021: 
+05022:     action_type = (
+05023:         _assert_supported_executor_action_type_v1(
+05024:             repair_action_type
+05025:         )
+05026:     )
+05027: 
+05028:     normalized_target_store = (
+05029:         _require_string(
+05030:             target_store,
+05031:             field_name="target_store",
+05032:         ).upper()
+
+  MATCH AT LINE 5202
+05190:             candidate_path=target_path,
+05191:             allowed_root=workspace_store_root,
+05192:         )
+05193:     )
+05194: 
+05195: 
+05196:     # ---------------------------------------------------------
+05197:     # 1. Revalidate action/store/replacement boundaries
+05198:     # immediately before mutation.
+05199:     # ---------------------------------------------------------
+05200: 
+05201:     replacement_validation = (
+05202:         _validate_controlled_replacement_record_v1(
+05203:             repair_action_type=action_type,
+05204:             target_store=normalized_target_store,
+05205:             replacement_record=replacement,
+05206:             workspace_id=normalized_workspace_id,
+05207:         )
+05208:     )
+05209: 
+05210:     if (
+05211:         replacement_validation[
+05212:             "replacement_record_valid"
+05213:         ]
+05214:         is not True
+05215:     ):
+05216:         raise LifecycleRepairExecutorEngineError(
+05217:             "Controlled replacement record failed "
+05218:             "final validation."
+05219:         )
+05220: 
+
+SEARCH: _create_file_backup_v1(
+  MATCH AT LINE 1967
+01955:             )
+01956: 
+01957:             if not chunk:
+01958:                 break
+01959: 
+01960:             digest.update(
+01961:                 chunk
+01962:             )
+01963: 
+01964:     return digest.hexdigest()
+01965: 
+01966: 
+01967: def _create_file_backup_v1(
+01968:     *,
+01969:     source_path: Path,
+01970:     backup_root: Path,
+01971:     workspace_store_root: Path,
+01972: ) -> Mapping[str, Any]:
+01973: 
+01974:     safe_source_path = (
+01975:         _assert_path_within_root_v1(
+01976:             candidate_path=source_path,
+01977:             allowed_root=workspace_store_root,
+01978:         )
+01979:     )
+01980: 
+01981:     safe_backup_root = (
+01982:         backup_root.resolve(
+01983:             strict=False
+01984:         )
+01985:     )
+
+  MATCH AT LINE 9799
+09787:                 )
+09788:             )
+09789: 
+09790: 
+09791:             # -------------------------------------------------
+09792:             # 6D. Backup BEFORE any mutation attempt.
+09793:             #
+09794:             # Missing targets are recorded as source_existed
+09795:             # False so rollback can remove newly created files.
+09796:             # -------------------------------------------------
+09797: 
+09798:             backup_record = (
+09799:                 _create_file_backup_v1(
+09800:                     source_path=target_path,
+09801:                     backup_root=action_backup_root,
+09802:                     workspace_store_root=workspace_store_root,
+09803:                 )
+09804:             )
+09805: 
+09806: 
+09807:             # -------------------------------------------------
+09808:             # 6E. Prepare conservative rollback metadata.
+09809:             #
+09810:             # For quarantine, calculate the expected
+09811:             # quarantine path before mutation begins.
+09812:             # -------------------------------------------------
+09813: 
+09814:             expected_mutation_result: Mapping[
+09815:                 str,
+09816:                 Any,
+09817:             ] = _freeze(
+
+SEARCH: _dispatch_authorized_mutation_v1(
+  MATCH AT LINE 6230
+06218:             "mutation_performed":
+06219:                 True,
+06220: 
+06221:             "no_op":
+06222:                 False,
+06223: 
+06224:             "removed_fields":
+06225:                 (),
+06226:         }
+06227:     )
+06228: 
+06229: 
+06230: def _dispatch_authorized_mutation_v1(
+06231:     *,
+06232:     project_root: str | Path,
+06233:     workspace_id: str,
+06234:     mutation_intent: Mapping[str, Any],
+06235:     execution_authorized: bool,
+06236: ) -> Mapping[str, Any]:
+06237: 
+06238:     intent = _require_mapping(
+06239:         mutation_intent,
+06240:         field_name="mutation_intent",
+06241:     )
+06242: 
+06243:     normalized_workspace_id = (
+06244:         _require_string(
+06245:             workspace_id,
+06246:             field_name="workspace_id",
+06247:         )
+06248:     )
+
+  MATCH AT LINE 9923
+09911: 
+09912: 
+09913:             # -------------------------------------------------
+09914:             # 6G. Mutation begins.
+09915:             # -------------------------------------------------
+09916: 
+09917:             transaction_entry[
+09918:                 "mutation_attempted"
+09919:             ] = True
+09920: 
+09921: 
+09922:             mutation_result = (
+09923:                 _dispatch_authorized_mutation_v1(
+09924:                     project_root=project_root,
+09925:                     workspace_id=workspace_id,
+09926:                     mutation_intent=mutation_intent,
+09927:                     execution_authorized=True,
+09928:                 )
+09929:             )
+09930: 
+09931: 
+09932:             transaction_entry[
+09933:                 "mutation_result"
+09934:             ] = mutation_result
+09935: 
+09936: 
+09937:             transaction_entry[
+09938:                 "mutation_completed"
+09939:             ] = True
+09940: 
+09941: 
+
+SEARCH: _validate_prepared_action_preflight_v1(
+  NO MATCH
+
+SEARCH: _validate_prepared_action_v1(
+  NO MATCH
+
+SEARCH: "replacement_record"
+  MATCH AT LINE 3409
+03397:     return normalized
+03398: 
+03399: 
+03400: def _extract_controlled_replacement_record_v1(
+03401:     *,
+03402:     source_finding: Mapping[str, Any],
+03403: ) -> Mapping[str, Any] | None:
+03404: 
+03405:     value = (
+03406:         _find_first_evidence_value_v1(
+03407:             source_finding=source_finding,
+03408:             field_names=(
+03409:                 "replacement_record",
+03410:                 "repaired_record",
+03411:                 "normalized_record",
+03412:                 "expected_record",
+03413:             ),
+03414:         )
+03415:     )
+03416: 
+03417:     if not isinstance(
+03418:         value,
+03419:         Mapping,
+03420:     ):
+03421:         return None
+03422: 
+03423:     return _freeze(
+03424:         dict(
+03425:             value
+03426:         )
+03427:     )
+
+  MATCH AT LINE 3771
+03759:             target[
+03760:                 "target_checksum_before"
+03761:             ],
+03762: 
+03763:         "target_descriptor_checksum":
+03764:             target[
+03765:                 "target_descriptor_checksum"
+03766:             ],
+03767: 
+03768:         "normalized_lifecycle_state":
+03769:             normalized_state,
+03770: 
+03771:         "replacement_record":
+03772:             replacement_record,
+03773: 
+03774:         "sufficient_repair_evidence":
+03775:             sufficient_repair_evidence,
+03776: 
+03777:         "evidence_requirement":
+03778:             evidence_requirement,
+03779: 
+03780:         "evidence_failures":
+03781:             tuple(
+03782:                 evidence_failures
+03783:             ),
+03784: 
+03785:         "mutation_authorized":
+03786:             False,
+03787: 
+03788:         "mutation_attempted":
+03789:             False,
+
+  MATCH AT LINE 4913
+04901:         ),
+04902:     )
+04903: 
+04904: 
+04905: def _validate_replacement_record_boundary_v1(
+04906:     *,
+04907:     replacement_record: Mapping[str, Any],
+04908:     workspace_id: str,
+04909: ) -> Mapping[str, Any]:
+04910: 
+04911:     replacement = _require_mapping(
+04912:         replacement_record,
+04913:         field_name="replacement_record",
+04914:     )
+04915: 
+04916:     normalized_workspace_id = (
+04917:         _require_string(
+04918:             workspace_id,
+04919:             field_name="workspace_id",
+04920:         )
+04921:     )
+04922: 
+04923: 
+04924:     if not replacement:
+04925:         raise LifecycleRepairExecutorEngineError(
+04926:             "Replacement record must not be empty."
+04927:         )
+04928: 
+04929: 
+04930:     replacement_workspace_id = (
+04931:         replacement.get(
+
+  MATCH AT LINE 5037
+05025:         )
+05026:     )
+05027: 
+05028:     normalized_target_store = (
+05029:         _require_string(
+05030:             target_store,
+05031:             field_name="target_store",
+05032:         ).upper()
+05033:     )
+05034: 
+05035:     replacement = _require_mapping(
+05036:         replacement_record,
+05037:         field_name="replacement_record",
+05038:     )
+05039: 
+05040: 
+05041:     # ---------------------------------------------------------
+05042:     # Action/store authorization boundary.
+05043:     # ---------------------------------------------------------
+05044: 
+05045:     _validate_action_target_store_boundary_v1(
+05046:         repair_action_type=action_type,
+05047:         target_store=normalized_target_store,
+05048:     )
+05049: 
+05050: 
+05051:     # ---------------------------------------------------------
+05052:     # Workspace and JSON boundary.
+05053:     # ---------------------------------------------------------
+05054: 
+05055:     replacement_boundary = (
+
+  MATCH AT LINE 5185
+05173:         ).upper()
+05174:     )
+05175: 
+05176:     normalized_workspace_id = (
+05177:         _require_string(
+05178:             workspace_id,
+05179:             field_name="workspace_id",
+05180:         )
+05181:     )
+05182: 
+05183:     replacement = _require_mapping(
+05184:         replacement_record,
+05185:         field_name="replacement_record",
+05186:     )
+05187: 
+05188:     safe_target_path = (
+05189:         _assert_path_within_root_v1(
+05190:             candidate_path=target_path,
+05191:             allowed_root=workspace_store_root,
+05192:         )
+05193:     )
+05194: 
+05195: 
+05196:     # ---------------------------------------------------------
+05197:     # 1. Revalidate action/store/replacement boundaries
+05198:     # immediately before mutation.
+05199:     # ---------------------------------------------------------
+05200: 
+05201:     replacement_validation = (
+05202:         _validate_controlled_replacement_record_v1(
+05203:             repair_action_type=action_type,
+
+  MATCH AT LINE 6460
+06448:         )
+06449: 
+06450: 
+06451:     # ---------------------------------------------------------
+06452:     # 7. Dispatch only the four certified repair strategies.
+06453:     # No delete/archive/restore bypass exists here.
+06454:     # ---------------------------------------------------------
+06455: 
+06456:     if strategy == "CONTROLLED_JSON_REBUILD":
+06457: 
+06458:         replacement_record = (
+06459:             intent.get(
+06460:                 "replacement_record"
+06461:             )
+06462:         )
+06463: 
+06464:         if not isinstance(
+06465:             replacement_record,
+06466:             Mapping,
+06467:         ):
+06468:             raise LifecycleRepairExecutorEngineError(
+06469:                 "Controlled JSON rebuild requires "
+06470:                 "replacement_record."
+06471:             )
+06472: 
+06473: 
+06474:         handler_result = (
+06475:             _execute_json_rebuild_v1(
+06476:                 target_path=safe_target_path,
+06477:                 workspace_store_root=(
+06478:                     verified_workspace_store_root
+
+SEARCH: "mutation_intent"
+  MATCH AT LINE 3824
+03812:     return _freeze(
+03813:         intent
+03814:     )
+03815: 
+03816: 
+03817: def _validate_mutation_intent_checksum_v1(
+03818:     *,
+03819:     mutation_intent: Mapping[str, Any],
+03820: ) -> bool:
+03821: 
+03822:     intent = _require_mapping(
+03823:         mutation_intent,
+03824:         field_name="mutation_intent",
+03825:     )
+03826: 
+03827:     stored_checksum = (
+03828:         intent.get(
+03829:             "mutation_intent_checksum"
+03830:         )
+03831:     )
+03832: 
+03833:     if (
+03834:         not isinstance(
+03835:             stored_checksum,
+03836:             str,
+03837:         )
+03838:         or not stored_checksum.strip()
+03839:     ):
+03840:         return False
+03841: 
+03842:     checksum_source = {
+
+  MATCH AT LINE 3872
+03860:         calculated_checksum
+03861:         == stored_checksum
+03862:     )
+03863: 
+03864: 
+03865: def _validate_target_descriptor_checksum_v1(
+03866:     *,
+03867:     mutation_intent: Mapping[str, Any],
+03868: ) -> bool:
+03869: 
+03870:     intent = _require_mapping(
+03871:         mutation_intent,
+03872:         field_name="mutation_intent",
+03873:     )
+03874: 
+03875:     stored_checksum = intent.get(
+03876:         "target_descriptor_checksum"
+03877:     )
+03878: 
+03879:     if (
+03880:         not isinstance(
+03881:             stored_checksum,
+03882:             str,
+03883:         )
+03884:         or not stored_checksum.strip()
+03885:     ):
+03886:         return False
+03887: 
+03888:     descriptor_source = {
+03889:         "repair_action_id":
+03890:             intent.get(
+
+  MATCH AT LINE 4214
+04202:                 ],
+04203: 
+04204:             "target_path":
+04205:                 mutation_intent[
+04206:                     "target_path"
+04207:                 ],
+04208: 
+04209:             "execution_strategy":
+04210:                 mutation_intent[
+04211:                     "execution_strategy"
+04212:                 ],
+04213: 
+04214:             "mutation_intent":
+04215:                 mutation_intent,
+04216: 
+04217:             "mutation_intent_checksum_valid":
+04218:                 mutation_intent_checksum_valid,
+04219: 
+04220:             "sufficient_repair_evidence":
+04221:                 sufficient_repair_evidence,
+04222: 
+04223:             "evidence_failures":
+04224:                 mutation_intent[
+04225:                     "evidence_failures"
+04226:                 ],
+04227: 
+04228:             "preflight_passed":
+04229:                 preflight_passed,
+04230: 
+04231:             "mutation_authorized":
+04232:                 False,
+
+  MATCH AT LINE 6240
+06228: 
+06229: 
+06230: def _dispatch_authorized_mutation_v1(
+06231:     *,
+06232:     project_root: str | Path,
+06233:     workspace_id: str,
+06234:     mutation_intent: Mapping[str, Any],
+06235:     execution_authorized: bool,
+06236: ) -> Mapping[str, Any]:
+06237: 
+06238:     intent = _require_mapping(
+06239:         mutation_intent,
+06240:         field_name="mutation_intent",
+06241:     )
+06242: 
+06243:     normalized_workspace_id = (
+06244:         _require_string(
+06245:             workspace_id,
+06246:             field_name="workspace_id",
+06247:         )
+06248:     )
+06249: 
+06250: 
+06251:     # ---------------------------------------------------------
+06252:     # 1. This dispatcher must never be callable as an
+06253:     # unauthorized mutation shortcut.
+06254:     # ---------------------------------------------------------
+06255: 
+06256:     if execution_authorized is not True:
+06257:         raise LifecycleRepairExecutorEngineError(
+06258:             "Authorized mutation dispatcher requires "
+
+  MATCH AT LINE 6932
+06920: 
+06921: 
+06922:         action_checksum_valid = (
+06923:             _validate_prepared_action_checksum_v1(
+06924:                 prepared_action=prepared_action,
+06925:             )
+06926:         )
+06927: 
+06928: 
+06929:         mutation_intent = (
+06930:             _require_mapping(
+06931:                 prepared_action.get(
+06932:                     "mutation_intent"
+06933:                 ),
+06934:                 field_name=(
+06935:                     "prepared_action.mutation_intent"
+06936:                 ),
+06937:             )
+06938:         )
+06939: 
+06940: 
+06941:         mutation_intent_checksum_valid = (
+06942:             _validate_mutation_intent_checksum_v1(
+06943:                 mutation_intent=mutation_intent,
+06944:             )
+06945:         )
+06946: 
+06947: 
+06948:         action_type = (
+06949:             _assert_supported_executor_action_type_v1(
+06950:                 prepared_action.get(
+
+  MATCH AT LINE 7459
+07447:     )
+07448: 
+07449: 
+07450: def _verify_target_unchanged_since_preflight_v1(
+07451:     *,
+07452:     project_root: str | Path,
+07453:     workspace_id: str,
+07454:     mutation_intent: Mapping[str, Any],
+07455: ) -> Mapping[str, Any]:
+07456: 
+07457:     intent = _require_mapping(
+07458:         mutation_intent,
+07459:         field_name="mutation_intent",
+07460:     )
+07461: 
+07462: 
+07463:     if not _validate_mutation_intent_checksum_v1(
+07464:         mutation_intent=intent,
+07465:     ):
+07466:         raise LifecycleRepairExecutorEngineError(
+07467:             "Cannot verify changed target from an "
+07468:             "invalid mutation intent."
+07469:         )
+07470: 
+07471: 
+07472:     normalized_workspace_id = (
+07473:         _require_string(
+07474:             workspace_id,
+07475:             field_name="workspace_id",
+07476:         )
+07477:     )
+
+  MATCH AT LINE 7737
+07725:     )
+07726: 
+07727: 
+07728:     if not prepared_action_checksum_valid:
+07729:         raise LifecycleRepairExecutorEngineError(
+07730:             "Prepared repair action checksum is invalid."
+07731:         )
+07732: 
+07733: 
+07734:     mutation_intent = (
+07735:         _require_mapping(
+07736:             action.get(
+07737:                 "mutation_intent"
+07738:             ),
+07739:             field_name=(
+07740:                 "prepared_action.mutation_intent"
+07741:             ),
+07742:         )
+07743:     )
+07744: 
+07745: 
+07746:     mutation_intent_checksum_valid = (
+07747:         _validate_mutation_intent_checksum_v1(
+07748:             mutation_intent=mutation_intent,
+07749:         )
+07750:     )
+07751: 
+07752: 
+07753:     if not mutation_intent_checksum_valid:
+07754:         raise LifecycleRepairExecutorEngineError(
+07755:             "Prepared mutation intent checksum is invalid."
+
+  MATCH AT LINE 9376
+09364:                     "repair action: "
+09365:                     + str(
+09366:                         action.get(
+09367:                             "repair_action_id"
+09368:                         )
+09369:                     )
+09370:                 )
+09371: 
+09372: 
+09373:             mutation_intent = (
+09374:                 _require_mapping(
+09375:                     action.get(
+09376:                         "mutation_intent"
+09377:                     ),
+09378:                     field_name=(
+09379:                         "prepared_action.mutation_intent"
+09380:                     ),
+09381:                 )
+09382:             )
+09383: 
+09384: 
+09385:             dry_run_result = (
+09386:                 _build_dry_run_action_result_v1(
+09387:                     repair_action={
+09388:                         "repair_action_id":
+09389:                             action[
+09390:                                 "repair_action_id"
+09391:                             ],
+09392: 
+09393:                         "repair_action_type":
+09394:                             action[
+
+  MATCH AT LINE 9682
+09670:             current_action_type = (
+09671:                 _assert_supported_executor_action_type_v1(
+09672:                     action.get(
+09673:                         "repair_action_type"
+09674:                     )
+09675:                 )
+09676:             )
+09677: 
+09678: 
+09679:             mutation_intent = (
+09680:                 _require_mapping(
+09681:                     action.get(
+09682:                         "mutation_intent"
+09683:                     ),
+09684:                     field_name=(
+09685:                         "prepared_action.mutation_intent"
+09686:                     ),
+09687:                 )
+09688:             )
+09689: 
+09690: 
+09691:             current_target_store = (
+09692:                 _require_string(
+09693:                     mutation_intent.get(
+09694:                         "target_store"
+09695:                     ),
+09696:                     field_name=(
+09697:                         "mutation_intent.target_store"
+09698:                     ),
+09699:                 ).upper()
+09700:             )
+

@@ -1,6 +1,6 @@
 ﻿# LinkCraftor Cloud Service Portfolio
 
-Version: 1.0
+Version: 1.1
 Status: Canonical
 Phase: Cloud Infrastructure Architecture
 Section: 1.1.3 Cloud Service Portfolio
@@ -332,6 +332,37 @@ not part of the current launch infrastructure.
 
 ---
 
+# Regional and Disaster-Recovery Service Boundary
+
+This Cloud Service Portfolio determines whether an AWS service is approved,
+conditionally approved, future, or not approved.
+
+It does not determine the canonical primary Region, disaster-recovery Region,
+Availability Zone topology, replication topology, or recovery activation model.
+
+Those decisions are defined by the relevant Region Strategy, Availability Zone
+Strategy, Disaster Recovery Architecture, data architecture, and
+workload-specific infrastructure designs.
+
+The existence of a designated disaster-recovery Region does not automatically
+make every cross-region AWS service a launch requirement.
+
+Services such as:
+
+- AWS Global Accelerator
+- AWS Transit Gateway
+- AWS Elastic Disaster Recovery
+- AWS Resilience Hub
+- AWS Fault Injection Service
+
+must retain their portfolio status until the architecture phase that depends on
+them explicitly approves activation.
+
+A service classified as Future must not be promoted to launch infrastructure
+solely because it could support multi-region or disaster-recovery operations.
+
+---
+
 # Selection Rules
 
 A service may be introduced only when:
@@ -397,6 +428,13 @@ Initial preference:
 This list is an architectural preference, not proof that every service must be
 activated at launch.
 
+Cross-region, disaster-recovery, and global-traffic services must be activated
+only when required by the certified regional, resilience, recovery, networking,
+or workload architecture.
+
+The Cloud Service Portfolio does not independently authorize cross-region data
+replication or disaster-recovery activation.
+
 ---
 
 # Runtime Eligibility
@@ -431,3 +469,4 @@ LinkCraftor Architecture
 
 Status:
 CANONICAL
+

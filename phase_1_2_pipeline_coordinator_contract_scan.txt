@@ -1,0 +1,3751 @@
+============================================================
+LINKCRAFTOR UNIVERSAL COORDINATION FRAMEWORK
+PHASE 1.2 - PIPELINE COORDINATOR CONTRACT SCAN
+Generated: 2026-08-10 04:41:08
+============================================================
+
+PURPOSE
+-------
+Inspect the active coordinator implementations before building the
+Universal Pipeline Coordinator Contract.
+
+No production files will be modified.
+
+============================================================
+SECTION 1 - ACTIVE PIPELINE COORDINATOR FILES
+============================================================
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\connect_domain\coordinator.py
+------------------------------------------------------------
+"""
+LinkCraftor — Canonical Connect Domain Coordinator
+
+CONNECT DOMAIN
+    +-- linking_target_pipeline_batch
+    +-- website_connection_batch
+
+The coordinator:
+
+1. validates the complete Domain Workspace modal identity;
+2. persists the canonical workspace profile;
+3. queues both pipelines;
+4. returns immediately.
+
+The pipeline implementation remains outside this coordinator.
+"""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict
+
+from fastapi import HTTPException
+
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    create_universal_knowledge_job,
+)
+from backend.server.pipelines.connect_domain.job_types import (
+    LINKING_TARGET_PIPELINE_BATCH,
+)
+from backend.server.pipelines.connect_domain.linking_target_pipeline.runtime_registration import (
+    ensure_linking_target_pipeline_registration,
+)
+from backend.server.pipelines.connect_domain.website_knowledge_pipeline.coordinator import (
+    _normalize_domain,
+    _resolve_workspace_id,
+    run_website_knowledge_pipeline,
+)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_workspace_name(
+    workspace_name: str | None,
+    domain: str,
+) -> str:
+    supplied = str(workspace_name or "").strip()
+
+    if supplied:
+        return supplied
+
+    return (
+        domain
+        .replace("www.", "")
+        .replace(".", " ")
+        .replace("-", " ")
+        .strip()
+        .title()
+    )
+
+
+def _persist_workspace_profile(
+    *,
+    workspace_id: str,
+    workspace_name: str,
+    workspace_mode: str,
+    domain: str,
+    site_url: str | None,
+) -> Path:
+    profile_dir = (
+        Path("backend/server/data/workspaces")
+        / workspace_id
+    )
+
+    profile_path = profile_dir / "workspace_profile.json"
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    existing: Dict[str, Any] = {}
+
+    if profile_path.exists():
+        try:
+            loaded = json.loads(
+                profile_path.read_text(encoding="utf-8-sig")
+            )
+
+            if isinstance(loaded, dict):
+                existing = loaded
+        except Exception:
+            existing = {}
+
+    now = _now_iso()
+
+    profile = {
+        **existing,
+        "schema_version": "workspace_profile_v2",
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_name,
+        "workspace_mode": workspace_mode,
+        "domain": domain,
+        "site_url": str(site_url or "").strip(),
+        "source_type": "domain",
+        "connection_status": "processing",
+        "created_at": existing.get("created_at") or now,
+        "connected_at": existing.get("connected_at") or now,
+        "updated_at": now,
+    }
+
+    temporary_path = profile_path.with_suffix(".json.tmp")
+
+    temporary_path.write_text(
+        json.dumps(
+            profile,
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    temporary_path.replace(profile_path)
+
+    return profile_path
+
+
+def run_connect_domain(
+    *,
+    workspace_id: str | None = None,
+    workspace_name: str | None = None,
+    workspace_mode: str = "domain",
+    domain: str | None = None,
+    site_url: str | None = None,
+    url: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Persist the Domain Workspace identity and queue both pipelines.
+    """
+
+    normalized_mode = str(
+        workspace_mode or "domain"
+    ).strip().lower()
+
+    if normalized_mode != "domain":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "The Connect Domain endpoint accepts only "
+                "workspace_mode='domain'."
+            ),
+        )
+
+    clean_domain = _normalize_domain(
+        domain or url or site_url
+    )
+
+    resolved_workspace_id = _resolve_workspace_id(
+        workspace_id,
+        clean_domain,
+    )
+
+    resolved_workspace_name = _normalize_workspace_name(
+        workspace_name,
+        clean_domain,
+    )
+
+    profile_path = _persist_workspace_profile(
+        workspace_id=resolved_workspace_id,
+        workspace_name=resolved_workspace_name,
+        workspace_mode=normalized_mode,
+        domain=clean_domain,
+        site_url=site_url,
+    )
+
+    registration = ensure_linking_target_pipeline_registration()
+
+    pipeline_1_job = create_universal_knowledge_job(
+        workspace_id=resolved_workspace_id,
+        job_type=LINKING_TARGET_PIPELINE_BATCH,
+        pipeline="linking_target_pipeline",
+        stage=LINKING_TARGET_PIPELINE_BATCH,
+        payload={
+            "workspace_id": resolved_workspace_id,
+            "workspace_name": resolved_workspace_name,
+            "workspace_mode": normalized_mode,
+            "domain": clean_domain,
+            "site_url": str(site_url or "").strip(),
+            "source_type": "website",
+            "pipeline": "linking_target_pipeline",
+            "trigger": "canonical_connect_domain_coordinator",
+        },
+    )
+
+    pipeline_2 = run_website_knowledge_pipeline(
+        workspace_id=resolved_workspace_id,
+        domain=clean_domain,
+        url=url,
+    )
+
+    pipeline_1_queued = (
+        pipeline_1_job.get("status") == "queued"
+    )
+
+    overall_ok = bool(
+        pipeline_1_queued
+        and pipeline_2.get("ok")
+    )
+
+    return {
+        "ok": overall_ok,
+        "workspace_id": resolved_workspace_id,
+        "workspace_name": resolved_workspace_name,
+        "workspace_mode": normalized_mode,
+        "domain": clean_domain,
+        "site_url": str(site_url or "").strip(),
+        "connected": overall_ok,
+        "connection_status": (
+            "processing"
+            if overall_ok
+            else "queue_creation_failed"
+        ),
+        "execution_mode": "asynchronous",
+        "workspace_profile": str(profile_path),
+        "pipelines": {
+            "linking_target_pipeline": {
+                "ok": pipeline_1_queued,
+                "execution_status": "QUEUED_AWAITING_WORKER",
+                "job_type": LINKING_TARGET_PIPELINE_BATCH,
+                "job": pipeline_1_job,
+                "runtime_registration": registration,
+            },
+            "website_knowledge_pipeline": pipeline_2,
+        },
+    }
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py
+------------------------------------------------------------
+"""
+LinkCraftor Connect Domain â€” Pipeline 1
+
+LINKING TARGET PIPELINE
+
+CONNECT DOMAIN
+    -> Site Sources
+    -> URL Cleaner
+    -> Site Pages
+    -> Live Domain Target Pool
+    -> Active Target Set
+
+Runtime registration and Universal Runtime Infrastructure wiring are
+intentionally deferred.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+from fastapi import HTTPException
+
+from backend.server.pipelines.connect_domain.linking_target_pipeline.url_cleaner import clean_urls
+from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (
+    build_active_target_set,
+    load_optional_source_payload,
+    save_active_target_set,
+)
+
+
+def _site_reader():
+    """
+    Resolve the existing Site Reader module only when Pipeline 1 executes.
+
+    The delayed import prevents a module-import cycle while the Connect Domain
+    route delegates execution into this pipeline module.
+    """
+    from backend.server.routes import site_reader
+
+    return site_reader
+
+
+def run_linking_target_pipeline(payload):
+    """Execute Connect Domain Pipeline 1 â€” Linking Target Pipeline."""
+    sr = _site_reader()
+
+    _normalize_domain = sr._normalize_domain
+    _workspace_id_from_domain = sr._workspace_id_from_domain
+    _http_get = sr._http_get
+    _fetch_and_expand_sitemaps = sr._fetch_and_expand_sitemaps
+    _domain_from_url = sr._domain_from_url
+    save_site_sources = sr.save_site_sources
+    save_site_pages = sr.save_site_pages
+    load_site_pages_payload = sr.load_site_pages_payload
+    build_canonical_live_domain_target_pool = sr.build_canonical_live_domain_target_pool
+    save_canonical_live_domain_target_pool = sr.save_canonical_live_domain_target_pool
+
+    domain = _normalize_domain(payload.domain)
+
+    if not domain:
+        raise HTTPException(
+            status_code=400,
+            detail="A valid domain is required.",
+        )
+
+    # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
+    requested_workspace_id = str(payload.workspace_id or "").strip()
+    workspace_id = requested_workspace_id or _workspace_id_from_domain(domain)
+
+    data_dir = Path("backend/server/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    ws_meta_path = data_dir / f"workspace_{workspace_id}.json"
+
+    created = False
+
+    if not ws_meta_path.exists():
+        obj = {
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        ws_meta_path.write_text(
+            json.dumps(obj, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        created = True
+
+    sitemap_candidates = [
+        f"https://{domain}/sitemap.xml",
+        f"https://{domain}/sitemap_index.xml",
+        f"https://{domain}/sitemap-index.xml",
+        f"https://{domain}/wp-sitemap.xml",
+        f"https://www.{domain}/sitemap.xml",
+        f"https://www.{domain}/sitemap_index.xml",
+        f"https://www.{domain}/sitemap-index.xml",
+        f"https://www.{domain}/wp-sitemap.xml",
+    ]
+
+    # Also discover sitemap URLs declared inside robots.txt.
+    for robots_url in [f"https://{domain}/robots.txt", f"https://www.{domain}/robots.txt"]:
+        try:
+            code, content, ct = _http_get(robots_url)
+            if code < 400 and content:
+                robots_txt = content.decode("utf-8", errors="replace")
+                for line in robots_txt.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith("sitemap:"):
+                        sm = line.split(":", 1)[1].strip()
+                        if sm and sm not in sitemap_candidates:
+                            sitemap_candidates.append(sm)
+        except Exception:
+            pass
+
+    all_urls = []
+    sitemap_errors = []
+    sitemap_used = None
+
+    for sitemap_url in sitemap_candidates:
+        urls, errors = _fetch_and_expand_sitemaps(sitemap_url)
+        sitemap_errors.extend(errors or [])
+
+        if urls:
+            all_urls = [str(u).strip() for u in urls if str(u).strip()]
+            sitemap_used = sitemap_url
+            break
+
+    if not all_urls:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "no_sitemap_urls_found",
+            "sitemap_candidates": sitemap_candidates,
+            "sitemap_errors": sitemap_errors[:20],
+        }
+
+    cleaner_result = clean_urls(
+        all_urls,
+        domain,
+        exclude_informational=True,
+        exclude_taxonomy=True,
+    )
+
+    cleaned_urls = cleaner_result.urls
+    rejected_urls = cleaner_result.rejected
+    rejection_reason_counts = cleaner_result.reason_counts
+    explicit_content_urls = cleaner_result.explicit_urls
+    uncertain_content_urls = cleaner_result.uncertain_urls
+
+    save_site_sources(workspace_id, {
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "sources": [
+            {
+                "source_type": "connected_domain",
+                "domain": domain,
+                "sitemap_url": sitemap_used,
+                "sitemap_urls": all_urls,
+                "sitemap_urls_count": len(all_urls),
+                "url_cleaner_input_count": len(all_urls),
+                "cleaned_urls_count": len(cleaned_urls),
+                "explicit_content_urls_count": len(explicit_content_urls),
+                "uncertain_content_urls_count": len(uncertain_content_urls),
+                "rejected_urls_count": len(rejected_urls),
+                "rejection_reason_counts": rejection_reason_counts,
+            }
+        ],
+        "errors": sitemap_errors[:100],
+        "rejected_urls_sample": rejected_urls[:200],
+    })
+
+    pages = {}
+    now = datetime.now(timezone.utc).isoformat()
+
+    for url in cleaned_urls:
+        path = urlparse(url).path or ""
+        slug = path.strip("/").split("/")[-1] if path.strip("/") else url
+        title = re.sub(r"[-_]+", " ", slug).strip().title() if slug else url
+
+        pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+    save_site_pages(workspace_id, {
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "updated_at": now,
+        "pages": pages,
+    })
+
+    # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
+    try:
+        workspace_profile_dir = Path("backend/server/data/workspaces") / workspace_id
+        workspace_profile_dir.mkdir(parents=True, exist_ok=True)
+        workspace_profile_path = workspace_profile_dir / "workspace_profile.json"
+
+        profile = {}
+        if workspace_profile_path.exists():
+            try:
+                profile = json.loads(workspace_profile_path.read_text(encoding="utf-8"))
+                if not isinstance(profile, dict):
+                    profile = {}
+            except Exception:
+                profile = {}
+
+        now_profile = datetime.now(timezone.utc).isoformat()
+
+        profile["workspace_id"] = workspace_id
+        profile["workspace_name"] = profile.get("workspace_name") or workspace_id.replace("ws_", "").replace("_", " ").title()
+        profile["workspace_mode"] = profile.get("workspace_mode") or "domain"
+        profile["domain"] = domain
+        profile["connection_status"] = "connected"
+        profile["connected_at"] = profile.get("connected_at") or now_profile
+        profile["updated_at"] = now_profile
+
+        if not profile.get("source_type"):
+            profile["source_type"] = "domain"
+
+        if "site_url" not in profile:
+            profile["site_url"] = ""
+
+        workspace_profile_path.write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as profile_err:
+        print("[connect_domain] workspace profile update failed:", profile_err)
+
+    try:
+        site_pages_payload = load_site_pages_payload(
+            workspace_id
+        )
+
+        certified_pages = (
+            site_pages_payload.get("pages")
+            or []
+        )
+
+        certified_domain = str(
+            site_pages_payload.get("domain")
+            or domain
+        ).strip()
+
+        live_result = build_canonical_live_domain_target_pool(
+            certified_pages,
+            workspace_id=workspace_id,
+            domain=certified_domain,
+        )
+
+        save_canonical_live_domain_target_pool(
+            live_result
+        )
+
+        live_counts = {
+            "input_count": live_result.input_count,
+            "created_count": live_result.created_count,
+            "rejected_count": live_result.rejected_count,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "live_domain_target_pool_build_failed",
+            "detail": str(e)[:300],
+            "sitemap_url_count": len(all_urls),
+            "cleaned_urls_count": len(cleaned_urls),
+        }
+
+    try:
+        document_payload = load_optional_source_payload(
+            Path(
+                "backend/server/data/target_pools/document_registry"
+            )
+            / f"document_registry_{workspace_id}.json"
+        )
+
+        imported_payload = load_optional_source_payload(
+            Path(
+                "backend/server/data/target_pools/imported"
+            )
+            / f"imported_target_pool_{workspace_id}.json"
+        )
+
+        draft_payload = load_optional_source_payload(
+            Path(
+                "backend/server/data/target_pools/draft"
+            )
+            / f"draft_target_pool_{workspace_id}.json"
+        )
+
+        active_result = build_active_target_set(
+            workspace_id=workspace_id,
+            live_domain_payload={
+                "workspace_id": workspace_id,
+                "items": live_result.target_dicts(),
+            },
+            document_payload=document_payload,
+            imported_payload=imported_payload,
+            draft_payload=draft_payload,
+        )
+
+        active_target_set_path = save_active_target_set(
+            active_result
+        )
+
+        active_counts = dict(
+            active_result.active_counts
+        )
+
+        active_source_counts = dict(
+            active_result.source_counts
+        )
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "active_target_set_build_failed",
+            "detail": str(e)[:300],
+            "sitemap_url_count": len(all_urls),
+            "cleaned_urls_count": len(cleaned_urls),
+            "live_domain_counts": live_counts,
+        }
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "created": created,
+        "workspace_file": str(ws_meta_path),
+        "sitemap_used": sitemap_used,
+        "sitemap_url_count": len(all_urls),
+        "cleaned_urls_count": len(cleaned_urls),
+        "active_live_domain_urls_count": active_counts["live_domain"],
+        "active_target_set_path": str(active_target_set_path),
+        "active_target_set_counts": active_counts,
+        "active_target_set_source_counts": active_source_counts,
+        "live_domain_counts": live_counts,
+    }
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py
+------------------------------------------------------------
+"""
+LinkCraftor Connect Domain — Pipeline 2
+
+WEBSITE KNOWLEDGE PIPELINE
+
+CONNECT DOMAIN
+    -> Site Sources
+    -> Site Pages
+    -> Enterprise Raw HTML Acquisition
+    -> Raw HTML Store
+    -> UDARE
+    -> Website Article Integrity
+    -> Article Validation
+    -> Website Unified Content
+    -> UUCD
+    -> Universal Article Body Store
+    -> Certification
+    -> Semantic Ready
+
+This coordinator currently creates the existing
+website_connection_batch job.
+
+Runtime-foundation expansion is intentionally deferred.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict
+
+from fastapi import HTTPException
+
+
+from backend.server.pipelines.connect_domain.job_types import (
+    WEBSITE_CONNECTION_BATCH,
+)
+from backend.server.jobs.universal_knowledge_orchestrator import (
+    create_universal_knowledge_job,
+)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _normalize_domain(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="domain or url is required",
+        )
+
+    raw = re.sub(r"^https?://", "", raw, flags=re.IGNORECASE)
+    raw = raw.split("/", 1)[0].strip()
+    raw = raw.rstrip(".")
+
+    if raw.startswith("www."):
+        raw = raw[4:]
+
+    if not raw or "." not in raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid domain",
+        )
+
+    return raw
+
+
+def _workspace_id_from_domain(domain: str) -> str:
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        "_",
+        str(domain or "").lower(),
+    ).strip("_")
+
+    if not normalized:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not derive workspace_id from domain",
+        )
+
+    return f"ws_{normalized}"
+
+
+def _resolve_workspace_id(
+    workspace_id: str | None,
+    domain: str,
+) -> str:
+    supplied = str(workspace_id or "").strip()
+
+    if supplied:
+        if not supplied.startswith("ws_"):
+            raise HTTPException(
+                status_code=400,
+                detail="workspace_id must start with ws_",
+            )
+
+        return supplied
+
+    return _workspace_id_from_domain(domain)
+
+
+def _write_json(path: Path, data: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    path.write_text(
+        json.dumps(
+            data,
+            indent=2,
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def run_website_knowledge_pipeline(
+    *,
+    workspace_id: str | None = None,
+    domain: str | None = None,
+    url: str | None = None,
+) -> Dict[str, Any]:
+    """
+    Start Connect Domain Pipeline 2 — Website Knowledge Pipeline.
+
+    This function records the domain connection and creates the existing
+    website_connection_batch job without executing the full workload inside
+    the HTTP route.
+    """
+
+    clean_domain = _normalize_domain(domain or url)
+
+    resolved_workspace_id = _resolve_workspace_id(
+        workspace_id,
+        clean_domain,
+    )
+
+    connected_at = _now_iso()
+
+    live_domain_payload = {
+        "schema_version": "live_domain_connection_v1",
+        "workspace_id": resolved_workspace_id,
+        "domain": clean_domain,
+        "source_type": "website",
+        "status": "queued",
+        "connection_status": "processing",
+        "connected_at": connected_at,
+        "updated_at": connected_at,
+        "pipeline": "website_knowledge_pipeline",
+    }
+
+    live_domain_path = (
+        Path("backend/server/data/live_domains")
+        / f"live_domain_{resolved_workspace_id}.json"
+    )
+
+    _write_json(
+        live_domain_path,
+        live_domain_payload,
+    )
+
+    job = create_universal_knowledge_job(
+        workspace_id=resolved_workspace_id,
+        job_type=WEBSITE_CONNECTION_BATCH,
+        payload={
+            "workspace_id": resolved_workspace_id,
+            "domain": clean_domain,
+            "urls": [],
+            "source_type": "website",
+            "pipeline": "website_knowledge_pipeline",
+            "trigger": "live_connect_domain_route",
+        },
+    )
+
+    return {
+        "ok": True,
+        "workspace_id": resolved_workspace_id,
+        "domain": clean_domain,
+        "connected": True,
+        "connection_status": "processing",
+        "execution_status": "QUEUED_AWAITING_WORKER",
+        "pipeline": "website_knowledge_pipeline",
+        "live_domain_record": str(live_domain_path),
+        "job": job,
+    }
+
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\upload_document\coordinator.py
+------------------------------------------------------------
+"""
+Canonical Upload Document Coordinator
+
+Dependency-aware execution:
+
+UPLOADED DOCUMENT
+    -> Uploaded Document-to-UDUC Pipeline
+    -> Uploaded Document-to-Highlight Pipeline
+    -> Uploaded Document Registry-to-Active Target Set Pipeline
+
+Pipeline 2 executes first because it creates the uploaded-document identity,
+stored-file metadata, and extracted content required by Pipelines 1 and 3.
+
+After Pipeline 2 completes, Pipelines 1 and 3 execute as independent
+downstream branches using the Pipeline 2 result.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from fastapi import UploadFile
+
+from .uploaded_document_to_uduc_pipeline import (
+    UploadIntakeDependencies,
+    run_uploaded_document_to_uduc_pipeline,
+)
+from .uploaded_document_to_highlight_pipeline import (
+    run_uploaded_document_to_highlight_pipeline,
+)
+from .uploaded_document_registry_to_active_target_set_pipeline import (
+    run_uploaded_document_registry_to_active_target_set_pipeline,
+)
+
+
+def _required_string(
+    source: Dict[str, Any],
+    *keys: str,
+) -> str:
+    for key in keys:
+        value = source.get(key)
+
+        if value is None:
+            continue
+
+        cleaned = str(value).strip()
+
+        if cleaned:
+            return cleaned
+
+    return ""
+
+
+async def run_upload_document(
+    *,
+    workspace_id: str,
+    file: UploadFile,
+    dependencies: UploadIntakeDependencies,
+) -> Dict[str, Any]:
+    """
+    Canonical top-level Upload Document entry point.
+
+    Execution order:
+    1. Uploaded Document-to-UDUC Pipeline
+    2. Uploaded Document-to-Highlight Pipeline
+    3. Uploaded Document Registry-to-Active Target Set Pipeline
+    """
+
+    pipeline_2 = await run_uploaded_document_to_uduc_pipeline(
+        workspace_id=workspace_id,
+        file=file,
+        dependencies=dependencies,
+    )
+
+    if not isinstance(pipeline_2, dict):
+        raise RuntimeError(
+            "Uploaded Document-to-UDUC Pipeline returned "
+            "a non-dictionary result."
+        )
+
+    if pipeline_2.get("ok") is not True:
+        return {
+            "ok": False,
+            "pipeline": "upload_document",
+            "status": "UDUC_PIPELINE_FAILED",
+            "execution_started": True,
+            "execution_completed": False,
+            "pipelines": {
+                "uploaded_document_to_uduc_pipeline": pipeline_2,
+                "uploaded_document_to_highlight_pipeline": {
+                    "executed": False,
+                    "reason": "Blocked by Pipeline 2 failure.",
+                },
+                "uploaded_document_registry_to_active_target_set_pipeline": {
+                    "executed": False,
+                    "reason": "Blocked by Pipeline 2 failure.",
+                },
+            },
+        }
+
+    document_metadata = pipeline_2.get("doc")
+
+    if not isinstance(document_metadata, dict):
+        raise RuntimeError(
+            "Pipeline 2 result does not contain document metadata."
+        )
+
+    document_id = _required_string(
+        document_metadata,
+        "doc_id",
+        "document_id",
+        "id",
+    )
+
+    if not document_id:
+        raise RuntimeError(
+            "Pipeline 2 result does not contain a document ID."
+        )
+
+    extraction_result = {
+        "title": _required_string(
+            document_metadata,
+            "title",
+            "filename",
+        ),
+        "text": _required_string(
+            pipeline_2,
+            "text",
+        ),
+        "html": _required_string(
+            pipeline_2,
+            "html",
+        ),
+        "source_format": _required_string(
+            pipeline_2,
+            "ext",
+        ),
+    }
+
+    pipeline_1 = run_uploaded_document_to_highlight_pipeline(
+        workspace_id=str(
+            pipeline_2.get("workspace_id") or workspace_id
+        ),
+        document_id=document_id,
+        extraction_result=extraction_result,
+    )
+
+    pipeline_3 = (
+        run_uploaded_document_registry_to_active_target_set_pipeline(
+            workspace_id=str(
+                pipeline_2.get("workspace_id") or workspace_id
+            ),
+            document_id=document_id,
+            unified_content={
+                "document_id": document_id,
+                "workspace_id": str(
+                    pipeline_2.get("workspace_id") or workspace_id
+                ),
+                "title": extraction_result["title"],
+                "content_body": extraction_result["text"],
+                "content_html": extraction_result["html"],
+                "source_format": extraction_result["source_format"],
+                "upload_metadata": document_metadata,
+            },
+        )
+    )
+
+    overall_ok = (
+        pipeline_2.get("ok") is True
+        and pipeline_1.get("ok") is True
+        and pipeline_3.get("ok") is True
+    )
+
+    return {
+        # ------------------------------------------------------------
+        # Canonical HTTP upload compatibility contract
+        # ------------------------------------------------------------
+        # The editor upload client consumes these fields directly.
+        # Pipeline 2 remains the authoritative producer.
+        "ok": overall_ok,
+        "workspace_id": str(
+            pipeline_2.get("workspace_id") or workspace_id
+        ),
+        "doc": document_metadata,
+        "filename": pipeline_2.get("filename")
+        or document_metadata.get("filename")
+        or document_metadata.get("title")
+        or "",
+        "ext": pipeline_2.get("ext") or "",
+        "text": pipeline_2.get("text") or "",
+        "html": pipeline_2.get("html") or "",
+        "is_html": pipeline_2.get("is_html", False),
+        "truncated": pipeline_2.get("truncated", False),
+
+        # ------------------------------------------------------------
+        # Canonical orchestration metadata
+        # ------------------------------------------------------------
+        "pipeline": "upload_document",
+        "document_id": document_id,
+        "status": (
+            "UPLOAD_DOCUMENT_PIPELINES_COMPLETED"
+            if overall_ok
+            else "UPLOAD_DOCUMENT_PIPELINES_PARTIALLY_FAILED"
+        ),
+        "execution_started": True,
+        "execution_completed": True,
+        "execution_order": [
+            "uploaded_document_to_uduc_pipeline",
+            "uploaded_document_to_highlight_pipeline",
+            (
+                "uploaded_document_registry_to_"
+                "active_target_set_pipeline"
+            ),
+        ],
+        "pipelines": {
+            "uploaded_document_to_uduc_pipeline": pipeline_2,
+            "uploaded_document_to_highlight_pipeline": pipeline_1,
+            (
+                "uploaded_document_registry_to_"
+                "active_target_set_pipeline"
+            ): pipeline_3,
+        },
+    }
+
+
+__all__ = [
+    "run_upload_document",
+]
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py
+------------------------------------------------------------
+"""
+Uploaded Document-to-Highlight Pipeline
+
+Entry-point scope only:
+
+UPLOADED DOCUMENT
+    -> Uploaded Document-to-Highlight Pipeline
+    -> Smart Phrase Extractor
+
+Downstream stages remain in their existing production locations and are not
+executed or migrated by this coordinator during the pipeline-separation phase.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from backend.server.stores.smart_phrase_extractor import (
+    extract_smart_phrases,
+)
+
+
+def _read_string(
+    extraction_result: Dict[str, Any],
+    *keys: str,
+) -> str:
+    for key in keys:
+        value = extraction_result.get(key)
+
+        if value is None:
+            continue
+
+        cleaned = str(value).strip()
+
+        if cleaned:
+            return cleaned
+
+    return ""
+
+
+def run_uploaded_document_to_highlight_pipeline(
+    *,
+    workspace_id: str,
+    document_id: str,
+    extraction_result: Dict[str, Any] | None = None,
+    max_candidates: int = 500,
+    vertical: str = "general",
+) -> Dict[str, Any]:
+    """
+    Canonical entry point for the Uploaded Document-to-Highlight Pipeline.
+
+    This coordinator delegates only to the existing Smart Phrase Extractor.
+    """
+
+    clean_workspace_id = str(workspace_id or "").strip()
+    clean_document_id = str(document_id or "").strip()
+
+    if not clean_workspace_id:
+        raise ValueError("workspace_id is required.")
+
+    if not clean_document_id:
+        raise ValueError("document_id is required.")
+
+    if not isinstance(extraction_result, dict):
+        raise TypeError("extraction_result must be a dictionary.")
+
+    text = _read_string(
+        extraction_result,
+        "text",
+        "content_text",
+        "body_text",
+        "content_body",
+        "extracted_text",
+    )
+
+    html = _read_string(
+        extraction_result,
+        "html",
+        "content_html",
+        "body_html",
+        "extracted_html",
+    )
+
+    title = _read_string(
+        extraction_result,
+        "title",
+        "document_title",
+        "extracted_title",
+        "h1",
+    )
+
+    if not text and not html and not title:
+        raise ValueError(
+            "extraction_result contains no usable text, HTML, or title."
+        )
+
+    safe_max_candidates = max(
+        1,
+        min(int(max_candidates or 500), 5000),
+    )
+
+    safe_vertical = str(
+        vertical or "general"
+    ).strip() or "general"
+
+    phrase_candidates = extract_smart_phrases(
+        text=text,
+        html=html,
+        title=title,
+        doc_id=clean_document_id,
+        max_candidates=safe_max_candidates,
+        workspace_id=clean_workspace_id,
+        vertical=safe_vertical,
+    )
+
+    if not isinstance(phrase_candidates, list):
+        raise RuntimeError(
+            "Smart Phrase Extractor returned a non-list result."
+        )
+
+    return {
+        "ok": True,
+        "pipeline": "uploaded_document_to_highlight_pipeline",
+        "workspace_id": clean_workspace_id,
+        "document_id": clean_document_id,
+        "status": "SMART_PHRASE_EXTRACTOR_COMPLETED",
+        "executed": True,
+        "entry_point": "smart_phrase_extractor",
+        "phrase_candidates": phrase_candidates,
+        "phrase_candidate_count": len(phrase_candidates),
+    }
+
+
+__all__ = [
+    "run_uploaded_document_to_highlight_pipeline",
+]
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py
+------------------------------------------------------------
+"""
+Uploaded Document-to-UDUC Pipeline
+
+Entry-point scope:
+
+UPLOADED DOCUMENT
+    -> Upload API / File Route
+    -> Uploaded Document-to-UDUC Pipeline Coordinator
+    -> Upload Intake
+
+The coordinator delegates the upload request into the existing canonical
+upload-intake implementation.
+
+The worker, format detection, format router, extractor, and UDUC internals
+remain in their existing production locations.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from fastapi import UploadFile
+
+from .upload_intake import (
+    UploadIntakeDependencies,
+    run_upload_intake,
+)
+
+
+async def run_uploaded_document_to_uduc_pipeline(
+    *,
+    workspace_id: str,
+    file: UploadFile,
+    dependencies: UploadIntakeDependencies,
+) -> Dict[str, Any]:
+    """
+    Canonical entry point for the Uploaded Document-to-UDUC Pipeline.
+
+    This coordinator owns orchestration only and delegates directly to the
+    existing upload-intake boundary.
+    """
+
+    result = await run_upload_intake(
+        workspace_id=workspace_id,
+        file=file,
+        dependencies=dependencies,
+    )
+
+    if not isinstance(result, dict):
+        raise RuntimeError(
+            "Uploaded Document-to-UDUC upload intake returned "
+            "a non-dictionary result."
+        )
+
+    result["pipeline"] = "uploaded_document_to_uduc_pipeline"
+    result["pipeline_entry"] = (
+        "run_uploaded_document_to_uduc_pipeline"
+    )
+
+    return result
+
+
+__all__ = [
+    "run_uploaded_document_to_uduc_pipeline",
+]
+
+------------------------------------------------------------
+FILE: backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py
+------------------------------------------------------------
+"""
+Uploaded Document Registry-to-Active Target Set Pipeline
+
+Entry-point scope only:
+
+UPLOADED DOCUMENT
+    -> Uploaded Document Registry-to-Active Target Set Pipeline
+    -> Document Pre-validation
+
+Downstream registry and Active Target Set stages remain in their existing
+production locations and are not executed by this coordinator during the
+pipeline-separation phase.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Dict
+
+from .document_pre_validation import (
+    run_document_pre_validation,
+)
+
+
+def run_uploaded_document_registry_to_active_target_set_pipeline(
+    *,
+    workspace_id: str,
+    document_id: str,
+    unified_content: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """
+    Canonical entry point for the Uploaded Document Registry-to-Active
+    Target Set Pipeline.
+
+    This coordinator delegates only to Document Pre-validation.
+    """
+
+    if not isinstance(unified_content, dict):
+        raise TypeError("unified_content must be a dictionary.")
+
+    pre_validation = run_document_pre_validation(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        unified_content=unified_content,
+    )
+
+    return {
+        "ok": bool(pre_validation.get("ok")),
+        "pipeline": (
+            "uploaded_document_registry_to_active_target_set_pipeline"
+        ),
+        "workspace_id": pre_validation["workspace_id"],
+        "document_id": pre_validation["document_id"],
+        "status": pre_validation["status"],
+        "executed": True,
+        "entry_point": "document_pre_validation",
+        "pre_validation": pre_validation,
+    }
+
+
+__all__ = [
+    "run_uploaded_document_registry_to_active_target_set_pipeline",
+]
+
+------------------------------------------------------------
+FILE: backend\server\crawler\session_coordinator.py
+------------------------------------------------------------
+"""
+LinkCraftor Autonomous Public-Web Crawler
+Crawler Session Coordinator
+
+This coordinator controls the canonical lifecycle of crawler sessions.
+
+Responsibilities:
+- generate crawler-session identities;
+- validate lifecycle requests;
+- create crawler sessions;
+- start crawler sessions;
+- pause crawler sessions;
+- resume crawler sessions;
+- request controlled session stopping;
+- complete crawler sessions;
+- fail crawler sessions;
+- cancel crawler sessions;
+- retrieve crawler-session status;
+- persist lifecycle changes through the certified repository.
+
+This coordinator does not:
+- register seed URLs;
+- manage the crawl frontier;
+- schedule URLs;
+- claim worker jobs;
+- fetch web pages;
+- inspect or classify pages;
+- perform left-arm handoff.
+
+Those components will be integrated later through the top-level
+Autonomous Crawler Coordinator after they are built and certified.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Dict, Mapping
+from uuid import uuid4
+
+from .session_models import (
+    CrawlSession,
+    CrawlSessionLimits,
+    CrawlSessionStatistics,
+    CrawlSessionStatus,
+    required_string,
+)
+from .session_repository import (
+    create_crawler_session,
+    require_crawler_session,
+    update_crawler_session,
+)
+
+
+CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION = (
+    "crawler_session_coordinator.v1"
+)
+
+
+ALLOWED_CRAWLER_SESSION_TRANSITIONS = {
+    CrawlSessionStatus.CREATED: frozenset(
+        {
+            CrawlSessionStatus.RUNNING,
+            CrawlSessionStatus.CANCELLED,
+            CrawlSessionStatus.FAILED,
+        }
+    ),
+    CrawlSessionStatus.RUNNING: frozenset(
+        {
+            CrawlSessionStatus.PAUSED,
+            CrawlSessionStatus.STOPPING,
+            CrawlSessionStatus.COMPLETED,
+            CrawlSessionStatus.FAILED,
+            CrawlSessionStatus.CANCELLED,
+        }
+    ),
+    CrawlSessionStatus.PAUSED: frozenset(
+        {
+            CrawlSessionStatus.RUNNING,
+            CrawlSessionStatus.STOPPING,
+            CrawlSessionStatus.FAILED,
+            CrawlSessionStatus.CANCELLED,
+        }
+    ),
+    CrawlSessionStatus.STOPPING: frozenset(
+        {
+            CrawlSessionStatus.COMPLETED,
+            CrawlSessionStatus.FAILED,
+            CrawlSessionStatus.CANCELLED,
+        }
+    ),
+    CrawlSessionStatus.COMPLETED: frozenset(),
+    CrawlSessionStatus.FAILED: frozenset(),
+    CrawlSessionStatus.CANCELLED: frozenset(),
+}
+
+
+def utc_now_iso() -> str:
+    """Return a timezone-aware UTC timestamp."""
+
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def generate_crawler_session_id() -> str:
+    """
+    Generate a globally unique crawler-session identity.
+
+    The timestamp supports operational inspection while UUID entropy
+    protects against collisions across workers and environments.
+    """
+
+    timestamp = datetime.now(
+        timezone.utc
+    ).strftime("%Y%m%dT%H%M%S%fZ")
+
+    random_suffix = uuid4().hex[:12]
+
+    return (
+        "crawl_session_"
+        f"{timestamp}_"
+        f"{random_suffix}"
+    )
+
+
+def normalize_optional_string(
+    value: Any,
+) -> str | None:
+    """Normalize an optional string value."""
+
+    if value is None:
+        return None
+
+    cleaned = str(value).strip()
+
+    return cleaned or None
+
+
+def normalize_metadata(
+    metadata: Mapping[str, Any] | None,
+) -> Dict[str, Any]:
+    """Return a validated independent metadata dictionary."""
+
+    if metadata is None:
+        return {}
+
+    if not isinstance(metadata, Mapping):
+        raise ValueError(
+            "metadata must be a mapping."
+        )
+
+    return dict(metadata)
+
+
+def normalize_limits(
+    limits: CrawlSessionLimits
+    | Mapping[str, Any]
+    | None,
+) -> CrawlSessionLimits:
+    """Normalize crawler-session safety limits."""
+
+    if limits is None:
+        return CrawlSessionLimits()
+
+    if isinstance(
+        limits,
+        CrawlSessionLimits,
+    ):
+        return CrawlSessionLimits.from_mapping(
+            limits.to_dict()
+        )
+
+    if isinstance(limits, Mapping):
+        return CrawlSessionLimits.from_mapping(
+            limits
+        )
+
+    raise ValueError(
+        "limits must be CrawlSessionLimits, "
+        "a mapping, or None."
+    )
+
+
+def validate_transition(
+    *,
+    current_status: CrawlSessionStatus,
+    target_status: CrawlSessionStatus,
+) -> None:
+    """Reject invalid crawler-session lifecycle transitions."""
+
+    allowed_targets = (
+        ALLOWED_CRAWLER_SESSION_TRANSITIONS.get(
+            current_status
+        )
+    )
+
+    if allowed_targets is None:
+        raise ValueError(
+            "Current crawler-session status is not "
+            "registered in the transition table."
+        )
+
+    if target_status not in allowed_targets:
+        raise ValueError(
+            "Invalid crawler-session transition: "
+            f"{current_status.value} -> "
+            f"{target_status.value}"
+        )
+
+
+def create_crawler_session_request(
+    *,
+    workspace_id: str,
+    session_name: str,
+    limits: CrawlSessionLimits
+    | Mapping[str, Any]
+    | None = None,
+    metadata: Mapping[str, Any]
+    | None = None,
+    crawl_session_id: str | None = None,
+) -> CrawlSession:
+    """
+    Create and persist a crawler session in CREATED state.
+
+    This function creates session identity and state only. It does not
+    register seeds, initialize a frontier, or start workers.
+    """
+
+    clean_workspace_id = required_string(
+        workspace_id,
+        field_name="workspace_id",
+    )
+
+    clean_session_name = required_string(
+        session_name,
+        field_name="session_name",
+    )
+
+    resolved_session_id = (
+        required_string(
+            crawl_session_id,
+            field_name="crawl_session_id",
+        )
+        if crawl_session_id is not None
+        else generate_crawler_session_id()
+    )
+
+    normalized_metadata = normalize_metadata(
+        metadata
+    )
+
+    normalized_metadata.setdefault(
+        "created_by",
+        "crawler_session_coordinator",
+    )
+    normalized_metadata.setdefault(
+        "execution_initialized",
+        False,
+    )
+    normalized_metadata.setdefault(
+        "seed_registry_initialized",
+        False,
+    )
+    normalized_metadata.setdefault(
+        "crawl_frontier_initialized",
+        False,
+    )
+    normalized_metadata.setdefault(
+        "scheduler_initialized",
+        False,
+    )
+    normalized_metadata.setdefault(
+        "worker_cluster_initialized",
+        False,
+    )
+
+    session = CrawlSession(
+        crawl_session_id=resolved_session_id,
+        workspace_id=clean_workspace_id,
+        session_name=clean_session_name,
+        status=CrawlSessionStatus.CREATED,
+        current_phase="session_created",
+        limits=normalize_limits(
+            limits
+        ),
+        statistics=CrawlSessionStatistics(),
+        metadata=normalized_metadata,
+    )
+
+    return create_crawler_session(
+        session
+    )
+
+
+def transition_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+    target_status: CrawlSessionStatus,
+    current_phase: str,
+    failure_reason: str | None = None,
+    metadata_updates: Mapping[str, Any]
+    | None = None,
+) -> CrawlSession:
+    """
+    Perform one validated crawler-session lifecycle transition.
+
+    All public lifecycle operations delegate to this function.
+    """
+
+    if not isinstance(
+        target_status,
+        CrawlSessionStatus,
+    ):
+        try:
+            target_status = CrawlSessionStatus(
+                str(target_status).strip().lower()
+            )
+        except ValueError as exc:
+            raise ValueError(
+                "target_status is not a supported "
+                "CrawlSessionStatus."
+            ) from exc
+
+    session = require_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+    )
+
+    validate_transition(
+        current_status=session.status,
+        target_status=target_status,
+    )
+
+    now = utc_now_iso()
+
+    session.status = target_status
+    session.current_phase = required_string(
+        current_phase,
+        field_name="current_phase",
+    )
+    session.updated_at = now
+
+    if target_status == CrawlSessionStatus.RUNNING:
+        if session.started_at is None:
+            session.started_at = now
+        else:
+            session.resumed_at = now
+
+        session.paused_at = None
+        session.failure_reason = None
+
+    elif target_status == CrawlSessionStatus.PAUSED:
+        session.paused_at = now
+
+    elif target_status == CrawlSessionStatus.STOPPING:
+        session.stop_requested_at = now
+
+    elif target_status == CrawlSessionStatus.COMPLETED:
+        session.completed_at = now
+        session.failure_reason = None
+
+    elif target_status == CrawlSessionStatus.FAILED:
+        clean_failure_reason = normalize_optional_string(
+            failure_reason
+        )
+
+        if clean_failure_reason is None:
+            raise ValueError(
+                "failure_reason is required when "
+                "failing a crawler session."
+            )
+
+        session.failed_at = now
+        session.failure_reason = (
+            clean_failure_reason
+        )
+
+    elif target_status == CrawlSessionStatus.CANCELLED:
+        session.cancelled_at = now
+
+        clean_reason = normalize_optional_string(
+            failure_reason
+        )
+
+        if clean_reason is not None:
+            session.failure_reason = clean_reason
+
+    if metadata_updates is not None:
+        session.metadata.update(
+            normalize_metadata(
+                metadata_updates
+            )
+        )
+
+    return update_crawler_session(
+        session
+    )
+
+
+def start_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+) -> CrawlSession:
+    """
+    Mark a CREATED session as RUNNING.
+
+    This currently authorizes execution only. Actual seed, frontier,
+    scheduler, and worker startup will be connected after those
+    components are built and certified.
+    """
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.RUNNING,
+        current_phase="session_running",
+        metadata_updates={
+            "execution_authorized": True,
+        },
+    )
+
+
+def pause_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+) -> CrawlSession:
+    """Pause a running crawler session."""
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.PAUSED,
+        current_phase="session_paused",
+        metadata_updates={
+            "execution_authorized": False,
+        },
+    )
+
+
+def resume_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+) -> CrawlSession:
+    """Resume a paused crawler session."""
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.RUNNING,
+        current_phase="session_running",
+        metadata_updates={
+            "execution_authorized": True,
+        },
+    )
+
+
+def request_stop_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+) -> CrawlSession:
+    """
+    Request a controlled crawler-session stop.
+
+    Later worker and scheduler components will observe STOPPING and
+    finish or release their active work safely.
+    """
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.STOPPING,
+        current_phase="controlled_stop_requested",
+        metadata_updates={
+            "execution_authorized": False,
+            "controlled_stop_requested": True,
+        },
+    )
+
+
+def complete_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+) -> CrawlSession:
+    """Mark a RUNNING or STOPPING session as completed."""
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.COMPLETED,
+        current_phase="session_completed",
+        metadata_updates={
+            "execution_authorized": False,
+            "execution_completed": True,
+        },
+    )
+
+
+def fail_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+    failure_reason: str,
+) -> CrawlSession:
+    """Mark a non-terminal crawler session as failed."""
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.FAILED,
+        current_phase="session_failed",
+        failure_reason=failure_reason,
+        metadata_updates={
+            "execution_authorized": False,
+            "execution_failed": True,
+        },
+    )
+
+
+def cancel_crawler_session(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+    cancellation_reason: str | None = None,
+) -> CrawlSession:
+    """Cancel a non-terminal crawler session."""
+
+    return transition_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+        target_status=CrawlSessionStatus.CANCELLED,
+        current_phase="session_cancelled",
+        failure_reason=cancellation_reason,
+        metadata_updates={
+            "execution_authorized": False,
+            "execution_cancelled": True,
+        },
+    )
+
+
+def get_crawler_session_status(
+    *,
+    workspace_id: str,
+    crawl_session_id: str,
+) -> Dict[str, Any]:
+    """Return a stable crawler-session status response."""
+
+    session = require_crawler_session(
+        workspace_id=workspace_id,
+        crawl_session_id=crawl_session_id,
+    )
+
+    return {
+        "ok": True,
+        "component": "crawler_session_coordinator",
+        "schema_version": (
+            CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION
+        ),
+        "crawl_session_id": (
+            session.crawl_session_id
+        ),
+        "workspace_id": session.workspace_id,
+        "session_name": session.session_name,
+        "status": session.status.value,
+        "current_phase": session.current_phase,
+        "is_terminal": session.is_terminal,
+        "created_at": session.created_at,
+        "updated_at": session.updated_at,
+        "started_at": session.started_at,
+        "paused_at": session.paused_at,
+        "resumed_at": session.resumed_at,
+        "stop_requested_at": (
+            session.stop_requested_at
+        ),
+        "completed_at": session.completed_at,
+        "failed_at": session.failed_at,
+        "cancelled_at": session.cancelled_at,
+        "failure_reason": session.failure_reason,
+        "limits": session.limits.to_dict(),
+        "statistics": (
+            session.statistics.to_dict()
+        ),
+        "metadata": dict(session.metadata),
+    }
+
+
+def explain_crawler_session_coordinator_v1() -> Dict[str, Any]:
+    """Return the inspectable coordinator contract."""
+
+    return {
+        "ok": True,
+        "component": "crawler_session_coordinator",
+        "schema_version": (
+            CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION
+        ),
+        "responsibilities": [
+            "generate crawler session identities",
+            "create crawler sessions",
+            "validate crawler session lifecycle transitions",
+            "start crawler sessions",
+            "pause crawler sessions",
+            "resume crawler sessions",
+            "request controlled session stopping",
+            "complete crawler sessions",
+            "fail crawler sessions",
+            "cancel crawler sessions",
+            "return crawler session status",
+            "persist lifecycle changes through the session repository",
+        ],
+        "excluded_responsibilities": [
+            "seed URL registration",
+            "crawl frontier management",
+            "URL scheduling",
+            "worker job claiming",
+            "web page fetching",
+            "HTML parsing",
+            "page classification",
+            "page lifecycle analysis",
+            "left-arm handoff",
+        ],
+        "allowed_transitions": {
+            source.value: sorted(
+                target.value
+                for target in targets
+            )
+            for source, targets
+            in ALLOWED_CRAWLER_SESSION_TRANSITIONS.items()
+        },
+        "future_integrations": [
+            "Seed Registry",
+            "Crawl Frontier",
+            "Crawl Scheduler",
+            "Crawler Worker Cluster",
+            "Crawler Statistics",
+            "Top-Level Autonomous Crawler Coordinator",
+        ],
+    }
+
+
+__all__ = [
+    "ALLOWED_CRAWLER_SESSION_TRANSITIONS",
+    "CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION",
+    "cancel_crawler_session",
+    "complete_crawler_session",
+    "create_crawler_session_request",
+    "explain_crawler_session_coordinator_v1",
+    "fail_crawler_session",
+    "generate_crawler_session_id",
+    "get_crawler_session_status",
+    "pause_crawler_session",
+    "request_stop_crawler_session",
+    "resume_crawler_session",
+    "start_crawler_session",
+    "transition_crawler_session",
+    "validate_transition",
+]
+
+============================================================
+SECTION 2 - COORDINATOR FUNCTION DEFINITIONS
+============================================================
+
+Path                                                                                     LineNumber Line                           
+----                                                                                     ---------- ----                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         43 def _now_iso() -> str:         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         47 def _normalize_workspace_name( 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         66 def _persist_workspace_profile(
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        128 def run_connect_domain(        
+
+
+
+
+Path                                                                                                             LineNumber Line                                     
+----                                                                                                             ---------- ----                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         35 def _site_reader():                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         47 def run_linking_target_pipeline(payload):
+
+
+
+
+Path                                                                                                                LineNumber Line                                                      
+----                                                                                                                ---------- ----                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         45 def _now_iso() -> str:                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         49 def _normalize_domain(value: str | None) -> str:          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         74 def _workspace_id_from_domain(domain: str) -> str:        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         90 def _resolve_workspace_id(                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        108 def _write_json(path: Path, data: Dict[str, Any]) -> None:
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        121 def run_website_knowledge_pipeline(                       
+
+
+
+
+Path                                                                                      LineNumber Line                          
+----                                                                                      ---------- ----                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         36 def _required_string(         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         54 async def run_upload_document(
+
+
+
+
+Path                                                                                                                              LineNumber Line                                            
+----                                                                                                                              ---------- ----                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         23 def _read_string(                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         41 def run_uploaded_document_to_highlight_pipeline(
+
+
+
+
+Path                                                                                                                         LineNumber Line                                             
+----                                                                                                                         ---------- ----                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         30 async def run_uploaded_document_to_uduc_pipeline(
+
+
+
+
+Path                                                                                                                                               LineNumber Line                                                             
+----                                                                                                                                               ---------- ----                                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         24 def run_uploaded_document_registry_to_active_target_set_pipeline(
+
+
+
+
+Path                                                                            LineNumber Line                                                           
+----                                                                            ---------- ----                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py         97 def utc_now_iso() -> str:                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        105 def generate_crawler_session_id() -> str:                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        126 def normalize_optional_string(                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        139 def normalize_metadata(                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        155 def normalize_limits(                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        184 def validate_transition(                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        211 def create_crawler_session_request(                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        295 def transition_crawler_session(                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        401 def start_crawler_session(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        425 def pause_crawler_session(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        443 def resume_crawler_session(                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        461 def request_stop_crawler_session(                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        485 def complete_crawler_session(                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        504 def fail_crawler_session(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        525 def cancel_crawler_session(                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        546 def get_crawler_session_status(                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        592 def explain_crawler_session_coordinator_v1() -> Dict[str, Any]:
+
+
+
+
+============================================================
+SECTION 3 - COORDINATOR CONSTANTS / IDENTITIES
+============================================================
+
+Path                                                                                     LineNumber Line                                                                                              
+----                                                                                     ---------- ----                                                                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py          2 LinkCraftor — Canonical Connect Domain Coordinator                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py          5     +-- linking_target_pipeline_batch                                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py          8 The coordinator:                                                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         12 3. queues both pipelines;                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         15 The pipeline implementation remains outside this coordinator.                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         30 from backend.server.pipelines.connect_domain.job_types import (                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         31     LINKING_TARGET_PIPELINE_BATCH,                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         33 from backend.server.pipelines.connect_domain.linking_target_pipeline.runtime_registration import (
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         34     ensure_linking_target_pipeline_registration,                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         36 from backend.server.pipelines.connect_domain.website_knowledge_pipeline.coordinator import (      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         39     run_website_knowledge_pipeline,                                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         99         "schema_version": "workspace_profile_v2",                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        138     Persist the Domain Workspace identity and queue both pipelines.                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        176     registration = ensure_linking_target_pipeline_registration()                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        178     pipeline_1_job = create_universal_knowledge_job(                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        180         job_type=LINKING_TARGET_PIPELINE_BATCH,                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        181         pipeline="linking_target_pipeline",                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        182         stage=LINKING_TARGET_PIPELINE_BATCH,                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        190             "pipeline": "linking_target_pipeline",                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        191             "trigger": "canonical_connect_domain_coordinator",                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        195     pipeline_2 = run_website_knowledge_pipeline(                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        201     pipeline_1_queued = (                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        202         pipeline_1_job.get("status") == "queued"                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        206         pipeline_1_queued                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        207         and pipeline_2.get("ok")                                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        225         "pipelines": {                                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        226             "linking_target_pipeline": {                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        227                 "ok": pipeline_1_queued,                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        229                 "job_type": LINKING_TARGET_PIPELINE_BATCH,                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        230                 "job": pipeline_1_job,                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        233             "website_knowledge_pipeline": pipeline_2,                                             
+
+
+
+
+Path                                                                                                             LineNumber Line                                                                                              
+----                                                                                                             ---------- ----                                                                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py          2 LinkCraftor Connect Domain — Pipeline 1                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py          4 LINKING TARGET PIPELINE                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         27 from backend.server.pipelines.connect_domain.linking_target_pipeline.url_cleaner import clean_urls
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         28 from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         37     Resolve the existing Site Reader module only when Pipeline 1 executes.                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         40     route delegates execution into this pipeline module.                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         47 def run_linking_target_pipeline(payload):                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         48     """Execute Connect Domain Pipeline 1 — Linking Target Pipeline."""                            
+
+
+
+
+Path                                                                                                                LineNumber Line                                                             
+----                                                                                                                ---------- ----                                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py          2 LinkCraftor Connect Domain — Pipeline 2                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py          4 WEBSITE KNOWLEDGE PIPELINE                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         20 This coordinator currently creates the existing                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         37 from backend.server.pipelines.connect_domain.job_types import (  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        121 def run_website_knowledge_pipeline(                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        128     Start Connect Domain Pipeline 2 — Website Knowledge Pipeline.
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        145         "schema_version": "live_domain_connection_v1",           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        153         "pipeline": "website_knowledge_pipeline",                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        168         job_type=WEBSITE_CONNECTION_BATCH,                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        174             "pipeline": "website_knowledge_pipeline",            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        186         "pipeline": "website_knowledge_pipeline",                
+
+
+
+
+Path                                                                                      LineNumber Line                                                                         
+----                                                                                      ---------- ----                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          2 Canonical Upload Document Coordinator                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          7     -> Uploaded Document-to-UDUC Pipeline                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          8     -> Uploaded Document-to-Highlight Pipeline                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          9     -> Uploaded Document Registry-to-Active Target Set Pipeline              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         11 Pipeline 2 executes first because it creates the uploaded-document identity, 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         12 stored-file metadata, and extracted content required by Pipelines 1 and 3.   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         14 After Pipeline 2 completes, Pipelines 1 and 3 execute as independent         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         15 downstream branches using the Pipeline 2 result.                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         24 from .uploaded_document_to_uduc_pipeline import (                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         26     run_uploaded_document_to_uduc_pipeline,                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         28 from .uploaded_document_to_highlight_pipeline import (                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         29     run_uploaded_document_to_highlight_pipeline,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         31 from .uploaded_document_registry_to_active_target_set_pipeline import (      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         32     run_uploaded_document_registry_to_active_target_set_pipeline,            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         64     1. Uploaded Document-to-UDUC Pipeline                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         65     2. Uploaded Document-to-Highlight Pipeline                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         66     3. Uploaded Document Registry-to-Active Target Set Pipeline              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         69     pipeline_2 = await run_uploaded_document_to_uduc_pipeline(               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         75     if not isinstance(pipeline_2, dict):                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         77             "Uploaded Document-to-UDUC Pipeline returned "                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         81     if pipeline_2.get("ok") is not True:                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         84             "pipeline": "upload_document",                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         85             "status": "UDUC_PIPELINE_FAILED",                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         88             "pipelines": {                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         89                 "uploaded_document_to_uduc_pipeline": pipeline_2,            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         90                 "uploaded_document_to_highlight_pipeline": {                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         92                     "reason": "Blocked by Pipeline 2 failure.",              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         94                 "uploaded_document_registry_to_active_target_set_pipeline": {
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         96                     "reason": "Blocked by Pipeline 2 failure.",              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        101     document_metadata = pipeline_2.get("doc")                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        105             "Pipeline 2 result does not contain document metadata."          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        117             "Pipeline 2 result does not contain a document ID."              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        127             pipeline_2,                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        131             pipeline_2,                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        135             pipeline_2,                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        140     pipeline_1 = run_uploaded_document_to_highlight_pipeline(                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        142             pipeline_2.get("workspace_id") or workspace_id                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        148     pipeline_3 = (                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        149         run_uploaded_document_registry_to_active_target_set_pipeline(        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        151                 pipeline_2.get("workspace_id") or workspace_id               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        157                     pipeline_2.get("workspace_id") or workspace_id           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        169         pipeline_2.get("ok") is True                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        170         and pipeline_1.get("ok") is True                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        171         and pipeline_3.get("ok") is True                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        179         # Pipeline 2 remains the authoritative producer.                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        182             pipeline_2.get("workspace_id") or workspace_id                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        185         "filename": pipeline_2.get("filename")                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        189         "ext": pipeline_2.get("ext") or "",                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        190         "text": pipeline_2.get("text") or "",                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        191         "html": pipeline_2.get("html") or "",                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        192         "is_html": pipeline_2.get("is_html", False),                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        193         "truncated": pipeline_2.get("truncated", False),                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        198         "pipeline": "upload_document",                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        201             "UPLOAD_DOCUMENT_PIPELINES_COMPLETED"                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        203             else "UPLOAD_DOCUMENT_PIPELINES_PARTIALLY_FAILED"                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        208             "uploaded_document_to_uduc_pipeline",                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        209             "uploaded_document_to_highlight_pipeline",                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        212                 "active_target_set_pipeline"                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        215         "pipelines": {                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        216             "uploaded_document_to_uduc_pipeline": pipeline_2,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        217             "uploaded_document_to_highlight_pipeline": pipeline_1,           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        220                 "active_target_set_pipeline"                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        221             ): pipeline_3,                                                   
+
+
+
+
+Path                                                                                                                              LineNumber Line                                                                          
+----                                                                                                                              ---------- ----                                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py          2 Uploaded Document-to-Highlight Pipeline                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py          7     -> Uploaded Document-to-Highlight Pipeline                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         10 Downstream stages remain in their existing production locations and are not   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         11 executed or migrated by this coordinator during the pipeline-separation phase.
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         41 def run_uploaded_document_to_highlight_pipeline(                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         50     Canonical entry point for the Uploaded Document-to-Highlight Pipeline.    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         52     This coordinator delegates only to the existing Smart Phrase Extractor.   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        123         "pipeline": "uploaded_document_to_highlight_pipeline",                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        135     "run_uploaded_document_to_highlight_pipeline",                            
+
+
+
+
+Path                                                                                                                         LineNumber Line                                                                      
+----                                                                                                                         ---------- ----                                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py          2 Uploaded Document-to-UDUC Pipeline                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py          8     -> Uploaded Document-to-UDUC Pipeline Coordinator                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         11 The coordinator delegates the upload request into the existing canonical  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         30 async def run_uploaded_document_to_uduc_pipeline(                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         37     Canonical entry point for the Uploaded Document-to-UDUC Pipeline.     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         39     This coordinator owns orchestration only and delegates directly to the
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         55     result["pipeline"] = "uploaded_document_to_uduc_pipeline"             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         56     result["pipeline_entry"] = (                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         57         "run_uploaded_document_to_uduc_pipeline"                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         64     "run_uploaded_document_to_uduc_pipeline",                             
+
+
+
+
+Path                                                                                                                                               LineNumber Line                                                                     
+----                                                                                                                                               ---------- ----                                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py          2 Uploaded Document Registry-to-Active Target Set Pipeline                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py          7     -> Uploaded Document Registry-to-Active Target Set Pipeline          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         10 Downstream registry and Active Target Set stages remain in their existing
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         11 production locations and are not executed by this coordinator during the 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         12 pipeline-separation phase.                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         24 def run_uploaded_document_registry_to_active_target_set_pipeline(        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         32     Target Set Pipeline.                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         34     This coordinator delegates only to Document Pre-validation.          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         48         "pipeline": (                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         49             "uploaded_document_registry_to_active_target_set_pipeline"   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         61     "run_uploaded_document_registry_to_active_target_set_pipeline",      
+
+
+
+
+Path                                                                            LineNumber Line                                                                  
+----                                                                            ---------- ----                                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py          3 Crawler Session Coordinator                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py          5 This coordinator controls the canonical lifecycle of crawler sessions.
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py         21 This coordinator does not:                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py         31 Autonomous Crawler Coordinator after they are built and certified.    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py         54 CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION = (                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py         55     "crawler_session_coordinator.v1"                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        254         "crawler_session_coordinator",                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        321                 "target_status is not a supported "                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        560         "component": "crawler_session_coordinator",                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        561         "schema_version": (                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        562             CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        592 def explain_crawler_session_coordinator_v1() -> Dict[str, Any]:       
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        593     """Return the inspectable coordinator contract."""                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        597         "component": "crawler_session_coordinator",                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        598         "schema_version": (                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        599             CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        640             "Top-Level Autonomous Crawler Coordinator",               
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        647     "CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION",                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        651     "explain_crawler_session_coordinator_v1",                         
+
+
+
+
+============================================================
+SECTION 4 - RUNTIME / JOB CREATION DEPENDENCIES
+============================================================
+
+Path                                                                                     LineNumber Line                                                                                              
+----                                                                                     ---------- ----                                                                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         12 3. queues both pipelines;                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         28     create_universal_knowledge_job,                                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         30 from backend.server.pipelines.connect_domain.job_types import (                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         33 from backend.server.pipelines.connect_domain.linking_target_pipeline.runtime_registration import (
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         34     ensure_linking_target_pipeline_registration,                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        138     Persist the Domain Workspace identity and queue both pipelines.                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        176     registration = ensure_linking_target_pipeline_registration()                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        178     pipeline_1_job = create_universal_knowledge_job(                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        180         job_type=LINKING_TARGET_PIPELINE_BATCH,                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        201     pipeline_1_queued = (                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        202         pipeline_1_job.get("status") == "queued"                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        206         pipeline_1_queued                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        221             else "queue_creation_failed"                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        227                 "ok": pipeline_1_queued,                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        228                 "execution_status": "QUEUED_AWAITING_WORKER",                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        229                 "job_type": LINKING_TARGET_PIPELINE_BATCH,                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        231                 "runtime_registration": registration,                                             
+
+
+
+
+Path                                                                                                             LineNumber Line                                                                
+----                                                                                                             ---------- ----                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         13 Runtime registration and Universal Runtime Infrastructure wiring are
+
+
+
+
+Path                                                                                                                LineNumber Line                                                           
+----                                                                                                                ---------- ----                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         23 Runtime-foundation expansion is intentionally deferred.        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         37 from backend.server.pipelines.connect_domain.job_types import (
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py         41     create_universal_knowledge_job,                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        149         "status": "queued",                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        166     job = create_universal_knowledge_job(                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        168         job_type=WEBSITE_CONNECTION_BATCH,                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        185         "execution_status": "QUEUED_AWAITING_WORKER",          
+
+
+
+
+Path                                                                                      LineNumber Line                       
+----                                                                                      ---------- ----                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         76         raise RuntimeError(
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        104         raise RuntimeError(
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        116         raise RuntimeError(
+
+
+
+
+Path                                                                                                                              LineNumber Line                       
+----                                                                                                                              ---------- ----                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        117         raise RuntimeError(
+
+
+
+
+Path                                                                                                                         LineNumber Line                       
+----                                                                                                                         ---------- ----                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         50         raise RuntimeError(
+
+
+
+
+
+Path                                                                            LineNumber Line                                
+----                                                                            ---------- ----                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        616             "seed URL registration",
+
+
+
+
+============================================================
+SECTION 5 - COORDINATOR RETURN SHAPES
+============================================================
+
+Path                                                                                     LineNumber Line                                              
+----                                                                                     ---------- ----                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        100         "workspace_id": workspace_id,             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        184             "workspace_id": resolved_workspace_id,
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        190             "pipeline": "linking_target_pipeline",
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        202         pipeline_1_job.get("status") == "queued"  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        207         and pipeline_2.get("ok")                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        210     return {                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        211         "ok": overall_ok,                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        212         "workspace_id": resolved_workspace_id,    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        227                 "ok": pipeline_1_queued,          
+
+
+
+
+Path                                                                                                             LineNumber Line                                                        
+----                                                                                                             ---------- ----                                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         83             "workspace_id": workspace_id,                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        135         return {                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        136             "ok": False,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        137             "workspace_id": workspace_id,                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        140             "error": "no_sitemap_urls_found",               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        159         "workspace_id": workspace_id,                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        207         "workspace_id": workspace_id,                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        230         profile["workspace_id"] = workspace_id              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        282         return {                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        283             "ok": False,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        284             "workspace_id": workspace_id,                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        287             "error": "live_domain_target_pool_build_failed",
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        318                 "workspace_id": workspace_id,               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        339         return {                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        340             "ok": False,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        341             "workspace_id": workspace_id,                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        344             "error": "active_target_set_build_failed",      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        351     return {                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        352         "ok": True,                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        353         "workspace_id": workspace_id,                       
+
+
+
+
+Path                                                                                                                LineNumber Line                                                 
+----                                                                                                                ---------- ----                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        146         "workspace_id": resolved_workspace_id,       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        149         "status": "queued",                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        153         "pipeline": "website_knowledge_pipeline",    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        170             "workspace_id": resolved_workspace_id,   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        174             "pipeline": "website_knowledge_pipeline",
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        179     return {                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        180         "ok": True,                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        181         "workspace_id": resolved_workspace_id,       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        186         "pipeline": "website_knowledge_pipeline",    
+
+
+
+
+Path                                                                                      LineNumber Line                                                              
+----                                                                                      ---------- ----                                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         81     if pipeline_2.get("ok") is not True:                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         82         return {                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         83             "ok": False,                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         84             "pipeline": "upload_document",                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         85             "status": "UDUC_PIPELINE_FAILED",                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        142             pipeline_2.get("workspace_id") or workspace_id        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        151                 pipeline_2.get("workspace_id") or workspace_id    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        156                 "workspace_id": str(                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        157                     pipeline_2.get("workspace_id") or workspace_id
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        169         pipeline_2.get("ok") is True                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        170         and pipeline_1.get("ok") is True                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        171         and pipeline_3.get("ok") is True                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        174     return {                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        180         "ok": overall_ok,                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        181         "workspace_id": str(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        182             pipeline_2.get("workspace_id") or workspace_id        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        198         "pipeline": "upload_document",                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        200         "status": (                                               
+
+
+
+
+Path                                                                                                                              LineNumber Line                                                          
+----                                                                                                                              ---------- ----                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        121     return {                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        122         "ok": True,                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        123         "pipeline": "uploaded_document_to_highlight_pipeline",
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        124         "workspace_id": clean_workspace_id,                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        126         "status": "SMART_PHRASE_EXTRACTOR_COMPLETED",         
+
+
+
+
+Path                                                                                                                         LineNumber Line                                                         
+----                                                                                                                         ---------- ----                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         55     result["pipeline"] = "uploaded_document_to_uduc_pipeline"
+
+
+
+
+Path                                                                                                                                               LineNumber Line                                                   
+----                                                                                                                                               ---------- ----                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         46     return {                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         47         "ok": bool(pre_validation.get("ok")),          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         48         "pipeline": (                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         51         "workspace_id": pre_validation["workspace_id"],
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         53         "status": pre_validation["status"],            
+
+
+
+
+Path                                                                            LineNumber Line                                         
+----                                                                            ---------- ----                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        145         return {}                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        231         field_name="workspace_id",           
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        558     return {                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        559         "ok": True,                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        567         "workspace_id": session.workspace_id,
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        569         "status": session.status.value,      
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        595     return {                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        596         "ok": True,                          
+
+
+
+
+============================================================
+SECTION 6 - PIPELINE SEQUENCING REFERENCES
+============================================================
+
+Path                                                                                     LineNumber Line                                        
+----                                                                                     ---------- ----                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py        182         stage=LINKING_TARGET_PIPELINE_BATCH,
+
+
+
+
+Path                                                                                                             LineNumber Line                                                                                              
+----                                                                                                             ---------- ----                                                                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         27 from backend.server.pipelines.connect_domain.linking_target_pipeline.url_cleaner import clean_urls
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         28 from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         29     build_active_target_set,                                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         31     save_active_target_set,                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         56     save_site_sources = sr.save_site_sources                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         57     save_site_pages = sr.save_site_pages                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         58     load_site_pages_payload = sr.load_site_pages_payload                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         59     build_canonical_live_domain_target_pool = sr.build_canonical_live_domain_target_pool          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py         60     save_canonical_live_domain_target_pool = sr.save_canonical_live_domain_target_pool            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        158     save_site_sources(workspace_id, {                                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        169                 "url_cleaner_input_count": len(all_urls),                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        206     save_site_pages(workspace_id, {                                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        252         site_pages_payload = load_site_pages_payload(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        257             site_pages_payload.get("pages")                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        262             site_pages_payload.get("domain")                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        266         live_result = build_canonical_live_domain_target_pool(                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        272         save_canonical_live_domain_target_pool(                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        287             "error": "live_domain_target_pool_build_failed",                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        296                 "backend/server/data/target_pools/document_registry"                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        298             / f"document_registry_{workspace_id}.json"                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        315         active_result = build_active_target_set(                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        326         active_target_set_path = save_active_target_set(                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        344             "error": "active_target_set_build_failed",                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        361         "active_target_set_path": str(active_target_set_path),                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        362         "active_target_set_counts": active_counts,                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        363         "active_target_set_source_counts": active_source_counts,                                  
+
+
+
+
+
+Path                                                                                      LineNumber Line                                                                         
+----                                                                                      ---------- ----                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          7     -> Uploaded Document-to-UDUC Pipeline                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          8     -> Uploaded Document-to-Highlight Pipeline                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py          9     -> Uploaded Document Registry-to-Active Target Set Pipeline              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         24 from .uploaded_document_to_uduc_pipeline import (                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         26     run_uploaded_document_to_uduc_pipeline,                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         28 from .uploaded_document_to_highlight_pipeline import (                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         29     run_uploaded_document_to_highlight_pipeline,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         31 from .uploaded_document_registry_to_active_target_set_pipeline import (      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         32     run_uploaded_document_registry_to_active_target_set_pipeline,            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         64     1. Uploaded Document-to-UDUC Pipeline                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         65     2. Uploaded Document-to-Highlight Pipeline                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         66     3. Uploaded Document Registry-to-Active Target Set Pipeline              
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         69     pipeline_2 = await run_uploaded_document_to_uduc_pipeline(               
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         77             "Uploaded Document-to-UDUC Pipeline returned "                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         85             "status": "UDUC_PIPELINE_FAILED",                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         89                 "uploaded_document_to_uduc_pipeline": pipeline_2,            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         90                 "uploaded_document_to_highlight_pipeline": {                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py         94                 "uploaded_document_registry_to_active_target_set_pipeline": {
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        140     pipeline_1 = run_uploaded_document_to_highlight_pipeline(                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        149         run_uploaded_document_registry_to_active_target_set_pipeline(        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        208             "uploaded_document_to_uduc_pipeline",                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        209             "uploaded_document_to_highlight_pipeline",                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        211                 "uploaded_document_registry_to_"                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        212                 "active_target_set_pipeline"                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        216             "uploaded_document_to_uduc_pipeline": pipeline_2,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        217             "uploaded_document_to_highlight_pipeline": pipeline_1,           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        219                 "uploaded_document_registry_to_"                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        220                 "active_target_set_pipeline"                                 
+
+
+
+
+Path                                                                                                                              LineNumber Line                                                                       
+----                                                                                                                              ---------- ----                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py          2 Uploaded Document-to-Highlight Pipeline                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py          7     -> Uploaded Document-to-Highlight Pipeline                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         10 Downstream stages remain in their existing production locations and are not
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         41 def run_uploaded_document_to_highlight_pipeline(                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py         50     Canonical entry point for the Uploaded Document-to-Highlight Pipeline. 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        123         "pipeline": "uploaded_document_to_highlight_pipeline",             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_highlight_pipeline\coordinator.py        135     "run_uploaded_document_to_highlight_pipeline",                         
+
+
+
+
+Path                                                                                                                         LineNumber Line                                                                      
+----                                                                                                                         ---------- ----                                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py          2 Uploaded Document-to-UDUC Pipeline                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py          8     -> Uploaded Document-to-UDUC Pipeline Coordinator                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         14 The worker, format detection, format router, extractor, and UDUC internals
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         30 async def run_uploaded_document_to_uduc_pipeline(                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         37     Canonical entry point for the Uploaded Document-to-UDUC Pipeline.     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         51             "Uploaded Document-to-UDUC upload intake returned "           
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         55     result["pipeline"] = "uploaded_document_to_uduc_pipeline"             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         57         "run_uploaded_document_to_uduc_pipeline"                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py         64     "run_uploaded_document_to_uduc_pipeline",                             
+
+
+
+
+Path                                                                                                                                               LineNumber Line                                                                     
+----                                                                                                                                               ---------- ----                                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py          2 Uploaded Document Registry-to-Active Target Set Pipeline                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py          7     -> Uploaded Document Registry-to-Active Target Set Pipeline          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         10 Downstream registry and Active Target Set stages remain in their existing
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         24 def run_uploaded_document_registry_to_active_target_set_pipeline(        
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         31     Canonical entry point for the Uploaded Document Registry-to-Active   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         49             "uploaded_document_registry_to_active_target_set_pipeline"   
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\uploaded_document_registry_to_active_target_set_pipeline\coordinator.py         61     "run_uploaded_document_registry_to_active_target_set_pipeline",      
+
+
+
+
+Path                                                                            LineNumber Line                                
+----                                                                            ---------- ----                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        261         "seed_registry_initialized",
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        635             "Seed Registry",        
+
+
+
+
+============================================================
+SECTION 7 - EXISTING EXPLAIN / INSPECTION CONTRACTS
+============================================================
+
+Path                                                                                     LineNumber Line                                             
+----                                                                                     ---------- ----                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py         99         "schema_version": "workspace_profile_v2",
+
+
+
+
+
+Path                                                                                                                LineNumber Line                                                  
+----                                                                                                                ---------- ----                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py        145         "schema_version": "live_domain_connection_v1",
+
+
+
+
+Path                                                                                      LineNumber Line                                                  
+----                                                                                      ---------- ----                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py        176         # Canonical HTTP upload compatibility contract
+
+
+
+
+
+
+
+Path                                                                            LineNumber Line                                                           
+----                                                                            ---------- ----                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py         54 CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION = (                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        170             limits.to_dict()                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        561         "schema_version": (                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        562             CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION         
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        584         "limits": session.limits.to_dict(),                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        586             session.statistics.to_dict()                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        592 def explain_crawler_session_coordinator_v1() -> Dict[str, Any]:
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        593     """Return the inspectable coordinator contract."""         
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        598         "schema_version": (                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        599             CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION         
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        647     "CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION",              
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py        651     "explain_crawler_session_coordinator_v1",                  
+
+
+
+
+============================================================
+SECTION 8 - CURRENT UNIVERSAL WORKFLOW CONTRACT
+============================================================
+"""
+LinkCraftor Universal Workflow Contract
+=======================================
+
+Canonical immutable contract representing one complete coordinated workflow
+execution.
+
+This module belongs to the Universal Coordination Framework.
+
+It is intentionally pure:
+- no I/O
+- no queue access
+- no worker access
+- no Runtime Registration
+- no pipeline-specific business logic
+- no mutable global workflow state
+
+A Universal Workflow may coordinate many Universal Runtime jobs, but it does
+not execute those jobs itself.
+"""
+
+from __future__ import annotations
+
+import enum
+import hashlib
+import json
+from dataclasses import dataclass, field, fields
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Final, Mapping, Optional, Tuple
+
+
+# ============================================================================
+# 1. Contract identity
+# ============================================================================
+
+UNIVERSAL_WORKFLOW_CONTRACT_ID: Final[str] = (
+    "urn:linkcraftor:coordination:universal-workflow-contract"
+)
+
+UNIVERSAL_WORKFLOW_CONTRACT_VERSION: Final[str] = (
+    "universal_workflow_contract_v1.1.0"
+)
+
+UNIVERSAL_WORKFLOW_SCHEMA_VERSION: Final[str] = (
+    "universal_workflow_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Canonical required fields
+# ============================================================================
+
+REQUIRED_UNIVERSAL_WORKFLOW_FIELDS: Final[Tuple[str, ...]] = (
+    # Identity
+    "workflow_id",
+    "workflow_type",
+    "workflow_version",
+    "workspace_id",
+
+    # Ownership / coordination
+    "coordinator_id",
+    "coordinator_version",
+
+    # Correlation
+    "correlation_id",
+    "parent_workflow_id",
+    "root_workflow_id",
+
+    # Lifecycle
+    "status",
+
+    # Workflow data
+    "input_reference",
+    "context",
+    "metadata",
+
+    # Stage-state summaries
+    "current_stage",
+    "completed_stages",
+    "pending_stages",
+    "failed_stages",
+    "skipped_stages",
+
+    # Results / evidence
+    "result_reference",
+    "artifact_references",
+
+    # Idempotency
+    "idempotency_key",
+
+    # Timestamps
+    "created_at",
+    "started_at",
+    "updated_at",
+    "completed_at",
+    "failed_at",
+    "cancelled_at",
+
+    # Failure
+    "failure_code",
+    "failure_message",
+    "failure_details",
+
+    # Contract identity
+    "contract_version",
+)
+
+
+# ============================================================================
+# 3. Errors
+# ============================================================================
+
+class UniversalWorkflowContractError(ValueError):
+    """Raised when a Universal Workflow violates the canonical contract."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        violations: Tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.violations = tuple(violations)
+
+
+# ============================================================================
+# 4. Workflow lifecycle status
+# ============================================================================
+
+class UniversalWorkflowStatus(str, enum.Enum):
+    CREATED = "CREATED"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    WAITING = "WAITING"
+    PAUSED = "PAUSED"
+    RECOVERING = "RECOVERING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    ABORTED = "ABORTED"
+
+    @classmethod
+    def coerce(cls, value: Any) -> "UniversalWorkflowStatus":
+        if isinstance(value, cls):
+            return value
+
+        if not isinstance(value, str):
+            raise UniversalWorkflowContractError(
+                "workflow status must be a string or UniversalWorkflowStatus"
+            )
+
+        normalized = value.strip().upper()
+
+        try:
+            return cls(normalized)
+        except ValueError as exc:
+            raise UniversalWorkflowContractError(
+                f"unknown workflow status: {value!r}"
+            ) from exc
+
+
+TERMINAL_WORKFLOW_STATUSES: Final[frozenset[UniversalWorkflowStatus]] = (
+    frozenset(
+        {
+            UniversalWorkflowStatus.COMPLETED,
+            UniversalWorkflowStatus.FAILED,
+            UniversalWorkflowStatus.CANCELLED,
+            UniversalWorkflowStatus.ABORTED,
+        }
+    )
+)
+
+
+# ============================================================================
+# 5. Immutable mapping helpers
+# ============================================================================
+
+_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+_EMPTY_TUPLE: Final[Tuple[str, ...]] = ()
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType(
+            {
+                str(key): _freeze(item)
+                for key, item in value.items()
+            }
+        )
+
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+
+    if isinstance(value, tuple):
+        return tuple(_freeze(item) for item in value)
+
+    if isinstance(value, set):
+        return tuple(
+            sorted(
+                (_freeze(item) for item in value),
+                key=repr,
+            )
+        )
+
+    return value
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): _thaw(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+
+    return value
+
+
+# ============================================================================
+# 6. Validation helpers
+# ============================================================================
+
+def _require_nonempty_string(
+    value: Any,
+    *,
+    name: str,
+    violations: list[str],
+) -> str:
+    if not isinstance(value, str):
+        violations.append(f"{name} must be a string")
+        return ""
+
+    normalized = value.strip()
+
+    if not normalized:
+        violations.append(f"{name} must be non-empty")
+
+    return normalized
+
+
+def _optional_string(
+    value: Any,
+    *,
+    name: str,
+    violations: list[str],
+) -> Optional[str]:
+    if value is None:
+        return None
+
+    if not isinstance(value, str):
+        violations.append(f"{name} must be a string or None")
+        return None
+
+    normalized = value.strip()
+
+    return normalized or None
+
+
+def _normalize_string_tuple(
+    value: Any,
+    *,
+    name: str,
+    violations: list[str],
+) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        violations.append(f"{name} must be a list or tuple of strings")
+        return ()
+
+    normalized: list[str] = []
+
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            violations.append(
+                f"{name}[{index}] must be a string"
+            )
+            continue
+
+        item = item.strip()
+
+        if not item:
+            violations.append(
+                f"{name}[{index}] must be non-empty"
+            )
+            continue
+
+        if item not in normalized:
+            normalized.append(item)
+
+    return tuple(normalized)
+
+
+def _normalize_mapping(
+    value: Any,
+    *,
+    name: str,
+    violations: list[str],
+) -> Mapping[str, Any]:
+    if value is None:
+        return _EMPTY_MAPPING
+
+    if not isinstance(value, Mapping):
+        violations.append(f"{name} must be a mapping")
+        return _EMPTY_MAPPING
+
+    return _freeze(value)
+
+
+def _normalize_timestamp(
+    value: Any,
+    *,
+    name: str,
+    required: bool,
+    violations: list[str],
+) -> Optional[str]:
+    if value is None:
+        if required:
+            violations.append(f"{name} is required")
+        return None
+
+    if not isinstance(value, str):
+        violations.append(f"{name} must be an ISO-8601 string or None")
+        return None
+
+    normalized = value.strip()
+
+    if not normalized:
+        if required:
+            violations.append(f"{name} must be non-empty")
+        return None
+
+    candidate = normalized
+
+    if candidate.endswith("Z"):
+        candidate = candidate[:-1] + "+00:00"
+
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        violations.append(
+            f"{name} must be a valid ISO-8601 timestamp"
+        )
+        return normalized
+
+    if parsed.tzinfo is None:
+        violations.append(
+            f"{name} must include timezone information"
+        )
+        return normalized
+
+    utc_value = parsed.astimezone(timezone.utc)
+
+    return utc_value.isoformat().replace("+00:00", "Z")
+
+
+def _canonical_json(value: Any) -> str:
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    )
+
+
+def _fingerprint(text: str) -> str:
+    return hashlib.sha256(
+        text.encode("utf-8")
+    ).hexdigest()
+
+
+# ============================================================================
+# 7. Validation report
+# ============================================================================
+
+@dataclass(frozen=True, slots=True)
+class UniversalWorkflowValidationReport:
+    is_valid: bool
+    violations: Tuple[str, ...] = ()
+    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+    checked_field_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "is_valid": self.is_valid,
+            "violations": list(self.violations),
+            "contract_version": self.contract_version,
+            "checked_field_count": self.checked_field_count,
+        }
+
+
+# ============================================================================
+# 8. Universal Workflow
+# ============================================================================
+
+@dataclass(frozen=True, slots=True)
+class UniversalWorkflow:
+    """
+    Canonical immutable representation of one coordinated workflow execution.
+
+    This object describes workflow identity and coordination state. It does not
+    execute stages or runtime jobs.
+    """
+
+    # Identity
+    workflow_id: str
+    workflow_type: str
+    workflow_version: str
+    workspace_id: str
+
+    # Coordinator identity
+    coordinator_id: str
+    coordinator_version: str
+
+    # Correlation
+    correlation_id: str
+    parent_workflow_id: Optional[str]
+    root_workflow_id: str
+
+    # Lifecycle
+    status: UniversalWorkflowStatus
+
+    # Workflow input/context
+    input_reference: Optional[str]
+    context: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    # Stage summaries
+    current_stage: Optional[str] = None
+    completed_stages: Tuple[str, ...] = ()
+    pending_stages: Tuple[str, ...] = ()
+    failed_stages: Tuple[str, ...] = ()
+    skipped_stages: Tuple[str, ...] = ()
+
+    # Result/evidence
+    result_reference: Optional[str] = None
+    artifact_references: Tuple[str, ...] = ()
+
+    # Duplicate protection
+    idempotency_key: Optional[str] = None
+
+    # Timestamps
+    created_at: str = ""
+    started_at: Optional[str] = None
+    updated_at: str = ""
+    completed_at: Optional[str] = None
+    failed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
+
+    # Failure
+    failure_code: Optional[str] = None
+    failure_message: Optional[str] = None
+    failure_details: Mapping[str, Any] = field(default_factory=dict)
+
+    # Contract
+    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        violations: list[str] = []
+
+        workflow_id = _require_nonempty_string(
+            self.workflow_id,
+            name="workflow_id",
+            violations=violations,
+        )
+
+        workflow_type = _require_nonempty_string(
+            self.workflow_type,
+            name="workflow_type",
+            violations=violations,
+        )
+
+        workflow_version = _require_nonempty_string(
+            self.workflow_version,
+            name="workflow_version",
+            violations=violations,
+        )
+
+        workspace_id = _require_nonempty_string(
+            self.workspace_id,
+            name="workspace_id",
+            violations=violations,
+        )
+
+        coordinator_id = _require_nonempty_string(
+            self.coordinator_id,
+            name="coordinator_id",
+            violations=violations,
+        )
+
+        coordinator_version = _require_nonempty_string(
+            self.coordinator_version,
+            name="coordinator_version",
+            violations=violations,
+        )
+
+        correlation_id = _require_nonempty_string(
+            self.correlation_id,
+            name="correlation_id",
+            violations=violations,
+        )
+
+        parent_workflow_id = _optional_string(
+            self.parent_workflow_id,
+            name="parent_workflow_id",
+            violations=violations,
+        )
+
+        root_workflow_id = _require_nonempty_string(
+            self.root_workflow_id,
+            name="root_workflow_id",
+            violations=violations,
+        )
+
+        try:
+            status = UniversalWorkflowStatus.coerce(
+                self.status
+            )
+        except UniversalWorkflowContractError as exc:
+            violations.extend(
+                exc.violations or (str(exc),)
+            )
+            status = UniversalWorkflowStatus.CREATED
+
+        input_reference = _optional_string(
+            self.input_reference,
+            name="input_reference",
+            violations=violations,
+        )
+
+        current_stage = _optional_string(
+            self.current_stage,
+            name="current_stage",
+            violations=violations,
+        )
+
+        result_reference = _optional_string(
+            self.result_reference,
+            name="result_reference",
+            violations=violations,
+        )
+
+        idempotency_key = _optional_string(
+            self.idempotency_key,
+            name="idempotency_key",
+            violations=violations,
+        )
+
+        failure_code = _optional_string(
+            self.failure_code,
+            name="failure_code",
+            violations=violations,
+        )
+
+        failure_message = _optional_string(
+            self.failure_message,
+            name="failure_message",
+            violations=violations,
+        )
+
+        context = _normalize_mapping(
+            self.context,
+            name="context",
+            violations=violations,
+        )
+
+        metadata = _normalize_mapping(
+            self.metadata,
+            name="metadata",
+            violations=violations,
+        )
+
+        failure_details = _normalize_mapping(
+            self.failure_details,
+            name="failure_details",
+            violations=violations,
+        )
+
+        completed_stages = _normalize_string_tuple(
+            self.completed_stages,
+            name="completed_stages",
+            violations=violations,
+        )
+
+        pending_stages = _normalize_string_tuple(
+            self.pending_stages,
+            name="pending_stages",
+            violations=violations,
+        )
+
+        failed_stages = _normalize_string_tuple(
+            self.failed_stages,
+            name="failed_stages",
+            violations=violations,
+        )
+
+        skipped_stages = _normalize_string_tuple(
+            self.skipped_stages,
+            name="skipped_stages",
+            violations=violations,
+        )
+
+        artifact_references = _normalize_string_tuple(
+            self.artifact_references,
+            name="artifact_references",
+            violations=violations,
+        )
+
+        created_at = _normalize_timestamp(
+            self.created_at,
+            name="created_at",
+            required=True,
+            violations=violations,
+        )
+
+        updated_at = _normalize_timestamp(
+            self.updated_at,
+            name="updated_at",
+            required=True,
+            violations=violations,
+        )
+
+        started_at = _normalize_timestamp(
+            self.started_at,
+            name="started_at",
+            required=False,
+            violations=violations,
+        )
+
+        completed_at = _normalize_timestamp(
+            self.completed_at,
+            name="completed_at",
+            required=False,
+            violations=violations,
+        )
+
+        failed_at = _normalize_timestamp(
+            self.failed_at,
+            name="failed_at",
+            required=False,
+            violations=violations,
+        )
+
+        cancelled_at = _normalize_timestamp(
+            self.cancelled_at,
+            name="cancelled_at",
+            required=False,
+            violations=violations,
+        )
+
+        contract_version = _require_nonempty_string(
+            self.contract_version,
+            name="contract_version",
+            violations=violations,
+        )
+
+        if contract_version != UNIVERSAL_WORKFLOW_CONTRACT_VERSION:
+            violations.append(
+                "contract_version must be "
+                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+            )
+
+        # ------------------------------------------------------------------
+        # Cross-field invariants
+        # ------------------------------------------------------------------
+
+        if parent_workflow_id is None:
+            if root_workflow_id != workflow_id:
+                violations.append(
+                    "a root workflow must have root_workflow_id equal to workflow_id"
+                )
+        else:
+            if parent_workflow_id == workflow_id:
+                violations.append(
+                    "parent_workflow_id cannot equal workflow_id"
+                )
+
+        stage_sets = {
+            "completed": set(completed_stages),
+            "pending": set(pending_stages),
+            "failed": set(failed_stages),
+            "skipped": set(skipped_stages),
+        }
+
+        names = tuple(stage_sets)
+
+        for index, left_name in enumerate(names):
+            for right_name in names[index + 1:]:
+                overlap = (
+                    stage_sets[left_name]
+                    & stage_sets[right_name]
+                )
+
+                if overlap:
+                    violations.append(
+                        f"stages cannot be both {left_name} and "
+                        f"{right_name}: {', '.join(sorted(overlap))}"
+                    )
+
+        if (
+            current_stage is not None
+            and current_stage in set(completed_stages)
+        ):
+            violations.append(
+                "current_stage cannot already be completed"
+            )
+
+        if (
+            current_stage is not None
+            and current_stage in set(failed_stages)
+        ):
+            violations.append(
+                "current_stage cannot already be failed"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.COMPLETED
+            and completed_at is None
+        ):
+            violations.append(
+                "completed_at is required when status is COMPLETED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.FAILED
+            and failed_at is None
+        ):
+            violations.append(
+                "failed_at is required when status is FAILED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.CANCELLED
+            and cancelled_at is None
+        ):
+            violations.append(
+                "cancelled_at is required when status is CANCELLED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.FAILED
+            and failure_code is None
+        ):
+            violations.append(
+                "failure_code is required when status is FAILED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.COMPLETED
+            and failed_stages
+        ):
+            violations.append(
+                "COMPLETED workflow cannot contain failed_stages"
+            )
+
+        if (
+            created_at is not None
+            and updated_at is not None
+        ):
+            created_dt = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")
+            )
+            updated_dt = datetime.fromisoformat(
+                updated_at.replace("Z", "+00:00")
+            )
+
+            if updated_dt < created_dt:
+                violations.append(
+                    "updated_at cannot be earlier than created_at"
+                )
+
+        if violations:
+            raise UniversalWorkflowContractError(
+                "Universal Workflow Contract validation failed",
+                violations=tuple(violations),
+            )
+
+        object.__setattr__(self, "workflow_id", workflow_id)
+        object.__setattr__(self, "workflow_type", workflow_type)
+        object.__setattr__(self, "workflow_version", workflow_version)
+        object.__setattr__(self, "workspace_id", workspace_id)
+        object.__setattr__(self, "coordinator_id", coordinator_id)
+        object.__setattr__(self, "coordinator_version", coordinator_version)
+        object.__setattr__(self, "correlation_id", correlation_id)
+        object.__setattr__(self, "parent_workflow_id", parent_workflow_id)
+        object.__setattr__(self, "root_workflow_id", root_workflow_id)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "input_reference", input_reference)
+        object.__setattr__(self, "context", context)
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "current_stage", current_stage)
+        object.__setattr__(self, "completed_stages", completed_stages)
+        object.__setattr__(self, "pending_stages", pending_stages)
+        object.__setattr__(self, "failed_stages", failed_stages)
+        object.__setattr__(self, "skipped_stages", skipped_stages)
+        object.__setattr__(self, "result_reference", result_reference)
+        object.__setattr__(self, "artifact_references", artifact_references)
+        object.__setattr__(self, "idempotency_key", idempotency_key)
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "started_at", started_at)
+        object.__setattr__(self, "updated_at", updated_at)
+        object.__setattr__(self, "completed_at", completed_at)
+        object.__setattr__(self, "failed_at", failed_at)
+        object.__setattr__(self, "cancelled_at", cancelled_at)
+        object.__setattr__(self, "failure_code", failure_code)
+        object.__setattr__(self, "failure_message", failure_message)
+        object.__setattr__(self, "failure_details", failure_details)
+        object.__setattr__(self, "contract_version", contract_version)
+
+    # ======================================================================
+    # Serialization
+    # ======================================================================
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "workflow_type": self.workflow_type,
+            "workflow_version": self.workflow_version,
+            "workspace_id": self.workspace_id,
+            "coordinator_id": self.coordinator_id,
+            "coordinator_version": self.coordinator_version,
+            "correlation_id": self.correlation_id,
+            "parent_workflow_id": self.parent_workflow_id,
+            "root_workflow_id": self.root_workflow_id,
+            "status": self.status.value,
+            "input_reference": self.input_reference,
+            "context": _thaw(self.context),
+            "metadata": _thaw(self.metadata),
+            "current_stage": self.current_stage,
+            "completed_stages": list(self.completed_stages),
+            "pending_stages": list(self.pending_stages),
+            "failed_stages": list(self.failed_stages),
+            "skipped_stages": list(self.skipped_stages),
+            "result_reference": self.result_reference,
+            "artifact_references": list(self.artifact_references),
+            "idempotency_key": self.idempotency_key,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "completed_at": self.completed_at,
+            "failed_at": self.failed_at,
+            "cancelled_at": self.cancelled_at,
+            "failure_code": self.failure_code,
+            "failure_message": self.failure_message,
+            "failure_details": _thaw(self.failure_details),
+            "contract_version": self.contract_version,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_canonical_dict()
+
+    def to_canonical_json(self) -> str:
+        return _canonical_json(
+            self.to_canonical_dict()
+        )
+
+    # ======================================================================
+    # Schema
+    # ======================================================================
+
+    @classmethod
+    def required_fields(cls) -> Tuple[str, ...]:
+        return REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+
+    @classmethod
+    def schema(cls) -> Mapping[str, Any]:
+        return MappingProxyType(
+            {
+                "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+                "contract_version": UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+                "schema_version": UNIVERSAL_WORKFLOW_SCHEMA_VERSION,
+                "required_fields": REQUIRED_UNIVERSAL_WORKFLOW_FIELDS,
+            }
+        )
+
+    # ======================================================================
+    # Reconstruction
+    # ======================================================================
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalWorkflow":
+        if not isinstance(data, Mapping):
+            raise UniversalWorkflowContractError(
+                "workflow data must be a mapping"
+            )
+
+        unknown_fields = sorted(
+            set(data) - _CONTRACT_CONSTRUCTOR_FIELDS
+        )
+
+        if unknown_fields:
+            raise UniversalWorkflowContractError(
+                "unknown universal workflow fields: "
+                + ", ".join(unknown_fields),
+                violations=tuple(
+                    "unknown field: " + name
+                    for name in unknown_fields
+                ),
+            )
+
+        missing_fields = tuple(
+            name
+            for name in REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+            if name not in data
+        )
+
+        if missing_fields:
+            raise UniversalWorkflowContractError(
+                "missing required universal workflow fields: "
+                + ", ".join(missing_fields),
+                violations=tuple(
+                    "missing required field: " + name
+                    for name in missing_fields
+                ),
+            )
+
+        kwargs = dict(data)
+
+        kwargs["status"] = UniversalWorkflowStatus.coerce(
+            kwargs["status"]
+        )
+
+        return cls(**kwargs)
+
+    @classmethod
+    def from_json(
+        cls,
+        text: str,
+    ) -> "UniversalWorkflow":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise UniversalWorkflowContractError(
+                "workflow json is not decodable: "
+                + str(exc)
+            ) from exc
+
+        return cls.from_dict(data)
+
+    @classmethod
+    def reconstruct(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalWorkflow":
+        return cls.from_dict(data)
+
+    # ======================================================================
+    # Identity / evidence
+    # ======================================================================
+
+    def identity_fingerprint(self) -> str:
+        material = {
+            "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+            "contract_version": self.contract_version,
+            "workflow_id": self.workflow_id,
+            "workflow_type": self.workflow_type,
+            "workflow_version": self.workflow_version,
+            "workspace_id": self.workspace_id,
+            "root_workflow_id": self.root_workflow_id,
+            "correlation_id": self.correlation_id,
+        }
+
+        return _fingerprint(
+            _canonical_json(material)
+        )
+
+    def content_fingerprint(self) -> str:
+        return _fingerprint(
+            self.to_canonical_json()
+        )
+
+    def validate(self) -> UniversalWorkflowValidationReport:
+        return validate_universal_workflow(self)
+
+
+_CONTRACT_CONSTRUCTOR_FIELDS: Final[frozenset[str]] = frozenset(
+    item.name
+    for item in fields(UniversalWorkflow)
+)
+
+
+# ============================================================================
+# 9. Standalone validation
+# ============================================================================
+
+def validate_universal_workflow(
+    candidate: Any,
+) -> UniversalWorkflowValidationReport:
+
+    if isinstance(candidate, UniversalWorkflow):
+        return UniversalWorkflowValidationReport(
+            is_valid=True,
+            violations=_EMPTY_TUPLE,
+            contract_version=candidate.contract_version,
+            checked_field_count=len(
+                REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+            ),
+        )
+
+    if not isinstance(candidate, Mapping):
+        return UniversalWorkflowValidationReport(
+            is_valid=False,
+            violations=(
+                "candidate must be a UniversalWorkflow or mapping",
+            ),
+            checked_field_count=0,
+        )
+
+    try:
+        reconstructed = UniversalWorkflow.from_dict(candidate)
+    except UniversalWorkflowContractError as exc:
+        return UniversalWorkflowValidationReport(
+            is_valid=False,
+            violations=(
+                tuple(exc.violations)
+                or (str(exc),)
+            ),
+            checked_field_count=len(
+                REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+            ),
+        )
+
+    return UniversalWorkflowValidationReport(
+        is_valid=True,
+        violations=_EMPTY_TUPLE,
+        contract_version=reconstructed.contract_version,
+        checked_field_count=len(
+            REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+        ),
+    )
+
+
+__all__ = [
+    "UNIVERSAL_WORKFLOW_CONTRACT_ID",
+    "UNIVERSAL_WORKFLOW_CONTRACT_VERSION",
+    "UNIVERSAL_WORKFLOW_SCHEMA_VERSION",
+    "REQUIRED_UNIVERSAL_WORKFLOW_FIELDS",
+    "TERMINAL_WORKFLOW_STATUSES",
+    "UniversalWorkflow",
+    "UniversalWorkflowStatus",
+    "UniversalWorkflowValidationReport",
+    "UniversalWorkflowContractError",
+    "validate_universal_workflow",
+]
+
+============================================================
+SECTION 9 - PACKAGE STRUCTURE
+============================================================
+
+FullName                                                                                                               Length LastWriteTime      
+--------                                                                                                               ------ -------------      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows                                             8/9/2026 2:34:54 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\__pycache__                                                     8/9/2026 2:34:54 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\__init__.py                                              49     8/9/2026 2:34:20 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\__pycache__                                 8/9/2026 2:34:54 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                          30384  8/9/2026 2:34:24 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\__init__.py                          52     8/9/2026 2:34:20 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\__pycache__\contract.cpython-313.pyc 29153  8/9/2026 2:34:54 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\__pycache__\__init__.cpython-313.pyc 249    8/9/2026 2:34:54 AM
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\__pycache__\__init__.cpython-313.pyc                     226    8/9/2026 2:34:54 AM
+
+
+
+
+============================================================
+SCAN COMPLETE
+============================================================
+Inspection only.
+No production files were modified.
+============================================================

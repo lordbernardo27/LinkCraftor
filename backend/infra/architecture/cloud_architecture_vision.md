@@ -1,6 +1,6 @@
 ﻿# LinkCraftor Cloud Architecture Vision
 
-Version: 1.0
+Version: 1.1
 Status: Canonical
 Phase: Cloud Infrastructure Architecture
 Section: 1.1.1 Cloud Architecture Vision
@@ -37,6 +37,10 @@ The infrastructure shall be designed to:
 - Support plugin infrastructure
 - Support future AI services
 - Support global deployment
+- Support Multi-Availability-Zone production deployment
+- Support controlled regional disaster recovery
+- Support backup and recovery operations
+- Support regional failover readiness
 
 ---
 
@@ -77,6 +81,10 @@ Each environment shall remain isolated.
 - Cost Awareness
 - Tenant Isolation
 - Fault Isolation
+- Availability Zone Isolation
+- Regional Resilience
+- Disaster Recovery Readiness
+- Data Residency Awareness
 - Zero Single Point of Failure
 
 ---
@@ -90,6 +98,8 @@ Future capabilities include:
 
 - Multi-Region Deployment
 - Global Traffic Routing
+- Cross-Region Disaster Recovery
+- Controlled Cross-Region Replication
 - AI Infrastructure
 - Enterprise APIs
 - Plugin Ecosystem
@@ -114,3 +124,4 @@ LinkCraftor Architecture
 
 Status:
 CANONICAL
+

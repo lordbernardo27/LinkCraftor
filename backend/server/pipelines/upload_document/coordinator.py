@@ -1,4 +1,4 @@
-﻿"""
+"""
 Canonical Upload Document Coordinator
 
 Dependency-aware execution:
@@ -172,11 +172,30 @@ async def run_upload_document(
     )
 
     return {
+        # ------------------------------------------------------------
+        # Canonical HTTP upload compatibility contract
+        # ------------------------------------------------------------
+        # The editor upload client consumes these fields directly.
+        # Pipeline 2 remains the authoritative producer.
         "ok": overall_ok,
-        "pipeline": "upload_document",
         "workspace_id": str(
             pipeline_2.get("workspace_id") or workspace_id
         ),
+        "doc": document_metadata,
+        "filename": pipeline_2.get("filename")
+        or document_metadata.get("filename")
+        or document_metadata.get("title")
+        or "",
+        "ext": pipeline_2.get("ext") or "",
+        "text": pipeline_2.get("text") or "",
+        "html": pipeline_2.get("html") or "",
+        "is_html": pipeline_2.get("is_html", False),
+        "truncated": pipeline_2.get("truncated", False),
+
+        # ------------------------------------------------------------
+        # Canonical orchestration metadata
+        # ------------------------------------------------------------
+        "pipeline": "upload_document",
         "document_id": document_id,
         "status": (
             "UPLOAD_DOCUMENT_PIPELINES_COMPLETED"

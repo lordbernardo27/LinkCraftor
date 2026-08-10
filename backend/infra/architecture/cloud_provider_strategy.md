@@ -1,6 +1,6 @@
 ﻿# LinkCraftor Cloud Provider Strategy
 
-Version: 1.0
+Version: 1.1
 Status: Canonical
 Phase: Cloud Infrastructure Architecture
 Section: 1.1.2 Cloud Provider Strategy
@@ -20,7 +20,15 @@ used, future expansion policies, and governance rules.
 
 Amazon Web Services (AWS)
 
-AWS is the official cloud platform for LinkCraftor.
+AWS is the official and primary cloud platform for LinkCraftor.
+
+LinkCraftor shall use AWS as its canonical production cloud provider unless
+a future architecture-governance decision explicitly approves an additional
+provider.
+
+The use of AWS as the primary provider does not require LinkCraftor business
+logic to become unnecessarily dependent on provider-specific implementation
+details where portable architecture is practical.
 
 ---
 
@@ -31,7 +39,10 @@ The cloud platform shall provide:
 - Enterprise-grade reliability
 - Global scalability
 - High availability
+- Multi-Availability-Zone deployment
 - Multi-region deployment
+- Regional disaster-recovery capability
+- Controlled cross-region replication
 - Managed infrastructure
 - Strong security
 - Mature AI ecosystem
@@ -70,10 +81,12 @@ The cloud platform shall provide:
 - Amazon ElastiCache
 - Amazon DynamoDB (where appropriate)
 
-## Identity
+## Identity and Organization Governance
 
 - AWS IAM
+- AWS IAM Identity Center
 - AWS Organizations
+- AWS Control Tower (Future, when organizational scale justifies adoption)
 
 ## Security
 
@@ -102,16 +115,41 @@ The platform may adopt additional AWS services provided they:
 
 ---
 
+# Provider Resilience Policy
+
+AWS must support LinkCraftor's required resilience architecture through:
+
+- Multiple Availability Zones
+- Multiple AWS Regions
+- Regional managed services where appropriate
+- Cross-region backup and replication where approved
+- Disaster-recovery infrastructure
+- Health-based routing and failover capabilities
+- Regional monitoring and observability
+- Secure cross-account and cross-region operations
+
+Specific primary, backup, disaster-recovery, and future expansion Regions are
+defined by the canonical Region Strategy rather than this provider document.
+
+---
+
 # Multi-Cloud Policy
 
 Current Strategy:
 
-Single Cloud Provider (AWS)
+Single Primary Cloud Provider (AWS)
+
+LinkCraftor does not require active multi-cloud production deployment for
+launch.
 
 Future Strategy:
 
 Multi-cloud support may be considered only if there is a demonstrated
-business or technical requirement.
+business, regulatory, resilience, customer, or technical requirement.
+
+Any future second-cloud adoption must be approved through architecture
+governance and must not weaken security, observability, data governance,
+runtime reliability, or operational control.
 
 ---
 
@@ -132,10 +170,36 @@ All new cloud services introduced into LinkCraftor must be reviewed for:
 - Security
 - Cost
 - Scalability
+- Availability
+- Regional support
+- Data residency
 - Operational impact
+- Disaster-recovery implications
+- Service quotas
 - Long-term maintainability
 
 before adoption.
+
+AWS accounts and workloads must follow the canonical LinkCraftor account,
+environment, ownership, logging, security, and resource-governance standards.
+
+The detailed list and lifecycle classification of approved AWS services is
+maintained by the Cloud Service Portfolio.
+
+---
+
+# Runtime Eligibility
+
+This Cloud Provider Strategy is an architecture and governance artifact.
+
+Runtime Eligibility:
+
+Not Runtime Eligible / N/A
+
+Executable cloud operations introduced later, including provisioning,
+inventory, compliance, failover, recovery, or provider-health workflows, must
+be assessed separately under the Universal Runtime Registration Standard where
+applicable.
 
 ---
 
@@ -153,3 +217,4 @@ LinkCraftor Architecture
 
 Status:
 CANONICAL
+

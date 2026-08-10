@@ -1,0 +1,2741 @@
+============================================================
+PHASE 9.1.13.2 - BACKUP LIFECYCLE INSPECTION
+============================================================
+
+============================================================
+FUNCTION: _build_executor_action_result_v1
+============================================================
+LINES: 8202-8576
+
+ 8202: def _build_executor_action_result_v1(
+ 8203:     *,
+ 8204:     repair_action_id: str,
+ 8205:     source_finding_id: str,
+ 8206:     repair_action_type: str,
+ 8207:     target_store: str,
+ 8208:     target_path: str | None,
+ 8209:     execution_mode: str,
+ 8210:     execution_status: str,
+ 8211:     execution_authorized: bool,
+ 8212:     mutation_attempted: bool,
+ 8213:     mutation_performed: bool,
+ 8214:     backup_record: Mapping[str, Any] | None = None,
+ 8215:     mutation_result: Mapping[str, Any] | None = None,
+ 8216:     rollback_result: Mapping[str, Any] | None = None,
+ 8217:     failure_reason: str | None = None,
+ 8218: ) -> Mapping[str, Any]:
+ 8219: 
+ 8220:     normalized_repair_action_id = (
+ 8221:         _require_string(
+ 8222:             repair_action_id,
+ 8223:             field_name="repair_action_id",
+ 8224:         )
+ 8225:     )
+ 8226: 
+ 8227:     normalized_source_finding_id = (
+ 8228:         _require_string(
+ 8229:             source_finding_id,
+ 8230:             field_name="source_finding_id",
+ 8231:         )
+ 8232:     )
+ 8233: 
+ 8234:     normalized_action_type = (
+ 8235:         _assert_supported_executor_action_type_v1(
+ 8236:             repair_action_type
+ 8237:         )
+ 8238:     )
+ 8239: 
+ 8240:     normalized_target_store = (
+ 8241:         _require_string(
+ 8242:             target_store,
+ 8243:             field_name="target_store",
+ 8244:         ).upper()
+ 8245:     )
+ 8246: 
+ 8247:     _validate_action_target_store_boundary_v1(
+ 8248:         repair_action_type=normalized_action_type,
+ 8249:         target_store=normalized_target_store,
+ 8250:     )
+ 8251: 
+ 8252:     normalized_execution_mode = (
+ 8253:         _normalize_execution_mode_v1(
+ 8254:             execution_mode
+ 8255:         )
+ 8256:     )
+ 8257: 
+ 8258:     normalized_execution_status = (
+ 8259:         _require_string(
+ 8260:             execution_status,
+ 8261:             field_name="execution_status",
+ 8262:         ).upper()
+ 8263:     )
+ 8264: 
+ 8265: 
+ 8266:     if (
+ 8267:         normalized_execution_status
+ 8268:         not in EXECUTOR_ACTION_RESULT_STATUSES
+ 8269:     ):
+ 8270:         raise LifecycleRepairExecutorEngineError(
+ 8271:             "Unsupported Executor action result status: "
+ 8272:             + normalized_execution_status
+ 8273:         )
+ 8274: 
+ 8275: 
+ 8276:     if not isinstance(
+ 8277:         execution_authorized,
+ 8278:         bool,
+ 8279:     ):
+ 8280:         raise LifecycleRepairExecutorEngineError(
+ 8281:             "execution_authorized must be boolean."
+ 8282:         )
+ 8283: 
+ 8284: 
+ 8285:     if not isinstance(
+ 8286:         mutation_attempted,
+ 8287:         bool,
+ 8288:     ):
+ 8289:         raise LifecycleRepairExecutorEngineError(
+ 8290:             "mutation_attempted must be boolean."
+ 8291:         )
+ 8292: 
+ 8293: 
+ 8294:     if not isinstance(
+ 8295:         mutation_performed,
+ 8296:         bool,
+ 8297:     ):
+ 8298:         raise LifecycleRepairExecutorEngineError(
+ 8299:             "mutation_performed must be boolean."
+ 8300:         )
+ 8301: 
+ 8302: 
+ 8303:     normalized_target_path: str | None = None
+ 8304: 
+ 8305:     if target_path is not None:
+ 8306: 
+ 8307:         normalized_target_path = (
+ 8308:             _require_string(
+ 8309:                 target_path,
+ 8310:                 field_name="target_path",
+ 8311:             )
+ 8312:         )
+ 8313: 
+ 8314: 
+ 8315:     # ---------------------------------------------------------
+ 8316:     # Normalize optional records.
+ 8317:     # ---------------------------------------------------------
+ 8318: 
+ 8319:     normalized_backup_record = (
+ 8320:         _require_mapping(
+ 8321:             backup_record,
+ 8322:             field_name="backup_record",
+ 8323:         )
+ 8324:         if backup_record is not None
+ 8325:         else None
+ 8326:     )
+ 8327: 
+ 8328: 
+ 8329:     normalized_mutation_result = (
+ 8330:         _require_mapping(
+ 8331:             mutation_result,
+ 8332:             field_name="mutation_result",
+ 8333:         )
+ 8334:         if mutation_result is not None
+ 8335:         else None
+ 8336:     )
+ 8337: 
+ 8338: 
+ 8339:     normalized_rollback_result = (
+ 8340:         _require_mapping(
+ 8341:             rollback_result,
+ 8342:             field_name="rollback_result",
+ 8343:         )
+ 8344:         if rollback_result is not None
+ 8345:         else None
+ 8346:     )
+ 8347: 
+ 8348: 
+ 8349:     # ---------------------------------------------------------
+ 8350:     # Result-state consistency.
+ 8351:     # ---------------------------------------------------------
+ 8352: 
+ 8353:     rollback_performed = (
+ 8354:         normalized_rollback_result is not None
+ 8355:         and normalized_rollback_result.get(
+ 8356:             "rollback_performed"
+ 8357:         )
+ 8358:         is True
+ 8359:     )
+ 8360: 
+ 8361: 
+ 8362:     rollback_verified = (
+ 8363:         normalized_rollback_result.get(
+ 8364:             "rollback_verified"
+ 8365:         )
+ 8366:         if normalized_rollback_result is not None
+ 8367:         else None
+ 8368:     )
+ 8369: 
+ 8370: 
+ 8371:     backup_created = (
+ 8372:         normalized_backup_record is not None
+ 8373:         and normalized_backup_record.get(
+ 8374:             "backup_created"
+ 8375:         )
+ 8376:         is True
+ 8377:     )
+ 8378: 
+ 8379: 
+ 8380:     if (
+ 8381:         normalized_execution_status
+ 8382:         == "DRY_RUN_VALIDATED"
+ 8383:     ):
+ 8384: 
+ 8385:         if execution_authorized:
+ 8386:             raise LifecycleRepairExecutorEngineError(
+ 8387:                 "DRY_RUN action result cannot be "
+ 8388:                 "execution-authorized."
+ 8389:             )
+ 8390: 
+ 8391:         if (
+ 8392:             mutation_attempted
+ 8393:             or mutation_performed
+ 8394:         ):
+ 8395:             raise LifecycleRepairExecutorEngineError(
+ 8396:                 "DRY_RUN action result cannot report "
+ 8397:                 "a mutation attempt or mutation."
+ 8398:             )
+ 8399: 
+ 8400: 
+ 8401:     if (
+ 8402:         normalized_execution_status
+ 8403:         == "EXECUTED"
+ 8404:         and (
+ 8405:             execution_authorized is not True
+ 8406:             or mutation_attempted is not True
+ 8407:             or mutation_performed is not True
+ 8408:             or rollback_performed
+ 8409:         )
+ 8410:     ):
+ 8411:         raise LifecycleRepairExecutorEngineError(
+ 8412:             "EXECUTED action result has an "
+ 8413:             "inconsistent execution state."
+ 8414:         )
+ 8415: 
+ 8416: 
+ 8417:     if (
+ 8418:         normalized_execution_status
+ 8419:         == "SKIPPED"
+ 8420:         and mutation_performed
+ 8421:     ):
+ 8422:         raise LifecycleRepairExecutorEngineError(
+ 8423:             "SKIPPED action cannot report a mutation."
+ 8424:         )
+ 8425: 
+ 8426: 
+ 8427:     if (
+ 8428:         normalized_execution_status
+ 8429:         in (
+ 8430:             "NOT_EXECUTED",
+ 8431:             "REJECTED",
+ 8432:         )
+ 8433:         and mutation_performed
+ 8434:     ):
+ 8435:         raise LifecycleRepairExecutorEngineError(
+ 8436:             normalized_execution_status
+ 8437:             + " action cannot report a mutation."
+ 8438:         )
+ 8439: 
+ 8440: 
+ 8441:     if (
+ 8442:         rollback_performed
+ 8443:         and rollback_verified is not True
+ 8444:     ):
+ 8445:         # We still allow FAILED results to record an
+ 8446:         # unsuccessful rollback, but never describe the repair
+ 8447:         # itself as successfully executed.
+ 8448:         repair_executed = False
+ 8449: 
+ 8450:     else:
+ 8451: 
+ 8452:         repair_executed = all(
+ 8453:             (
+ 8454:                 normalized_execution_status
+ 8455:                 == "EXECUTED",
+ 8456: 
+ 8457:                 execution_authorized,
+ 8458:                 mutation_attempted,
+ 8459:                 mutation_performed,
+ 8460: 
+ 8461:                 not rollback_performed,
+ 8462:             )
+ 8463:         )
+ 8464: 
+ 8465: 
+ 8466:     normalized_failure_reason: str | None = None
+ 8467: 
+ 8468:     if failure_reason is not None:
+ 8469: 
+ 8470:         normalized_failure_reason = (
+ 8471:             _require_string(
+ 8472:                 failure_reason,
+ 8473:                 field_name="failure_reason",
+ 8474:             )
+ 8475:         )
+ 8476: 
+ 8477: 
+ 8478:     if (
+ 8479:         normalized_execution_status
+ 8480:         == "FAILED"
+ 8481:         and normalized_failure_reason is None
+ 8482:     ):
+ 8483:         raise LifecycleRepairExecutorEngineError(
+ 8484:             "FAILED action result requires "
+ 8485:             "a failure_reason."
+ 8486:         )
+ 8487: 
+ 8488: 
+ 8489:     result = {
+ 8490:         "schema":
+ 8491:             BODY_STORE_LIFECYCLE_REPAIR_ACTION_RESULT_SCHEMA,
+ 8492: 
+ 8493:         "executor_engine_schema":
+ 8494:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+ 8495: 
+ 8496:         "executor_engine_version":
+ 8497:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+ 8498: 
+ 8499:         "repair_action_id":
+ 8500:             normalized_repair_action_id,
+ 8501: 
+ 8502:         "source_finding_id":
+ 8503:             normalized_source_finding_id,
+ 8504: 
+ 8505:         "repair_action_type":
+ 8506:             normalized_action_type,
+ 8507: 
+ 8508:         "target_store":
+ 8509:             normalized_target_store,
+ 8510: 
+ 8511:         "target_path":
+ 8512:             normalized_target_path,
+ 8513: 
+ 8514:         "execution_mode":
+ 8515:             normalized_execution_mode,
+ 8516: 
+ 8517:         "execution_status":
+ 8518:             normalized_execution_status,
+ 8519: 
+ 8520:         "execution_authorized":
+ 8521:             execution_authorized,
+ 8522: 
+ 8523:         "mutation_attempted":
+ 8524:             mutation_attempted,
+ 8525: 
+ 8526:         "mutation_performed":
+ 8527:             mutation_performed,
+ 8528: 
+ 8529:         "backup_created":
+ 8530:             backup_created,
+ 8531: 
+ 8532:         "backup_record":
+ 8533:             normalized_backup_record,
+ 8534: 
+ 8535:         "rollback_required":
+ 8536:             normalized_rollback_result
+ 8537:             is not None,
+ 8538: 
+ 8539:         "rollback_performed":
+ 8540:             rollback_performed,
+ 8541: 
+ 8542:         "rollback_verified":
+ 8543:             rollback_verified,
+ 8544: 
+ 8545:         "rollback_result":
+ 8546:             normalized_rollback_result,
+ 8547: 
+ 8548:         "mutation_result":
+ 8549:             normalized_mutation_result,
+ 8550: 
+ 8551:         "failure_reason":
+ 8552:             normalized_failure_reason,
+ 8553: 
+ 8554:         "repair_executed":
+ 8555:             repair_executed,
+ 8556: 
+ 8557:         "runtime_job_created":
+ 8558:             False,
+ 8559: 
+ 8560:         "queue_job_created":
+ 8561:             False,
+ 8562:     }
+ 8563: 
+ 8564: 
+ 8565:     result[
+ 8566:         "action_result_checksum"
+ 8567:     ] = (
+ 8568:         calculate_lifecycle_repair_executor_engine_checksum_v1(
+ 8569:             payload=result,
+ 8570:         )
+ 8571:     )
+ 8572: 
+ 8573: 
+ 8574:     return _freeze(
+ 8575:         result
+ 8576:     )
+
+============================================================
+FUNCTION: _create_file_backup_v1
+============================================================
+LINES: 1967-2125
+
+ 1967: def _create_file_backup_v1(
+ 1968:     *,
+ 1969:     source_path: Path,
+ 1970:     backup_root: Path,
+ 1971:     workspace_store_root: Path,
+ 1972: ) -> Mapping[str, Any]:
+ 1973: 
+ 1974:     safe_source_path = (
+ 1975:         _assert_path_within_root_v1(
+ 1976:             candidate_path=source_path,
+ 1977:             allowed_root=workspace_store_root,
+ 1978:         )
+ 1979:     )
+ 1980: 
+ 1981:     safe_backup_root = (
+ 1982:         backup_root.resolve(
+ 1983:             strict=False
+ 1984:         )
+ 1985:     )
+ 1986: 
+ 1987:     if not safe_source_path.exists():
+ 1988: 
+ 1989:         return _freeze(
+ 1990:             {
+ 1991:                 "source_path":
+ 1992:                     str(
+ 1993:                         safe_source_path
+ 1994:                     ),
+ 1995: 
+ 1996:                 "source_existed":
+ 1997:                     False,
+ 1998: 
+ 1999:                 "source_checksum_before":
+ 2000:                     "ABSENT",
+ 2001: 
+ 2002:                 "backup_created":
+ 2003:                     False,
+ 2004: 
+ 2005:                 "backup_path":
+ 2006:                     None,
+ 2007: 
+ 2008:                 "backup_checksum":
+ 2009:                     None,
+ 2010: 
+ 2011:                 "backup_verified":
+ 2012:                     True,
+ 2013:             }
+ 2014:         )
+ 2015: 
+ 2016:     if not safe_source_path.is_file():
+ 2017:         raise LifecycleRepairExecutorEngineError(
+ 2018:             "Repair target is not a file: "
+ 2019:             + str(
+ 2020:                 safe_source_path
+ 2021:             )
+ 2022:         )
+ 2023: 
+ 2024:     resolved_workspace_root = (
+ 2025:         workspace_store_root.resolve(
+ 2026:             strict=False
+ 2027:         )
+ 2028:     )
+ 2029: 
+ 2030:     relative_path = (
+ 2031:         safe_source_path.relative_to(
+ 2032:             resolved_workspace_root
+ 2033:         )
+ 2034:     )
+ 2035: 
+ 2036:     backup_path = (
+ 2037:         safe_backup_root
+ 2038:         / relative_path
+ 2039:     )
+ 2040: 
+ 2041:     safe_backup_path = (
+ 2042:         _assert_path_within_root_v1(
+ 2043:             candidate_path=backup_path,
+ 2044:             allowed_root=safe_backup_root,
+ 2045:         )
+ 2046:     )
+ 2047: 
+ 2048:     if safe_backup_path.exists():
+ 2049:         raise LifecycleRepairExecutorEngineError(
+ 2050:             "Executor backup already exists for "
+ 2051:             "this repair target: "
+ 2052:             + str(
+ 2053:                 safe_backup_path
+ 2054:             )
+ 2055:         )
+ 2056: 
+ 2057:     source_checksum = (
+ 2058:         _calculate_file_checksum_v1(
+ 2059:             path=safe_source_path,
+ 2060:         )
+ 2061:     )
+ 2062: 
+ 2063:     safe_backup_path.parent.mkdir(
+ 2064:         parents=True,
+ 2065:         exist_ok=True,
+ 2066:     )
+ 2067: 
+ 2068:     shutil.copy2(
+ 2069:         safe_source_path,
+ 2070:         safe_backup_path,
+ 2071:     )
+ 2072: 
+ 2073:     backup_checksum = (
+ 2074:         _calculate_file_checksum_v1(
+ 2075:             path=safe_backup_path,
+ 2076:         )
+ 2077:     )
+ 2078: 
+ 2079:     backup_verified = (
+ 2080:         source_checksum
+ 2081:         == backup_checksum
+ 2082:     )
+ 2083: 
+ 2084:     if not backup_verified:
+ 2085: 
+ 2086:         try:
+ 2087:             safe_backup_path.unlink(
+ 2088:                 missing_ok=True
+ 2089:             )
+ 2090: 
+ 2091:         except Exception:
+ 2092:             pass
+ 2093: 
+ 2094:         raise LifecycleRepairExecutorEngineError(
+ 2095:             "Repair backup checksum mismatch."
+ 2096:         )
+ 2097: 
+ 2098:     return _freeze(
+ 2099:         {
+ 2100:             "source_path":
+ 2101:                 str(
+ 2102:                     safe_source_path
+ 2103:                 ),
+ 2104: 
+ 2105:             "source_existed":
+ 2106:                 True,
+ 2107: 
+ 2108:             "source_checksum_before":
+ 2109:                 source_checksum,
+ 2110: 
+ 2111:             "backup_created":
+ 2112:                 True,
+ 2113: 
+ 2114:             "backup_path":
+ 2115:                 str(
+ 2116:                     safe_backup_path
+ 2117:                 ),
+ 2118: 
+ 2119:             "backup_checksum":
+ 2120:                 backup_checksum,
+ 2121: 
+ 2122:             "backup_verified":
+ 2123:                 True,
+ 2124:         }
+ 2125:     )
+
+============================================================
+FUNCTION: _remove_quarantine_artifact_for_rollback_v1
+============================================================
+LINES: 7890-8088
+
+ 7890: def _remove_quarantine_artifact_for_rollback_v1(
+ 7891:     *,
+ 7892:     project_root: str | Path,
+ 7893:     workspace_id: str,
+ 7894:     mutation_result: Mapping[str, Any],
+ 7895: ) -> Mapping[str, Any]:
+ 7896: 
+ 7897:     normalized_workspace_id = (
+ 7898:         _require_string(
+ 7899:             workspace_id,
+ 7900:             field_name="workspace_id",
+ 7901:         )
+ 7902:     )
+ 7903: 
+ 7904:     result = _require_mapping(
+ 7905:         mutation_result,
+ 7906:         field_name="mutation_result",
+ 7907:     )
+ 7908: 
+ 7909: 
+ 7910:     # ---------------------------------------------------------
+ 7911:     # Dispatcher results wrap the actual handler result.
+ 7912:     # Accept the wrapper but inspect the handler payload.
+ 7913:     # ---------------------------------------------------------
+ 7914: 
+ 7915:     handler_result_raw = result.get(
+ 7916:         "handler_result"
+ 7917:     )
+ 7918: 
+ 7919:     if isinstance(
+ 7920:         handler_result_raw,
+ 7921:         Mapping,
+ 7922:     ):
+ 7923:         handler_result = handler_result_raw
+ 7924: 
+ 7925:     else:
+ 7926:         handler_result = result
+ 7927: 
+ 7928: 
+ 7929:     quarantine_path_value = (
+ 7930:         handler_result.get(
+ 7931:             "quarantine_path"
+ 7932:         )
+ 7933:     )
+ 7934: 
+ 7935: 
+ 7936:     # ---------------------------------------------------------
+ 7937:     # Non-quarantine mutations require no quarantine cleanup.
+ 7938:     # ---------------------------------------------------------
+ 7939: 
+ 7940:     if (
+ 7941:         not isinstance(
+ 7942:             quarantine_path_value,
+ 7943:             str,
+ 7944:         )
+ 7945:         or not quarantine_path_value.strip()
+ 7946:     ):
+ 7947: 
+ 7948:         return _freeze(
+ 7949:             {
+ 7950:                 "quarantine_cleanup_required":
+ 7951:                     False,
+ 7952: 
+ 7953:                 "quarantine_cleanup_performed":
+ 7954:                     False,
+ 7955: 
+ 7956:                 "quarantine_cleanup_verified":
+ 7957:                     True,
+ 7958: 
+ 7959:                 "quarantine_path":
+ 7960:                     None,
+ 7961:             }
+ 7962:         )
+ 7963: 
+ 7964: 
+ 7965:     target_store = (
+ 7966:         _require_string(
+ 7967:             handler_result.get(
+ 7968:                 "target_store",
+ 7969:                 result.get(
+ 7970:                     "target_store"
+ 7971:                 ),
+ 7972:             ),
+ 7973:             field_name=(
+ 7974:                 "mutation_result.target_store"
+ 7975:             ),
+ 7976:         ).upper()
+ 7977:     )
+ 7978: 
+ 7979: 
+ 7980:     if (
+ 7981:         target_store
+ 7982:         not in SUPPORTED_TARGET_STORES
+ 7983:     ):
+ 7984:         raise LifecycleRepairExecutorEngineError(
+ 7985:             "Rollback quarantine result contains "
+ 7986:             "an unsupported target store: "
+ 7987:             + target_store
+ 7988:         )
+ 7989: 
+ 7990: 
+ 7991:     # ---------------------------------------------------------
+ 7992:     # Independently reconstruct quarantine boundary.
+ 7993:     # Never trust a stored quarantine path by itself.
+ 7994:     # ---------------------------------------------------------
+ 7995: 
+ 7996:     quarantine_root = (
+ 7997:         _resolve_quarantine_root_v1(
+ 7998:             project_root=project_root,
+ 7999:             workspace_id=normalized_workspace_id,
+ 8000:         )
+ 8001:     )
+ 8002: 
+ 8003: 
+ 8004:     store_quarantine_root = (
+ 8005:         quarantine_root
+ 8006:         / target_store.lower()
+ 8007:     )
+ 8008: 
+ 8009: 
+ 8010:     safe_store_quarantine_root = (
+ 8011:         _assert_path_within_root_v1(
+ 8012:             candidate_path=store_quarantine_root,
+ 8013:             allowed_root=quarantine_root,
+ 8014:         )
+ 8015:     )
+ 8016: 
+ 8017: 
+ 8018:     quarantine_path = Path(
+ 8019:         quarantine_path_value
+ 8020:     )
+ 8021: 
+ 8022: 
+ 8023:     safe_quarantine_path = (
+ 8024:         _assert_path_within_root_v1(
+ 8025:             candidate_path=quarantine_path,
+ 8026:             allowed_root=safe_store_quarantine_root,
+ 8027:         )
+ 8028:     )
+ 8029: 
+ 8030: 
+ 8031:     if (
+ 8032:         safe_quarantine_path
+ 8033:         == safe_store_quarantine_root
+ 8034:     ):
+ 8035:         raise LifecycleRepairExecutorEngineError(
+ 8036:             "Rollback quarantine target may not "
+ 8037:             "be the quarantine store root."
+ 8038:         )
+ 8039: 
+ 8040: 
+ 8041:     cleanup_performed = False
+ 8042: 
+ 8043: 
+ 8044:     if safe_quarantine_path.exists():
+ 8045: 
+ 8046:         if not safe_quarantine_path.is_file():
+ 8047:             raise LifecycleRepairExecutorEngineError(
+ 8048:                 "Quarantine rollback artifact "
+ 8049:                 "is not a file."
+ 8050:             )
+ 8051: 
+ 8052:         safe_quarantine_path.unlink()
+ 8053: 
+ 8054:         cleanup_performed = True
+ 8055: 
+ 8056: 
+ 8057:     cleanup_verified = (
+ 8058:         not safe_quarantine_path.exists()
+ 8059:     )
+ 8060: 
+ 8061: 
+ 8062:     if not cleanup_verified:
+ 8063:         raise LifecycleRepairExecutorEngineError(
+ 8064:             "Quarantine rollback cleanup could "
+ 8065:             "not be verified."
+ 8066:         )
+ 8067: 
+ 8068: 
+ 8069:     return _freeze(
+ 8070:         {
+ 8071:             "quarantine_cleanup_required":
+ 8072:                 True,
+ 8073: 
+ 8074:             "quarantine_cleanup_performed":
+ 8075:                 cleanup_performed,
+ 8076: 
+ 8077:             "quarantine_cleanup_verified":
+ 8078:                 cleanup_verified,
+ 8079: 
+ 8080:             "quarantine_path":
+ 8081:                 str(
+ 8082:                     safe_quarantine_path
+ 8083:                 ),
+ 8084: 
+ 8085:             "target_store":
+ 8086:                 target_store,
+ 8087:         }
+ 8088:     )
+
+============================================================
+FUNCTION: _resolve_executor_backup_root_v1
+============================================================
+LINES: 1866-1918
+
+ 1866: def _resolve_executor_backup_root_v1(
+ 1867:     *,
+ 1868:     project_root: str | Path,
+ 1869:     workspace_id: str,
+ 1870:     execution_request_id: str,
+ 1871: ) -> Path:
+ 1872: 
+ 1873:     normalized_workspace_id = (
+ 1874:         _require_string(
+ 1875:             workspace_id,
+ 1876:             field_name="workspace_id",
+ 1877:         )
+ 1878:     )
+ 1879: 
+ 1880:     normalized_execution_request_id = (
+ 1881:         _require_string(
+ 1882:             execution_request_id,
+ 1883:             field_name="execution_request_id",
+ 1884:         )
+ 1885:     )
+ 1886: 
+ 1887:     data_root = _resolve_data_root_v1(
+ 1888:         project_root=project_root,
+ 1889:     )
+ 1890: 
+ 1891:     backup_base = (
+ 1892:         data_root
+ 1893:         / "universal_article_body_store_repair_backups"
+ 1894:     ).resolve(
+ 1895:         strict=False
+ 1896:     )
+ 1897: 
+ 1898:     workspace_backup_root = (
+ 1899:         backup_base
+ 1900:         / normalized_workspace_id
+ 1901:     )
+ 1902: 
+ 1903:     safe_workspace_backup_root = (
+ 1904:         _assert_path_within_root_v1(
+ 1905:             candidate_path=workspace_backup_root,
+ 1906:             allowed_root=backup_base,
+ 1907:         )
+ 1908:     )
+ 1909: 
+ 1910:     execution_backup_root = (
+ 1911:         safe_workspace_backup_root
+ 1912:         / normalized_execution_request_id
+ 1913:     )
+ 1914: 
+ 1915:     return _assert_path_within_root_v1(
+ 1916:         candidate_path=execution_backup_root,
+ 1917:         allowed_root=safe_workspace_backup_root,
+ 1918:     )
+
+============================================================
+FUNCTION: _restore_file_backup_v1
+============================================================
+LINES: 2128-2381
+
+ 2128: def _restore_file_backup_v1(
+ 2129:     *,
+ 2130:     backup_record: Mapping[str, Any],
+ 2131:     backup_root: Path,
+ 2132:     workspace_store_root: Path,
+ 2133: ) -> Mapping[str, Any]:
+ 2134: 
+ 2135:     record = _require_mapping(
+ 2136:         backup_record,
+ 2137:         field_name="backup_record",
+ 2138:     )
+ 2139: 
+ 2140:     source_path = Path(
+ 2141:         _require_string(
+ 2142:             record.get(
+ 2143:                 "source_path"
+ 2144:             ),
+ 2145:             field_name=(
+ 2146:                 "backup_record.source_path"
+ 2147:             ),
+ 2148:         )
+ 2149:     )
+ 2150: 
+ 2151:     safe_source_path = (
+ 2152:         _assert_path_within_root_v1(
+ 2153:             candidate_path=source_path,
+ 2154:             allowed_root=workspace_store_root,
+ 2155:         )
+ 2156:     )
+ 2157: 
+ 2158:     source_existed = (
+ 2159:         record.get(
+ 2160:             "source_existed"
+ 2161:         )
+ 2162:         is True
+ 2163:     )
+ 2164: 
+ 2165:     backup_created = (
+ 2166:         record.get(
+ 2167:             "backup_created"
+ 2168:         )
+ 2169:         is True
+ 2170:     )
+ 2171: 
+ 2172: 
+ 2173:     # ---------------------------------------------------------
+ 2174:     # Target existed before repair:
+ 2175:     # restore the certified backup.
+ 2176:     # ---------------------------------------------------------
+ 2177: 
+ 2178:     if source_existed:
+ 2179: 
+ 2180:         backup_path_value = (
+ 2181:             record.get(
+ 2182:                 "backup_path"
+ 2183:             )
+ 2184:         )
+ 2185: 
+ 2186:         if (
+ 2187:             not backup_created
+ 2188:             or not isinstance(
+ 2189:                 backup_path_value,
+ 2190:                 str,
+ 2191:             )
+ 2192:             or not backup_path_value.strip()
+ 2193:         ):
+ 2194:             raise LifecycleRepairExecutorEngineError(
+ 2195:                 "Rollback backup is missing."
+ 2196:             )
+ 2197: 
+ 2198:         backup_path = Path(
+ 2199:             backup_path_value
+ 2200:         )
+ 2201: 
+ 2202:         safe_backup_path = (
+ 2203:             _assert_path_within_root_v1(
+ 2204:                 candidate_path=backup_path,
+ 2205:                 allowed_root=backup_root,
+ 2206:             )
+ 2207:         )
+ 2208: 
+ 2209:         if not safe_backup_path.exists():
+ 2210:             raise LifecycleRepairExecutorEngineError(
+ 2211:                 "Rollback backup file does not exist: "
+ 2212:                 + str(
+ 2213:                     safe_backup_path
+ 2214:                 )
+ 2215:             )
+ 2216: 
+ 2217:         if not safe_backup_path.is_file():
+ 2218:             raise LifecycleRepairExecutorEngineError(
+ 2219:                 "Rollback backup path is not a file."
+ 2220:             )
+ 2221: 
+ 2222:         expected_checksum = (
+ 2223:             _require_string(
+ 2224:                 record.get(
+ 2225:                     "source_checksum_before"
+ 2226:                 ),
+ 2227:                 field_name=(
+ 2228:                     "backup_record."
+ 2229:                     "source_checksum_before"
+ 2230:                 ),
+ 2231:             )
+ 2232:         )
+ 2233: 
+ 2234:         recorded_backup_checksum = (
+ 2235:             _require_string(
+ 2236:                 record.get(
+ 2237:                     "backup_checksum"
+ 2238:                 ),
+ 2239:                 field_name=(
+ 2240:                     "backup_record.backup_checksum"
+ 2241:                 ),
+ 2242:             )
+ 2243:         )
+ 2244: 
+ 2245:         actual_backup_checksum = (
+ 2246:             _calculate_file_checksum_v1(
+ 2247:                 path=safe_backup_path,
+ 2248:             )
+ 2249:         )
+ 2250: 
+ 2251:         if (
+ 2252:             actual_backup_checksum
+ 2253:             != recorded_backup_checksum
+ 2254:         ):
+ 2255:             raise LifecycleRepairExecutorEngineError(
+ 2256:                 "Rollback backup checksum validation failed."
+ 2257:             )
+ 2258: 
+ 2259:         if (
+ 2260:             actual_backup_checksum
+ 2261:             != expected_checksum
+ 2262:         ):
+ 2263:             raise LifecycleRepairExecutorEngineError(
+ 2264:                 "Rollback backup does not match "
+ 2265:                 "the original pre-repair checksum."
+ 2266:             )
+ 2267: 
+ 2268:         safe_source_path.parent.mkdir(
+ 2269:             parents=True,
+ 2270:             exist_ok=True,
+ 2271:         )
+ 2272: 
+ 2273:         restore_temp_path = (
+ 2274:             safe_source_path.with_name(
+ 2275:                 safe_source_path.name
+ 2276:                 + ".repair_restore_tmp"
+ 2277:             )
+ 2278:         )
+ 2279: 
+ 2280:         safe_restore_temp_path = (
+ 2281:             _assert_path_within_root_v1(
+ 2282:                 candidate_path=restore_temp_path,
+ 2283:                 allowed_root=workspace_store_root,
+ 2284:             )
+ 2285:         )
+ 2286: 
+ 2287:         if safe_restore_temp_path.exists():
+ 2288:             raise LifecycleRepairExecutorEngineError(
+ 2289:                 "Rollback temporary path already exists: "
+ 2290:                 + str(
+ 2291:                     safe_restore_temp_path
+ 2292:                 )
+ 2293:             )
+ 2294: 
+ 2295:         try:
+ 2296:             shutil.copy2(
+ 2297:                 safe_backup_path,
+ 2298:                 safe_restore_temp_path,
+ 2299:             )
+ 2300: 
+ 2301:             temporary_checksum = (
+ 2302:                 _calculate_file_checksum_v1(
+ 2303:                     path=safe_restore_temp_path,
+ 2304:                 )
+ 2305:             )
+ 2306: 
+ 2307:             if (
+ 2308:                 temporary_checksum
+ 2309:                 != expected_checksum
+ 2310:             ):
+ 2311:                 raise LifecycleRepairExecutorEngineError(
+ 2312:                     "Rollback temporary file checksum mismatch."
+ 2313:                 )
+ 2314: 
+ 2315:             safe_restore_temp_path.replace(
+ 2316:                 safe_source_path
+ 2317:             )
+ 2318: 
+ 2319:         finally:
+ 2320: 
+ 2321:             if safe_restore_temp_path.exists():
+ 2322: 
+ 2323:                 try:
+ 2324:                     safe_restore_temp_path.unlink()
+ 2325: 
+ 2326:                 except Exception:
+ 2327:                     pass
+ 2328: 
+ 2329:         restored_checksum = (
+ 2330:             _calculate_file_checksum_v1(
+ 2331:                 path=safe_source_path,
+ 2332:             )
+ 2333:         )
+ 2334: 
+ 2335:         rollback_verified = (
+ 2336:             restored_checksum
+ 2337:             == expected_checksum
+ 2338:         )
+ 2339: 
+ 2340: 
+ 2341:     # ---------------------------------------------------------
+ 2342:     # Target did not exist before repair:
+ 2343:     # rollback means removing the newly created target.
+ 2344:     # ---------------------------------------------------------
+ 2345: 
+ 2346:     else:
+ 2347: 
+ 2348:         if safe_source_path.exists():
+ 2349: 
+ 2350:             if not safe_source_path.is_file():
+ 2351:                 raise LifecycleRepairExecutorEngineError(
+ 2352:                     "Rollback target unexpectedly became "
+ 2353:                     "a non-file path."
+ 2354:                 )
+ 2355: 
+ 2356:             safe_source_path.unlink()
+ 2357: 
+ 2358:         restored_checksum = "ABSENT"
+ 2359: 
+ 2360:         rollback_verified = (
+ 2361:             not safe_source_path.exists()
+ 2362:         )
+ 2363: 
+ 2364: 
+ 2365:     return _freeze(
+ 2366:         {
+ 2367:             "source_path":
+ 2368:                 str(
+ 2369:                     safe_source_path
+ 2370:                 ),
+ 2371: 
+ 2372:             "rollback_performed":
+ 2373:                 True,
+ 2374: 
+ 2375:             "rollback_verified":
+ 2376:                 rollback_verified,
+ 2377: 
+ 2378:             "restored_checksum":
+ 2379:                 restored_checksum,
+ 2380:         }
+ 2381:     )
+
+============================================================
+FUNCTION: _rollback_executed_action_v1
+============================================================
+LINES: 8091-8199
+
+ 8091: def _rollback_executed_action_v1(
+ 8092:     *,
+ 8093:     project_root: str | Path,
+ 8094:     workspace_id: str,
+ 8095:     backup_record: Mapping[str, Any],
+ 8096:     mutation_result: Mapping[str, Any],
+ 8097:     backup_root: Path,
+ 8098:     workspace_store_root: Path,
+ 8099: ) -> Mapping[str, Any]:
+ 8100: 
+ 8101:     normalized_workspace_id = (
+ 8102:         _require_string(
+ 8103:             workspace_id,
+ 8104:             field_name="workspace_id",
+ 8105:         )
+ 8106:     )
+ 8107: 
+ 8108:     record = _require_mapping(
+ 8109:         backup_record,
+ 8110:         field_name="backup_record",
+ 8111:     )
+ 8112: 
+ 8113:     result = _require_mapping(
+ 8114:         mutation_result,
+ 8115:         field_name="mutation_result",
+ 8116:     )
+ 8117: 
+ 8118: 
+ 8119:     # ---------------------------------------------------------
+ 8120:     # IMPORTANT ORDER:
+ 8121:     #
+ 8122:     # 1. Restore original target from backup first.
+ 8123:     # 2. Only then remove quarantine copy.
+ 8124:     #
+ 8125:     # If restoration fails, the quarantine artifact remains
+ 8126:     # available as an additional recovery copy.
+ 8127:     # ---------------------------------------------------------
+ 8128: 
+ 8129:     backup_rollback = (
+ 8130:         _restore_file_backup_v1(
+ 8131:             backup_record=record,
+ 8132:             backup_root=backup_root,
+ 8133:             workspace_store_root=workspace_store_root,
+ 8134:         )
+ 8135:     )
+ 8136: 
+ 8137: 
+ 8138:     if (
+ 8139:         backup_rollback[
+ 8140:             "rollback_verified"
+ 8141:         ]
+ 8142:         is not True
+ 8143:     ):
+ 8144:         raise LifecycleRepairExecutorEngineError(
+ 8145:             "Backup rollback could not be verified."
+ 8146:         )
+ 8147: 
+ 8148: 
+ 8149:     quarantine_cleanup = (
+ 8150:         _remove_quarantine_artifact_for_rollback_v1(
+ 8151:             project_root=project_root,
+ 8152:             workspace_id=normalized_workspace_id,
+ 8153:             mutation_result=result,
+ 8154:         )
+ 8155:     )
+ 8156: 
+ 8157: 
+ 8158:     rollback_verified = all(
+ 8159:         (
+ 8160:             backup_rollback[
+ 8161:                 "rollback_verified"
+ 8162:             ]
+ 8163:             is True,
+ 8164: 
+ 8165:             quarantine_cleanup[
+ 8166:                 "quarantine_cleanup_verified"
+ 8167:             ]
+ 8168:             is True,
+ 8169:         )
+ 8170:     )
+ 8171: 
+ 8172: 
+ 8173:     return _freeze(
+ 8174:         {
+ 8175:             "schema":
+ 8176:                 "body_store_lifecycle_repair_rollback_result.v1",
+ 8177: 
+ 8178:             "workspace_id":
+ 8179:                 normalized_workspace_id,
+ 8180: 
+ 8181:             "rollback_performed":
+ 8182:                 True,
+ 8183: 
+ 8184:             "rollback_verified":
+ 8185:                 rollback_verified,
+ 8186: 
+ 8187:             "backup_rollback":
+ 8188:                 backup_rollback,
+ 8189: 
+ 8190:             "quarantine_cleanup":
+ 8191:                 quarantine_cleanup,
+ 8192: 
+ 8193:             "mutation_performed":
+ 8194:                 False,
+ 8195: 
+ 8196:             "repair_executed":
+ 8197:                 False,
+ 8198:         }
+ 8199:     )
+
+============================================================
+FUNCTION: execute_lifecycle_repair_plan_v1
+============================================================
+LINES: 8675-10220
+
+ 8675: def execute_lifecycle_repair_plan_v1(
+ 8676:     *,
+ 8677:     project_root: str | Path,
+ 8678:     repair_plan: Mapping[str, Any],
+ 8679:     planner_certification: Mapping[str, Any],
+ 8680:     authorization: Mapping[str, Any],
+ 8681:     execution_request: Mapping[str, Any],
+ 8682:     findings: tuple[Mapping[str, Any], ...]
+ 8683:     | list[Mapping[str, Any]],
+ 8684: ) -> Mapping[str, Any]:
+ 8685: 
+ 8686:     plan = _require_mapping(
+ 8687:         repair_plan,
+ 8688:         field_name="repair_plan",
+ 8689:     )
+ 8690: 
+ 8691:     request = _require_mapping(
+ 8692:         execution_request,
+ 8693:         field_name="execution_request",
+ 8694:     )
+ 8695: 
+ 8696:     execution_mode = (
+ 8697:         _normalize_execution_mode_v1(
+ 8698:             request.get(
+ 8699:                 "execution_mode"
+ 8700:             )
+ 8701:         )
+ 8702:     )
+ 8703: 
+ 8704:     workspace_id = (
+ 8705:         _require_string(
+ 8706:             request.get(
+ 8707:                 "workspace_id"
+ 8708:             ),
+ 8709:             field_name=(
+ 8710:                 "execution_request.workspace_id"
+ 8711:             ),
+ 8712:         )
+ 8713:     )
+ 8714: 
+ 8715:     execution_request_id = (
+ 8716:         _require_string(
+ 8717:             request.get(
+ 8718:                 "execution_request_id"
+ 8719:             ),
+ 8720:             field_name=(
+ 8721:                 "execution_request.execution_request_id"
+ 8722:             ),
+ 8723:         )
+ 8724:     )
+ 8725: 
+ 8726: 
+ 8727:     # =========================================================
+ 8728:     # 1. PREPARE EXECUTION
+ 8729:     # =========================================================
+ 8730: 
+ 8731:     preflight = (
+ 8732:         prepare_lifecycle_repair_execution_v1(
+ 8733:             project_root=project_root,
+ 8734:             repair_plan=plan,
+ 8735:             planner_certification=planner_certification,
+ 8736:             authorization=authorization,
+ 8737:             execution_request=request,
+ 8738:             findings=findings,
+ 8739:         )
+ 8740:     )
+ 8741: 
+ 8742: 
+ 8743:     # =========================================================
+ 8744:     # 2. INDEPENDENT PREFLIGHT VALIDATION
+ 8745:     # =========================================================
+ 8746: 
+ 8747:     preflight_validation = (
+ 8748:         validate_lifecycle_repair_execution_preflight_v1(
+ 8749:             project_root=project_root,
+ 8750:             preflight=preflight,
+ 8751:         )
+ 8752:     )
+ 8753: 
+ 8754: 
+ 8755:     if (
+ 8756:         preflight_validation[
+ 8757:             "preflight_valid"
+ 8758:         ]
+ 8759:         is not True
+ 8760:     ):
+ 8761:         raise LifecycleRepairExecutorEngineError(
+ 8762:             "Lifecycle Repair Executor preflight "
+ 8763:             "validation failed."
+ 8764:         )
+ 8765: 
+ 8766: 
+ 8767:     if (
+ 8768:         _validate_preflight_checksum_v1(
+ 8769:             preflight=preflight,
+ 8770:         )
+ 8771:         is not True
+ 8772:     ):
+ 8773:         raise LifecycleRepairExecutorEngineError(
+ 8774:             "Lifecycle Repair Executor preflight "
+ 8775:             "checksum validation failed."
+ 8776:         )
+ 8777: 
+ 8778: 
+ 8779:     prepared_actions = tuple(
+ 8780:         preflight[
+ 8781:             "prepared_actions"
+ 8782:         ]
+ 8783:     )
+ 8784: 
+ 8785: 
+ 8786:     if not prepared_actions:
+ 8787:         raise LifecycleRepairExecutorEngineError(
+ 8788:             "Executor preflight produced no prepared actions."
+ 8789:         )
+ 8790: 
+ 8791: 
+ 8792:     # =========================================================
+ 8793:     # 3. DRY RUN
+ 8794:     # =========================================================
+ 8795: 
+ 8796:     if execution_mode == "DRY_RUN":
+ 8797: 
+ 8798:         dry_run_results: list[
+ 8799:             Mapping[str, Any]
+ 8800:         ] = []
+ 8801: 
+ 8802: 
+ 8803:         for prepared_action in prepared_actions:
+ 8804: 
+ 8805:             action = _require_mapping(
+ 8806:                 prepared_action,
+ 8807:                 field_name="prepared_action",
+ 8808:             )
+ 8809: 
+ 8810: 
+ 8811:             # -------------------------------------------------
+ 8812:             # Even a dry run must not report against a target
+ 8813:             # that changed after preflight.
+ 8814:             #
+ 8815:             # This remains fully read-only.
+ 8816:             # -------------------------------------------------
+ 8817: 
+ 8818:             transaction_gate = (
+ 8819:                 _verify_prepared_action_transaction_gate_v1(
+ 8820:                     project_root=project_root,
+ 8821:                     workspace_id=workspace_id,
+ 8822:                     prepared_action=action,
+ 8823:                 )
+ 8824:             )
+ 8825: 
+ 8826: 
+ 8827:             if (
+ 8828:                 transaction_gate[
+ 8829:                     "gate_passed"
+ 8830:                 ]
+ 8831:                 is not True
+ 8832:             ):
+ 8833:                 raise LifecycleRepairExecutorEngineError(
+ 8834:                     "DRY_RUN transaction gate failed for "
+ 8835:                     "repair action: "
+ 8836:                     + str(
+ 8837:                         action.get(
+ 8838:                             "repair_action_id"
+ 8839:                         )
+ 8840:                     )
+ 8841:                 )
+ 8842: 
+ 8843: 
+ 8844:             mutation_intent = (
+ 8845:                 _require_mapping(
+ 8846:                     action.get(
+ 8847:                         "mutation_intent"
+ 8848:                     ),
+ 8849:                     field_name=(
+ 8850:                         "prepared_action.mutation_intent"
+ 8851:                     ),
+ 8852:                 )
+ 8853:             )
+ 8854: 
+ 8855: 
+ 8856:             dry_run_result = (
+ 8857:                 _build_dry_run_action_result_v1(
+ 8858:                     repair_action={
+ 8859:                         "repair_action_id":
+ 8860:                             action[
+ 8861:                                 "repair_action_id"
+ 8862:                             ],
+ 8863: 
+ 8864:                         "repair_action_type":
+ 8865:                             action[
+ 8866:                                 "repair_action_type"
+ 8867:                             ],
+ 8868:                     },
+ 8869:                     source_finding={
+ 8870:                         "finding_id":
+ 8871:                             action[
+ 8872:                                 "source_finding_id"
+ 8873:                             ],
+ 8874:                     },
+ 8875:                     target_store=(
+ 8876:                         mutation_intent[
+ 8877:                             "target_store"
+ 8878:                         ]
+ 8879:                     ),
+ 8880:                     target_path=(
+ 8881:                         mutation_intent[
+ 8882:                             "target_path"
+ 8883:                         ]
+ 8884:                     ),
+ 8885:                 )
+ 8886:             )
+ 8887: 
+ 8888: 
+ 8889:             dry_run_results.append(
+ 8890:                 dry_run_result
+ 8891:             )
+ 8892: 
+ 8893: 
+ 8894:         result = {
+ 8895:             "schema":
+ 8896:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTION_RESULT_SCHEMA,
+ 8897: 
+ 8898:             "executor_engine_schema":
+ 8899:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+ 8900: 
+ 8901:             "executor_engine_version":
+ 8902:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+ 8903: 
+ 8904:             "executor_contract_version":
+ 8905:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_CONTRACT_VERSION,
+ 8906: 
+ 8907:             "execution_request_id":
+ 8908:                 execution_request_id,
+ 8909: 
+ 8910:             "workspace_id":
+ 8911:                 workspace_id,
+ 8912: 
+ 8913:             "repair_plan_id":
+ 8914:                 plan.get(
+ 8915:                     "repair_plan_id"
+ 8916:                 ),
+ 8917: 
+ 8918:             "execution_mode":
+ 8919:                 "DRY_RUN",
+ 8920: 
+ 8921:             "context_valid":
+ 8922:                 True,
+ 8923: 
+ 8924:             "preflight_valid":
+ 8925:                 True,
+ 8926: 
+ 8927:             "execution_authorized":
+ 8928:                 False,
+ 8929: 
+ 8930:             "execution_started":
+ 8931:                 True,
+ 8932: 
+ 8933:             "execution_completed":
+ 8934:                 True,
+ 8935: 
+ 8936:             "execution_succeeded":
+ 8937:                 True,
+ 8938: 
+ 8939:             "requested_action_count":
+ 8940:                 len(
+ 8941:                     prepared_actions
+ 8942:                 ),
+ 8943: 
+ 8944:             "executed_action_count":
+ 8945:                 0,
+ 8946: 
+ 8947:             "committed_mutation_count":
+ 8948:                 0,
+ 8949: 
+ 8950:             "dry_run_validated_action_count":
+ 8951:                 len(
+ 8952:                     dry_run_results
+ 8953:                 ),
+ 8954: 
+ 8955:             "skipped_action_count":
+ 8956:                 0,
+ 8957: 
+ 8958:             "failed_action_count":
+ 8959:                 0,
+ 8960: 
+ 8961:             "rolled_back_action_count":
+ 8962:                 0,
+ 8963: 
+ 8964:             "action_results":
+ 8965:                 tuple(
+ 8966:                     dry_run_results
+ 8967:                 ),
+ 8968: 
+ 8969:             "repair_executed":
+ 8970:                 False,
+ 8971: 
+ 8972:             "mutation_performed":
+ 8973:                 False,
+ 8974: 
+ 8975:             "rollback_required":
+ 8976:                 False,
+ 8977: 
+ 8978:             "rollback_performed":
+ 8979:                 False,
+ 8980: 
+ 8981:             "rollback_verified":
+ 8982:                 None,
+ 8983: 
+ 8984:             "mutation_outcome_uncertain_action_ids":
+ 8985:                 (),
+ 8986: 
+ 8987:             "runtime_job_created":
+ 8988:                 False,
+ 8989: 
+ 8990:             "queue_job_created":
+ 8991:                 False,
+ 8992:         }
+ 8993: 
+ 8994: 
+ 8995:         result[
+ 8996:             "execution_result_checksum"
+ 8997:         ] = (
+ 8998:             calculate_lifecycle_repair_executor_engine_checksum_v1(
+ 8999:                 payload=result,
+ 9000:             )
+ 9001:         )
+ 9002: 
+ 9003: 
+ 9004:         return _freeze(
+ 9005:             result
+ 9006:         )
+ 9007: 
+ 9008: 
+ 9009:     # =========================================================
+ 9010:     # 4. AUTHORIZED APPLY ONLY BEYOND THIS POINT
+ 9011:     # =========================================================
+ 9012: 
+ 9013:     if execution_mode != "AUTHORIZED_APPLY":
+ 9014: 
+ 9015:         raise LifecycleRepairExecutorEngineError(
+ 9016:             "Unsupported execution mode: "
+ 9017:             + execution_mode
+ 9018:         )
+ 9019: 
+ 9020: 
+ 9021:     authorization_item = (
+ 9022:         _require_mapping(
+ 9023:             authorization,
+ 9024:             field_name="authorization",
+ 9025:         )
+ 9026:     )
+ 9027: 
+ 9028: 
+ 9029:     if (
+ 9030:         authorization_item.get(
+ 9031:             "authorization_state"
+ 9032:         )
+ 9033:         != "AUTHORIZED"
+ 9034:     ):
+ 9035:         raise LifecycleRepairExecutorEngineError(
+ 9036:             "AUTHORIZED_APPLY requires an "
+ 9037:             "AUTHORIZED authorization state."
+ 9038:         )
+ 9039: 
+ 9040: 
+ 9041:     if (
+ 9042:         authorization_item.get(
+ 9043:             "explicitly_authorized"
+ 9044:         )
+ 9045:         is not True
+ 9046:     ):
+ 9047:         raise LifecycleRepairExecutorEngineError(
+ 9048:             "AUTHORIZED_APPLY requires explicit "
+ 9049:             "execution authorization."
+ 9050:         )
+ 9051: 
+ 9052: 
+ 9053:     # =========================================================
+ 9054:     # 5. TRANSACTION FOUNDATION
+ 9055:     # =========================================================
+ 9056: 
+ 9057:     backup_root = (
+ 9058:         _resolve_executor_backup_root_v1(
+ 9059:             project_root=project_root,
+ 9060:             workspace_id=workspace_id,
+ 9061:             execution_request_id=execution_request_id,
+ 9062:         )
+ 9063:     )
+ 9064: 
+ 9065: 
+ 9066:     action_results: list[
+ 9067:         Mapping[str, Any]
+ 9068:     ] = []
+ 9069: 
+ 9070: 
+ 9071:     transaction_stack: list[
+ 9072:         dict[str, Any]
+ 9073:     ] = []
+ 9074: 
+ 9075: 
+ 9076:     transaction_entries_by_action_id: dict[
+ 9077:         str,
+ 9078:         dict[str, Any],
+ 9079:     ] = {}
+ 9080: 
+ 9081: 
+ 9082:     failed_action_id: str | None = None
+ 9083: 
+ 9084:     failure_reason: str | None = None
+ 9085: 
+ 9086: 
+ 9087:     current_action_id: str | None = None
+ 9088: 
+ 9089:     current_source_finding_id: str | None = None
+ 9090: 
+ 9091:     current_action_type: str | None = None
+ 9092: 
+ 9093:     current_target_store: str | None = None
+ 9094: 
+ 9095:     current_target_path: str | None = None
+ 9096: 
+ 9097:     current_transaction_entry: (
+ 9098:         dict[str, Any]
+ 9099:         | None
+ 9100:     ) = None
+ 9101: 
+ 9102: 
+ 9103:     # =========================================================
+ 9104:     # 6. AUTHORIZED TRANSACTION LOOP
+ 9105:     # =========================================================
+ 9106: 
+ 9107:     try:
+ 9108: 
+ 9109:         for prepared_action in prepared_actions:
+ 9110: 
+ 9111:             action = _require_mapping(
+ 9112:                 prepared_action,
+ 9113:                 field_name="prepared_action",
+ 9114:             )
+ 9115: 
+ 9116: 
+ 9117:             current_action_id = (
+ 9118:                 _require_string(
+ 9119:                     action.get(
+ 9120:                         "repair_action_id"
+ 9121:                     ),
+ 9122:                     field_name=(
+ 9123:                         "prepared_action.repair_action_id"
+ 9124:                     ),
+ 9125:                 )
+ 9126:             )
+ 9127: 
+ 9128: 
+ 9129:             current_source_finding_id = (
+ 9130:                 _require_string(
+ 9131:                     action.get(
+ 9132:                         "source_finding_id"
+ 9133:                     ),
+ 9134:                     field_name=(
+ 9135:                         "prepared_action.source_finding_id"
+ 9136:                     ),
+ 9137:                 )
+ 9138:             )
+ 9139: 
+ 9140: 
+ 9141:             current_action_type = (
+ 9142:                 _assert_supported_executor_action_type_v1(
+ 9143:                     action.get(
+ 9144:                         "repair_action_type"
+ 9145:                     )
+ 9146:                 )
+ 9147:             )
+ 9148: 
+ 9149: 
+ 9150:             mutation_intent = (
+ 9151:                 _require_mapping(
+ 9152:                     action.get(
+ 9153:                         "mutation_intent"
+ 9154:                     ),
+ 9155:                     field_name=(
+ 9156:                         "prepared_action.mutation_intent"
+ 9157:                     ),
+ 9158:                 )
+ 9159:             )
+ 9160: 
+ 9161: 
+ 9162:             current_target_store = (
+ 9163:                 _require_string(
+ 9164:                     mutation_intent.get(
+ 9165:                         "target_store"
+ 9166:                     ),
+ 9167:                     field_name=(
+ 9168:                         "mutation_intent.target_store"
+ 9169:                     ),
+ 9170:                 ).upper()
+ 9171:             )
+ 9172: 
+ 9173: 
+ 9174:             current_target_path = (
+ 9175:                 _require_string(
+ 9176:                     mutation_intent.get(
+ 9177:                         "target_path"
+ 9178:                     ),
+ 9179:                     field_name=(
+ 9180:                         "mutation_intent.target_path"
+ 9181:                     ),
+ 9182:                 )
+ 9183:             )
+ 9184: 
+ 9185: 
+ 9186:             # -------------------------------------------------
+ 9187:             # 6A. Final transaction gate immediately before
+ 9188:             # backup/mutation.
+ 9189:             # -------------------------------------------------
+ 9190: 
+ 9191:             transaction_gate = (
+ 9192:                 _verify_prepared_action_transaction_gate_v1(
+ 9193:                     project_root=project_root,
+ 9194:                     workspace_id=workspace_id,
+ 9195:                     prepared_action=action,
+ 9196:                 )
+ 9197:             )
+ 9198: 
+ 9199: 
+ 9200:             if (
+ 9201:                 transaction_gate[
+ 9202:                     "gate_passed"
+ 9203:                 ]
+ 9204:                 is not True
+ 9205:             ):
+ 9206:                 raise LifecycleRepairExecutorEngineError(
+ 9207:                     "Final transaction gate failed "
+ 9208:                     "for repair action: "
+ 9209:                     + current_action_id
+ 9210:                 )
+ 9211: 
+ 9212: 
+ 9213:             # -------------------------------------------------
+ 9214:             # 6B. Independently reconstruct store root again.
+ 9215:             # -------------------------------------------------
+ 9216: 
+ 9217:             workspace_store_root = (
+ 9218:                 _resolve_verified_workspace_store_root_v1(
+ 9219:                     project_root=project_root,
+ 9220:                     workspace_id=workspace_id,
+ 9221:                     target_store=current_target_store,
+ 9222:                 )
+ 9223:             )
+ 9224: 
+ 9225: 
+ 9226:             target_path = (
+ 9227:                 _assert_path_within_root_v1(
+ 9228:                     candidate_path=Path(
+ 9229:                         current_target_path
+ 9230:                     ),
+ 9231:                     allowed_root=workspace_store_root,
+ 9232:                 )
+ 9233:             )
+ 9234: 
+ 9235: 
+ 9236:             if target_path == workspace_store_root:
+ 9237: 
+ 9238:                 raise LifecycleRepairExecutorEngineError(
+ 9239:                     "Repair action attempted to target "
+ 9240:                     "the workspace store root itself."
+ 9241:                 )
+ 9242: 
+ 9243: 
+ 9244:             # -------------------------------------------------
+ 9245:             # 6C. Create per-store backup root.
+ 9246:             # -------------------------------------------------
+ 9247: 
+ 9248:             action_backup_root = (
+ 9249:                 backup_root
+ 9250:                 / current_target_store.lower()
+ 9251:             )
+ 9252: 
+ 9253: 
+ 9254:             action_backup_root = (
+ 9255:                 _assert_path_within_root_v1(
+ 9256:                     candidate_path=action_backup_root,
+ 9257:                     allowed_root=backup_root,
+ 9258:                 )
+ 9259:             )
+ 9260: 
+ 9261: 
+ 9262:             # -------------------------------------------------
+ 9263:             # 6D. Backup BEFORE any mutation attempt.
+ 9264:             #
+ 9265:             # Missing targets are recorded as source_existed
+ 9266:             # False so rollback can remove newly created files.
+ 9267:             # -------------------------------------------------
+ 9268: 
+ 9269:             backup_record = (
+ 9270:                 _create_file_backup_v1(
+ 9271:                     source_path=target_path,
+ 9272:                     backup_root=action_backup_root,
+ 9273:                     workspace_store_root=workspace_store_root,
+ 9274:                 )
+ 9275:             )
+ 9276: 
+ 9277: 
+ 9278:             # -------------------------------------------------
+ 9279:             # 6E. Prepare conservative rollback metadata.
+ 9280:             #
+ 9281:             # For quarantine, calculate the expected
+ 9282:             # quarantine path before mutation begins.
+ 9283:             # -------------------------------------------------
+ 9284: 
+ 9285:             expected_mutation_result: Mapping[
+ 9286:                 str,
+ 9287:                 Any,
+ 9288:             ] = _freeze(
+ 9289:                 {
+ 9290:                     "target_store":
+ 9291:                         current_target_store,
+ 9292: 
+ 9293:                     "mutation_performed":
+ 9294:                         False,
+ 9295:                 }
+ 9296:             )
+ 9297: 
+ 9298: 
+ 9299:             if (
+ 9300:                 mutation_intent.get(
+ 9301:                     "execution_strategy"
+ 9302:                 )
+ 9303:                 == "QUARANTINE_FILE"
+ 9304:             ):
+ 9305: 
+ 9306:                 expected_mutation_result = (
+ 9307:                     _build_expected_quarantine_rollback_stub_v1(
+ 9308:                         project_root=project_root,
+ 9309:                         workspace_id=workspace_id,
+ 9310:                         target_store=current_target_store,
+ 9311:                         target_path=target_path,
+ 9312:                         workspace_store_root=workspace_store_root,
+ 9313:                     )
+ 9314:                 )
+ 9315: 
+ 9316: 
+ 9317:             # -------------------------------------------------
+ 9318:             # 6F. Register current action BEFORE mutation.
+ 9319:             #
+ 9320:             # This is critical:
+ 9321:             # if the handler throws halfway through mutation,
+ 9322:             # this action is already in the rollback stack.
+ 9323:             # -------------------------------------------------
+ 9324: 
+ 9325:             transaction_entry: dict[
+ 9326:                 str,
+ 9327:                 Any,
+ 9328:             ] = {
+ 9329:                 "repair_action_id":
+ 9330:                     current_action_id,
+ 9331: 
+ 9332:                 "source_finding_id":
+ 9333:                     current_source_finding_id,
+ 9334: 
+ 9335:                 "repair_action_type":
+ 9336:                     current_action_type,
+ 9337: 
+ 9338:                 "target_store":
+ 9339:                     current_target_store,
+ 9340: 
+ 9341:                 "target_path":
+ 9342:                     str(
+ 9343:                         target_path
+ 9344:                     ),
+ 9345: 
+ 9346:                 "workspace_store_root":
+ 9347:                     workspace_store_root,
+ 9348: 
+ 9349:                 "backup_root":
+ 9350:                     action_backup_root,
+ 9351: 
+ 9352:                 "backup_record":
+ 9353:                     backup_record,
+ 9354: 
+ 9355:                 "mutation_result":
+ 9356:                     expected_mutation_result,
+ 9357: 
+ 9358:                 "mutation_attempted":
+ 9359:                     False,
+ 9360: 
+ 9361:                 "mutation_completed":
+ 9362:                     False,
+ 9363: 
+ 9364:                 "mutation_performed":
+ 9365:                     False,
+ 9366:             }
+ 9367: 
+ 9368: 
+ 9369:             current_transaction_entry = (
+ 9370:                 transaction_entry
+ 9371:             )
+ 9372: 
+ 9373: 
+ 9374:             transaction_stack.append(
+ 9375:                 transaction_entry
+ 9376:             )
+ 9377: 
+ 9378: 
+ 9379:             transaction_entries_by_action_id[
+ 9380:                 current_action_id
+ 9381:             ] = transaction_entry
+ 9382: 
+ 9383: 
+ 9384:             # -------------------------------------------------
+ 9385:             # 6G. Mutation begins.
+ 9386:             # -------------------------------------------------
+ 9387: 
+ 9388:             transaction_entry[
+ 9389:                 "mutation_attempted"
+ 9390:             ] = True
+ 9391: 
+ 9392: 
+ 9393:             mutation_result = (
+ 9394:                 _dispatch_authorized_mutation_v1(
+ 9395:                     project_root=project_root,
+ 9396:                     workspace_id=workspace_id,
+ 9397:                     mutation_intent=mutation_intent,
+ 9398:                     execution_authorized=True,
+ 9399:                 )
+ 9400:             )
+ 9401: 
+ 9402: 
+ 9403:             transaction_entry[
+ 9404:                 "mutation_result"
+ 9405:             ] = mutation_result
+ 9406: 
+ 9407: 
+ 9408:             transaction_entry[
+ 9409:                 "mutation_completed"
+ 9410:             ] = True
+ 9411: 
+ 9412: 
+ 9413:             mutation_performed = (
+ 9414:                 mutation_result.get(
+ 9415:                     "mutation_performed"
+ 9416:                 )
+ 9417:                 is True
+ 9418:             )
+ 9419: 
+ 9420: 
+ 9421:             transaction_entry[
+ 9422:                 "mutation_performed"
+ 9423:             ] = mutation_performed
+ 9424: 
+ 9425: 
+ 9426:             execution_status = (
+ 9427:                 "EXECUTED"
+ 9428:                 if mutation_performed
+ 9429:                 else "SKIPPED"
+ 9430:             )
+ 9431: 
+ 9432: 
+ 9433:             action_result = (
+ 9434:                 _build_executor_action_result_v1(
+ 9435:                     repair_action_id=(
+ 9436:                         current_action_id
+ 9437:                     ),
+ 9438:                     source_finding_id=(
+ 9439:                         current_source_finding_id
+ 9440:                     ),
+ 9441:                     repair_action_type=(
+ 9442:                         current_action_type
+ 9443:                     ),
+ 9444:                     target_store=(
+ 9445:                         current_target_store
+ 9446:                     ),
+ 9447:                     target_path=(
+ 9448:                         str(
+ 9449:                             target_path
+ 9450:                         )
+ 9451:                     ),
+ 9452:                     execution_mode=(
+ 9453:                         "AUTHORIZED_APPLY"
+ 9454:                     ),
+ 9455:                     execution_status=(
+ 9456:                         execution_status
+ 9457:                     ),
+ 9458:                     execution_authorized=True,
+ 9459:                     mutation_attempted=True,
+ 9460:                     mutation_performed=(
+ 9461:                         mutation_performed
+ 9462:                     ),
+ 9463:                     backup_record=(
+ 9464:                         backup_record
+ 9465:                     ),
+ 9466:                     mutation_result=(
+ 9467:                         mutation_result
+ 9468:                     ),
+ 9469:                 )
+ 9470:             )
+ 9471: 
+ 9472: 
+ 9473:             action_results.append(
+ 9474:                 action_result
+ 9475:             )
+ 9476: 
+ 9477: 
+ 9478:             # -------------------------------------------------
+ 9479:             # No-op actions changed nothing.
+ 9480:             # They must not remain in rollback stack.
+ 9481:             # -------------------------------------------------
+ 9482: 
+ 9483:             if not mutation_performed:
+ 9484: 
+ 9485:                 transaction_stack.pop()
+ 9486: 
+ 9487:                 transaction_entries_by_action_id.pop(
+ 9488:                     current_action_id,
+ 9489:                     None,
+ 9490:                 )
+ 9491: 
+ 9492: 
+ 9493:             current_transaction_entry = None
+ 9494: 
+ 9495: 
+ 9496:     # =========================================================
+ 9497:     # 7. FAILURE → TRANSACTION ROLLBACK
+ 9498:     # =========================================================
+ 9499: 
+ 9500:     except Exception as exc:
+ 9501: 
+ 9502:         failed_action_id = (
+ 9503:             current_action_id
+ 9504:         )
+ 9505: 
+ 9506: 
+ 9507:         failure_reason = str(
+ 9508:             exc
+ 9509:         )
+ 9510: 
+ 9511: 
+ 9512:         rollback_results: list[
+ 9513:             Mapping[str, Any]
+ 9514:         ] = []
+ 9515: 
+ 9516: 
+ 9517:         rollback_failures: list[
+ 9518:             str
+ 9519:         ] = []
+ 9520: 
+ 9521: 
+ 9522:         rollback_by_action_id: dict[
+ 9523:             str,
+ 9524:             Mapping[str, Any],
+ 9525:         ] = {}
+ 9526: 
+ 9527: 
+ 9528:         mutation_outcome_uncertain_action_ids: list[
+ 9529:             str
+ 9530:         ] = []
+ 9531: 
+ 9532: 
+ 9533:         # -----------------------------------------------------
+ 9534:         # If a mutation handler threw before returning,
+ 9535:         # mutation completion cannot be trusted.
+ 9536:         # -----------------------------------------------------
+ 9537: 
+ 9538:         for transaction_entry in (
+ 9539:             transaction_stack
+ 9540:         ):
+ 9541: 
+ 9542:             if (
+ 9543:                 transaction_entry.get(
+ 9544:                     "mutation_attempted"
+ 9545:                 )
+ 9546:                 is True
+ 9547:                 and transaction_entry.get(
+ 9548:                     "mutation_completed"
+ 9549:                 )
+ 9550:                 is not True
+ 9551:             ):
+ 9552: 
+ 9553:                 mutation_outcome_uncertain_action_ids.append(
+ 9554:                     transaction_entry[
+ 9555:                         "repair_action_id"
+ 9556:                     ]
+ 9557:                 )
+ 9558: 
+ 9559: 
+ 9560:         # -----------------------------------------------------
+ 9561:         # Roll back in reverse mutation order.
+ 9562:         # -----------------------------------------------------
+ 9563: 
+ 9564:         for transaction_entry in reversed(
+ 9565:             transaction_stack
+ 9566:         ):
+ 9567: 
+ 9568:             rollback_action_id = (
+ 9569:                 transaction_entry[
+ 9570:                     "repair_action_id"
+ 9571:                 ]
+ 9572:             )
+ 9573: 
+ 9574: 
+ 9575:             try:
+ 9576: 
+ 9577:                 rollback_result = (
+ 9578:                     _rollback_executed_action_v1(
+ 9579:                         project_root=project_root,
+ 9580:                         workspace_id=workspace_id,
+ 9581:                         backup_record=(
+ 9582:                             transaction_entry[
+ 9583:                                 "backup_record"
+ 9584:                             ]
+ 9585:                         ),
+ 9586:                         mutation_result=(
+ 9587:                             transaction_entry[
+ 9588:                                 "mutation_result"
+ 9589:                             ]
+ 9590:                         ),
+ 9591:                         backup_root=(
+ 9592:                             transaction_entry[
+ 9593:                                 "backup_root"
+ 9594:                             ]
+ 9595:                         ),
+ 9596:                         workspace_store_root=(
+ 9597:                             transaction_entry[
+ 9598:                                 "workspace_store_root"
+ 9599:                             ]
+ 9600:                         ),
+ 9601:                     )
+ 9602:                 )
+ 9603: 
+ 9604: 
+ 9605:                 rollback_by_action_id[
+ 9606:                     rollback_action_id
+ 9607:                 ] = rollback_result
+ 9608: 
+ 9609: 
+ 9610:                 rollback_results.append(
+ 9611:                     _freeze(
+ 9612:                         {
+ 9613:                             "repair_action_id":
+ 9614:                                 rollback_action_id,
+ 9615: 
+ 9616:                             "rollback_result":
+ 9617:                                 rollback_result,
+ 9618:                         }
+ 9619:                     )
+ 9620:                 )
+ 9621: 
+ 9622: 
+ 9623:                 if (
+ 9624:                     rollback_result[
+ 9625:                         "rollback_verified"
+ 9626:                     ]
+ 9627:                     is not True
+ 9628:                 ):
+ 9629: 
+ 9630:                     rollback_failures.append(
+ 9631:                         rollback_action_id
+ 9632:                     )
+ 9633: 
+ 9634: 
+ 9635:             except Exception as rollback_exc:
+ 9636: 
+ 9637:                 rollback_failures.append(
+ 9638:                     rollback_action_id
+ 9639:                     + ": "
+ 9640:                     + str(
+ 9641:                         rollback_exc
+ 9642:                     )
+ 9643:                 )
+ 9644: 
+ 9645: 
+ 9646:         rollback_required = bool(
+ 9647:             transaction_stack
+ 9648:         )
+ 9649: 
+ 9650: 
+ 9651:         rollback_performed = bool(
+ 9652:             rollback_results
+ 9653:         )
+ 9654: 
+ 9655: 
+ 9656:         if rollback_required:
+ 9657: 
+ 9658:             rollback_verified: bool | None = (
+ 9659:                 not rollback_failures
+ 9660:                 and len(
+ 9661:                     rollback_results
+ 9662:                 )
+ 9663:                 == len(
+ 9664:                     transaction_stack
+ 9665:                 )
+ 9666:                 and all(
+ 9667:                     rollback_item[
+ 9668:                         "rollback_result"
+ 9669:                     ][
+ 9670:                         "rollback_verified"
+ 9671:                     ]
+ 9672:                     is True
+ 9673: 
+ 9674:                     for rollback_item
+ 9675:                     in rollback_results
+ 9676:                 )
+ 9677:             )
+ 9678: 
+ 9679:         else:
+ 9680: 
+ 9681:             rollback_verified = None
+ 9682: 
+ 9683: 
+ 9684:         # =====================================================
+ 9685:         # 8. REBUILD PRIOR ACTION RESULTS THAT WERE ROLLED BACK
+ 9686:         # =====================================================
+ 9687: 
+ 9688:         rebuilt_action_results: list[
+ 9689:             Mapping[str, Any]
+ 9690:         ] = []
+ 9691: 
+ 9692: 
+ 9693:         existing_result_ids: set[
+ 9694:             str
+ 9695:         ] = set()
+ 9696: 
+ 9697: 
+ 9698:         for existing_result in action_results:
+ 9699: 
+ 9700:             existing_action_id = (
+ 9701:                 existing_result[
+ 9702:                     "repair_action_id"
+ 9703:                 ]
+ 9704:             )
+ 9705: 
+ 9706: 
+ 9707:             existing_result_ids.add(
+ 9708:                 existing_action_id
+ 9709:             )
+ 9710: 
+ 9711: 
+ 9712:             rollback_result = (
+ 9713:                 rollback_by_action_id.get(
+ 9714:                     existing_action_id
+ 9715:                 )
+ 9716:             )
+ 9717: 
+ 9718: 
+ 9719:             if rollback_result is None:
+ 9720: 
+ 9721:                 rebuilt_action_results.append(
+ 9722:                     existing_result
+ 9723:                 )
+ 9724: 
+ 9725:                 continue
+ 9726: 
+ 9727: 
+ 9728:             transaction_entry = (
+ 9729:                 transaction_entries_by_action_id[
+ 9730:                     existing_action_id
+ 9731:                 ]
+ 9732:             )
+ 9733: 
+ 9734: 
+ 9735:             rebuilt_action_results.append(
+ 9736:                 _build_executor_action_result_v1(
+ 9737:                     repair_action_id=(
+ 9738:                         existing_action_id
+ 9739:                     ),
+ 9740:                     source_finding_id=(
+ 9741:                         transaction_entry[
+ 9742:                             "source_finding_id"
+ 9743:                         ]
+ 9744:                     ),
+ 9745:                     repair_action_type=(
+ 9746:                         transaction_entry[
+ 9747:                             "repair_action_type"
+ 9748:                         ]
+ 9749:                     ),
+ 9750:                     target_store=(
+ 9751:                         transaction_entry[
+ 9752:                             "target_store"
+ 9753:                         ]
+ 9754:                     ),
+ 9755:                     target_path=(
+ 9756:                         transaction_entry[
+ 9757:                             "target_path"
+ 9758:                         ]
+ 9759:                     ),
+ 9760:                     execution_mode=(
+ 9761:                         "AUTHORIZED_APPLY"
+ 9762:                     ),
+ 9763:                     execution_status="FAILED",
+ 9764:                     execution_authorized=True,
+ 9765:                     mutation_attempted=(
+ 9766:                         transaction_entry[
+ 9767:                             "mutation_attempted"
+ 9768:                         ]
+ 9769:                         is True
+ 9770:                     ),
+ 9771:                     mutation_performed=(
+ 9772:                         transaction_entry[
+ 9773:                             "mutation_performed"
+ 9774:                         ]
+ 9775:                         is True
+ 9776:                     ),
+ 9777:                     backup_record=(
+ 9778:                         transaction_entry[
+ 9779:                             "backup_record"
+ 9780:                         ]
+ 9781:                     ),
+ 9782:                     mutation_result=(
+ 9783:                         transaction_entry[
+ 9784:                             "mutation_result"
+ 9785:                         ]
+ 9786:                     ),
+ 9787:                     rollback_result=(
+ 9788:                         rollback_result
+ 9789:                     ),
+ 9790:                     failure_reason=(
+ 9791:                         "Transaction rolled back because "
+ 9792:                         "repair action "
+ 9793:                         + str(
+ 9794:                             failed_action_id
+ 9795:                         )
+ 9796:                         + " failed: "
+ 9797:                         + failure_reason
+ 9798:                     ),
+ 9799:                 )
+ 9800:             )
+ 9801: 
+ 9802: 
+ 9803:         # =====================================================
+ 9804:         # 9. ADD FAILED CURRENT ACTION IF IT NEVER PRODUCED
+ 9805:         # AN ACTION RESULT
+ 9806:         # =====================================================
+ 9807: 
+ 9808:         if (
+ 9809:             failed_action_id is not None
+ 9810:             and failed_action_id
+ 9811:             not in existing_result_ids
+ 9812:             and current_source_finding_id
+ 9813:             is not None
+ 9814:             and current_action_type
+ 9815:             is not None
+ 9816:             and current_target_store
+ 9817:             is not None
+ 9818:         ):
+ 9819: 
+ 9820:             failed_transaction_entry = (
+ 9821:                 transaction_entries_by_action_id.get(
+ 9822:                     failed_action_id
+ 9823:                 )
+ 9824:             )
+ 9825: 
+ 9826: 
+ 9827:             if failed_transaction_entry is not None:
+ 9828: 
+ 9829:                 failed_rollback_result = (
+ 9830:                     rollback_by_action_id.get(
+ 9831:                         failed_action_id
+ 9832:                     )
+ 9833:                 )
+ 9834: 
+ 9835: 
+ 9836:                 rebuilt_action_results.append(
+ 9837:                     _build_executor_action_result_v1(
+ 9838:                         repair_action_id=(
+ 9839:                             failed_action_id
+ 9840:                         ),
+ 9841:                         source_finding_id=(
+ 9842:                             current_source_finding_id
+ 9843:                         ),
+ 9844:                         repair_action_type=(
+ 9845:                             current_action_type
+ 9846:                         ),
+ 9847:                         target_store=(
+ 9848:                             current_target_store
+ 9849:                         ),
+ 9850:                         target_path=(
+ 9851:                             failed_transaction_entry[
+ 9852:                                 "target_path"
+ 9853:                             ]
+ 9854:                         ),
+ 9855:                         execution_mode=(
+ 9856:                             "AUTHORIZED_APPLY"
+ 9857:                         ),
+ 9858:                         execution_status="FAILED",
+ 9859:                         execution_authorized=True,
+ 9860:                         mutation_attempted=(
+ 9861:                             failed_transaction_entry[
+ 9862:                                 "mutation_attempted"
+ 9863:                             ]
+ 9864:                             is True
+ 9865:                         ),
+ 9866:                         mutation_performed=(
+ 9867:                             failed_transaction_entry[
+ 9868:                                 "mutation_performed"
+ 9869:                             ]
+ 9870:                             is True
+ 9871:                         ),
+ 9872:                         backup_record=(
+ 9873:                             failed_transaction_entry[
+ 9874:                                 "backup_record"
+ 9875:                             ]
+ 9876:                         ),
+ 9877:                         mutation_result=(
+ 9878:                             failed_transaction_entry[
+ 9879:                                 "mutation_result"
+ 9880:                             ]
+ 9881:                         ),
+ 9882:                         rollback_result=(
+ 9883:                             failed_rollback_result
+ 9884:                         ),
+ 9885:                         failure_reason=(
+ 9886:                             failure_reason
+ 9887:                         ),
+ 9888:                     )
+ 9889:                 )
+ 9890: 
+ 9891: 
+ 9892:             else:
+ 9893: 
+ 9894:                 # Failure occurred before backup/mutation.
+ 9895:                 rebuilt_action_results.append(
+ 9896:                     _build_executor_action_result_v1(
+ 9897:                         repair_action_id=(
+ 9898:                             failed_action_id
+ 9899:                         ),
+ 9900:                         source_finding_id=(
+ 9901:                             current_source_finding_id
+ 9902:                         ),
+ 9903:                         repair_action_type=(
+ 9904:                             current_action_type
+ 9905:                         ),
+ 9906:                         target_store=(
+ 9907:                             current_target_store
+ 9908:                         ),
+ 9909:                         target_path=(
+ 9910:                             current_target_path
+ 9911:                         ),
+ 9912:                         execution_mode=(
+ 9913:                             "AUTHORIZED_APPLY"
+ 9914:                         ),
+ 9915:                         execution_status="FAILED",
+ 9916:                         execution_authorized=True,
+ 9917:                         mutation_attempted=False,
+ 9918:                         mutation_performed=False,
+ 9919:                         failure_reason=(
+ 9920:                             failure_reason
+ 9921:                         ),
+ 9922:                     )
+ 9923:                 )
+ 9924: 
+ 9925: 
+ 9926:         # =====================================================
+ 9927:         # 10. TRANSACTION FAILURE RESULT
+ 9928:         # =====================================================
+ 9929: 
+ 9930:         persistent_mutation_possible = (
+ 9931:             rollback_required
+ 9932:             and rollback_verified
+ 9933:             is not True
+ 9934:         )
+ 9935: 
+ 9936: 
+ 9937:         failed_result = {
+ 9938:             "schema":
+ 9939:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTION_RESULT_SCHEMA,
+ 9940: 
+ 9941:             "executor_engine_schema":
+ 9942:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+ 9943: 
+ 9944:             "executor_engine_version":
+ 9945:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+ 9946: 
+ 9947:             "executor_contract_version":
+ 9948:                 BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_CONTRACT_VERSION,
+ 9949: 
+ 9950:             "execution_request_id":
+ 9951:                 execution_request_id,
+ 9952: 
+ 9953:             "workspace_id":
+ 9954:                 workspace_id,
+ 9955: 
+ 9956:             "repair_plan_id":
+ 9957:                 plan.get(
+ 9958:                     "repair_plan_id"
+ 9959:                 ),
+ 9960: 
+ 9961:             "execution_mode":
+ 9962:                 "AUTHORIZED_APPLY",
+ 9963: 
+ 9964:             "context_valid":
+ 9965:                 True,
+ 9966: 
+ 9967:             "preflight_valid":
+ 9968:                 True,
+ 9969: 
+ 9970:             "execution_authorized":
+ 9971:                 True,
+ 9972: 
+ 9973:             "execution_started":
+ 9974:                 True,
+ 9975: 
+ 9976:             "execution_completed":
+ 9977:                 True,
+ 9978: 
+ 9979:             "execution_succeeded":
+ 9980:                 False,
+ 9981: 
+ 9982:             "failed_action_id":
+ 9983:                 failed_action_id,
+ 9984: 
+ 9985:             "failure_reason":
+ 9986:                 failure_reason,
+ 9987: 
+ 9988:             "requested_action_count":
+ 9989:                 len(
+ 9990:                     prepared_actions
+ 9991:                 ),
+ 9992: 
+ 9993:             "completed_action_result_count":
+ 9994:                 len(
+ 9995:                     action_results
+ 9996:                 ),
+ 9997: 
+ 9998:             "failed_action_count":
+ 9999:                 1,
+10000: 
+10001:             "committed_mutation_count":
+10002:                 0,
+10003: 
+10004:             "rolled_back_action_count":
+10005:                 len(
+10006:                     rollback_results
+10007:                 ),
+10008: 
+10009:             "action_results":
+10010:                 tuple(
+10011:                     rebuilt_action_results
+10012:                 ),
+10013: 
+10014:             "rollback_results":
+10015:                 tuple(
+10016:                     rollback_results
+10017:                 ),
+10018: 
+10019:             "rollback_failures":
+10020:                 tuple(
+10021:                     rollback_failures
+10022:                 ),
+10023: 
+10024:             "repair_executed":
+10025:                 False,
+10026: 
+10027:             # True here means an unverified mutation may still
+10028:             # remain after a rollback failure.
+10029:             "mutation_performed":
+10030:                 persistent_mutation_possible,
+10031: 
+10032:             "rollback_required":
+10033:                 rollback_required,
+10034: 
+10035:             "rollback_performed":
+10036:                 rollback_performed,
+10037: 
+10038:             "rollback_verified":
+10039:                 rollback_verified,
+10040: 
+10041:             "mutation_outcome_uncertain_action_ids":
+10042:                 tuple(
+10043:                     mutation_outcome_uncertain_action_ids
+10044:                 ),
+10045: 
+10046:             "runtime_job_created":
+10047:                 False,
+10048: 
+10049:             "queue_job_created":
+10050:                 False,
+10051:         }
+10052: 
+10053: 
+10054:         failed_result[
+10055:             "execution_result_checksum"
+10056:         ] = (
+10057:             calculate_lifecycle_repair_executor_engine_checksum_v1(
+10058:                 payload=failed_result,
+10059:             )
+10060:         )
+10061: 
+10062: 
+10063:         return _freeze(
+10064:             failed_result
+10065:         )
+10066: 
+10067: 
+10068:     # =========================================================
+10069:     # 11. SUCCESSFUL AUTHORIZED TRANSACTION
+10070:     # =========================================================
+10071: 
+10072:     committed_mutations = sum(
+10073:         1
+10074: 
+10075:         for action_result
+10076:         in action_results
+10077: 
+10078:         if action_result.get(
+10079:             "mutation_performed"
+10080:         )
+10081:         is True
+10082:     )
+10083: 
+10084: 
+10085:     skipped_actions = sum(
+10086:         1
+10087: 
+10088:         for action_result
+10089:         in action_results
+10090: 
+10091:         if action_result.get(
+10092:             "execution_status"
+10093:         )
+10094:         == "SKIPPED"
+10095:     )
+10096: 
+10097: 
+10098:     executed_actions = sum(
+10099:         1
+10100: 
+10101:         for action_result
+10102:         in action_results
+10103: 
+10104:         if action_result.get(
+10105:             "execution_status"
+10106:         )
+10107:         == "EXECUTED"
+10108:     )
+10109: 
+10110: 
+10111:     successful_result = {
+10112:         "schema":
+10113:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTION_RESULT_SCHEMA,
+10114: 
+10115:         "executor_engine_schema":
+10116:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_SCHEMA,
+10117: 
+10118:         "executor_engine_version":
+10119:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_ENGINE_VERSION,
+10120: 
+10121:         "executor_contract_version":
+10122:             BODY_STORE_LIFECYCLE_REPAIR_EXECUTOR_CONTRACT_VERSION,
+10123: 
+10124:         "execution_request_id":
+10125:             execution_request_id,
+10126: 
+10127:         "workspace_id":
+10128:             workspace_id,
+10129: 
+10130:         "repair_plan_id":
+10131:             plan.get(
+10132:                 "repair_plan_id"
+10133:             ),
+10134: 
+10135:         "execution_mode":
+10136:             "AUTHORIZED_APPLY",
+10137: 
+10138:         "context_valid":
+10139:             True,
+10140: 
+10141:         "preflight_valid":
+10142:             True,
+10143: 
+10144:         "execution_authorized":
+10145:             True,
+10146: 
+10147:         "execution_started":
+10148:             True,
+10149: 
+10150:         "execution_completed":
+10151:             True,
+10152: 
+10153:         "execution_succeeded":
+10154:             True,
+10155: 
+10156:         "requested_action_count":
+10157:             len(
+10158:                 prepared_actions
+10159:             ),
+10160: 
+10161:         "executed_action_count":
+10162:             executed_actions,
+10163: 
+10164:         "skipped_action_count":
+10165:             skipped_actions,
+10166: 
+10167:         "committed_mutation_count":
+10168:             committed_mutations,
+10169: 
+10170:         "failed_action_count":
+10171:             0,
+10172: 
+10173:         "rolled_back_action_count":
+10174:             0,
+10175: 
+10176:         "action_results":
+10177:             tuple(
+10178:                 action_results
+10179:             ),
+10180: 
+10181:         "repair_executed":
+10182:             committed_mutations
+10183:             > 0,
+10184: 
+10185:         "mutation_performed":
+10186:             committed_mutations
+10187:             > 0,
+10188: 
+10189:         "rollback_required":
+10190:             False,
+10191: 
+10192:         "rollback_performed":
+10193:             False,
+10194: 
+10195:         "rollback_verified":
+10196:             None,
+10197: 
+10198:         "mutation_outcome_uncertain_action_ids":
+10199:             (),
+10200: 
+10201:         "runtime_job_created":
+10202:             False,
+10203: 
+10204:         "queue_job_created":
+10205:             False,
+10206:     }
+10207: 
+10208: 
+10209:     successful_result[
+10210:         "execution_result_checksum"
+10211:     ] = (
+10212:         calculate_lifecycle_repair_executor_engine_checksum_v1(
+10213:             payload=successful_result,
+10214:         )
+10215:     )
+10216: 
+10217: 
+10218:     return _freeze(
+10219:         successful_result
+10220:     )
+

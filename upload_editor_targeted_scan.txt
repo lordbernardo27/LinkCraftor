@@ -1,0 +1,964 @@
+LINKCRAFTOR TARGETED UPLOAD ? EDITOR SCAN
+==========================================================================================
+
+
+==========================================================================================
+C:\Users\HP\Documents\LinkCraftor\backend\server\routes\files.py
+LINES 630-710
+==========================================================================================
+   630:     workspace_id: str,
+   631:     *,
+   632:     add_document_ids: List[str] | None = None,
+   633:     add_draft_ids: List[str] | None = None,
+   634:     add_imported_urls: List[str] | None = None,
+   635:     add_live_domain_urls: List[str] | None = None,
+   636:     add_upload_ids: List[str] | None = None,
+   637: ) -> Dict[str, Any]:
+   638:     """Block obsolete membership-array mutation."""
+   639:     raise RuntimeError(
+   640:         "Membership-array Active Target Set merging is forbidden. "
+   641:         "Rebuild the canonical set from source target pools."
+   642:     )
+   643: 
+   644: 
+   645: # -------------------------
+   646: # API
+   647: # -------------------------
+   648: 
+   649: @router.post("/upload")
+   650: async def upload_file(
+   651:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+   652:     file: UploadFile = File(...),
+   653: ):
+   654:     """
+   655:     Canonical Upload Document API entry point.
+   656: 
+   657:     The HTTP route performs no Pipeline 2 implementation directly.
+   658:     It delegates the upload-intake workflow to the canonical
+   659:     Ingestion and Unified Content Pipeline.
+   660:     """
+   661: 
+   662:     from backend.server.pipelines.upload_document import (
+   663:         run_upload_document,
+   664:     )
+   665:     from backend.server.pipelines.upload_document.uploaded_document_to_uduc_pipeline import (
+   666:         UploadIntakeDependencies,
+   667:     )
+   668: 
+   669:     dependencies = UploadIntakeDependencies(
+   670:         guess_extension=_guess_ext,
+   671:         normalize_workspace_id=_ws,
+   672:         extract_preview=_extract_preview_from_bytes,
+   673:         store_and_index=_store_and_index,
+   674:         workspace_directory=_ws_dir,
+   675:         allowed_extensions=ALLOWED_EXT,
+   676:     )
+   677: 
+   678:     return await run_upload_document(
+   679:         workspace_id=workspace_id,
+   680:         file=file,
+   681:         dependencies=dependencies,
+   682:     )
+   683: 
+   684: 
+   685: @router.post("/clear_session")
+   686: def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
+   687:     ws_norm = _ws(workspace_id)
+   688: 
+   689:     removed_files: List[str] = []
+   690: 
+   691:     paths_to_remove = [
+   692:         BASE_DIR / "data" / f"upload_struct_{ws_norm}.json",
+   693:         BASE_DIR / "data" / f"upload_phrase_index_{ws_norm}.json",
+   694:         BASE_DIR / "data" / "phrase_pools" / "upload" / f"upload_phrase_pool_{ws_norm}.json",
+   695:         BASE_DIR / "data" / "phrase_pools" / "active" / f"active_phrase_pool_{ws_norm}.json",
+   696:     ]
+   697: 
+   698:     for fp in paths_to_remove:
+   699:         try:
+   700:             if fp.exists():
+   701:                 fp.unlink()
+   702:                 removed_files.append(str(fp))
+   703:         except Exception as e:
+   704:             print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
+   705: 
+   706:     # Clear uploaded workspace document files for this session.
+   707:     # This prevents re-upload from being blocked as duplicate after Clear Session.
+   708:     # FIX: only remove stored upload files ("{doc_id}__{name}"); previously this
+   709:     # deleted EVERY file in the directory, wiping index.json and work_index.json.
+   710:     try:
+
+
+==========================================================================================
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\upload_document\coordinator.py
+LINES 1-220
+==========================================================================================
+     1: """
+     2: Canonical Upload Document Coordinator
+     3: 
+     4: Dependency-aware execution:
+     5: 
+     6: UPLOADED DOCUMENT
+     7:     -> Uploaded Document-to-UDUC Pipeline
+     8:     -> Uploaded Document-to-Highlight Pipeline
+     9:     -> Uploaded Document Registry-to-Active Target Set Pipeline
+    10: 
+    11: Pipeline 2 executes first because it creates the uploaded-document identity,
+    12: stored-file metadata, and extracted content required by Pipelines 1 and 3.
+    13: 
+    14: After Pipeline 2 completes, Pipelines 1 and 3 execute as independent
+    15: downstream branches using the Pipeline 2 result.
+    16: """
+    17: 
+    18: from __future__ import annotations
+    19: 
+    20: from typing import Any, Dict
+    21: 
+    22: from fastapi import UploadFile
+    23: 
+    24: from .uploaded_document_to_uduc_pipeline import (
+    25:     UploadIntakeDependencies,
+    26:     run_uploaded_document_to_uduc_pipeline,
+    27: )
+    28: from .uploaded_document_to_highlight_pipeline import (
+    29:     run_uploaded_document_to_highlight_pipeline,
+    30: )
+    31: from .uploaded_document_registry_to_active_target_set_pipeline import (
+    32:     run_uploaded_document_registry_to_active_target_set_pipeline,
+    33: )
+    34: 
+    35: 
+    36: def _required_string(
+    37:     source: Dict[str, Any],
+    38:     *keys: str,
+    39: ) -> str:
+    40:     for key in keys:
+    41:         value = source.get(key)
+    42: 
+    43:         if value is None:
+    44:             continue
+    45: 
+    46:         cleaned = str(value).strip()
+    47: 
+    48:         if cleaned:
+    49:             return cleaned
+    50: 
+    51:     return ""
+    52: 
+    53: 
+    54: async def run_upload_document(
+    55:     *,
+    56:     workspace_id: str,
+    57:     file: UploadFile,
+    58:     dependencies: UploadIntakeDependencies,
+    59: ) -> Dict[str, Any]:
+    60:     """
+    61:     Canonical top-level Upload Document entry point.
+    62: 
+    63:     Execution order:
+    64:     1. Uploaded Document-to-UDUC Pipeline
+    65:     2. Uploaded Document-to-Highlight Pipeline
+    66:     3. Uploaded Document Registry-to-Active Target Set Pipeline
+    67:     """
+    68: 
+    69:     pipeline_2 = await run_uploaded_document_to_uduc_pipeline(
+    70:         workspace_id=workspace_id,
+    71:         file=file,
+    72:         dependencies=dependencies,
+    73:     )
+    74: 
+    75:     if not isinstance(pipeline_2, dict):
+    76:         raise RuntimeError(
+    77:             "Uploaded Document-to-UDUC Pipeline returned "
+    78:             "a non-dictionary result."
+    79:         )
+    80: 
+    81:     if pipeline_2.get("ok") is not True:
+    82:         return {
+    83:             "ok": False,
+    84:             "pipeline": "upload_document",
+    85:             "status": "UDUC_PIPELINE_FAILED",
+    86:             "execution_started": True,
+    87:             "execution_completed": False,
+    88:             "pipelines": {
+    89:                 "uploaded_document_to_uduc_pipeline": pipeline_2,
+    90:                 "uploaded_document_to_highlight_pipeline": {
+    91:                     "executed": False,
+    92:                     "reason": "Blocked by Pipeline 2 failure.",
+    93:                 },
+    94:                 "uploaded_document_registry_to_active_target_set_pipeline": {
+    95:                     "executed": False,
+    96:                     "reason": "Blocked by Pipeline 2 failure.",
+    97:                 },
+    98:             },
+    99:         }
+   100: 
+   101:     document_metadata = pipeline_2.get("doc")
+   102: 
+   103:     if not isinstance(document_metadata, dict):
+   104:         raise RuntimeError(
+   105:             "Pipeline 2 result does not contain document metadata."
+   106:         )
+   107: 
+   108:     document_id = _required_string(
+   109:         document_metadata,
+   110:         "doc_id",
+   111:         "document_id",
+   112:         "id",
+   113:     )
+   114: 
+   115:     if not document_id:
+   116:         raise RuntimeError(
+   117:             "Pipeline 2 result does not contain a document ID."
+   118:         )
+   119: 
+   120:     extraction_result = {
+   121:         "title": _required_string(
+   122:             document_metadata,
+   123:             "title",
+   124:             "filename",
+   125:         ),
+   126:         "text": _required_string(
+   127:             pipeline_2,
+   128:             "text",
+   129:         ),
+   130:         "html": _required_string(
+   131:             pipeline_2,
+   132:             "html",
+   133:         ),
+   134:         "source_format": _required_string(
+   135:             pipeline_2,
+   136:             "ext",
+   137:         ),
+   138:     }
+   139: 
+   140:     pipeline_1 = run_uploaded_document_to_highlight_pipeline(
+   141:         workspace_id=str(
+   142:             pipeline_2.get("workspace_id") or workspace_id
+   143:         ),
+   144:         document_id=document_id,
+   145:         extraction_result=extraction_result,
+   146:     )
+   147: 
+   148:     pipeline_3 = (
+   149:         run_uploaded_document_registry_to_active_target_set_pipeline(
+   150:             workspace_id=str(
+   151:                 pipeline_2.get("workspace_id") or workspace_id
+   152:             ),
+   153:             document_id=document_id,
+   154:             unified_content={
+   155:                 "document_id": document_id,
+   156:                 "workspace_id": str(
+   157:                     pipeline_2.get("workspace_id") or workspace_id
+   158:                 ),
+   159:                 "title": extraction_result["title"],
+   160:                 "content_body": extraction_result["text"],
+   161:                 "content_html": extraction_result["html"],
+   162:                 "source_format": extraction_result["source_format"],
+   163:                 "upload_metadata": document_metadata,
+   164:             },
+   165:         )
+   166:     )
+   167: 
+   168:     overall_ok = (
+   169:         pipeline_2.get("ok") is True
+   170:         and pipeline_1.get("ok") is True
+   171:         and pipeline_3.get("ok") is True
+   172:     )
+   173: 
+   174:     return {
+   175:         "ok": overall_ok,
+   176:         "pipeline": "upload_document",
+   177:         "workspace_id": str(
+   178:             pipeline_2.get("workspace_id") or workspace_id
+   179:         ),
+   180:         "document_id": document_id,
+   181:         "status": (
+   182:             "UPLOAD_DOCUMENT_PIPELINES_COMPLETED"
+   183:             if overall_ok
+   184:             else "UPLOAD_DOCUMENT_PIPELINES_PARTIALLY_FAILED"
+   185:         ),
+   186:         "execution_started": True,
+   187:         "execution_completed": True,
+   188:         "execution_order": [
+   189:             "uploaded_document_to_uduc_pipeline",
+   190:             "uploaded_document_to_highlight_pipeline",
+   191:             (
+   192:                 "uploaded_document_registry_to_"
+   193:                 "active_target_set_pipeline"
+   194:             ),
+   195:         ],
+   196:         "pipelines": {
+   197:             "uploaded_document_to_uduc_pipeline": pipeline_2,
+   198:             "uploaded_document_to_highlight_pipeline": pipeline_1,
+   199:             (
+   200:                 "uploaded_document_registry_to_"
+   201:                 "active_target_set_pipeline"
+   202:             ): pipeline_3,
+   203:         },
+   204:     }
+   205: 
+   206: 
+   207: __all__ = [
+   208:     "run_upload_document",
+   209: ]
+
+
+==========================================================================================
+C:\Users\HP\Documents\LinkCraftor\frontend\public\assets\js\app\api.js
+LINES 1-140
+==========================================================================================
+     1: // assets/js/app/api.js
+     2: // Uploads ALL formats to backend /api/files/upload (so they get stored + indexed into pools).
+     3: // Also keeps originals locally so “Download original” works without a server.
+     4: //
+     5: // Point API_BASE at your FastAPI server (we default to 8001 for dev).
+     6: const API_BASE =
+     7:   (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE) ||
+     8:   "http://127.0.0.1:8001";
+     9: 
+    10: // Keep originals so “Download original” works without a server.
+    11: const ORIGINAL_BLOBS = new Map();
+    12: const ORIGINAL_URLS = new Map();
+    13: 
+    14: function extOf(name = "") {
+    15:   const m = /\.[^.]+$/.exec(name);
+    16:   return m ? m[0].toLowerCase() : "";
+    17: }
+    18: 
+    19: function asDocRecord({
+    20:   filename,
+    21:   ext,
+    22:   text = "",
+    23:   html = "",
+    24:   size = 0,
+    25:   doc_id = "",
+    26:   h1 = "",
+    27:   h1_source = "",
+    28:   h1_error = "",
+    29:   workspace_id = "",
+    30: }) {
+    31:   return { filename, ext, text, html, size, doc_id, h1, h1_source, h1_error, workspace_id };
+    32: }
+    33: 
+    34: function getWorkspaceId(explicitWs) {
+    35:   let ws =
+    36:     (explicitWs || "").trim() ||
+    37:     (
+    38:       (typeof window !== "undefined" &&
+    39:         (window.WORKSPACE_ID || window.LINKCRAFTOR_WORKSPACE_ID)) ||
+    40:       ""
+    41:     ).trim() ||
+    42:     (
+    43:       (typeof localStorage !== "undefined" &&
+    44:         (localStorage.getItem("workspace_id") || localStorage.getItem("ws"))) ||
+    45:       ""
+    46:     ).trim() ||
+    47:     "ws_betterhealthcheck_com";
+    48: 
+    49:   if (!ws.toLowerCase().startsWith("ws_")) {
+    50:     ws = `ws_${ws}`;
+    51:   }
+    52: 
+    53:   return ws;
+    54: }
+    55: 
+    56: // -------------------------
+    57: // Upload
+    58: // -------------------------
+    59: // NOTE: This now uploads every file type to backend so it is persisted + indexed for pools.
+    60: // It still reads some formats locally only to keep a smooth preview, but the source of truth is backend.
+    61: export async function uploadFile(file, workspaceId) {
+    62:   if (!file || !file.name) throw new Error("No file provided");
+    63: 
+    64:   const ws = getWorkspaceId(workspaceId);
+    65:   const ext = extOf(file.name);
+    66: 
+    67:   // Store original blob locally for "Download original"
+    68:   ORIGINAL_BLOBS.set(file.name, file);
+    69: 
+    70:   // Always upload to backend so it lands in:
+    71:   // backend/server/data/docs/<ws>/
+    72:   const fd = new FormData();
+    73:   fd.append("file", file);
+    74: 
+    75:   const res = await fetch(`${API_BASE}/api/files/upload?workspace_id=${encodeURIComponent(ws)}`, {
+    76:     method: "POST",
+    77:     body: fd,
+    78:   });
+    79: 
+    80:   let data;
+    81:   try {
+    82:     data = await res.json();
+    83:   } catch {
+    84:     throw new Error(`upload_failed_http_${res.status}`);
+    85:   }
+    86: 
+    87:   if (!res.ok || !data || data.ok !== true) {
+    88:     const msg =
+    89:       data && (data.detail || data.error)
+    90:         ? (data.detail || data.error)
+    91:         : `upload_failed_http_${res.status}`;
+    92:     throw new Error(msg);
+    93:   }
+    94: 
+    95:   // Backend returns:
+    96:   // { ok, workspace_id, doc:{...}, filename, ext, text, html, is_html, truncated }
+    97:   const doc = data.doc || {};
+    98:   const text = (data.text ?? doc.text ?? "") || "";
+    99:   const html = (data.html ?? doc.html ?? "") || "";
+   100: 
+   101:   return asDocRecord({
+   102:     filename: data.filename || doc.filename || file.name,
+   103:     ext: data.ext || doc.ext || ext,
+   104:     text,
+   105:     html,
+   106:     size: file.size,
+   107:     doc_id: doc.doc_id || "",
+   108:     h1: doc.h1 || "",
+   109:     h1_source: doc.h1_source || "",
+   110:     h1_error: doc.h1_error || "",
+   111:     workspace_id: data.workspace_id || ws,
+   112:   });
+   113: }
+   114: 
+   115: // -------------------------
+   116: // Downloads / Exports
+   117: // -------------------------
+   118: export function downloadOriginalUrl(filename) {
+   119:   if (ORIGINAL_BLOBS.has(filename)) {
+   120:     try {
+   121:       if (ORIGINAL_URLS.has(filename)) {
+   122:         URL.revokeObjectURL(ORIGINAL_URLS.get(filename));
+   123:       }
+   124:     } catch {}
+   125:     const url = URL.createObjectURL(ORIGINAL_BLOBS.get(filename));
+   126:     ORIGINAL_URLS.set(filename, url);
+   127:     return url;
+   128:   }
+   129:   // If you later persist originals on the server, you can serve them here:
+   130:   return `${API_BASE}/api/download/original?file=${encodeURIComponent(filename)}`;
+   131: }
+   132: 
+   133: // (Optional) bulk export stubs kept for later; safe to leave as-is.
+   134: export function exportZipUrl() {
+   135:   return `${API_BASE}/api/export/zip`;
+   136: }
+   137: 
+   138: export function exportRarUrl() {
+   139:   return `${API_BASE}/api/export/rar`;
+   140: }
+
+
+==========================================================================================
+C:\Users\HP\Documents\LinkCraftor\frontend\public\assets\js\app.js
+LINES 1500-1800
+==========================================================================================
+  1500:       append: true,
+  1501:       perPassLimit
+  1502:     })
+  1503:   : 0;
+  1504: 
+  1505: console.log("[HIGHLIGHT APPLIED COUNTS]", {
+  1506:   strong: appliedStrong || 0,
+  1507:   optional: appliedOptional || 0
+  1508: });
+  1509: 
+  1510: cleanupMarksInHeadings(viewerEl);
+  1511: underlineLinkedPhrases();
+  1512: updateHighlightBadge();
+  1513: rebuildEngineHighlightsPanel();
+  1514: 
+  1515: LAST_ENGINE_OUTPUT = {
+  1516:   internal_strong: out.internal_strong || [],
+  1517:   semantic_optional: out.semantic_optional || [],
+  1518:   hidden: out.hidden || [],
+  1519:   meta: out.meta || {}
+  1520: };
+  1521: 
+  1522:   try {
+  1523:     window.LC_LAST_ENGINE_RUN = {
+  1524:       completed_at: new Date().toISOString(),
+  1525:       internal_strong_count: (out.internal_strong || []).length,
+  1526:       semantic_optional_count: (out.semantic_optional || []).length,
+  1527:       hidden_count: (out.hidden || []).length
+  1528:     };
+  1529: 
+  1530:     if (typeof window.lcAutosaveWorkspaceSession === "function") {
+  1531:       window.lcSetAutosaveStatus?.("saving");
+  1532:       const autosaveResult = await window.lcAutosaveWorkspaceSession("after_engine_run");
+  1533: 
+  1534:       if (autosaveResult && autosaveResult.ok) {
+  1535:         window.lcSetAutosaveStatus?.("saved");
+  1536:       } else {
+  1537:         window.lcSetAutosaveStatus?.("error", autosaveResult);
+  1538:       }
+  1539:     }
+  1540:   } catch (autosaveErr) {
+  1541:     console.warn("[LinkCraftor Autosave] after engine run failed:", autosaveErr);
+  1542:     window.lcSetAutosaveStatus?.("error", autosaveErr);
+  1543:   }
+  1544: 
+  1545: 
+  1546: 
+  1547: return (appliedStrong || 0) + (appliedOptional || 0);
+  1548:   } finally {
+  1549:     window.__LC_RB2_RUNNING = false;
+  1550:   }
+  1551: }
+  1552: 
+  1553: // === Auto-Link main button: run engine on CURRENT document ===
+  1554: btnAutoLinkMain?.addEventListener("click", async () => {
+  1555:   console.log("[AutoLink] Bulk Auto-Link button clicked");
+  1556:   highlightsArmed = true;
+  1557: 
+  1558:   if (!docs || !docs.length) {
+  1559:     showToast(errorBox, "Upload at least one document first.", 2000);
+  1560:     return;
+  1561:   }
+  1562: 
+  1563:   try {
+  1564:     await runRB2PipelineAndHighlight({ append: true });
+  1565:   } catch (e) {
+  1566:     console.error("[AutoLink] failed:", e);
+  1567:     showToast(errorBox, "Auto-Link failed: " + (e?.message || e), 2500);
+  1568:   }
+  1569: });
+  1570: 
+  1571: /* ==========================================================================
+  1572:    STORAGE KEYS
+  1573:    ========================================================================== */
+  1574: const STORAGE_KEY         = "linkcraftor_state_v2";
+  1575: const HILITE_KEY          = "linkcraftor_highlight_enabled_v1";
+  1576: const IL_LINKED_SET_KEY   = "linkcraftor_il_linked_set_v2";
+  1577: const IL_REJECTED_SET_KEY = "linkcraftor_rejected_set_v1";
+  1578: 
+  1579: const IMPORTED_URLS_KEY   = "linkcraftor_imported_urls_v1";
+  1580: const PUBLISHED_TOPICS_KEY= "linkcraftor_published_topics_v1";
+  1581: const DRAFT_TOPICS_KEY    = "linkcraftor_draft_topics_v1";
+  1582: 
+  1583: const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
+  1584: 
+  1585: 
+  1586: // ==========================================================================
+  1587: // Session format helpers (upload/download lock to one format) â€” COLLISION-SAFE
+  1588: // ==========================================================================
+  1589: (function(){
+  1590:   const W = (typeof window !== "undefined") ? window : globalThis;
+  1591: 
+  1592:   // Namespace (never collides)
+  1593:   W.__LC__ = W.__LC__ || {};
+  1594:   if (typeof W.__LC__.SESSION_FORMAT === "undefined") {
+  1595:     W.__LC__.SESSION_FORMAT = "";
+  1596:   }
+  1597: 
+  1598:   // Core implementations (namespaced; never collide)
+  1599:   function __getSessionFormatNS(){
+  1600:     try {
+  1601:       return W.__LC__.SESSION_FORMAT || (localStorage.getItem("lc_session_format") || "");
+  1602:     } catch {
+  1603:       return W.__LC__.SESSION_FORMAT || "";
+  1604:     }
+  1605:   }
+  1606: 
+  1607:   function __setSessionFormatNS(ext){
+  1608:     try{
+  1609:       if (!ext) return;
+  1610:       W.__LC__.SESSION_FORMAT = ext;
+  1611:       try { localStorage.setItem("lc_session_format", ext); } catch {}
+  1612:       // defer menu sync until DOM is ready; no crash if not present
+  1613:       const sync = () => { try { __ensureDownloadMenuForSessionNS(); } catch {} };
+  1614:       if (document.readyState === "loading") {
+  1615:         document.addEventListener("DOMContentLoaded", sync, { once: true });
+  1616:       } else {
+  1617:         sync();
+  1618:       }
+  1619:     }catch{}
+  1620:   }
+  1621: 
+  1622:   function __ensureDownloadMenuForSessionNS(){
+  1623:     try{
+  1624:       const sess = (__getSessionFormatNS() || "").toLowerCase();   // ".docx" | ".md" | ".txt" | ".html" | ""
+  1625:       const menu = document.getElementById("downloadMenu");
+  1626:       if (!menu) return;
+  1627: 
+  1628:       // Allowed single choice when locked
+  1629:       const allow = new Set();
+  1630:       if (sess === ".docx") allow.add("docx");
+  1631:       if (sess === ".md")   allow.add("md");
+  1632:       if (sess === ".txt")  allow.add("txt");
+  1633:       if (sess === ".html") allow.add("html");
+  1634: 
+  1635:       // Always hidden (features removed): "original" and "htm"
+  1636:       const kill = new Set(["original","htm"]);
+  1637: 
+  1638:       menu.querySelectorAll("button[data-ext]").forEach(btn=>{
+  1639:         const extAttr = (btn.getAttribute("data-ext") || "").toLowerCase();
+  1640: 
+  1641:         // Never show â€”originalâ€” or â€”.htmâ€”
+  1642:         if (kill.has(extAttr)) { btn.style.display = "none"; return; }
+  1643: 
+  1644:         // If a session format is locked, show only that matching option
+  1645:         if (sess){
+  1646:           btn.style.display = allow.has(extAttr) ? "" : "none";
+  1647:         } else {
+  1648:           // No session yet ? show everything except killers
+  1649:           btn.style.display = "";
+  1650:         }
+  1651:       }).filter(Boolean);
+  1652:     } catch {}
+  1653:   }
+  1654: 
+  1655:   // Expose namespaced API (always)
+  1656:   W.__LC__.getSessionFormat = __getSessionFormatNS;
+  1657:   W.__LC__.setSessionFormat = __setSessionFormatNS;
+  1658:   W.__LC__.ensureDownloadMenuForSession = __ensureDownloadMenuForSessionNS;
+  1659: 
+  1660:   // Create global wrappers ONLY if they don't already exist (prevents redeclare errors)
+  1661:   if (typeof W.getSessionFormat !== "function") {
+  1662:     W.getSessionFormat = __getSessionFormatNS;
+  1663:   }
+  1664:   if (typeof W.setSessionFormat !== "function") {
+  1665:     W.setSessionFormat = __setSessionFormatNS;
+  1666:   }
+  1667:   if (typeof W.ensureDownloadMenuForSession !== "function") {
+  1668:     W.ensureDownloadMenuForSession = __ensureDownloadMenuForSessionNS;
+  1669:   }
+  1670: })();
+  1671: 
+  1672: 
+  1673: async function loadAndRenderDocByIndex(idx){
+  1674:   if (idx < 0 || idx >= (docs || []).length) return;
+  1675:   const d = docs[idx] || {};
+  1676:   const docId = String(d.doc_id || "");
+  1677:   if (!docId) { renderDoc(idx); return; }
+  1678: 
+  1679:   try{
+  1680:     const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+  1681:     
+  1682:     const ws = getCurrentWorkspaceId("default");
+  1683:      const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+  1684: 
+  1685:     const data = await res.json().catch(()=>({}));
+  1686:     if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  1687: 
+  1688:     // merge preview into the placeholder doc
+  1689:     docs[idx] = Object.assign({}, docs[idx], data, data.doc || {});
+  1690:     renderDoc(idx);
+  1691: 
+  1692:     // keep dropdown in sync
+  1693:     try { if (allDocs) allDocs.value = docId; } catch {}
+  1694:   } catch(e){
+  1695:     console.error("[preview] failed:", e);
+  1696:     showToast?.(errorBox, "Preview failed: " + (e?.message || e), 2200);
+  1697:     renderDoc(idx); // fallback
+  1698:   }
+  1699: }
+  1700: 
+  1701: 
+  1702: 
+  1703: /* ==========================================================================
+  1704:    HELPERS
+  1705:    ========================================================================== */
+  1706: const rxWord = /[\p{L}\p{N}â€”'-]+/gu;
+  1707: const norm   = (s)=> String(s||"").toLowerCase().trim().replace(/\s+/g, " ");
+  1708: const tokens = (s)=> (String(s||"").toLowerCase().match(rxWord) || []).filter(Boolean);
+  1709: const uniq   = (a)=> Array.from(new Set(a));
+  1710: function escapeAttr(s) { return (s||"").replace(/"/g, '&quot;'); }
+  1711: function debounce(fn, ms = 200) { let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+  1712: function isStop(w){ return STOPWORDS.has(String(w||"").toLowerCase()); }
+  1713: function clamp01(x){ return x<0?0:x>1?1:x; }
+  1714: 
+  1715: /* === High-fidelity HTML + Markdown render helpers ======================== */
+  1716: function extractHtmlPayload(rawHtml = "") {
+  1717:   // Safely parse full HTML docs; pull out head <style> and body content.
+  1718:   try {
+  1719:     const doc = document.implementation.createHTMLDocument("");
+  1720:     // If it's a fragment (no <html>), treat as body content
+  1721:     const hasHtmlTag = /<html[\s>]/i.test(rawHtml);
+  1722:     if (!hasHtmlTag) {
+  1723:       return { headStyles: "", bodyHtml: rawHtml };
+  1724:     }
+  1725:     doc.documentElement.innerHTML = rawHtml;
+  1726: 
+  1727:     // Collect inline styles from <head> (ignore <link> for nowâ€”canâ€”t fetch local files)
+  1728:     const head = doc.querySelector("head");
+  1729:     let styles = "";
+  1730:     if (head) {
+  1731:       const styleEls = head.querySelectorAll("style");
+  1732:       styleEls.forEach(s => { styles += s.outerHTML + "\n"; });
+  1733:     }
+  1734: 
+  1735:     const body = doc.body ? doc.body.innerHTML : rawHtml;
+  1736:     return { headStyles: styles, bodyHtml: body };
+  1737:   } catch {
+  1738:     return { headStyles: "", bodyHtml: rawHtml };
+  1739:   }
+  1740: }
+  1741: 
+  1742: function markdownToHtml(md = "") {
+  1743:   // Minimal but solid MD ? HTML (supports: headings, bold/italic, code, lists, tables, links/images)
+  1744:   // 1) Fence blocks
+  1745:   const fences = [];
+  1746:   md = md.replace(/```([\s\S]*?)```/g, (_, code) => {
+  1747:     fences.push(code);
+  1748:     return `\uE000CODE${fences.length - 1}\uE000`;
+  1749:   });
+  1750: 
+  1751:   // 2) Escape HTML (so markdown canâ€”t inject raw tags)
+  1752:   const esc = s => String(s)
+  1753:     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  1754: 
+  1755:   // 3) Headings
+  1756:   md = md
+  1757:     .replace(/^###### (.*)$/gm, "<h6>$1</h6>")
+  1758:     .replace(/^##### (.*)$/gm, "<h5>$1</h5>")
+  1759:     .replace(/^#### (.*)$/gm, "<h4>$1</h4>")
+  1760:     .replace(/^### (.*)$/gm, "<h3>$1</h3>")
+  1761:     .replace(/^## (.*)$/gm, "<h2>$1</h2>")
+  1762:     .replace(/^# (.*)$/gm, "<h1>$1</h1>");
+  1763: 
+  1764:   // 4) Tables (GitHub-style)
+  1765:   // Detect header | --- | row and subsequent rows
+  1766:   md = md.replace(
+  1767:     /(^|\n)\s*\|(.+)\|\s*\n\s*\|([ \t:\-\|]+)\|\s*\n((?:\s*\|.*\|\s*\n?)*)/g,
+  1768:     (_, pfx, headRow, sep, bodyRows) => {
+  1769:       const th = headRow.split("|").map(s => s.trim()).map(h => `<th>${esc(h)}</th>`).join("");
+  1770:       const trs = bodyRows.trim().split(/\n+/).filter(Boolean).map(r => {
+  1771:         const tds = r.replace(/^\s*\||\|\s*$/g, "").split("|").map(s => `<td>${esc(s.trim())}</td>`).join("");
+  1772:         return `<tr>${tds}</tr>`;
+  1773:       }).join("");
+  1774:       return `${pfx}<table><thead><tr>${th}</tr></thead><tbody>${trs}</tbody></table>\n`;
+  1775:     }
+  1776:   );
+  1777: 
+  1778:   // 5) Lists (unordered + ordered)
+  1779:   // Unordered blocks
+  1780:   md = md.replace(
+  1781:     /(^|\n)(?:[ \t]*[-+*] .+(?:\n[ \t]*[-+*] .+)*)/g,
+  1782:     block => {
+  1783:       const items = block.trim().split(/\n/).map(l =>
+  1784:         l.replace(/^[ \t]*[-+*] +/, "").trim()
+  1785:       ).map(txt => `<li>${txt}</li>`).join("");
+  1786:       return `\n<ul>${items}</ul>`;
+  1787:     }
+  1788:   );
+  1789:   // Ordered blocks
+  1790:   md = md.replace(
+  1791:     /(^|\n)(?:[ \t]*\d+\. .+(?:\n[ \t]*\d+\. .+)*)/g,
+  1792:     block => {
+  1793:       const items = block.trim().split(/\n/).map(l =>
+  1794:         l.replace(/^[ \t]*\d+\. +/, "").trim()
+  1795:       ).map(txt => `<li>${txt}</li>`).join("");
+  1796:       return `\n<ol>${items}</ol>`;
+  1797:     }
+  1798:   );
+  1799: 
+  1800:   // 6) Images + Links
+
+
+==========================================================================================
+C:\Users\HP\Documents\LinkCraftor\frontend\public\assets\js\app.js
+LINES 2400-2600
+==========================================================================================
+  2400:         if (typeof window.lcAutosaveWorkspaceSession === "function") {
+  2401:           window.lcSetAutosaveStatus?.("saving");
+  2402:           const autosaveResult = await window.lcAutosaveWorkspaceSession("after_document_upload");
+  2403:           if (autosaveResult && autosaveResult.ok) {
+  2404:             window.lcSetAutosaveStatus?.("saved");
+  2405:           } else {
+  2406:             window.lcSetAutosaveStatus?.("error", autosaveResult);
+  2407:           }
+  2408:         }
+  2409:       } catch (autosaveErr) {
+  2410:         console.warn("[LinkCraftor Autosave] after upload failed:", autosaveErr);
+  2411:         window.lcSetAutosaveStatus?.("error", autosaveErr);
+  2412:       }
+  2413:     }, 0);
+  2414: 
+  2415:     const msgParts = [`Uploaded ${accepted} file(s)`];
+  2416: 
+  2417:     if (duplicates) {
+  2418:       msgParts.push("File already exists");
+  2419:     }
+  2420: 
+  2421:     if (skipped) {
+  2422:       msgParts.push(`${skipped} skipped because not ${sessExt}`);
+  2423:     }
+  2424: 
+  2425:     showToast(errorBox, msgParts.join(". ") + ".", 2200);
+  2426:   } catch (e) {
+  2427:     safeSetText(errorBox, "Upload failed: " + (e?.message || e), "error");
+  2428:   } finally {
+  2429:     if (fileInput) fileInput.value = "";
+  2430:   }
+  2431: });
+  2432: 
+  2433: sitemapFile.addEventListener("change", async () => {
+  2434:   const f = sitemapFile.files && sitemapFile.files[0];
+  2435:   sitemapFile.value = "";
+  2436:   if (!f) return;
+  2437: 
+  2438:   try {
+  2439:     const before = new Set(Array.from(IMPORTED_URLS || []));
+  2440: 
+  2441:     // 1) Import into backend storage
+  2442:     const r = await apiImportUrlsFile(f, "default");
+  2443:     const added = Number(r.added || 0);
+  2444: 
+  2445:     // 2) Load full saved set from backend into engine memory
+  2446:     const ws = getCurrentWorkspaceId("");
+  2447: const urls = ws ? await apiLoadImportedUrls(ws, 200000) : [];
+  2448:     IMPORTED_URLS = new Set(urls);
+  2449: 
+  2450:    // ? Update the badge in the top bar
+  2451: try {
+  2452:   const el = document.getElementById("importCount");
+  2453: } catch {}
+  2454: 
+  2455: 
+  2456:     // 3) Continue normal pipeline (no distortion)
+  2457:     rebuildTitleIndexFromDocs();
+  2458:     rebuildPublishedTopics();
+  2459: 
+  2460:     // 4) Scrape only newly added URLs (optional)
+  2461:     const nowUrls = Array.from(IMPORTED_URLS);
+  2462:     const newOnes = nowUrls.filter(u => u && !before.has(u) && !SITEMAP_CONTENT.has(u));
+  2463:     if (newOnes.length) {
+  2464:       fetchSitemapContentForUrls(newOnes);
+  2465:     }
+  2466: 
+  2467:     showToast(errorBox, `Imported ${added} URL(s) from ${f.name}.`, 2000);
+  2468:     if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+  2469:   } catch (e) {
+  2470:     console.error("[SITEMAP->BACKEND] failed:", e);
+  2471:     showToast(errorBox, `Import failed: ${e?.message || e}`, 2200);
+  2472:   }
+  2473: });
+  2474: 
+  2475: 
+  2476: /* Toolbar basics */
+  2477: const toolbar = $("toolbar");
+  2478: function ensureViewerFocus(){ try{ viewerEl?.focus(); }catch{} }
+  2479: function exec(name, value = null){ ensureViewerFocus(); document.execCommand(name, false, value); viewerEl?.dispatchEvent(new Event("input", { bubbles:true })); }
+  2480: if (toolbar){
+  2481:   toolbar.querySelectorAll("[data-cmd]").forEach(btn=>{
+  2482:     btn.addEventListener("click", ()=> exec(btn.getAttribute("data-cmd")));
+  2483:   });
+  2484: }
+  2485: 
+  2486: const updateDetectedDebounced = debounce(()=>{
+  2487:   if (highlightsArmed) runRB2PipelineAndHighlight({ append: true });
+  2488:   else { underlineLinkedPhrases(); highlightBucketKeywords(); updateHighlightBadge(); rebuildEngineHighlightsPanel(); }
+  2489: }, 200);
+  2490: 
+  2491: 
+  2492: /* ==========================================================================
+  2493:    EXTERNAL AUTO-LINK ENRICHMENT (backend + 24 providers + logging)
+  2494:    ========================================================================== */
+  2495: 
+  2496: const EXTERNAL_API_BASE = ""; 
+  2497: // If your backend is same origin, leave "" and use "/api/..."
+  2498: // If it's on another port/host, you can change to e.g. "http://localhost:8002"
+  2499: 
+  2500: /**
+  2501:  * Small helper: resolve a phrase via backend /api/external/runtime/resolve (GET).
+  2502:  * Backend returns an ARRAY of candidates (or []).
+  2503:  * Returns { url, providerId, providerLabel, title } or null.
+  2504:  */
+  2505: 
+  2506: 
+  2507: 
+  2508: /* ==========================================================================
+  2509:    EDITOR + DOC NAV (unchanged)
+  2510:    ========================================================================== */
+  2511: 
+  2512: editor?.addEventListener("input", () => {
+  2513:   if (currentIndex >= 0 && docs[currentIndex]) {
+  2514:     docs[currentIndex].text = viewerEl?.textContent || "";
+  2515:     docs[currentIndex].html = viewerEl?.innerHTML || "";
+  2516:     saveState();
+  2517:     updateDetectedDebounced();
+  2518:   }
+  2519: });
+  2520: 
+  2521: allDocs?.addEventListener("change", async () => {
+  2522:   const docId = allDocs.value;
+  2523:   if (!docId) return;
+  2524: 
+  2525:   const idx = docs.findIndex(d => String(d.doc_id || "") === String(docId));
+  2526:   if (idx < 0) return;
+  2527: 
+  2528:   try{
+  2529:     const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+  2530:     
+  2531:    const ws = getCurrentWorkspaceId("default");
+  2532: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+  2533: 
+  2534:     const data = await res.json().catch(()=>({}));
+  2535:     if (!res.ok) throw new Error(data?.detail || data?.error || `HTTP ${res.status}`);
+  2536: 
+  2537:     // Update the placeholder doc with real preview content
+  2538:     docs[idx] = Object.assign({}, docs[idx], data, data.doc || {});
+  2539: 
+  2540:     // Render using the new preview contract
+  2541:     renderDoc(idx);
+  2542:   } catch(e){
+  2543:     console.error("[preview] failed:", e);
+  2544:     showToast?.(errorBox, "Preview failed: " + (e?.message || e), 2200);
+  2545:   }
+  2546: });
+  2547: 
+  2548: 
+  2549: const btnClearSession = $("btnClearSession");
+  2550: btnClearSession?.addEventListener("click", async () => {
+  2551:   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+  2552:   const ws = getCurrentWorkspaceId("");
+  2553: 
+  2554:      // Clear backend uploaded document session.
+  2555:   try {
+  2556:     await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+  2557:       method: "POST",
+  2558:     });
+  2559:   } catch (e) {
+  2560:     console.warn("[ClearSession] uploaded file session clear failed:", e);
+  2561:   }
+  2562: 
+  2563:   // Clear backend imported sitemap URLs.
+  2564:   try {
+  2565:     await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+  2566:       method: "POST",
+  2567:     });
+  2568:   } catch (e) {
+  2569:     console.warn("[ClearSession] imported URL clear failed:", e);
+  2570:   }
+  2571: 
+  2572:   // Clear backend draft map imports.
+  2573:   try {
+  2574:     await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+  2575:       method: "POST",
+  2576:     });
+  2577:   } catch (e) {
+  2578:     console.warn("[ClearSession] draft clear failed:", e);
+  2579:   }
+  2580: 
+  2581:   try {
+  2582:   await loadDraftsFromBackend(ws);
+  2583: } catch {}
+  2584: 
+  2585: try {
+  2586:   await loadImportsFromBackend();
+  2587: } catch {}
+  2588: 
+  2589: try {
+  2590:   await updateUnifiedImportCount(ws);
+  2591: } catch {}
+  2592: 
+  2593: try {
+  2594:   setImportCount(0);
+  2595: } catch {}
+  2596: 
+  2597:   // Clear frontend imported-memory systems.
+  2598:   try { IMPORTED_URLS = new Set(); } catch {}
+  2599:   try { window.IMPORTED_URLS = new Set(); } catch {}
+  2600:   try { IMPORTED_TOPICS.length = 0; } catch {}
