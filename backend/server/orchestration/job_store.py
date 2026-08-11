@@ -119,20 +119,72 @@ def create_job(
     payload: Optional[Dict[str, Any]] = None,
     metadata: Optional[Dict[str, Any]] = None,
     priority: int = 5,
+    *,
+    job_id: Optional[str] = None,
 ) -> OrchestrationJob:
+    """Persist one orchestration job.
+
+    ``job_id`` is optional for backward compatibility.
+
+    When omitted, this function preserves the historical orchestration
+    behaviour and allocates a local ``job_*`` identity.
+
+    When supplied, the caller owns the canonical job identity.  This is the
+    ingress required by Universal Job / Runtime Registration integrations:
+    the orchestration layer MUST persist that exact identity rather than
+    minting a second job ID.
+    """
     jobs = load_jobs()
-    job_id = f"job_{uuid4().hex[:16]}"
+
+    canonical_job_id = str(
+        job_id
+        or f"job_{uuid4().hex[:16]}"
+    ).strip()
+
+    if not canonical_job_id:
+        raise ValueError(
+            "job_id must be a non-empty string when supplied"
+        )
+
+    existing = jobs.get(
+        canonical_job_id
+    )
+
+    if existing is not None:
+        raise ValueError(
+            "Job already exists: "
+            + canonical_job_id
+        )
+
     job = OrchestrationJob(
-        job_id=job_id,
+        job_id=canonical_job_id,
         workspace_id=workspace_id,
         job_type=job_type,
         payload=payload or {},
         metadata=metadata or {},
         priority=priority,
     )
-    jobs[job_id] = job
-    save_jobs(jobs)
-    append_job_event(job_id, "none", job.status, {"reason": "job_created"})
+
+    jobs[
+        canonical_job_id
+    ] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        canonical_job_id,
+        "none",
+        job.status,
+        {
+            "reason": "job_created",
+            "caller_supplied_job_id": (
+                job_id is not None
+            ),
+        },
+    )
+
     return job
 
 

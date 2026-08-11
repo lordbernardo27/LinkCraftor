@@ -1,0 +1,3999 @@
+﻿============================================================
+ARTICLE VALIDATION — EXACT ACTIVE CONTRACT SCAN
+============================================================
+
+
+============================================================
+FILE: backend\server\article_validation\certified_article_validation_input.py
+============================================================
+
+LINE 9
+It does not:
+- read Raw HTML;
+- reconstruct articles;
+- rerun Website Article Integrity;
+>>> - modify UDARE articles;
+- copy article bodies into another store.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from collections import Counter
+
+LINE 42
+    "CERTIFIED"
+)
+
+INVALID_ACTIVE_STATUSES = {
+>>>     "FAIL",
+    "FAILED",
+    "QUARANTINED",
+    "REJECTED",
+    "BLOCKED",
+}
+
+CANDIDATE_METADATA_FIELDS = (
+    "workspace_id",
+
+LINE 63
+    "h1",
+    "headings",
+    "article_filename",
+    "article_path",
+>>>     "udare_article_body_sha256",
+    "article_body_sha256",
+    "article_document_sha256",
+    "content_block_count",
+    "reconstruction_status",
+    "udare_engine",
+)
+
+
+
+LINE 64
+    "headings",
+    "article_filename",
+    "article_path",
+    "udare_article_body_sha256",
+>>>     "article_body_sha256",
+    "article_document_sha256",
+    "content_block_count",
+    "reconstruction_status",
+    "udare_engine",
+)
+
+
+def _safe_workspace_id(
+
+LINE 68
+    "article_body_sha256",
+    "article_document_sha256",
+    "content_block_count",
+    "reconstruction_status",
+>>>     "udare_engine",
+)
+
+
+def _safe_workspace_id(
+    workspace_id: str,
+) -> str:
+    value = str(
+        workspace_id or ""
+
+LINE 72
+    "udare_engine",
+)
+
+
+>>> def _safe_workspace_id(
+    workspace_id: str,
+) -> str:
+    value = str(
+        workspace_id or ""
+    ).strip()
+
+    if not value:
+        raise ValueError(
+
+LINE 102
+
+    return safe
+
+
+>>> def _load_json(
+    path: Path,
+) -> dict[str, Any]:
+    value = json.loads(
+        path.read_text(
+            encoding="utf-8-sig",
+            errors="strict",
+        )
+    )
+
+LINE 123
+
+    return value
+
+
+>>> def _read_jsonl(
+    path: Path,
+) -> list[dict[str, Any]]:
+    records: list[
+        dict[str, Any]
+    ] = []
+
+    with path.open(
+        "r",
+
+LINE 171
+
+    return records
+
+
+>>> def _sha256_file(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as handle:
+        for block in iter(
+            lambda: handle.read(
+                1024 * 1024
+
+LINE 188
+
+    return digest.hexdigest()
+
+
+>>> def _is_within(
+    path: Path,
+    root: Path,
+) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+
+    except ValueError:
+
+LINE 200
+    except ValueError:
+        return False
+
+
+>>> def _resolve_certified_path(
+    value: Any,
+    *,
+    reference_root: Path,
+    required_root: Path,
+    field_name: str,
+) -> Path:
+    text = str(
+        value or ""
+
+LINE 269
+
+    return selected
+
+
+>>> def _certificate_path(
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+        / "website_article_integrity"
+        / workspace_id
+        / "certification"
+        / "website_article_integrity_certificate.json"
+
+LINE 277
+        DATA_ROOT
+        / "website_article_integrity"
+        / workspace_id
+        / "certification"
+>>>         / "website_article_integrity_certificate.json"
+    )
+
+
+def _resolve_active_ledger_path(
+    certificate: Mapping[str, Any],
+    certificate_path: Path,
+) -> Path:
+    raw_path = str(
+
+LINE 281
+        / "website_article_integrity_certificate.json"
+    )
+
+
+>>> def _resolve_active_ledger_path(
+    certificate: Mapping[str, Any],
+    certificate_path: Path,
+) -> Path:
+    raw_path = str(
+        certificate.get(
+            "certified_active_ledger_path"
+        )
+        or ""
+
+LINE 282
+    )
+
+
+def _resolve_active_ledger_path(
+>>>     certificate: Mapping[str, Any],
+    certificate_path: Path,
+) -> Path:
+    raw_path = str(
+        certificate.get(
+            "certified_active_ledger_path"
+        )
+        or ""
+    ).strip()
+
+LINE 283
+
+
+def _resolve_active_ledger_path(
+    certificate: Mapping[str, Any],
+>>>     certificate_path: Path,
+) -> Path:
+    raw_path = str(
+        certificate.get(
+            "certified_active_ledger_path"
+        )
+        or ""
+    ).strip()
+
+
+LINE 286
+    certificate: Mapping[str, Any],
+    certificate_path: Path,
+) -> Path:
+    raw_path = str(
+>>>         certificate.get(
+            "certified_active_ledger_path"
+        )
+        or ""
+    ).strip()
+
+    if not raw_path:
+        raise RuntimeError(
+            "Integrity certificate does not provide "
+
+LINE 294
+    ).strip()
+
+    if not raw_path:
+        raise RuntimeError(
+>>>             "Integrity certificate does not provide "
+            "certified_active_ledger_path."
+        )
+
+    supplied = Path(raw_path)
+
+    candidates: list[Path] = []
+
+    if supplied.is_absolute():
+
+LINE 311
+    else:
+        candidates.extend(
+            (
+                PROJECT_ROOT / supplied,
+>>>                 certificate_path.parent
+                / supplied,
+                DATA_ROOT / supplied,
+            )
+        )
+
+    for candidate in candidates:
+        resolved = candidate.resolve()
+
+
+LINE 329
+        f"{raw_path}"
+    )
+
+
+>>> def _nonempty(
+    value: Any,
+) -> bool:
+    if value is None:
+        return False
+
+    if isinstance(
+        value,
+        str,
+
+LINE 357
+
+    return True
+
+
+>>> def load_certified_article_validation_input(
+    workspace_id: str,
+    *,
+    expected_active_count: int | None = None,
+) -> dict[str, Any]:
+    """Load and verify all certified active Article Validation inputs."""
+
+    workspace_id = _safe_workspace_id(
+        workspace_id
+
+LINE 368
+    workspace_id = _safe_workspace_id(
+        workspace_id
+    )
+
+>>>     certificate_path = (
+        _certificate_path(
+            workspace_id
+        )
+    )
+
+    if not certificate_path.is_file():
+        raise FileNotFoundError(
+            "Website Article Integrity certificate "
+
+LINE 369
+        workspace_id
+    )
+
+    certificate_path = (
+>>>         _certificate_path(
+            workspace_id
+        )
+    )
+
+    if not certificate_path.is_file():
+        raise FileNotFoundError(
+            "Website Article Integrity certificate "
+            f"does not exist: {certificate_path}"
+
+LINE 374
+            workspace_id
+        )
+    )
+
+>>>     if not certificate_path.is_file():
+        raise FileNotFoundError(
+            "Website Article Integrity certificate "
+            f"does not exist: {certificate_path}"
+        )
+
+    certificate = _load_json(
+        certificate_path
+    )
+
+LINE 376
+    )
+
+    if not certificate_path.is_file():
+        raise FileNotFoundError(
+>>>             "Website Article Integrity certificate "
+            f"does not exist: {certificate_path}"
+        )
+
+    certificate = _load_json(
+        certificate_path
+    )
+
+    certificate_workspace = str(
+
+LINE 377
+
+    if not certificate_path.is_file():
+        raise FileNotFoundError(
+            "Website Article Integrity certificate "
+>>>             f"does not exist: {certificate_path}"
+        )
+
+    certificate = _load_json(
+        certificate_path
+    )
+
+    certificate_workspace = str(
+        certificate.get(
+
+LINE 380
+            "Website Article Integrity certificate "
+            f"does not exist: {certificate_path}"
+        )
+
+>>>     certificate = _load_json(
+        certificate_path
+    )
+
+    certificate_workspace = str(
+        certificate.get(
+            "workspace_id"
+        )
+        or ""
+
+LINE 381
+            f"does not exist: {certificate_path}"
+        )
+
+    certificate = _load_json(
+>>>         certificate_path
+    )
+
+    certificate_workspace = str(
+        certificate.get(
+            "workspace_id"
+        )
+        or ""
+    ).strip()
+
+LINE 384
+    certificate = _load_json(
+        certificate_path
+    )
+
+>>>     certificate_workspace = str(
+        certificate.get(
+            "workspace_id"
+        )
+        or ""
+    ).strip()
+
+    if (
+        certificate_workspace
+
+LINE 385
+        certificate_path
+    )
+
+    certificate_workspace = str(
+>>>         certificate.get(
+            "workspace_id"
+        )
+        or ""
+    ).strip()
+
+    if (
+        certificate_workspace
+        and certificate_workspace
+
+LINE 392
+        or ""
+    ).strip()
+
+    if (
+>>>         certificate_workspace
+        and certificate_workspace
+        != workspace_id
+    ):
+        raise RuntimeError(
+            "Integrity certificate workspace mismatch: "
+            f"{certificate_workspace} != {workspace_id}"
+        )
+
+
+LINE 393
+    ).strip()
+
+    if (
+        certificate_workspace
+>>>         and certificate_workspace
+        != workspace_id
+    ):
+        raise RuntimeError(
+            "Integrity certificate workspace mismatch: "
+            f"{certificate_workspace} != {workspace_id}"
+        )
+
+    certification_status = str(
+
+LINE 397
+        and certificate_workspace
+        != workspace_id
+    ):
+        raise RuntimeError(
+>>>             "Integrity certificate workspace mismatch: "
+            f"{certificate_workspace} != {workspace_id}"
+        )
+
+    certification_status = str(
+        certificate.get(
+            "certification_status"
+        )
+        or ""
+
+LINE 398
+        != workspace_id
+    ):
+        raise RuntimeError(
+            "Integrity certificate workspace mismatch: "
+>>>             f"{certificate_workspace} != {workspace_id}"
+        )
+
+    certification_status = str(
+        certificate.get(
+            "certification_status"
+        )
+        or ""
+    ).strip().upper()
+
+LINE 402
+            f"{certificate_workspace} != {workspace_id}"
+        )
+
+    certification_status = str(
+>>>         certificate.get(
+            "certification_status"
+        )
+        or ""
+    ).strip().upper()
+
+    if (
+        certification_status
+        != CERTIFICATION_STATUS_REQUIRED
+
+LINE 417
+            "Website Article Integrity is not certified: "
+            f"{certification_status or 'MISSING'}"
+        )
+
+>>>     coverage = certificate.get(
+        "coverage",
+        {},
+    )
+
+    if not isinstance(
+        coverage,
+        Mapping,
+    ):
+
+LINE 427
+        coverage,
+        Mapping,
+    ):
+        raise RuntimeError(
+>>>             "Integrity certificate coverage is invalid."
+        )
+
+    certified_active_count = int(
+        coverage.get(
+            "active_certified_count"
+        )
+        or 0
+    )
+
+LINE 450
+            )
+
+    active_ledger_path = (
+        _resolve_active_ledger_path(
+>>>             certificate,
+            certificate_path,
+        )
+    )
+
+    ledger_records = _read_jsonl(
+        active_ledger_path
+    )
+
+
+LINE 451
+
+    active_ledger_path = (
+        _resolve_active_ledger_path(
+            certificate,
+>>>             certificate_path,
+        )
+    )
+
+    ledger_records = _read_jsonl(
+        active_ledger_path
+    )
+
+    if (
+
+LINE 469
+            f"{len(ledger_records)} != "
+            f"{certified_active_count}"
+        )
+
+>>>     udare_workspace_root = (
+        DATA_ROOT
+        / "udare_store"
+        / workspace_id
+    )
+
+    article_root = (
+        udare_workspace_root
+        / "articles"
+
+LINE 471
+        )
+
+    udare_workspace_root = (
+        DATA_ROOT
+>>>         / "udare_store"
+        / workspace_id
+    )
+
+    article_root = (
+        udare_workspace_root
+        / "articles"
+    )
+
+
+LINE 476
+        / workspace_id
+    )
+
+    article_root = (
+>>>         udare_workspace_root
+        / "articles"
+    )
+
+    metadata_root = (
+        udare_workspace_root
+        / "metadata"
+    )
+
+
+LINE 481
+        / "articles"
+    )
+
+    metadata_root = (
+>>>         udare_workspace_root
+        / "metadata"
+    )
+
+    if not article_root.is_dir():
+        raise FileNotFoundError(
+            f"UDARE article directory is missing: {article_root}"
+        )
+
+
+LINE 487
+    )
+
+    if not article_root.is_dir():
+        raise FileNotFoundError(
+>>>             f"UDARE article directory is missing: {article_root}"
+        )
+
+    if not metadata_root.is_dir():
+        raise FileNotFoundError(
+            f"UDARE metadata directory is missing: {metadata_root}"
+        )
+
+    seen_identifiers: set[str] = set()
+
+LINE 492
+        )
+
+    if not metadata_root.is_dir():
+        raise FileNotFoundError(
+>>>             f"UDARE metadata directory is missing: {metadata_root}"
+        )
+
+    seen_identifiers: set[str] = set()
+
+    verified_records: list[
+        dict[str, Any]
+    ] = []
+
+
+LINE 676
+            and metadata_workspace
+            != workspace_id
+        ):
+            raise RuntimeError(
+>>>                 "UDARE metadata workspace mismatch "
+                f"for {source_record_id}: "
+                f"{metadata_workspace}"
+            )
+
+        metadata_source_record_id = str(
+            metadata.get(
+                "source_record_id"
+            )
+
+LINE 694
+            and metadata_source_record_id
+            != source_record_id
+        ):
+            raise RuntimeError(
+>>>                 "UDARE metadata source_record_id mismatch "
+                f"for {source_record_id}: "
+                f"{metadata_source_record_id}"
+            )
+
+        for key in metadata:
+            metadata_key_coverage[
+                str(key)
+            ] += 1
+
+LINE 751
+                ),
+                "overall_integrity_status": (
+                    integrity_status
+                ),
+>>>                 "certificate_scope": (
+                    ledger_record.get(
+                        "certificate_scope"
+                    )
+                ),
+                "stage_statuses": (
+                    ledger_record.get(
+                        "stage_statuses"
+                    )
+
+LINE 753
+                    integrity_status
+                ),
+                "certificate_scope": (
+                    ledger_record.get(
+>>>                         "certificate_scope"
+                    )
+                ),
+                "stage_statuses": (
+                    ledger_record.get(
+                        "stage_statuses"
+                    )
+                ),
+            }
+
+LINE 767
+
+    return {
+        "loader_version": LOADER_VERSION,
+        "workspace_id": workspace_id,
+>>>         "certificate_status": (
+            certification_status
+        ),
+        "certificate_id": (
+            certificate.get(
+                "certificate_id"
+            )
+        ),
+        "certificate_path": str(
+
+LINE 770
+        "workspace_id": workspace_id,
+        "certificate_status": (
+            certification_status
+        ),
+>>>         "certificate_id": (
+            certificate.get(
+                "certificate_id"
+            )
+        ),
+        "certificate_path": str(
+            certificate_path
+        ),
+        "active_ledger_path": str(
+
+LINE 771
+        "certificate_status": (
+            certification_status
+        ),
+        "certificate_id": (
+>>>             certificate.get(
+                "certificate_id"
+            )
+        ),
+        "certificate_path": str(
+            certificate_path
+        ),
+        "active_ledger_path": str(
+            active_ledger_path
+
+LINE 772
+            certification_status
+        ),
+        "certificate_id": (
+            certificate.get(
+>>>                 "certificate_id"
+            )
+        ),
+        "certificate_path": str(
+            certificate_path
+        ),
+        "active_ledger_path": str(
+            active_ledger_path
+        ),
+
+LINE 775
+            certificate.get(
+                "certificate_id"
+            )
+        ),
+>>>         "certificate_path": str(
+            certificate_path
+        ),
+        "active_ledger_path": str(
+            active_ledger_path
+        ),
+        "certified_active_count": (
+            certified_active_count
+        ),
+
+LINE 776
+                "certificate_id"
+            )
+        ),
+        "certificate_path": str(
+>>>             certificate_path
+        ),
+        "active_ledger_path": str(
+            active_ledger_path
+        ),
+        "certified_active_count": (
+            certified_active_count
+        ),
+        "integrity_quarantined_count": int(
+
+LINE 815
+        "source_files_modified": [],
+    }
+
+
+>>> def load_certified_article_payload(
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Load one verified article body transiently for validation."""
+
+    source_record_id = str(
+        descriptor.get(
+            "source_record_id"
+        )
+
+============================================================
+FILE: backend\server\article_validation\article_validation_engine_v3.py
+============================================================
+
+LINE 3
+"""Canonical Article Validation Engine v3.
+
+>>> This engine consumes only integrity-certified UDARE article content.
+
+It performs no writes and returns metadata-only validation results.
+"""
+
+from __future__ import annotations
+
+import re
+from html.parser import HTMLParser
+
+LINE 15
+from html.parser import HTMLParser
+from typing import Any, Sequence
+
+
+>>> ARTICLE_VALIDATION_ENGINE_VERSION = (
+    "article_validation_engine_v3_certified_non_mutating_contextual_structure"
+)
+
+MINIMUM_PRINTABLE_RATIO = 0.98
+MAXIMUM_REPLACEMENT_CHARACTER_RATIO = 0.001
+
+
+def _normalize_text(
+
+LINE 23
+MINIMUM_PRINTABLE_RATIO = 0.98
+MAXIMUM_REPLACEMENT_CHARACTER_RATIO = 0.001
+
+
+>>> def _normalize_text(
+    value: Any,
+) -> str:
+    return re.sub(
+        r"\s+",
+        " ",
+        str(value or ""),
+    ).strip()
+
+
+LINE 33
+        str(value or ""),
+    ).strip()
+
+
+>>> def _valid_sha256(
+    value: Any,
+) -> bool:
+    return bool(
+        re.fullmatch(
+            r"[0-9a-fA-F]{64}",
+            str(value or "").strip(),
+        )
+    )
+
+LINE 44
+        )
+    )
+
+
+>>> def _paragraphs(
+    article_text: str,
+) -> list[str]:
+    return [
+        paragraph.strip()
+        for paragraph in str(
+            article_text or ""
+        ).split("\n\n")
+        if paragraph.strip()
+
+LINE 56
+        if paragraph.strip()
+    ]
+
+
+>>> def _duplicate_paragraph_ratio(
+    paragraphs: Sequence[str],
+) -> float:
+    normalized = [
+        _normalize_text(
+            paragraph
+        ).casefold()
+        for paragraph in paragraphs
+        if len(
+
+LINE 90
+        / len(normalized)
+    )
+
+
+>>> def _printable_ratio(
+    article_text: str,
+) -> float:
+    if not article_text:
+        return 1.0
+
+    printable_count = sum(
+        1
+        for character in article_text
+
+LINE 111
+        / len(article_text)
+    )
+
+
+>>> def _replacement_character_ratio(
+    article_text: str,
+) -> float:
+    if not article_text:
+        return 0.0
+
+    return (
+        article_text.count("\ufffd")
+        / len(article_text)
+
+LINE 328
+            )
+        )
+
+
+>>> def extract_article_validation_document_v3(
+    article_html: str,
+) -> dict[str, Any]:
+    """Extract transient validation text from certified HTML."""
+
+    parser = _CertifiedHTMLExtractor()
+
+    parser.feed(
+        str(article_html or "")
+
+LINE 362
+        "article_html_included": False,
+    }
+
+
+>>> def validate_certified_article_v3(
+    *,
+    article_text: str,
+    title: str,
+    source_record_id: str,
+    article_sha256: str,
+    metadata_sha256: str,
+    integrity_certificate_id: str,
+    integrity_certification_status: str,
+
+LINE 369
+    title: str,
+    source_record_id: str,
+    article_sha256: str,
+    metadata_sha256: str,
+>>>     integrity_certificate_id: str,
+    integrity_certification_status: str,
+    overall_integrity_status: str,
+    source_url: str = "",
+    h1: str = "",
+    headings: Sequence[str] | None = None,
+) -> dict[str, Any]:
+    """Validate one certified article and return metadata only."""
+
+
+LINE 406
+    metadata_sha256 = str(
+        metadata_sha256 or ""
+    ).strip().lower()
+
+>>>     integrity_certificate_id = str(
+        integrity_certificate_id or ""
+    ).strip()
+
+    integrity_certification_status = str(
+        integrity_certification_status
+        or ""
+    ).strip().upper()
+
+
+LINE 407
+        metadata_sha256 or ""
+    ).strip().lower()
+
+    integrity_certificate_id = str(
+>>>         integrity_certificate_id or ""
+    ).strip()
+
+    integrity_certification_status = str(
+        integrity_certification_status
+        or ""
+    ).strip().upper()
+
+    overall_integrity_status = str(
+
+LINE 473
+            bool(
+                source_record_id
+            ),
+
+>>>         "integrity_certificate_present":
+            bool(
+                integrity_certificate_id
+            ),
+
+        "integrity_certificate_certified":
+            (
+                integrity_certification_status
+                == "CERTIFIED"
+
+LINE 475
+            ),
+
+        "integrity_certificate_present":
+            bool(
+>>>                 integrity_certificate_id
+            ),
+
+        "integrity_certificate_certified":
+            (
+                integrity_certification_status
+                == "CERTIFIED"
+            ),
+
+
+LINE 478
+            bool(
+                integrity_certificate_id
+            ),
+
+>>>         "integrity_certificate_certified":
+            (
+                integrity_certification_status
+                == "CERTIFIED"
+            ),
+
+        "integrity_record_passed":
+            (
+                overall_integrity_status
+
+LINE 487
+
+        "integrity_record_passed":
+            (
+                overall_integrity_status
+>>>                 == "PASS"
+            ),
+
+        "article_sha256_valid":
+            _valid_sha256(
+                article_sha256
+            ),
+
+        "metadata_sha256_valid":
+
+LINE 584
+    rejection_map = {
+        "source_identity_present":
+            "MISSING_SOURCE_RECORD_ID",
+
+>>>         "integrity_certificate_present":
+            "MISSING_INTEGRITY_CERTIFICATE_ID",
+
+        "integrity_certificate_certified":
+            "INTEGRITY_CERTIFICATE_NOT_CERTIFIED",
+
+        "integrity_record_passed":
+            "ARTICLE_NOT_IN_CERTIFIED_ACTIVE_SCOPE",
+
+
+LINE 585
+        "source_identity_present":
+            "MISSING_SOURCE_RECORD_ID",
+
+        "integrity_certificate_present":
+>>>             "MISSING_INTEGRITY_CERTIFICATE_ID",
+
+        "integrity_certificate_certified":
+            "INTEGRITY_CERTIFICATE_NOT_CERTIFIED",
+
+        "integrity_record_passed":
+            "ARTICLE_NOT_IN_CERTIFIED_ACTIVE_SCOPE",
+
+        "article_sha256_valid":
+
+LINE 587
+
+        "integrity_certificate_present":
+            "MISSING_INTEGRITY_CERTIFICATE_ID",
+
+>>>         "integrity_certificate_certified":
+            "INTEGRITY_CERTIFICATE_NOT_CERTIFIED",
+
+        "integrity_record_passed":
+            "ARTICLE_NOT_IN_CERTIFIED_ACTIVE_SCOPE",
+
+        "article_sha256_valid":
+            "INVALID_ARTICLE_SHA256",
+
+
+LINE 588
+        "integrity_certificate_present":
+            "MISSING_INTEGRITY_CERTIFICATE_ID",
+
+        "integrity_certificate_certified":
+>>>             "INTEGRITY_CERTIFICATE_NOT_CERTIFIED",
+
+        "integrity_record_passed":
+            "ARTICLE_NOT_IN_CERTIFIED_ACTIVE_SCOPE",
+
+        "article_sha256_valid":
+            "INVALID_ARTICLE_SHA256",
+
+        "metadata_sha256_valid":
+
+LINE 633
+
+    return {
+        "status":
+            (
+>>>                 "PASS"
+                if passed
+                else "FAIL"
+            ),
+
+        "passed":
+            passed,
+
+        "validation_version":
+
+LINE 635
+        "status":
+            (
+                "PASS"
+                if passed
+>>>                 else "FAIL"
+            ),
+
+        "passed":
+            passed,
+
+        "validation_version":
+            ARTICLE_VALIDATION_ENGINE_VERSION,
+
+
+LINE 642
+        "passed":
+            passed,
+
+        "validation_version":
+>>>             ARTICLE_VALIDATION_ENGINE_VERSION,
+
+        "source_record_id":
+            source_record_id,
+
+        "source_url":
+            source_url,
+
+        "integrity_certificate_id":
+
+LINE 650
+
+        "source_url":
+            source_url,
+
+>>>         "integrity_certificate_id":
+            integrity_certificate_id,
+
+        "article_sha256":
+            article_sha256,
+
+        "metadata_sha256":
+            metadata_sha256,
+
+
+LINE 651
+        "source_url":
+            source_url,
+
+        "integrity_certificate_id":
+>>>             integrity_certificate_id,
+
+        "article_sha256":
+            article_sha256,
+
+        "metadata_sha256":
+            metadata_sha256,
+
+        "validation_score":
+
+LINE 739
+
+        "eligible_for_unified_content_document":
+            passed,
+
+>>>         "article_body_included":
+            False,
+
+        "article_body_modified":
+            False,
+    }
+
+LINE 742
+
+        "article_body_included":
+            False,
+
+>>>         "article_body_modified":
+            False,
+    }
+
+============================================================
+FILE: backend\server\article_validation\article_validation_runner_v3.py
+============================================================
+
+LINE 5
+"""Canonical Article Validation Runner v3.
+
+Canonical pipeline:
+
+>>> UDARE Store
+    -> Website Article Integrity verification
+    -> Article Validation
+    -> Website Unified Content
+
+This runner creates evidence and control artifacts only.
+
+It does not create:
+- an Article Validation Store;
+
+LINE 32
+from typing import Any, Iterable, Mapping, Sequence
+from uuid import uuid4
+
+from backend.server.article_validation.article_validation_engine_v3 import (
+>>>     ARTICLE_VALIDATION_ENGINE_VERSION,
+    extract_article_validation_document_v3,
+    validate_certified_article_v3,
+)
+
+from backend.server.article_validation.certified_article_validation_input import (
+    load_certified_article_payload,
+    load_certified_article_validation_input,
+)
+
+LINE 33
+from uuid import uuid4
+
+from backend.server.article_validation.article_validation_engine_v3 import (
+    ARTICLE_VALIDATION_ENGINE_VERSION,
+>>>     extract_article_validation_document_v3,
+    validate_certified_article_v3,
+)
+
+from backend.server.article_validation.certified_article_validation_input import (
+    load_certified_article_payload,
+    load_certified_article_validation_input,
+)
+
+
+LINE 39
+)
+
+from backend.server.article_validation.certified_article_validation_input import (
+    load_certified_article_payload,
+>>>     load_certified_article_validation_input,
+)
+
+
+RUNNER_VERSION = (
+    "article_validation_runner_v3_"
+    "integrity_verified_evidence_only"
+)
+
+
+LINE 68
+    / "data"
+)
+
+PROHIBITED_BODY_FIELDS = {
+>>>     "article_body",
+    "article_html",
+    "content_body",
+    "cleaned_article_text",
+    "body_text",
+    "raw_html",
+    "selected_html",
+    "full_text",
+}
+
+LINE 70
+
+PROHIBITED_BODY_FIELDS = {
+    "article_body",
+    "article_html",
+>>>     "content_body",
+    "cleaned_article_text",
+    "body_text",
+    "raw_html",
+    "selected_html",
+    "full_text",
+}
+
+
+
+LINE 72
+    "article_body",
+    "article_html",
+    "content_body",
+    "cleaned_article_text",
+>>>     "body_text",
+    "raw_html",
+    "selected_html",
+    "full_text",
+}
+
+
+def _utc_now() -> str:
+    return datetime.now(
+
+LINE 79
+    "full_text",
+}
+
+
+>>> def _utc_now() -> str:
+    return datetime.now(
+        timezone.utc
+    ).isoformat()
+
+
+def _safe_name(
+    value: str,
+    *,
+
+LINE 85
+        timezone.utc
+    ).isoformat()
+
+
+>>> def _safe_name(
+    value: str,
+    *,
+    field_name: str,
+) -> str:
+    text = str(
+        value or ""
+    ).strip()
+
+
+LINE 117
+
+    return safe
+
+
+>>> def _sha256_file(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open("rb") as handle:
+        for block in iter(
+            lambda: handle.read(
+                1024 * 1024
+
+LINE 134
+
+    return digest.hexdigest()
+
+
+>>> def _sha256_text(
+    value: str,
+) -> str:
+    return hashlib.sha256(
+        value.encode(
+            "utf-8"
+        )
+    ).hexdigest()
+
+
+LINE 144
+        )
+    ).hexdigest()
+
+
+>>> def _atomic_write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+
+LINE 176
+        path
+    )
+
+
+>>> def _atomic_write_jsonl(
+    path: Path,
+    records: Iterable[
+        Mapping[str, Any]
+    ],
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+
+LINE 215
+        path
+    )
+
+
+>>> def _load_json(
+    path: Path,
+) -> dict[str, Any]:
+    value = json.loads(
+        path.read_text(
+            encoding="utf-8-sig",
+        )
+    )
+
+
+LINE 235
+
+    return value
+
+
+>>> def _read_jsonl(
+    path: Path,
+) -> list[dict[str, Any]]:
+    records: list[
+        dict[str, Any]
+    ] = []
+
+    with path.open(
+        "r",
+
+LINE 275
+
+    return records
+
+
+>>> def _resolve_reference_path(
+    raw_value: Any,
+    *,
+    reference_root: Path,
+    required_root: Path,
+) -> Path:
+    text = str(
+        raw_value or ""
+    ).strip()
+
+LINE 332
+        + text
+    )
+
+
+>>> def _project_relative(
+    path: Path,
+) -> str:
+    resolved = path.resolve()
+
+    try:
+        return resolved.relative_to(
+            PROJECT_ROOT
+        ).as_posix()
+
+LINE 348
+            resolved
+        )
+
+
+>>> def _normalize_headings(
+    value: Any,
+) -> list[str]:
+    if not isinstance(
+        value,
+        list,
+    ):
+        return []
+
+
+LINE 384
+
+    return headings
+
+
+>>> def _find_prohibited_fields(
+    value: Any,
+    *,
+    prefix: str = "",
+) -> list[str]:
+    findings: list[str] = []
+
+    if isinstance(
+        value,
+
+LINE 438
+
+    return findings
+
+
+>>> def article_validation_artifact_paths_v3(
+    *,
+    workspace_id: str,
+    run_id: str,
+    artifact_root_override: str | Path | None = None,
+) -> dict[str, Path]:
+    workspace_id = _safe_name(
+        workspace_id,
+        field_name="workspace_id",
+
+LINE 457
+
+    if artifact_root_override is None:
+        base_root = (
+            DATA_ROOT
+>>>             / "article_validation_evidence"
+        )
+
+    else:
+        base_root = Path(
+            artifact_root_override
+        ).resolve()
+
+    root = (
+
+LINE 476
+    return {
+        "root":
+            root,
+
+>>>         "pass_manifest":
+            root
+            / "article_validation_pass_manifest.jsonl",
+
+        "failure_manifest":
+            root
+            / "article_validation_failure_manifest.jsonl",
+
+        "execution_ledger":
+
+LINE 478
+            root,
+
+        "pass_manifest":
+            root
+>>>             / "article_validation_pass_manifest.jsonl",
+
+        "failure_manifest":
+            root
+            / "article_validation_failure_manifest.jsonl",
+
+        "execution_ledger":
+            root
+            / "article_validation_execution_ledger.json",
+
+LINE 480
+        "pass_manifest":
+            root
+            / "article_validation_pass_manifest.jsonl",
+
+>>>         "failure_manifest":
+            root
+            / "article_validation_failure_manifest.jsonl",
+
+        "execution_ledger":
+            root
+            / "article_validation_execution_ledger.json",
+
+        "report":
+
+LINE 482
+            / "article_validation_pass_manifest.jsonl",
+
+        "failure_manifest":
+            root
+>>>             / "article_validation_failure_manifest.jsonl",
+
+        "execution_ledger":
+            root
+            / "article_validation_execution_ledger.json",
+
+        "report":
+            root
+            / "article_validation_report.json",
+
+LINE 484
+        "failure_manifest":
+            root
+            / "article_validation_failure_manifest.jsonl",
+
+>>>         "execution_ledger":
+            root
+            / "article_validation_execution_ledger.json",
+
+        "report":
+            root
+            / "article_validation_report.json",
+
+        "certificate":
+
+LINE 486
+            / "article_validation_failure_manifest.jsonl",
+
+        "execution_ledger":
+            root
+>>>             / "article_validation_execution_ledger.json",
+
+        "report":
+            root
+            / "article_validation_report.json",
+
+        "certificate":
+            root
+            / "article_validation_certificate.json",
+
+LINE 492
+        "report":
+            root
+            / "article_validation_report.json",
+
+>>>         "certificate":
+            root
+            / "article_validation_certificate.json",
+
+        "evidence_manifest":
+            root
+            / "article_validation_evidence_manifest.json",
+    }
+
+
+LINE 494
+            / "article_validation_report.json",
+
+        "certificate":
+            root
+>>>             / "article_validation_certificate.json",
+
+        "evidence_manifest":
+            root
+            / "article_validation_evidence_manifest.json",
+    }
+
+
+def _load_integrity_quarantine_ids(
+
+LINE 496
+        "certificate":
+            root
+            / "article_validation_certificate.json",
+
+>>>         "evidence_manifest":
+            root
+            / "article_validation_evidence_manifest.json",
+    }
+
+
+def _load_integrity_quarantine_ids(
+    certified_input: Mapping[str, Any],
+) -> tuple[set[str], str]:
+
+LINE 498
+            / "article_validation_certificate.json",
+
+        "evidence_manifest":
+            root
+>>>             / "article_validation_evidence_manifest.json",
+    }
+
+
+def _load_integrity_quarantine_ids(
+    certified_input: Mapping[str, Any],
+) -> tuple[set[str], str]:
+    certificate_path = Path(
+        str(
+
+LINE 502
+            / "article_validation_evidence_manifest.json",
+    }
+
+
+>>> def _load_integrity_quarantine_ids(
+    certified_input: Mapping[str, Any],
+) -> tuple[set[str], str]:
+    certificate_path = Path(
+        str(
+            certified_input.get(
+                "certificate_path"
+            )
+            or ""
+
+LINE 505
+
+def _load_integrity_quarantine_ids(
+    certified_input: Mapping[str, Any],
+) -> tuple[set[str], str]:
+>>>     certificate_path = Path(
+        str(
+            certified_input.get(
+                "certificate_path"
+            )
+            or ""
+        )
+    )
+
+
+LINE 508
+) -> tuple[set[str], str]:
+    certificate_path = Path(
+        str(
+            certified_input.get(
+>>>                 "certificate_path"
+            )
+            or ""
+        )
+    )
+
+    if not certificate_path.is_file():
+        raise FileNotFoundError(
+            "Website Article Integrity certificate "
+
+LINE 514
+            or ""
+        )
+    )
+
+>>>     if not certificate_path.is_file():
+        raise FileNotFoundError(
+            "Website Article Integrity certificate "
+            "path is unavailable."
+        )
+
+    certificate = _load_json(
+        certificate_path
+    )
+
+LINE 516
+    )
+
+    if not certificate_path.is_file():
+        raise FileNotFoundError(
+>>>             "Website Article Integrity certificate "
+            "path is unavailable."
+        )
+
+    certificate = _load_json(
+        certificate_path
+    )
+
+    quarantine_count = int(
+
+LINE 520
+            "Website Article Integrity certificate "
+            "path is unavailable."
+        )
+
+>>>     certificate = _load_json(
+        certificate_path
+    )
+
+    quarantine_count = int(
+        certified_input.get(
+            "integrity_quarantined_count"
+        )
+        or 0
+
+LINE 521
+            "path is unavailable."
+        )
+
+    certificate = _load_json(
+>>>         certificate_path
+    )
+
+    quarantine_count = int(
+        certified_input.get(
+            "integrity_quarantined_count"
+        )
+        or 0
+    )
+
+LINE 532
+        or 0
+    )
+
+    raw_quarantine_path = (
+>>>         certificate.get(
+            "certified_quarantine_ledger_path"
+        )
+    )
+
+    if (
+        not raw_quarantine_path
+        and quarantine_count == 0
+    ):
+
+LINE 557
+    quarantine_path = (
+        _resolve_reference_path(
+            raw_quarantine_path,
+            reference_root=(
+>>>                 certificate_path.parent
+            ),
+            required_root=(
+                integrity_workspace_root
+            ),
+        )
+    )
+
+    quarantine_records = (
+
+LINE 615
+        ),
+    )
+
+
+>>> def build_article_validation_decision_v3(
+    *,
+    certified_input: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify Integrity evidence and validate one UDARE article."""
+
+    source_record_id = str(
+        descriptor.get(
+
+LINE 620
+    *,
+    certified_input: Mapping[str, Any],
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+>>>     """Verify Integrity evidence and validate one UDARE article."""
+
+    source_record_id = str(
+        descriptor.get(
+            "source_record_id"
+        )
+        or ""
+    ).strip()
+
+
+LINE 641
+        )
+        or ""
+    ).strip().upper()
+
+>>>     if integrity_status != "PASS":
+        raise RuntimeError(
+            "Certified-active article does not have "
+            "Integrity PASS status: "
+            + source_record_id
+        )
+
+    payload = (
+        load_certified_article_payload(
+
+LINE 663
+        metadata,
+        Mapping,
+    ):
+        raise RuntimeError(
+>>>             "UDARE metadata is not an object: "
+            + source_record_id
+        )
+
+    extracted = (
+        extract_article_validation_document_v3(
+            str(
+                payload.get(
+                    "article_html"
+
+LINE 668
+            + source_record_id
+        )
+
+    extracted = (
+>>>         extract_article_validation_document_v3(
+            str(
+                payload.get(
+                    "article_html"
+                )
+                or ""
+            )
+        )
+    )
+
+LINE 760
+                    "metadata_sha256"
+                )
+                or ""
+            ),
+>>>             integrity_certificate_id=str(
+                certified_input.get(
+                    "certificate_id"
+                )
+                or ""
+            ),
+            integrity_certification_status=str(
+                certified_input.get(
+                    "certificate_status"
+
+LINE 762
+                or ""
+            ),
+            integrity_certificate_id=str(
+                certified_input.get(
+>>>                     "certificate_id"
+                )
+                or ""
+            ),
+            integrity_certification_status=str(
+                certified_input.get(
+                    "certificate_status"
+                )
+                or ""
+
+LINE 768
+                or ""
+            ),
+            integrity_certification_status=str(
+                certified_input.get(
+>>>                     "certificate_status"
+                )
+                or ""
+            ),
+            overall_integrity_status=(
+                integrity_status
+            ),
+        )
+    )
+
+LINE 844
+            validation.get(
+                "metadata_sha256"
+            ),
+
+>>>         "integrity_certificate_id":
+            certified_input.get(
+                "certificate_id"
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+                "certificate_status"
+            ),
+
+LINE 846
+            ),
+
+        "integrity_certificate_id":
+            certified_input.get(
+>>>                 "certificate_id"
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+                "certificate_status"
+            ),
+
+        "integrity_status":
+
+LINE 849
+            certified_input.get(
+                "certificate_id"
+            ),
+
+>>>         "integrity_certificate_status":
+            certified_input.get(
+                "certificate_status"
+            ),
+
+        "integrity_status":
+            integrity_status,
+
+        "integrity_verified":
+
+LINE 851
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+>>>                 "certificate_status"
+            ),
+
+        "integrity_status":
+            integrity_status,
+
+        "integrity_verified":
+            True,
+
+
+LINE 860
+
+        "integrity_verified":
+            True,
+
+>>>         "article_validation_status":
+            validation.get(
+                "status"
+            ),
+
+        "passed":
+            validation.get(
+                "passed"
+            ),
+
+LINE 921
+
+        "validated_at":
+            _utc_now(),
+
+>>>         "article_body_included":
+            False,
+
+        "article_body_modified":
+            False,
+
+        "article_body_copied":
+            False,
+    }
+
+LINE 924
+
+        "article_body_included":
+            False,
+
+>>>         "article_body_modified":
+            False,
+
+        "article_body_copied":
+            False,
+    }
+
+    prohibited_fields = (
+        _find_prohibited_fields(
+
+LINE 927
+
+        "article_body_modified":
+            False,
+
+>>>         "article_body_copied":
+            False,
+    }
+
+    prohibited_fields = (
+        _find_prohibited_fields(
+            decision
+        )
+    )
+
+LINE 949
+
+    return decision
+
+
+>>> def _write_validation_artifacts(
+    *,
+    workspace_id: str,
+    run_id: str,
+    certified_input: Mapping[str, Any],
+    decisions: Sequence[
+        Mapping[str, Any]
+    ],
+    quarantine_count: int,
+
+LINE 985
+    pass_records = [
+        dict(decision)
+        for decision in decisions
+        if decision.get(
+>>>             "article_validation_status"
+        )
+        == "PASS"
+    ]
+
+    failure_records = [
+        dict(decision)
+        for decision in decisions
+        if decision.get(
+
+LINE 987
+        for decision in decisions
+        if decision.get(
+            "article_validation_status"
+        )
+>>>         == "PASS"
+    ]
+
+    failure_records = [
+        dict(decision)
+        for decision in decisions
+        if decision.get(
+            "article_validation_status"
+        )
+
+LINE 994
+    failure_records = [
+        dict(decision)
+        for decision in decisions
+        if decision.get(
+>>>             "article_validation_status"
+        )
+        == "FAIL"
+    ]
+
+    processed_count = len(
+        decisions
+    )
+
+
+LINE 996
+        for decision in decisions
+        if decision.get(
+            "article_validation_status"
+        )
+>>>         == "FAIL"
+    ]
+
+    processed_count = len(
+        decisions
+    )
+
+    pass_count = len(
+        pass_records
+
+LINE 1077
+            ] += 1
+
+    generated_at = _utc_now()
+
+>>>     execution_ledger = {
+        "schema_version":
+            ARTIFACT_SCHEMA_VERSION,
+
+        "artifact_type":
+            "article_validation_execution_ledger",
+
+        "workspace_id":
+            workspace_id,
+
+LINE 1082
+        "schema_version":
+            ARTIFACT_SCHEMA_VERSION,
+
+        "artifact_type":
+>>>             "article_validation_execution_ledger",
+
+        "workspace_id":
+            workspace_id,
+
+        "run_id":
+            run_id,
+
+        "runner_version":
+
+LINE 1094
+        "runner_version":
+            RUNNER_VERSION,
+
+        "engine_version":
+>>>             ARTICLE_VALIDATION_ENGINE_VERSION,
+
+        "integrity_certificate_id":
+            certified_input.get(
+                "certificate_id"
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+
+LINE 1096
+
+        "engine_version":
+            ARTICLE_VALIDATION_ENGINE_VERSION,
+
+>>>         "integrity_certificate_id":
+            certified_input.get(
+                "certificate_id"
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+                "certificate_status"
+            ),
+
+LINE 1098
+            ARTICLE_VALIDATION_ENGINE_VERSION,
+
+        "integrity_certificate_id":
+            certified_input.get(
+>>>                 "certificate_id"
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+                "certificate_status"
+            ),
+
+        "certified_active_count":
+
+LINE 1101
+            certified_input.get(
+                "certificate_id"
+            ),
+
+>>>         "integrity_certificate_status":
+            certified_input.get(
+                "certificate_status"
+            ),
+
+        "certified_active_count":
+            certified_input.get(
+                "certified_active_count"
+            ),
+
+LINE 1103
+            ),
+
+        "integrity_certificate_status":
+            certified_input.get(
+>>>                 "certificate_status"
+            ),
+
+        "certified_active_count":
+            certified_input.get(
+                "certified_active_count"
+            ),
+
+        "processed_count":
+
+LINE 1190
+
+        "integrity_quarantine_ledger_reference":
+            quarantine_ledger_reference,
+
+>>>         "pass_manifest_reference":
+            _project_relative(
+                paths[
+                    "pass_manifest"
+                ]
+            ),
+
+        "failure_manifest_reference":
+            _project_relative(
+
+LINE 1193
+
+        "pass_manifest_reference":
+            _project_relative(
+                paths[
+>>>                     "pass_manifest"
+                ]
+            ),
+
+        "failure_manifest_reference":
+            _project_relative(
+                paths[
+                    "failure_manifest"
+                ]
+
+LINE 1197
+                    "pass_manifest"
+                ]
+            ),
+
+>>>         "failure_manifest_reference":
+            _project_relative(
+                paths[
+                    "failure_manifest"
+                ]
+            ),
+
+        "verification_only":
+            verification_only,
+
+LINE 1200
+
+        "failure_manifest_reference":
+            _project_relative(
+                paths[
+>>>                     "failure_manifest"
+                ]
+            ),
+
+        "verification_only":
+            verification_only,
+
+        "article_bodies_stored":
+            False,
+
+LINE 1222
+    }
+
+    _atomic_write_jsonl(
+        paths[
+>>>             "pass_manifest"
+        ],
+        pass_records,
+    )
+
+    _atomic_write_jsonl(
+        paths[
+            "failure_manifest"
+        ],
+
+LINE 1229
+    )
+
+    _atomic_write_jsonl(
+        paths[
+>>>             "failure_manifest"
+        ],
+        failure_records,
+    )
+
+    _atomic_write_json(
+        paths[
+            "execution_ledger"
+        ],
+
+LINE 1236
+    )
+
+    _atomic_write_json(
+        paths[
+>>>             "execution_ledger"
+        ],
+        execution_ledger,
+    )
+
+    _atomic_write_json(
+        paths[
+            "report"
+        ],
+
+LINE 1238
+    _atomic_write_json(
+        paths[
+            "execution_ledger"
+        ],
+>>>         execution_ledger,
+    )
+
+    _atomic_write_json(
+        paths[
+            "report"
+        ],
+        report,
+    )
+
+LINE 1248
+        ],
+        report,
+    )
+
+>>>     certificate: dict[
+        str,
+        Any
+    ] | None = None
+
+    core_artifact_paths = {
+        "pass_manifest":
+            paths[
+                "pass_manifest"
+
+LINE 1254
+        Any
+    ] | None = None
+
+    core_artifact_paths = {
+>>>         "pass_manifest":
+            paths[
+                "pass_manifest"
+            ],
+
+        "failure_manifest":
+            paths[
+                "failure_manifest"
+            ],
+
+LINE 1256
+
+    core_artifact_paths = {
+        "pass_manifest":
+            paths[
+>>>                 "pass_manifest"
+            ],
+
+        "failure_manifest":
+            paths[
+                "failure_manifest"
+            ],
+
+        "execution_ledger":
+
+LINE 1259
+            paths[
+                "pass_manifest"
+            ],
+
+>>>         "failure_manifest":
+            paths[
+                "failure_manifest"
+            ],
+
+        "execution_ledger":
+            paths[
+                "execution_ledger"
+            ],
+
+LINE 1261
+            ],
+
+        "failure_manifest":
+            paths[
+>>>                 "failure_manifest"
+            ],
+
+        "execution_ledger":
+            paths[
+                "execution_ledger"
+            ],
+
+        "report":
+
+LINE 1264
+            paths[
+                "failure_manifest"
+            ],
+
+>>>         "execution_ledger":
+            paths[
+                "execution_ledger"
+            ],
+
+        "report":
+            paths[
+                "report"
+            ],
+
+LINE 1266
+            ],
+
+        "execution_ledger":
+            paths[
+>>>                 "execution_ledger"
+            ],
+
+        "report":
+            paths[
+                "report"
+            ],
+    }
+
+
+LINE 1291
+        )
+    )
+
+    if certify:
+>>>         certificate_id = (
+            "article_validation_certificate_"
+            + _sha256_text(
+                workspace_id
+                + "|"
+                + run_id
+                + "|"
+                + core_evidence_sha256
+            )[:24]
+
+LINE 1292
+    )
+
+    if certify:
+        certificate_id = (
+>>>             "article_validation_certificate_"
+            + _sha256_text(
+                workspace_id
+                + "|"
+                + run_id
+                + "|"
+                + core_evidence_sha256
+            )[:24]
+        )
+
+LINE 1302
+                + core_evidence_sha256
+            )[:24]
+        )
+
+>>>         certificate = {
+            "schema_version":
+                ARTIFACT_SCHEMA_VERSION,
+
+            "artifact_type":
+                "article_validation_certificate",
+
+            "certificate_id":
+                certificate_id,
+
+LINE 1307
+            "schema_version":
+                ARTIFACT_SCHEMA_VERSION,
+
+            "artifact_type":
+>>>                 "article_validation_certificate",
+
+            "certificate_id":
+                certificate_id,
+
+            "workspace_id":
+                workspace_id,
+
+            "run_id":
+
+LINE 1309
+
+            "artifact_type":
+                "article_validation_certificate",
+
+>>>             "certificate_id":
+                certificate_id,
+
+            "workspace_id":
+                workspace_id,
+
+            "run_id":
+                run_id,
+
+
+LINE 1310
+            "artifact_type":
+                "article_validation_certificate",
+
+            "certificate_id":
+>>>                 certificate_id,
+
+            "workspace_id":
+                workspace_id,
+
+            "run_id":
+                run_id,
+
+            "certification_status":
+
+LINE 1331
+
+            "qualification":
+                "ALL_CERTIFIED_ACTIVE_INPUTS_ACCOUNTED",
+
+>>>             "integrity_certificate_id":
+                certified_input.get(
+                    "certificate_id"
+                ),
+
+            "certified_active_input_count":
+                certified_input.get(
+                    "certified_active_count"
+                ),
+
+LINE 1333
+                "ALL_CERTIFIED_ACTIVE_INPUTS_ACCOUNTED",
+
+            "integrity_certificate_id":
+                certified_input.get(
+>>>                     "certificate_id"
+                ),
+
+            "certified_active_input_count":
+                certified_input.get(
+                    "certified_active_count"
+                ),
+
+            "processed_count":
+
+LINE 1379
+        }
+
+        _atomic_write_json(
+            paths[
+>>>                 "certificate"
+            ],
+            certificate,
+        )
+
+    artifact_paths_for_evidence = dict(
+        core_artifact_paths
+    )
+
+
+LINE 1381
+        _atomic_write_json(
+            paths[
+                "certificate"
+            ],
+>>>             certificate,
+        )
+
+    artifact_paths_for_evidence = dict(
+        core_artifact_paths
+    )
+
+    if certificate is not None:
+        artifact_paths_for_evidence[
+
+LINE 1388
+    artifact_paths_for_evidence = dict(
+        core_artifact_paths
+    )
+
+>>>     if certificate is not None:
+        artifact_paths_for_evidence[
+            "certificate"
+        ] = paths[
+            "certificate"
+        ]
+
+    artifact_hashes = {
+        name: {
+
+LINE 1390
+    )
+
+    if certificate is not None:
+        artifact_paths_for_evidence[
+>>>             "certificate"
+        ] = paths[
+            "certificate"
+        ]
+
+    artifact_hashes = {
+        name: {
+            "path":
+                _project_relative(
+
+LINE 1392
+    if certificate is not None:
+        artifact_paths_for_evidence[
+            "certificate"
+        ] = paths[
+>>>             "certificate"
+        ]
+
+    artifact_hashes = {
+        name: {
+            "path":
+                _project_relative(
+                    path
+                ),
+
+LINE 1420
+            )
+        )
+    )
+
+>>>     evidence_manifest = {
+        "schema_version":
+            ARTIFACT_SCHEMA_VERSION,
+
+        "artifact_type":
+            "article_validation_evidence_manifest",
+
+        "workspace_id":
+            workspace_id,
+
+LINE 1425
+        "schema_version":
+            ARTIFACT_SCHEMA_VERSION,
+
+        "artifact_type":
+>>>             "article_validation_evidence_manifest",
+
+        "workspace_id":
+            workspace_id,
+
+        "run_id":
+            run_id,
+
+        "verification_only":
+
+LINE 1457
+    }
+
+    _atomic_write_json(
+        paths[
+>>>             "evidence_manifest"
+        ],
+        evidence_manifest,
+    )
+
+    return {
+        "ok":
+            True,
+
+
+LINE 1459
+    _atomic_write_json(
+        paths[
+            "evidence_manifest"
+        ],
+>>>         evidence_manifest,
+    )
+
+    return {
+        "ok":
+            True,
+
+        "workspace_id":
+            workspace_id,
+
+LINE 1487
+
+        "verification_only":
+            verification_only,
+
+>>>         "certificate_created":
+            certificate is not None,
+
+        "certificate_id":
+            (
+                certificate.get(
+                    "certificate_id"
+                )
+                if certificate
+
+LINE 1488
+        "verification_only":
+            verification_only,
+
+        "certificate_created":
+>>>             certificate is not None,
+
+        "certificate_id":
+            (
+                certificate.get(
+                    "certificate_id"
+                )
+                if certificate
+                else None
+
+LINE 1490
+
+        "certificate_created":
+            certificate is not None,
+
+>>>         "certificate_id":
+            (
+                certificate.get(
+                    "certificate_id"
+                )
+                if certificate
+                else None
+            ),
+
+
+LINE 1492
+            certificate is not None,
+
+        "certificate_id":
+            (
+>>>                 certificate.get(
+                    "certificate_id"
+                )
+                if certificate
+                else None
+            ),
+
+        "artifact_paths":
+            {
+
+LINE 1493
+
+        "certificate_id":
+            (
+                certificate.get(
+>>>                     "certificate_id"
+                )
+                if certificate
+                else None
+            ),
+
+        "artifact_paths":
+            {
+                name: str(path)
+
+LINE 1495
+            (
+                certificate.get(
+                    "certificate_id"
+                )
+>>>                 if certificate
+                else None
+            ),
+
+        "artifact_paths":
+            {
+                name: str(path)
+                for name, path
+                in paths.items()
+
+LINE 1517
+            False,
+    }
+
+
+>>> def _verify_integrity_population(
+    certified_input: Mapping[str, Any],
+    descriptors: Sequence[
+        Mapping[str, Any]
+    ],
+) -> tuple[int, str]:
+    if (
+        certified_input.get(
+            "certificate_status"
+
+LINE 1525
+    ],
+) -> tuple[int, str]:
+    if (
+        certified_input.get(
+>>>             "certificate_status"
+        )
+        != "CERTIFIED"
+    ):
+        raise RuntimeError(
+            "Website Article Integrity is not CERTIFIED."
+        )
+
+    certified_active_count = int(
+
+LINE 1590
+            descriptor.get(
+                "overall_integrity_status"
+            )
+            or ""
+>>>         ).strip().upper() != "PASS":
+            raise RuntimeError(
+                "Certified-active article has non-PASS "
+                "Integrity status: "
+                + source_record_id
+            )
+
+        active_ids.add(
+            source_record_id
+
+LINE 1607
+        quarantine_reference,
+    )
+
+
+>>> def run_article_validation_population_v3(
+    *,
+    workspace_id: str,
+    expected_active_count: int,
+    run_id: str = "",
+    batch_size: int = DEFAULT_BATCH_SIZE,
+) -> dict[str, Any]:
+    """Validate the complete Integrity-certified active population."""
+
+
+LINE 1640
+            "batch_size must be positive."
+        )
+
+    certified_input = (
+>>>         load_certified_article_validation_input(
+            workspace_id,
+            expected_active_count=(
+                expected_active_count
+            ),
+        )
+    )
+
+    descriptors = certified_input.get(
+
+LINE 1700
+        ]
+
+        for descriptor in batch:
+            decisions.append(
+>>>                 build_article_validation_decision_v3(
+                    certified_input=(
+                        certified_input
+                    ),
+                    descriptor=descriptor,
+                )
+            )
+
+    if len(decisions) != expected_active_count:
+
+LINE 1731
+        verification_only=False,
+    )
+
+
+>>> def run_article_validation_sample_v3(
+    *,
+    workspace_id: str,
+    positions: Sequence[int],
+    artifact_root_override: str | Path,
+    run_id: str = "",
+) -> dict[str, Any]:
+    """Verify the runner using at most ten certified records."""
+
+
+LINE 1775
+            "Verification positions must be unique."
+        )
+
+    certified_input = (
+>>>         load_certified_article_validation_input(
+            workspace_id
+        )
+    )
+
+    descriptors = certified_input.get(
+        "records"
+    )
+
+
+LINE 1832
+            descriptor
+        )
+
+    decisions = [
+>>>         build_article_validation_decision_v3(
+            certified_input=(
+                certified_input
+            ),
+            descriptor=descriptor,
+        )
+        for descriptor in selected
+    ]
+
+
+============================================================
+FILE: backend\server\article_validation\article_validation_runtime_registration.py
+============================================================
+
+LINE 11
+from pathlib import Path
+from typing import Any, Mapping
+
+from backend.server.article_validation.article_validation_engine_v3 import (
+>>>     ARTICLE_VALIDATION_ENGINE_VERSION,
+)
+from backend.server.article_validation.article_validation_runner_v3 import (
+    RUNNER_VERSION,
+    run_article_validation_population_v3,
+)
+from backend.server.article_validation.certified_article_validation_input import (
+    load_certified_article_validation_input,
+)
+
+LINE 15
+    ARTICLE_VALIDATION_ENGINE_VERSION,
+)
+from backend.server.article_validation.article_validation_runner_v3 import (
+    RUNNER_VERSION,
+>>>     run_article_validation_population_v3,
+)
+from backend.server.article_validation.certified_article_validation_input import (
+    load_certified_article_validation_input,
+)
+from backend.server.runtime.universal_runtime_registration import (
+    ensure_persisted_runtime_registrations_loaded,
+    register_runtime_handler,
+)
+
+LINE 18
+    RUNNER_VERSION,
+    run_article_validation_population_v3,
+)
+from backend.server.article_validation.certified_article_validation_input import (
+>>>     load_certified_article_validation_input,
+)
+from backend.server.runtime.universal_runtime_registration import (
+    ensure_persisted_runtime_registrations_loaded,
+    register_runtime_handler,
+)
+
+
+REGISTRATION_VERSION = (
+
+LINE 48
+
+HANDLER_REFERENCE = (
+    "backend.server.article_validation."
+    "article_validation_runtime_registration:"
+>>>     "execute_article_validation_runtime_job_v1"
+)
+
+PROJECT_ROOT = Path(
+    __file__
+).resolve().parents[3]
+
+REGISTRATION_EVIDENCE_PATH = (
+    PROJECT_ROOT
+
+LINE 73
+):
+    """Raised when Article Validation runtime registration is invalid."""
+
+
+>>> def _safe_name(
+    value: Any,
+    *,
+    field_name: str,
+) -> str:
+    normalized = str(
+        value or ""
+    ).strip()
+
+
+LINE 98
+
+    return normalized
+
+
+>>> def _positive_integer(
+    value: Any,
+    *,
+    field_name: str,
+) -> int:
+    try:
+        normalized = int(
+            value
+        )
+
+LINE 124
+
+    return normalized
+
+
+>>> def _job_payload(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+
+    nested_payload = job.get(
+        "payload"
+    )
+
+
+LINE 161
+
+    return payload
+
+
+>>> def _certified_active_count(
+    workspace_id: str,
+) -> int:
+    certified_input = (
+        load_certified_article_validation_input(
+            workspace_id
+        )
+    )
+
+
+LINE 165
+def _certified_active_count(
+    workspace_id: str,
+) -> int:
+    certified_input = (
+>>>         load_certified_article_validation_input(
+            workspace_id
+        )
+    )
+
+    records = certified_input.get(
+        "records"
+    )
+
+
+LINE 192
+        records
+    )
+
+
+>>> def execute_article_validation_runtime_job_v1(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Execute all certified Article Validation inputs through runtime."""
+
+    if not isinstance(
+        job,
+        Mapping,
+    ):
+
+LINE 268
+        or ""
+    ).strip()
+
+    result = (
+>>>         run_article_validation_population_v3(
+            workspace_id=workspace_id,
+            expected_active_count=(
+                expected_active_count
+            ),
+            run_id=run_id,
+            batch_size=batch_size,
+        )
+    )
+
+LINE 279
+        )
+    )
+
+    return {
+>>>         "runtime_job_type":
+            JOB_TYPE_ARTICLE_VALIDATION,
+
+        "pipeline":
+            PIPELINE,
+
+        "stage":
+            STAGE,
+
+
+LINE 314
+            result.get(
+                "run_id"
+            ),
+
+>>>         "certificate_id":
+            result.get(
+                "certificate_id"
+            ),
+
+        "artifact_paths":
+            result.get(
+                "artifact_paths"
+            ),
+
+LINE 316
+            ),
+
+        "certificate_id":
+            result.get(
+>>>                 "certificate_id"
+            ),
+
+        "artifact_paths":
+            result.get(
+                "artifact_paths"
+            ),
+
+        "article_bodies_stored":
+
+LINE 338
+            False,
+    }
+
+
+>>> def _write_json(
+    path: Path,
+    payload: Mapping[str, Any],
+) -> None:
+    path.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+
+LINE 361
+        encoding="utf-8",
+    )
+
+
+>>> def registration_definition_v1() -> dict[str, Any]:
+    return {
+        "registration_version":
+            REGISTRATION_VERSION,
+
+        "job_type":
+            JOB_TYPE_ARTICLE_VALIDATION,
+
+        "handler_reference":
+
+LINE 381
+
+        "description":
+            (
+                "Validate all Website Article Integrity-certified "
+>>>                 "active UDARE articles and produce evidence-only "
+                "Article Validation manifests, reports, ledgers "
+                "and certification."
+            ),
+
+        "required_payload_fields":
+            (
+                "workspace_id",
+            ),
+
+LINE 425
+            "business_domain":
+                "article_validation",
+
+            "engine_version":
+>>>                 ARTICLE_VALIDATION_ENGINE_VERSION,
+
+            "runner_version":
+                RUNNER_VERSION,
+
+            "uses_universal_runtime":
+                True,
+
+            "separate_queue_required":
+
+LINE 442
+
+            "evidence_only":
+                True,
+
+>>>             "article_body_store_created":
+                False,
+
+            "article_bodies_copied":
+                False,
+
+            "word_count_rule":
+                False,
+
+
+LINE 460
+        },
+    }
+
+
+>>> def register_article_validation_runtime_v1(
+    *,
+    replace: bool = False,
+    persist: bool = True,
+) -> dict[str, Any]:
+    ensure_persisted_runtime_registrations_loaded()
+
+    definition = registration_definition_v1()
+
+
+LINE 474
+        job_type=definition[
+            "job_type"
+        ],
+        handler=(
+>>>             execute_article_validation_runtime_job_v1
+        ),
+        pipeline=definition[
+            "pipeline"
+        ],
+        stage=definition[
+            "stage"
+        ],
+        description=definition[
+
+============================================================
+FILE: backend\server\website_unified_content\certified_wuc_input.py
+============================================================
+
+LINE 14
+
+
+INPUT_CONTRACT_VERSION = (
+    "certified_wuc_input_v1_"
+>>>     "article_validation_pass_udare_reference"
+)
+
+PROJECT_ROOT = Path(
+    __file__
+).resolve().parents[3]
+
+DATA_ROOT = (
+    PROJECT_ROOT
+
+LINE 35
+):
+    """Raised when certified WUC input evidence is invalid."""
+
+
+>>> def _safe_workspace_id(
+    value: Any,
+) -> str:
+    workspace_id = str(
+        value or ""
+    ).strip()
+
+    if not workspace_id:
+        raise CertifiedWucInputError(
+
+LINE 58
+
+    return workspace_id
+
+
+>>> def _load_json(
+    path: Path,
+) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            path.read_text(
+                encoding="utf-8-sig",
+            )
+        )
+
+LINE 87
+
+    return value
+
+
+>>> def _load_jsonl(
+    path: Path,
+) -> list[dict[str, Any]]:
+    records: list[
+        dict[str, Any]
+    ] = []
+
+    try:
+        handle = path.open(
+
+LINE 140
+
+    return records
+
+
+>>> def _resolve_reference(
+    value: Any,
+) -> Path:
+    raw = str(
+        value or ""
+    ).strip()
+
+    if not raw:
+        raise CertifiedWucInputError(
+
+LINE 165
+
+    return path.resolve()
+
+
+>>> def _sha256_file(
+    path: Path,
+) -> str:
+    digest = hashlib.sha256()
+
+    with path.open(
+        "rb"
+    ) as handle:
+        for block in iter(
+
+LINE 186
+
+    return digest.hexdigest()
+
+
+>>> def _authoritative_report_path(
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+        / "article_validation_scan"
+        / workspace_id
+        / "article_validation_population_v3_verification.json"
+    )
+
+LINE 197
+        / "article_validation_population_v3_verification.json"
+    )
+
+
+>>> def _article_validation_evidence_root(
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+        / "article_validation_evidence"
+        / workspace_id
+    )
+
+
+LINE 202
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+>>>         / "article_validation_evidence"
+        / workspace_id
+    )
+
+
+def _udare_articles_root(
+    workspace_id: str,
+) -> Path:
+    return (
+
+LINE 207
+        / workspace_id
+    )
+
+
+>>> def _udare_articles_root(
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+        / "udare_store"
+        / workspace_id
+        / "articles"
+    ).resolve()
+
+LINE 212
+    workspace_id: str,
+) -> Path:
+    return (
+        DATA_ROOT
+>>>         / "udare_store"
+        / workspace_id
+        / "articles"
+    ).resolve()
+
+
+def _manifest_from_report(
+    *,
+    workspace_id: str,
+
+LINE 218
+        / "articles"
+    ).resolve()
+
+
+>>> def _manifest_from_report(
+    *,
+    workspace_id: str,
+    report: Mapping[str, Any],
+) -> Path:
+    mappings: list[
+        Mapping[str, Any]
+    ] = []
+
+
+LINE 245
+    )
+
+    for mapping in mappings:
+        for key in (
+>>>             "pass_manifest",
+            "article_validation_pass_manifest",
+            "pass_manifest_path",
+            "article_validation_pass_manifest_path",
+        ):
+            value = mapping.get(
+                key
+            )
+
+
+LINE 246
+
+    for mapping in mappings:
+        for key in (
+            "pass_manifest",
+>>>             "article_validation_pass_manifest",
+            "pass_manifest_path",
+            "article_validation_pass_manifest_path",
+        ):
+            value = mapping.get(
+                key
+            )
+
+            if not value:
+
+LINE 247
+    for mapping in mappings:
+        for key in (
+            "pass_manifest",
+            "article_validation_pass_manifest",
+>>>             "pass_manifest_path",
+            "article_validation_pass_manifest_path",
+        ):
+            value = mapping.get(
+                key
+            )
+
+            if not value:
+                continue
+
+LINE 248
+        for key in (
+            "pass_manifest",
+            "article_validation_pass_manifest",
+            "pass_manifest_path",
+>>>             "article_validation_pass_manifest_path",
+        ):
+            value = mapping.get(
+                key
+            )
+
+            if not value:
+                continue
+
+
+LINE 275
+    roots: list[Path] = []
+
+    if run_id:
+        roots.append(
+>>>             _article_validation_evidence_root(
+                workspace_id
+            )
+            / "runs"
+            / run_id
+        )
+
+    roots.append(
+        _article_validation_evidence_root(
+
+LINE 283
+            / run_id
+        )
+
+    roots.append(
+>>>         _article_validation_evidence_root(
+            workspace_id
+        )
+    )
+
+    candidates: list[
+        Path
+    ] = []
+
+
+LINE 299
+
+        candidates.extend(
+            path.resolve()
+            for path in root.rglob(
+>>>                 "article_validation_pass_manifest.jsonl"
+            )
+            if path.is_file()
+        )
+
+    if not candidates:
+        raise CertifiedWucInputError(
+            "Article Validation PASS manifest was not found."
+        )
+
+LINE 317
+        ),
+    )
+
+
+>>> def load_article_validation_pass_contract_v1(
+    workspace_id: str,
+    *,
+    expected_pass_count: int | None = None,
+) -> dict[str, Any]:
+    normalized_workspace_id = (
+        _safe_workspace_id(
+            workspace_id
+        )
+
+LINE 371
+        )
+        or 0
+    )
+
+>>>     if verification_status != "PASS":
+        raise CertifiedWucInputError(
+            "Article Validation verification is not PASS."
+        )
+
+    if pass_count <= 0:
+        raise CertifiedWucInputError(
+            "Article Validation PASS count is empty."
+        )
+
+LINE 422
+    descriptors: list[
+        dict[str, Any]
+    ] = []
+
+>>>     udare_root = _udare_articles_root(
+        normalized_workspace_id
+    )
+
+    for index, record in enumerate(
+        records,
+        start=1,
+    ):
+        source_record_id = str(
+
+LINE 464
+        for field in (
+            "article_reference",
+            "article_path",
+            "source_article_path",
+>>>             "udare_article_path",
+            "content_ref",
+        ):
+            value = record.get(
+                field
+            )
+
+            if value:
+                article_reference = value
+
+LINE 477
+                break
+
+        if not article_reference:
+            raise CertifiedWucInputError(
+>>>                 "PASS record has no UDARE article reference: "
+                + source_record_id
+            )
+
+        article_path = _resolve_reference(
+            article_reference
+        )
+
+        try:
+
+LINE 487
+        )
+
+        try:
+            article_path.relative_to(
+>>>                 udare_root
+            )
+
+        except ValueError as exc:
+            raise CertifiedWucInputError(
+                "PASS record points outside the UDARE article directory: "
+                + source_record_id
+            ) from exc
+
+
+LINE 492
+            )
+
+        except ValueError as exc:
+            raise CertifiedWucInputError(
+>>>                 "PASS record points outside the UDARE article directory: "
+                + source_record_id
+            ) from exc
+
+        if not article_path.is_file():
+            raise CertifiedWucInputError(
+                "Referenced UDARE article is missing: "
+                + str(
+                    article_path
+
+LINE 498
+            ) from exc
+
+        if not article_path.is_file():
+            raise CertifiedWucInputError(
+>>>                 "Referenced UDARE article is missing: "
+                + str(
+                    article_path
+                )
+            )
+
+        expected_article_hash = str(
+            record.get(
+                "article_sha256"
+
+LINE 532
+            actual_article_hash
+            != expected_article_hash
+        ):
+            raise CertifiedWucInputError(
+>>>                 "UDARE article hash mismatch: "
+                + source_record_id
+            )
+
+        metadata_path = None
+        expected_metadata_hash = ""
+
+        if record.get(
+            "metadata_path"
+
+LINE 550
+            )
+
+            if not metadata_path.is_file():
+                raise CertifiedWucInputError(
+>>>                     "Referenced UDARE metadata is missing: "
+                    + source_record_id
+                )
+
+            expected_metadata_hash = str(
+                record.get(
+                    "metadata_sha256"
+                )
+                or ""
+
+LINE 569
+                )
+                != expected_metadata_hash
+            ):
+                raise CertifiedWucInputError(
+>>>                     "UDARE metadata hash mismatch: "
+                    + source_record_id
+                )
+
+        descriptors.append(
+            {
+                "source_record_id":
+                    source_record_id,
+
+
+LINE 621
+                    or record.get(
+                        "title"
+                    ),
+
+>>>                 "article_validation_status":
+                    "PASS",
+
+                "article_validation_run_id":
+                    report.get(
+                        "run_id"
+                    ),
+
+                "article_validation_certificate_id":
+
+LINE 622
+                        "title"
+                    ),
+
+                "article_validation_status":
+>>>                     "PASS",
+
+                "article_validation_run_id":
+                    report.get(
+                        "run_id"
+                    ),
+
+                "article_validation_certificate_id":
+                    report.get(
+
+LINE 629
+                    report.get(
+                        "run_id"
+                    ),
+
+>>>                 "article_validation_certificate_id":
+                    report.get(
+                        "certificate_id"
+                    ),
+            }
+        )
+
+    return {
+        "contract_version":
+
+LINE 631
+                    ),
+
+                "article_validation_certificate_id":
+                    report.get(
+>>>                         "certificate_id"
+                    ),
+            }
+        )
+
+    return {
+        "contract_version":
+            INPUT_CONTRACT_VERSION,
+
+
+LINE 648
+            report.get(
+                "run_id"
+            ),
+
+>>>         "article_validation_certificate_id":
+            report.get(
+                "certificate_id"
+            ),
+
+        "pass_count":
+            pass_count,
+
+        "fail_count":
+
+LINE 650
+            ),
+
+        "article_validation_certificate_id":
+            report.get(
+>>>                 "certificate_id"
+            ),
+
+        "pass_count":
+            pass_count,
+
+        "fail_count":
+            fail_count,
+
+
+LINE 664
+            str(
+                report_path
+            ),
+
+>>>         "pass_manifest_path":
+            str(
+                manifest_path
+            ),
+
+        "descriptors":
+            descriptors,
+
+        "article_bodies_loaded":
+
+LINE 683
+            False,
+    }
+
+
+>>> def load_transient_certified_wuc_source_v1(
+    descriptor: Mapping[str, Any],
+) -> dict[str, Any]:
+    article_path = _resolve_reference(
+        descriptor.get(
+            "article_path"
+        )
+    )
+
+
+LINE 709
+        or actual_article_hash
+        != expected_article_hash
+    ):
+        raise CertifiedWucInputError(
+>>>             "Transient UDARE article hash verification failed."
+        )
+
+    metadata: dict[str, Any] = {}
+
+    metadata_value = descriptor.get(
+        "metadata_path"
+    )
+
+
+LINE 738
+            )
+            != expected_metadata_hash
+        ):
+            raise CertifiedWucInputError(
+>>>                 "Transient UDARE metadata hash verification failed."
+            )
+
+        metadata = _load_json(
+            metadata_path
+        )
+
+    html = article_path.read_text(
+        encoding="utf-8-sig",
+
+LINE 752
+    )
+
+    if not html.strip():
+        raise CertifiedWucInputError(
+>>>             "Transient UDARE HTML is empty."
+        )
+
+    return {
+        "descriptor":
+            dict(
+                descriptor
+            ),
+
+
+LINE 761
+            dict(
+                descriptor
+            ),
+
+>>>         "udare_html":
+            html,
+
+        "udare_metadata":
+            metadata,
+
+        "article_body_loaded_transiently":
+            True,
+
+
+LINE 764
+
+        "udare_html":
+            html,
+
+>>>         "udare_metadata":
+            metadata,
+
+        "article_body_loaded_transiently":
+            True,
+
+        "article_body_persisted_by_wuc":
+            False,
+
+
+LINE 767
+
+        "udare_metadata":
+            metadata,
+
+>>>         "article_body_loaded_transiently":
+            True,
+
+        "article_body_persisted_by_wuc":
+            False,
+
+        "article_body_copied_to_intermediate_store":
+            False,
+    }
+
+LINE 770
+
+        "article_body_loaded_transiently":
+            True,
+
+>>>         "article_body_persisted_by_wuc":
+            False,
+
+        "article_body_copied_to_intermediate_store":
+            False,
+    }
+
+LINE 773
+
+        "article_body_persisted_by_wuc":
+            False,
+
+>>>         "article_body_copied_to_intermediate_store":
+            False,
+    }
+
+============================================================
+ARTICLE VALIDATION EXACT ACTIVE CONTRACT SCAN COMPLETE
+NO FILES MODIFIED
+============================================================

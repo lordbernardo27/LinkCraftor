@@ -1,0 +1,3444 @@
+﻿============================================================
+STAGE 9 — CANONICAL UUCD PERSISTENCE
+PRE-IMPLEMENTATION EXACT CONTRACT SCAN
+============================================================
+
+Purpose:
+- Confirm current canonical UUCD package
+- Confirm persistence component does not already exist
+- Confirm canonical content_ref contract
+- Confirm finalized Body Store Writer handoff contract
+- Confirm exact fields available to persistence
+- Confirm current canonical store state
+- Prepare implementation without touching production data
+
+============================================================
+1. CANONICAL PACKAGE INVENTORY
+============================================================
+backend\server\universal_unified_content_document\__init__.py
+backend\server\universal_unified_content_document\uucd_engine_v1.py
+
+============================================================
+2. EXISTING PERSISTENCE COMPONENT SEARCH
+============================================================
+TOTAL_MATCHES: 11
+FILE: audit_fresh_body_store_writer_complete_v1.py
+LINE 717: "persist_uucd",
+FILE: audit_fresh_body_store_writer_complete_v1.py
+LINE 718: "save_uucd",
+FILE: audit_fresh_body_store_writer_complete_v1.py
+LINE 914: == "READY_FOR_UUCD_PERSISTENCE",
+FILE: certify_body_store_runtime_phase_5_3.py
+LINE 535: "persist_uucd",
+FILE: certify_body_store_runtime_phase_5_3.py
+LINE 537: "save_uucd",
+FILE: scan_universal_article_body_store_management_layer_v1.py
+LINE 149: "persist_uucd",
+FILE: scan_universal_article_body_store_management_layer_v1.py
+LINE 151: "save_uucd",
+FILE: verify_body_store_repository_v1.py
+LINE 297: "persist_uucd",
+FILE: verify_body_store_repository_v1.py
+LINE 299: "save_uucd",
+FILE: verify_fresh_body_store_writer_v1.py
+LINE 395: == "READY_FOR_UUCD_PERSISTENCE",
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE 762: "READY_FOR_UUCD_PERSISTENCE",
+
+============================================================
+3. UUCD ENGINE — EXACT CONTENT_REF CONTRACT
+============================================================
+
+LINE 22
+from copy import deepcopy
+from typing import Any, Mapping
+
+
+>>> UUCD_SCHEMA_VERSION = (
+    "universal_unified_content_document_v2"
+)
+
+BODY_PAYLOAD_SCHEMA_VERSION = (
+    "universal_body_payload_v1"
+)
+
+HANDOFF_ENVELOPE_SCHEMA_VERSION = (
+    "universal_handoff_envelope_v1"
+)
+
+UUCD_ENGINE_VERSION = (
+
+LINE 75
+    "body_field",
+    "full_body_handoff",
+}
+
+>>> REQUIRED_UUCD_RECORD_FIELDS = {
+    "schema_version",
+    "engine_version",
+    "document_id",
+    "workspace_id",
+    "source_id",
+    "source_type",
+    "source_name",
+    "source_format",
+    "source_identity",
+    "title",
+    "h1",
+    "headings",
+
+LINE 91
+    "headings",
+    "canonical_url",
+    "structure",
+    "content_hash",
+>>>     "content_ref",
+    "body_ref",
+    "body_status",
+    "body_length",
+    "body_word_count",
+    "metadata",
+    "lifecycle",
+    "versioning",
+    "provenance",
+    "handoff",
+}
+
+REQUIRED_BODY_PAYLOAD_FIELDS = {
+
+LINE 92
+    "canonical_url",
+    "structure",
+    "content_hash",
+    "content_ref",
+>>>     "body_ref",
+    "body_status",
+    "body_length",
+    "body_word_count",
+    "metadata",
+    "lifecycle",
+    "versioning",
+    "provenance",
+    "handoff",
+}
+
+REQUIRED_BODY_PAYLOAD_FIELDS = {
+    "payload_schema_version",
+
+LINE 93
+    "structure",
+    "content_hash",
+    "content_ref",
+    "body_ref",
+>>>     "body_status",
+    "body_length",
+    "body_word_count",
+    "metadata",
+    "lifecycle",
+    "versioning",
+    "provenance",
+    "handoff",
+}
+
+REQUIRED_BODY_PAYLOAD_FIELDS = {
+    "payload_schema_version",
+    "document_id",
+
+LINE 112
+    "content_body",
+    "content_hash",
+    "body_length",
+    "body_word_count",
+>>>     "body_ref",
+    "content_encoding",
+}
+
+REQUIRED_BINDING_FIELDS = {
+    "document_id",
+    "workspace_id",
+    "source_type",
+    "content_hash",
+    "body_length",
+    "body_word_count",
+    "body_ref",
+    "binding_hash",
+
+LINE 123
+    "source_type",
+    "content_hash",
+    "body_length",
+    "body_word_count",
+>>>     "body_ref",
+    "binding_hash",
+    "binding_status",
+}
+
+BINDING_FIELD_NAMES = (
+    "document_id",
+    "workspace_id",
+    "source_type",
+    "content_hash",
+    "body_length",
+    "body_word_count",
+    "body_ref",
+
+LINE 135
+    "source_type",
+    "content_hash",
+    "body_length",
+    "body_word_count",
+>>>     "body_ref",
+)
+
+
+class UUCDContractError(
+    ValueError
+):
+    """Raised when a WUC package or handoff envelope is invalid."""
+
+
+def _require_mapping(
+    value: Any,
+    *,
+
+LINE 270
+        ]
+    )
+
+
+>>> def _stable_content_ref(
+    *,
+    workspace_id: str,
+    document_id: str,
+) -> str:
+    return (
+        "backend/server/data/"
+        "universal_unified_content_documents/"
+        + workspace_id
+        + "/documents/"
+        + document_id
+        + ".json"
+    )
+
+LINE 277
+    document_id: str,
+) -> str:
+    return (
+        "backend/server/data/"
+>>>         "universal_unified_content_documents/"
+        + workspace_id
+        + "/documents/"
+        + document_id
+        + ".json"
+    )
+
+
+def _stable_body_ref(
+    *,
+    workspace_id: str,
+    document_id: str,
+    title: str,
+
+LINE 285
+        + ".json"
+    )
+
+
+>>> def _stable_body_ref(
+    *,
+    workspace_id: str,
+    document_id: str,
+    title: str,
+) -> str:
+    filename = (
+        _slugify(
+            title
+        )
+        + "_"
+        + document_id[
+            -12:
+
+LINE 628
+        source_type=source_type,
+        source_record_id=source_record_id,
+    )
+
+>>>     content_ref = _stable_content_ref(
+        workspace_id=workspace_id,
+        document_id=document_id,
+    )
+
+    body_ref = _stable_body_ref(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        title=title,
+    )
+
+    content_hash = validated[
+        "content_hash"
+
+LINE 633
+        workspace_id=workspace_id,
+        document_id=document_id,
+    )
+
+>>>     body_ref = _stable_body_ref(
+        workspace_id=workspace_id,
+        document_id=document_id,
+        title=title,
+    )
+
+    content_hash = validated[
+        "content_hash"
+    ]
+
+    body_length = validated[
+        "body_length"
+    ]
+
+LINE 672
+    )
+
+    uucd_record = {
+        "schema_version":
+>>>             UUCD_SCHEMA_VERSION,
+
+        "engine_version":
+            UUCD_ENGINE_VERSION,
+
+        "document_id":
+            document_id,
+
+        "workspace_id":
+            workspace_id,
+
+        "source_id":
+            source_record_id,
+
+LINE 739
+
+        "content_hash":
+            content_hash,
+
+>>>         "content_ref":
+            content_ref,
+
+        "body_ref":
+            body_ref,
+
+        "body_status":
+            "PENDING_BODY_STORE_WRITE",
+
+        "body_length":
+            body_length,
+
+        "body_word_count":
+
+LINE 740
+        "content_hash":
+            content_hash,
+
+        "content_ref":
+>>>             content_ref,
+
+        "body_ref":
+            body_ref,
+
+        "body_status":
+            "PENDING_BODY_STORE_WRITE",
+
+        "body_length":
+            body_length,
+
+        "body_word_count":
+            body_word_count,
+
+LINE 742
+
+        "content_ref":
+            content_ref,
+
+>>>         "body_ref":
+            body_ref,
+
+        "body_status":
+            "PENDING_BODY_STORE_WRITE",
+
+        "body_length":
+            body_length,
+
+        "body_word_count":
+            body_word_count,
+
+        "metadata": {
+
+LINE 743
+        "content_ref":
+            content_ref,
+
+        "body_ref":
+>>>             body_ref,
+
+        "body_status":
+            "PENDING_BODY_STORE_WRITE",
+
+        "body_length":
+            body_length,
+
+        "body_word_count":
+            body_word_count,
+
+        "metadata": {
+            "wuc_schema_version":
+
+LINE 745
+
+        "body_ref":
+            body_ref,
+
+>>>         "body_status":
+            "PENDING_BODY_STORE_WRITE",
+
+        "body_length":
+            body_length,
+
+        "body_word_count":
+            body_word_count,
+
+        "metadata": {
+            "wuc_schema_version":
+                wuc.get(
+                    "schema_version"
+
+LINE 746
+        "body_ref":
+            body_ref,
+
+        "body_status":
+>>>             "PENDING_BODY_STORE_WRITE",
+
+        "body_length":
+            body_length,
+
+        "body_word_count":
+            body_word_count,
+
+        "metadata": {
+            "wuc_schema_version":
+                wuc.get(
+                    "schema_version"
+                ),
+
+LINE 866
+
+            "body_transport":
+                "body_payload",
+
+>>>             "body_ref":
+                body_ref,
+
+            "content_ref":
+                content_ref,
+
+            "requires_verified_body_before_persistence":
+                True,
+        },
+    }
+
+    body_payload = {
+        "payload_schema_version":
+
+LINE 867
+            "body_transport":
+                "body_payload",
+
+            "body_ref":
+>>>                 body_ref,
+
+            "content_ref":
+                content_ref,
+
+            "requires_verified_body_before_persistence":
+                True,
+        },
+    }
+
+    body_payload = {
+        "payload_schema_version":
+            BODY_PAYLOAD_SCHEMA_VERSION,
+
+LINE 869
+
+            "body_ref":
+                body_ref,
+
+>>>             "content_ref":
+                content_ref,
+
+            "requires_verified_body_before_persistence":
+                True,
+        },
+    }
+
+    body_payload = {
+        "payload_schema_version":
+            BODY_PAYLOAD_SCHEMA_VERSION,
+
+        "document_id":
+
+LINE 870
+            "body_ref":
+                body_ref,
+
+            "content_ref":
+>>>                 content_ref,
+
+            "requires_verified_body_before_persistence":
+                True,
+        },
+    }
+
+    body_payload = {
+        "payload_schema_version":
+            BODY_PAYLOAD_SCHEMA_VERSION,
+
+        "document_id":
+            document_id,
+
+LINE 904
+
+        "body_word_count":
+            body_word_count,
+
+>>>         "body_ref":
+            body_ref,
+
+        "content_encoding":
+            "utf-8",
+    }
+
+    binding_values = {
+        field:
+            uucd_record[
+                field
+            ]
+        for field in BINDING_FIELD_NAMES
+
+LINE 905
+        "body_word_count":
+            body_word_count,
+
+        "body_ref":
+>>>             body_ref,
+
+        "content_encoding":
+            "utf-8",
+    }
+
+    binding_values = {
+        field:
+            uucd_record[
+                field
+            ]
+        for field in BINDING_FIELD_NAMES
+    }
+
+LINE 990
+        field_name="binding",
+    )
+
+    missing_record_fields = sorted(
+>>>         REQUIRED_UUCD_RECORD_FIELDS
+        - set(
+            uucd_record
+        )
+    )
+
+    if missing_record_fields:
+        raise UUCDContractError(
+            "UUCD record is missing fields: "
+            + ", ".join(
+                missing_record_fields
+            )
+        )
+
+LINE 1113
+            "Binding status is invalid."
+        )
+
+    if uucd_record.get(
+>>>         "body_status"
+    ) != "PENDING_BODY_STORE_WRITE":
+        raise UUCDContractError(
+            "UUCD body_status must be PENDING_BODY_STORE_WRITE."
+        )
+
+    return True
+
+LINE 1114
+        )
+
+    if uucd_record.get(
+        "body_status"
+>>>     ) != "PENDING_BODY_STORE_WRITE":
+        raise UUCDContractError(
+            "UUCD body_status must be PENDING_BODY_STORE_WRITE."
+        )
+
+    return True
+
+LINE 1116
+    if uucd_record.get(
+        "body_status"
+    ) != "PENDING_BODY_STORE_WRITE":
+        raise UUCDContractError(
+>>>             "UUCD body_status must be PENDING_BODY_STORE_WRITE."
+        )
+
+    return True
+
+============================================================
+4. BODY STORE WRITER — FINALIZED RECORD CONTRACT
+============================================================
+
+LINE 29
+
+from backend.server.common.text_statistics import count_words
+
+from backend.server.universal_unified_content_document.uucd_engine_v1 import (
+    UUCDContractError,
+>>>     compute_canonical_content_hash_v1,
+    validate_universal_handoff_envelope_v1,
+)
+
+
+BODY_STORE_WRITER_VERSION = (
+    "universal_article_body_store_writer_v1"
+)
+
+BODY_STORE_ROOT_RELATIVE = (
+    Path("backend")
+    / "server"
+    / "data"
+    / "universal_article_body_store"
+)
+
+
+LINE 149
+
+    except ValueError:
+        return False
+
+
+>>> def _canonical_body_ref(
+    *,
+    project_root: Path,
+    workspace_id: str,
+    supplied_body_ref: str,
+) -> tuple[Path, Path]:
+    project_root_resolved = (
+        project_root.resolve()
+    )
+
+    canonical_store_root = (
+        project_root_resolved
+        / BODY_STORE_ROOT_RELATIVE
+    ).resolve()
+
+    workspace_body_root = (
+
+LINE 153
+
+def _canonical_body_ref(
+    *,
+    project_root: Path,
+    workspace_id: str,
+>>>     supplied_body_ref: str,
+) -> tuple[Path, Path]:
+    project_root_resolved = (
+        project_root.resolve()
+    )
+
+    canonical_store_root = (
+        project_root_resolved
+        / BODY_STORE_ROOT_RELATIVE
+    ).resolve()
+
+    workspace_body_root = (
+        canonical_store_root
+        / workspace_id
+        / "bodies"
+    ).resolve()
+
+LINE 171
+        / workspace_id
+        / "bodies"
+    ).resolve()
+
+    supplied_path = Path(
+>>>         supplied_body_ref
+    )
+
+    if supplied_path.is_absolute():
+        resolved_body_path = (
+            supplied_path.resolve()
+        )
+
+    else:
+        resolved_body_path = (
+            project_root_resolved
+            / supplied_path
+        ).resolve()
+
+    if not _is_inside(
+        resolved_body_path,
+
+LINE 190
+    if not _is_inside(
+        resolved_body_path,
+        workspace_body_root,
+    ):
+        raise BodyStoreContractError(
+>>>             "body_ref escapes the canonical workspace Body Store."
+        )
+
+    if (
+        resolved_body_path.parent
+        != workspace_body_root
+    ):
+        raise BodyStoreContractError(
+            "body_ref must point directly inside the workspace bodies directory."
+        )
+
+    if (
+        resolved_body_path.suffix.casefold()
+        != ".txt"
+    ):
+        raise BodyStoreContractError(
+
+LINE 198
+    if (
+        resolved_body_path.parent
+        != workspace_body_root
+    ):
+        raise BodyStoreContractError(
+>>>             "body_ref must point directly inside the workspace bodies directory."
+        )
+
+    if (
+        resolved_body_path.suffix.casefold()
+        != ".txt"
+    ):
+        raise BodyStoreContractError(
+            "Body Store files must use the .txt extension."
+        )
+
+    return (
+        workspace_body_root,
+        resolved_body_path,
+    )
+
+
+LINE 326
+    }:
+        raise BodyStoreContractError(
+            "Only UTF-8 body payloads are supported."
+        )
+
+>>>     supplied_content_hash = (
+        _require_non_empty_string(
+            body_payload.get(
+                "content_hash"
+            ),
+            field_name="body_payload.content_hash",
+        )
+    )
+
+    calculated_content_hash = (
+        compute_canonical_content_hash_v1(
+            content_body
+        )
+    )
+
+    if (
+
+LINE 329
+        )
+
+    supplied_content_hash = (
+        _require_non_empty_string(
+            body_payload.get(
+>>>                 "content_hash"
+            ),
+            field_name="body_payload.content_hash",
+        )
+    )
+
+    calculated_content_hash = (
+        compute_canonical_content_hash_v1(
+            content_body
+        )
+    )
+
+    if (
+        supplied_content_hash
+        != calculated_content_hash
+    ):
+
+LINE 331
+    supplied_content_hash = (
+        _require_non_empty_string(
+            body_payload.get(
+                "content_hash"
+            ),
+>>>             field_name="body_payload.content_hash",
+        )
+    )
+
+    calculated_content_hash = (
+        compute_canonical_content_hash_v1(
+            content_body
+        )
+    )
+
+    if (
+        supplied_content_hash
+        != calculated_content_hash
+    ):
+        raise BodyStoreContractError(
+            "Body payload content_hash does not match content_body."
+
+LINE 335
+            ),
+            field_name="body_payload.content_hash",
+        )
+    )
+
+>>>     calculated_content_hash = (
+        compute_canonical_content_hash_v1(
+            content_body
+        )
+    )
+
+    if (
+        supplied_content_hash
+        != calculated_content_hash
+    ):
+        raise BodyStoreContractError(
+            "Body payload content_hash does not match content_body."
+        )
+
+    supplied_body_length = (
+        body_payload.get(
+
+LINE 336
+            field_name="body_payload.content_hash",
+        )
+    )
+
+    calculated_content_hash = (
+>>>         compute_canonical_content_hash_v1(
+            content_body
+        )
+    )
+
+    if (
+        supplied_content_hash
+        != calculated_content_hash
+    ):
+        raise BodyStoreContractError(
+            "Body payload content_hash does not match content_body."
+        )
+
+    supplied_body_length = (
+        body_payload.get(
+            "body_length"
+
+LINE 342
+            content_body
+        )
+    )
+
+    if (
+>>>         supplied_content_hash
+        != calculated_content_hash
+    ):
+        raise BodyStoreContractError(
+            "Body payload content_hash does not match content_body."
+        )
+
+    supplied_body_length = (
+        body_payload.get(
+            "body_length"
+        )
+    )
+
+    if (
+        not isinstance(
+            supplied_body_length,
+
+LINE 343
+        )
+    )
+
+    if (
+        supplied_content_hash
+>>>         != calculated_content_hash
+    ):
+        raise BodyStoreContractError(
+            "Body payload content_hash does not match content_body."
+        )
+
+    supplied_body_length = (
+        body_payload.get(
+            "body_length"
+        )
+    )
+
+    if (
+        not isinstance(
+            supplied_body_length,
+            int,
+
+LINE 346
+    if (
+        supplied_content_hash
+        != calculated_content_hash
+    ):
+        raise BodyStoreContractError(
+>>>             "Body payload content_hash does not match content_body."
+        )
+
+    supplied_body_length = (
+        body_payload.get(
+            "body_length"
+        )
+    )
+
+    if (
+        not isinstance(
+            supplied_body_length,
+            int,
+        )
+        or supplied_body_length
+        != len(
+
+LINE 349
+    ):
+        raise BodyStoreContractError(
+            "Body payload content_hash does not match content_body."
+        )
+
+>>>     supplied_body_length = (
+        body_payload.get(
+            "body_length"
+        )
+    )
+
+    if (
+        not isinstance(
+            supplied_body_length,
+            int,
+        )
+        or supplied_body_length
+        != len(
+            content_body
+        )
+    ):
+
+LINE 351
+            "Body payload content_hash does not match content_body."
+        )
+
+    supplied_body_length = (
+        body_payload.get(
+>>>             "body_length"
+        )
+    )
+
+    if (
+        not isinstance(
+            supplied_body_length,
+            int,
+        )
+        or supplied_body_length
+        != len(
+            content_body
+        )
+    ):
+        raise BodyStoreContractError(
+            "Body payload body_length is invalid."
+
+LINE 357
+        )
+    )
+
+    if (
+        not isinstance(
+>>>             supplied_body_length,
+            int,
+        )
+        or supplied_body_length
+        != len(
+            content_body
+        )
+    ):
+        raise BodyStoreContractError(
+            "Body payload body_length is invalid."
+        )
+
+    supplied_word_count = (
+        body_payload.get(
+            "body_word_count"
+        )
+
+LINE 360
+    if (
+        not isinstance(
+            supplied_body_length,
+            int,
+        )
+>>>         or supplied_body_length
+        != len(
+            content_body
+        )
+    ):
+        raise BodyStoreContractError(
+            "Body payload body_length is invalid."
+        )
+
+    supplied_word_count = (
+        body_payload.get(
+            "body_word_count"
+        )
+    )
+
+    calculated_word_count = (
+
+LINE 366
+        != len(
+            content_body
+        )
+    ):
+        raise BodyStoreContractError(
+>>>             "Body payload body_length is invalid."
+        )
+
+    supplied_word_count = (
+        body_payload.get(
+            "body_word_count"
+        )
+    )
+
+    calculated_word_count = (
+        _count_words(
+            content_body
+        )
+    )
+
+    if (
+
+LINE 371
+            "Body payload body_length is invalid."
+        )
+
+    supplied_word_count = (
+        body_payload.get(
+>>>             "body_word_count"
+        )
+    )
+
+    calculated_word_count = (
+        _count_words(
+            content_body
+        )
+    )
+
+    if (
+        not isinstance(
+            supplied_word_count,
+            int,
+        )
+        or supplied_word_count
+
+LINE 390
+        )
+        or supplied_word_count
+        != calculated_word_count
+    ):
+        raise BodyStoreContractError(
+>>>             "Body payload body_word_count is invalid."
+        )
+
+    body_ref = _require_non_empty_string(
+        body_payload.get(
+            "body_ref"
+        ),
+        field_name="body_payload.body_ref",
+    )
+
+    (
+        workspace_body_root,
+        body_path,
+    ) = _canonical_body_ref(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 393
+    ):
+        raise BodyStoreContractError(
+            "Body payload body_word_count is invalid."
+        )
+
+>>>     body_ref = _require_non_empty_string(
+        body_payload.get(
+            "body_ref"
+        ),
+        field_name="body_payload.body_ref",
+    )
+
+    (
+        workspace_body_root,
+        body_path,
+    ) = _canonical_body_ref(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        supplied_body_ref=body_ref,
+    )
+
+
+LINE 395
+            "Body payload body_word_count is invalid."
+        )
+
+    body_ref = _require_non_empty_string(
+        body_payload.get(
+>>>             "body_ref"
+        ),
+        field_name="body_payload.body_ref",
+    )
+
+    (
+        workspace_body_root,
+        body_path,
+    ) = _canonical_body_ref(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        supplied_body_ref=body_ref,
+    )
+
+    if (
+        uucd_record.get(
+
+LINE 397
+
+    body_ref = _require_non_empty_string(
+        body_payload.get(
+            "body_ref"
+        ),
+>>>         field_name="body_payload.body_ref",
+    )
+
+    (
+        workspace_body_root,
+        body_path,
+    ) = _canonical_body_ref(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        supplied_body_ref=body_ref,
+    )
+
+    if (
+        uucd_record.get(
+            "body_status"
+        )
+
+LINE 403
+    )
+
+    (
+        workspace_body_root,
+        body_path,
+>>>     ) = _canonical_body_ref(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        supplied_body_ref=body_ref,
+    )
+
+    if (
+        uucd_record.get(
+            "body_status"
+        )
+        != "PENDING_BODY_STORE_WRITE"
+    ):
+        raise BodyStoreContractError(
+            "UUCD Record is not pending a Body Store write."
+        )
+
+
+LINE 406
+        workspace_body_root,
+        body_path,
+    ) = _canonical_body_ref(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         supplied_body_ref=body_ref,
+    )
+
+    if (
+        uucd_record.get(
+            "body_status"
+        )
+        != "PENDING_BODY_STORE_WRITE"
+    ):
+        raise BodyStoreContractError(
+            "UUCD Record is not pending a Body Store write."
+        )
+
+    if (
+        uucd_record.get(
+            "handoff",
+
+LINE 474
+            source_type,
+
+        "content_body":
+            content_body,
+
+>>>         "content_hash":
+            calculated_content_hash,
+
+        "body_length":
+            supplied_body_length,
+
+        "body_word_count":
+            calculated_word_count,
+
+        "body_byte_length":
+            _utf8_byte_length(
+                content_body
+            ),
+
+        "body_ref":
+            body_ref,
+
+LINE 475
+
+        "content_body":
+            content_body,
+
+        "content_hash":
+>>>             calculated_content_hash,
+
+        "body_length":
+            supplied_body_length,
+
+        "body_word_count":
+            calculated_word_count,
+
+        "body_byte_length":
+            _utf8_byte_length(
+                content_body
+            ),
+
+        "body_ref":
+            body_ref,
+
+
+LINE 477
+            content_body,
+
+        "content_hash":
+            calculated_content_hash,
+
+>>>         "body_length":
+            supplied_body_length,
+
+        "body_word_count":
+            calculated_word_count,
+
+        "body_byte_length":
+            _utf8_byte_length(
+                content_body
+            ),
+
+        "body_ref":
+            body_ref,
+
+        "workspace_body_root":
+            workspace_body_root,
+
+LINE 478
+
+        "content_hash":
+            calculated_content_hash,
+
+        "body_length":
+>>>             supplied_body_length,
+
+        "body_word_count":
+            calculated_word_count,
+
+        "body_byte_length":
+            _utf8_byte_length(
+                content_body
+            ),
+
+        "body_ref":
+            body_ref,
+
+        "workspace_body_root":
+            workspace_body_root,
+
+
+LINE 480
+            calculated_content_hash,
+
+        "body_length":
+            supplied_body_length,
+
+>>>         "body_word_count":
+            calculated_word_count,
+
+        "body_byte_length":
+            _utf8_byte_length(
+                content_body
+            ),
+
+        "body_ref":
+            body_ref,
+
+        "workspace_body_root":
+            workspace_body_root,
+
+        "body_path":
+            body_path,
+
+LINE 488
+        "body_byte_length":
+            _utf8_byte_length(
+                content_body
+            ),
+
+>>>         "body_ref":
+            body_ref,
+
+        "workspace_body_root":
+            workspace_body_root,
+
+        "body_path":
+            body_path,
+    }
+
+
+def _write_body_atomically(
+    *,
+    body_path: Path,
+    content_body: str,
+) -> None:
+
+LINE 489
+            _utf8_byte_length(
+                content_body
+            ),
+
+        "body_ref":
+>>>             body_ref,
+
+        "workspace_body_root":
+            workspace_body_root,
+
+        "body_path":
+            body_path,
+    }
+
+
+def _write_body_atomically(
+    *,
+    body_path: Path,
+    content_body: str,
+) -> None:
+    body_path.parent.mkdir(
+
+LINE 564
+    project_root: str | Path,
+    overwrite: bool = False,
+) -> dict[str, Any]:
+    """Persist and verify one exact body from a handoff envelope.
+
+>>>     The returned finalized_uucd_record exists only in memory. This
+    function does not persist the UUCD Record.
+    """
+
+    root = Path(
+        project_root
+    ).resolve()
+
+    validated = _validate_body_payload(
+        envelope,
+        project_root=root,
+    )
+
+    body_path: Path = validated[
+        "body_path"
+    ]
+
+LINE 586
+    expected_body = validated[
+        "content_body"
+    ]
+
+    expected_hash = validated[
+>>>         "content_hash"
+    ]
+
+    expected_length = validated[
+        "body_length"
+    ]
+
+    expected_word_count = validated[
+        "body_word_count"
+    ]
+
+    expected_byte_length = validated[
+        "body_byte_length"
+    ]
+
+    existing_file_action = (
+
+LINE 590
+    expected_hash = validated[
+        "content_hash"
+    ]
+
+    expected_length = validated[
+>>>         "body_length"
+    ]
+
+    expected_word_count = validated[
+        "body_word_count"
+    ]
+
+    expected_byte_length = validated[
+        "body_byte_length"
+    ]
+
+    existing_file_action = (
+        "CREATED"
+    )
+
+    if body_path.exists():
+
+LINE 594
+    expected_length = validated[
+        "body_length"
+    ]
+
+    expected_word_count = validated[
+>>>         "body_word_count"
+    ]
+
+    expected_byte_length = validated[
+        "body_byte_length"
+    ]
+
+    existing_file_action = (
+        "CREATED"
+    )
+
+    if body_path.exists():
+        existing_bytes = (
+            body_path.read_bytes()
+        )
+
+
+LINE 629
+                "EXISTING_IDENTICAL_REUSED"
+            )
+
+        elif not overwrite:
+            raise BodyStoreContractError(
+>>>                 "A different body already exists at body_ref."
+            )
+
+        else:
+            existing_file_action = (
+                "OVERWRITTEN"
+            )
+
+    if (
+        existing_file_action
+        != "EXISTING_IDENTICAL_REUSED"
+    ):
+        _write_body_atomically(
+            body_path=body_path,
+            content_body=expected_body,
+        )
+
+LINE 725
+    ):
+        raise BodyStoreContractError(
+            "Stored body failed post-write verification."
+        )
+
+>>>     finalized_uucd_record = deepcopy(
+        dict(
+            validated[
+                "uucd_record"
+            ]
+        )
+    )
+
+    finalized_uucd_record[
+        "body_status"
+    ] = "STORED_AND_VERIFIED"
+
+    finalized_uucd_record[
+        "metadata"
+    ] = deepcopy(
+        dict(
+
+LINE 733
+                "uucd_record"
+            ]
+        )
+    )
+
+>>>     finalized_uucd_record[
+        "body_status"
+    ] = "STORED_AND_VERIFIED"
+
+    finalized_uucd_record[
+        "metadata"
+    ] = deepcopy(
+        dict(
+            finalized_uucd_record.get(
+                "metadata"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+
+LINE 735
+        )
+    )
+
+    finalized_uucd_record[
+        "body_status"
+>>>     ] = "STORED_AND_VERIFIED"
+
+    finalized_uucd_record[
+        "metadata"
+    ] = deepcopy(
+        dict(
+            finalized_uucd_record.get(
+                "metadata"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+        "metadata"
+    ].update(
+
+LINE 737
+
+    finalized_uucd_record[
+        "body_status"
+    ] = "STORED_AND_VERIFIED"
+
+>>>     finalized_uucd_record[
+        "metadata"
+    ] = deepcopy(
+        dict(
+            finalized_uucd_record.get(
+                "metadata"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+        "metadata"
+    ].update(
+        {
+            "body_store_writer_version":
+
+LINE 741
+
+    finalized_uucd_record[
+        "metadata"
+    ] = deepcopy(
+        dict(
+>>>             finalized_uucd_record.get(
+                "metadata"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+        "metadata"
+    ].update(
+        {
+            "body_store_writer_version":
+                BODY_STORE_WRITER_VERSION,
+
+            "body_store_write_verified":
+                True,
+
+LINE 748
+            )
+            or {}
+        )
+    )
+
+>>>     finalized_uucd_record[
+        "metadata"
+    ].update(
+        {
+            "body_store_writer_version":
+                BODY_STORE_WRITER_VERSION,
+
+            "body_store_write_verified":
+                True,
+
+            "body_store_write_timestamp":
+                _utc_now_iso(),
+
+            "persistence_status":
+                "READY_FOR_UUCD_PERSISTENCE",
+        }
+
+LINE 755
+    ].update(
+        {
+            "body_store_writer_version":
+                BODY_STORE_WRITER_VERSION,
+
+>>>             "body_store_write_verified":
+                True,
+
+            "body_store_write_timestamp":
+                _utc_now_iso(),
+
+            "persistence_status":
+                "READY_FOR_UUCD_PERSISTENCE",
+        }
+    )
+
+    finalized_uucd_record[
+        "handoff"
+    ] = deepcopy(
+        dict(
+            finalized_uucd_record.get(
+
+LINE 762
+
+            "body_store_write_timestamp":
+                _utc_now_iso(),
+
+            "persistence_status":
+>>>                 "READY_FOR_UUCD_PERSISTENCE",
+        }
+    )
+
+    finalized_uucd_record[
+        "handoff"
+    ] = deepcopy(
+        dict(
+            finalized_uucd_record.get(
+                "handoff"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+
+LINE 766
+            "persistence_status":
+                "READY_FOR_UUCD_PERSISTENCE",
+        }
+    )
+
+>>>     finalized_uucd_record[
+        "handoff"
+    ] = deepcopy(
+        dict(
+            finalized_uucd_record.get(
+                "handoff"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+        "handoff"
+    ].update(
+        {
+            "next_stage":
+
+LINE 770
+
+    finalized_uucd_record[
+        "handoff"
+    ] = deepcopy(
+        dict(
+>>>             finalized_uucd_record.get(
+                "handoff"
+            )
+            or {}
+        )
+    )
+
+    finalized_uucd_record[
+        "handoff"
+    ].update(
+        {
+            "next_stage":
+                "uucd_persistence",
+
+            "eligible_for_body_store":
+                False,
+
+LINE 777
+            )
+            or {}
+        )
+    )
+
+>>>     finalized_uucd_record[
+        "handoff"
+    ].update(
+        {
+            "next_stage":
+                "uucd_persistence",
+
+            "eligible_for_body_store":
+                False,
+
+            "eligible_for_uucd_persistence":
+                True,
+
+            "body_store_verified":
+                True,
+        }
+
+LINE 782
+    finalized_uucd_record[
+        "handoff"
+    ].update(
+        {
+            "next_stage":
+>>>                 "uucd_persistence",
+
+            "eligible_for_body_store":
+                False,
+
+            "eligible_for_uucd_persistence":
+                True,
+
+            "body_store_verified":
+                True,
+        }
+    )
+
+    write_certificate = {
+        "certificate_schema_version":
+            "body_store_write_certificate_v1",
+
+LINE 787
+                "uucd_persistence",
+
+            "eligible_for_body_store":
+                False,
+
+>>>             "eligible_for_uucd_persistence":
+                True,
+
+            "body_store_verified":
+                True,
+        }
+    )
+
+    write_certificate = {
+        "certificate_schema_version":
+            "body_store_write_certificate_v1",
+
+        "writer_version":
+            BODY_STORE_WRITER_VERSION,
+
+        "certificate_status":
+
+LINE 790
+                False,
+
+            "eligible_for_uucd_persistence":
+                True,
+
+>>>             "body_store_verified":
+                True,
+        }
+    )
+
+    write_certificate = {
+        "certificate_schema_version":
+            "body_store_write_certificate_v1",
+
+        "writer_version":
+            BODY_STORE_WRITER_VERSION,
+
+        "certificate_status":
+            "CERTIFIED",
+
+        "document_id":
+
+LINE 820
+        "source_type":
+            validated[
+                "source_type"
+            ],
+
+>>>         "body_ref":
+            validated[
+                "body_ref"
+            ],
+
+        "stored_path":
+            str(
+                body_path
+            ),
+
+        "content_hash":
+            expected_hash,
+
+        "body_length":
+            expected_length,
+
+
+LINE 822
+                "source_type"
+            ],
+
+        "body_ref":
+            validated[
+>>>                 "body_ref"
+            ],
+
+        "stored_path":
+            str(
+                body_path
+            ),
+
+        "content_hash":
+            expected_hash,
+
+        "body_length":
+            expected_length,
+
+        "body_byte_length":
+            expected_byte_length,
+
+LINE 830
+        "stored_path":
+            str(
+                body_path
+            ),
+
+>>>         "content_hash":
+            expected_hash,
+
+        "body_length":
+            expected_length,
+
+        "body_byte_length":
+            expected_byte_length,
+
+        "body_word_count":
+            expected_word_count,
+
+        "binding_hash":
+            validated[
+                "binding"
+            ][
+
+LINE 833
+            ),
+
+        "content_hash":
+            expected_hash,
+
+>>>         "body_length":
+            expected_length,
+
+        "body_byte_length":
+            expected_byte_length,
+
+        "body_word_count":
+            expected_word_count,
+
+        "binding_hash":
+            validated[
+                "binding"
+            ][
+                "binding_hash"
+            ],
+
+
+LINE 839
+            expected_length,
+
+        "body_byte_length":
+            expected_byte_length,
+
+>>>         "body_word_count":
+            expected_word_count,
+
+        "binding_hash":
+            validated[
+                "binding"
+            ][
+                "binding_hash"
+            ],
+
+        "existing_file_action":
+            existing_file_action,
+
+        "exact_content_match":
+            exact_content_match,
+
+
+LINE 870
+            word_count_verified,
+
+        "written_at":
+            _utc_now_iso(),
+
+>>>         "uucd_record_persisted":
+            False,
+
+        "runtime_executed":
+            False,
+
+        "semantic_processing_performed":
+            False,
+    }
+
+    return {
+        "write_status":
+            "STORED_AND_VERIFIED",
+
+        "body_path":
+            str(
+
+LINE 882
+            False,
+    }
+
+    return {
+        "write_status":
+>>>             "STORED_AND_VERIFIED",
+
+        "body_path":
+            str(
+                body_path
+            ),
+
+        "write_certificate":
+            write_certificate,
+
+        "finalized_uucd_record":
+            finalized_uucd_record,
+    }
+
+
+LINE 892
+            ),
+
+        "write_certificate":
+            write_certificate,
+
+>>>         "finalized_uucd_record":
+            finalized_uucd_record,
+    }
+
+
+LINE 893
+
+        "write_certificate":
+            write_certificate,
+
+        "finalized_uucd_record":
+>>>             finalized_uucd_record,
+    }
+
+
+============================================================
+5. CURRENT CANONICAL STORE STATE
+============================================================
+PATH: C:\Users\HP\Documents\LinkCraftor\backend\server\data\universal_unified_content_documents
+EXISTS: False
+
+============================================================
+6. BODY STORE REPOSITORY VERIFICATION API
+============================================================
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+
+LINE 65
+    )
+
+
+>>> def read_body(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> str:
+    """Read one exact stored article body through the Manager."""
+
+    return manager_read_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 69
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> str:
+    """Read one exact stored article body through the Manager."""
+
+    return manager_read_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+    )
+
+
+
+LINE 76
+    return manager_read_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+    )
+
+
+def verify_body(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+
+LINE 80
+    )
+
+
+>>> def verify_body(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body through the Management Layer."""
+
+LINE 84
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body through the Management Layer."""
+
+    return manager_verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 85
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+>>>     expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body through the Management Layer."""
+
+    return manager_verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+
+LINE 86
+    workspace_id: str,
+    body_ref: str | Path,
+    expected_content_hash: str | None = None,
+>>>     expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body through the Management Layer."""
+
+    return manager_verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+        expected_content_hash=expected_content_hash,
+
+LINE 88
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+>>>     expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body through the Management Layer."""
+
+    return manager_verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+        expected_content_hash=expected_content_hash,
+        expected_body_length=expected_body_length,
+        expected_body_byte_length=expected_body_byte_length,
+
+LINE 95
+    return manager_verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+        expected_content_hash=expected_content_hash,
+        expected_body_length=expected_body_length,
+        expected_body_byte_length=expected_body_byte_length,
+        expected_body_word_count=expected_body_word_count,
+    )
+
+
+def body_exists(
+    *,
+    project_root: str | Path,
+
+LINE 96
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+>>>         expected_content_hash=expected_content_hash,
+        expected_body_length=expected_body_length,
+        expected_body_byte_length=expected_body_byte_length,
+        expected_body_word_count=expected_body_word_count,
+    )
+
+
+def body_exists(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+
+LINE 97
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+        expected_content_hash=expected_content_hash,
+>>>         expected_body_length=expected_body_length,
+        expected_body_byte_length=expected_body_byte_length,
+        expected_body_word_count=expected_body_word_count,
+    )
+
+
+def body_exists(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+
+LINE 99
+        expected_content_hash=expected_content_hash,
+        expected_body_length=expected_body_length,
+        expected_body_byte_length=expected_body_byte_length,
+>>>         expected_body_word_count=expected_body_word_count,
+    )
+
+
+def body_exists(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> bool:
+    """Check body existence through the Management Layer."""
+
+LINE 103
+    )
+
+
+>>> def body_exists(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> bool:
+    """Check body existence through the Management Layer."""
+
+    return manager_body_exists(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 107
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> bool:
+    """Check body existence through the Management Layer."""
+
+    return manager_body_exists(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+    )
+
+
+
+LINE 114
+    return manager_body_exists(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+    )
+
+
+def get_metadata(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> dict[str, Any]:
+    """Return body metadata through the Management Layer."""
+
+LINE 118
+    )
+
+
+>>> def get_metadata(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> dict[str, Any]:
+    """Return body metadata through the Management Layer."""
+
+    return manager_get_body_metadata(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 122
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> dict[str, Any]:
+    """Return body metadata through the Management Layer."""
+
+    return manager_get_body_metadata(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+    )
+
+
+
+LINE 129
+    return manager_get_body_metadata(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+    )
+
+
+def list_workspace_bodies(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    verify_each: bool = False,
+) -> dict[str, Any]:
+    """List one workspace's stored bodies through the Manager."""
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+
+LINE 190
+    *,
+    project_root: Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> tuple[Path, Path]:
+    workspace_root = (
+        _workspace_body_root(
+            project_root=project_root,
+            workspace_id=workspace_id,
+        )
+    )
+
+    supplied_path = Path(
+        body_ref
+
+LINE 200
+    )
+
+    supplied_path = Path(
+>>>         body_ref
+    )
+
+    if supplied_path.is_absolute():
+        body_path = supplied_path.resolve()
+
+    else:
+        body_path = (
+            project_root
+            / supplied_path
+        ).resolve()
+
+LINE 217
+        workspace_root,
+    ):
+        raise BodyStoreAccessError(
+>>>             "body_ref escapes the canonical workspace Body Store."
+        )
+
+    if body_path.parent != workspace_root:
+        raise BodyStoreAccessError(
+            "body_ref must point directly inside the workspace bodies directory."
+        )
+
+    if body_path.suffix.casefold() != ".txt":
+        raise BodyStoreAccessError(
+            "Body Store files must use the .txt extension."
+
+LINE 222
+
+    if body_path.parent != workspace_root:
+        raise BodyStoreAccessError(
+>>>             "body_ref must point directly inside the workspace bodies directory."
+        )
+
+    if body_path.suffix.casefold() != ".txt":
+        raise BodyStoreAccessError(
+            "Body Store files must use the .txt extension."
+        )
+
+    return (
+        workspace_root,
+        body_path,
+
+LINE 236
+    )
+
+
+>>> def _body_ref_from_path(
+    *,
+    project_root: Path,
+    body_path: Path,
+) -> str:
+    return body_path.relative_to(
+        project_root
+    ).as_posix()
+
+
+def _sha256_bytes(
+
+LINE 305
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+    require_exists: bool = True,
+) -> Path:
+    """Return the canonical absolute path for one workspace body."""
+
+    root = _project_root(
+        project_root
+    )
+
+    workspace = _require_workspace_id(
+        workspace_id
+
+LINE 324
+    ) = _validate_body_path(
+        project_root=root,
+        workspace_id=workspace,
+>>>         body_ref=body_ref,
+    )
+
+    if workspace_body_root.is_symlink():
+        raise BodyStoreAccessError(
+            "Workspace Body Store directory must not be a symbolic link."
+        )
+
+    if require_exists:
+        if not body_path.exists():
+            raise BodyStoreMissingError(
+
+LINE 354
+    return body_path
+
+
+>>> def body_exists(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> bool:
+    """Return True only when the canonical body exists as a regular file."""
+
+    try:
+        body_path = locate_body(
+            project_root=project_root,
+
+LINE 358
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> bool:
+    """Return True only when the canonical body exists as a regular file."""
+
+    try:
+        body_path = locate_body(
+            project_root=project_root,
+            workspace_id=workspace_id,
+            body_ref=body_ref,
+            require_exists=False,
+        )
+
+LINE 366
+        body_path = locate_body(
+            project_root=project_root,
+            workspace_id=workspace_id,
+>>>             body_ref=body_ref,
+            require_exists=False,
+        )
+
+    except BodyStoreAccessError:
+        raise
+
+    return (
+        body_path.exists()
+        and body_path.is_file()
+        and not body_path.is_symlink()
+
+LINE 380
+    )
+
+
+>>> def read_body(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+) -> str:
+    """Read and return one exact UTF-8 article body."""
+
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 384
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> str:
+    """Read and return one exact UTF-8 article body."""
+
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+        require_exists=True,
+    )
+
+
+LINE 391
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+        require_exists=True,
+    )
+
+    (
+        _stored_bytes,
+        stored_body,
+    ) = _read_utf8_body(
+        body_path
+    )
+
+
+LINE 405
+    return stored_body
+
+
+>>> def verify_stored_body(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body against optional UUCD/certificate values."""
+
+LINE 409
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body against optional UUCD/certificate values."""
+
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+
+LINE 410
+    project_root: str | Path,
+    workspace_id: str,
+    body_ref: str | Path,
+>>>     expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body against optional UUCD/certificate values."""
+
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+
+LINE 411
+    workspace_id: str,
+    body_ref: str | Path,
+    expected_content_hash: str | None = None,
+>>>     expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+    expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body against optional UUCD/certificate values."""
+
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+        require_exists=True,
+
+LINE 413
+    expected_content_hash: str | None = None,
+    expected_body_length: int | None = None,
+    expected_body_byte_length: int | None = None,
+>>>     expected_body_word_count: int | None = None,
+) -> dict[str, Any]:
+    """Verify one stored body against optional UUCD/certificate values."""
+
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+        require_exists=True,
+    )
+
+
+LINE 420
+    body_path = locate_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+        require_exists=True,
+    )
+
+    (
+        stored_bytes,
+        stored_body,
+    ) = _read_utf8_body(
+        body_path
+    )
+
+
+LINE 431
+        body_path
+    )
+
+>>>     content_hash = _sha256_bytes(
+        stored_bytes
+    )
+
+    body_length = len(
+        stored_body
+    )
+
+    body_byte_length = len(
+        stored_bytes
+    )
+
+LINE 435
+        stored_bytes
+    )
+
+>>>     body_length = len(
+        stored_body
+    )
+
+    body_byte_length = len(
+        stored_bytes
+    )
+
+    body_word_count = _count_words(
+        stored_body
+    )
+
+LINE 443
+        stored_bytes
+    )
+
+>>>     body_word_count = _count_words(
+        stored_body
+    )
+
+    checks: dict[str, bool] = {
+        "file_exists":
+            True,
+
+        "regular_file":
+            body_path.is_file(),
+
+
+LINE 461
+            True,
+    }
+
+>>>     if expected_content_hash is not None:
+        normalized_hash = _require_non_empty_string(
+            expected_content_hash,
+            field_name="expected_content_hash",
+        ).casefold()
+
+        if not SHA256_PATTERN.fullmatch(
+            normalized_hash
+        ):
+            raise BodyStoreAccessError(
+                "expected_content_hash must be a lowercase SHA-256 digest."
+
+LINE 463
+
+    if expected_content_hash is not None:
+        normalized_hash = _require_non_empty_string(
+>>>             expected_content_hash,
+            field_name="expected_content_hash",
+        ).casefold()
+
+        if not SHA256_PATTERN.fullmatch(
+            normalized_hash
+        ):
+            raise BodyStoreAccessError(
+                "expected_content_hash must be a lowercase SHA-256 digest."
+            )
+
+
+LINE 464
+    if expected_content_hash is not None:
+        normalized_hash = _require_non_empty_string(
+            expected_content_hash,
+>>>             field_name="expected_content_hash",
+        ).casefold()
+
+        if not SHA256_PATTERN.fullmatch(
+            normalized_hash
+        ):
+            raise BodyStoreAccessError(
+                "expected_content_hash must be a lowercase SHA-256 digest."
+            )
+
+        checks[
+
+LINE 471
+            normalized_hash
+        ):
+            raise BodyStoreAccessError(
+>>>                 "expected_content_hash must be a lowercase SHA-256 digest."
+            )
+
+        checks[
+            "content_hash_verified"
+        ] = (
+            content_hash
+            == normalized_hash
+        )
+
+    if expected_body_length is not None:
+
+LINE 475
+            )
+
+        checks[
+>>>             "content_hash_verified"
+        ] = (
+            content_hash
+            == normalized_hash
+        )
+
+    if expected_body_length is not None:
+        if (
+            not isinstance(
+                expected_body_length,
+                int,
+
+LINE 477
+        checks[
+            "content_hash_verified"
+        ] = (
+>>>             content_hash
+            == normalized_hash
+        )
+
+    if expected_body_length is not None:
+        if (
+            not isinstance(
+                expected_body_length,
+                int,
+            )
+            or expected_body_length < 0
+
+LINE 481
+            == normalized_hash
+        )
+
+>>>     if expected_body_length is not None:
+        if (
+            not isinstance(
+                expected_body_length,
+                int,
+            )
+            or expected_body_length < 0
+        ):
+            raise BodyStoreAccessError(
+                "expected_body_length must be a non-negative integer."
+            )
+
+LINE 484
+    if expected_body_length is not None:
+        if (
+            not isinstance(
+>>>                 expected_body_length,
+                int,
+            )
+            or expected_body_length < 0
+        ):
+            raise BodyStoreAccessError(
+                "expected_body_length must be a non-negative integer."
+            )
+
+        checks[
+            "body_length_verified"
+
+LINE 487
+                expected_body_length,
+                int,
+            )
+>>>             or expected_body_length < 0
+        ):
+            raise BodyStoreAccessError(
+                "expected_body_length must be a non-negative integer."
+            )
+
+        checks[
+            "body_length_verified"
+        ] = (
+            body_length
+            == expected_body_length
+
+LINE 490
+            or expected_body_length < 0
+        ):
+            raise BodyStoreAccessError(
+>>>                 "expected_body_length must be a non-negative integer."
+            )
+
+        checks[
+            "body_length_verified"
+        ] = (
+            body_length
+            == expected_body_length
+        )
+
+    if expected_body_byte_length is not None:
+
+LINE 494
+            )
+
+        checks[
+>>>             "body_length_verified"
+        ] = (
+            body_length
+            == expected_body_length
+        )
+
+    if expected_body_byte_length is not None:
+        if (
+            not isinstance(
+                expected_body_byte_length,
+                int,
+
+LINE 496
+        checks[
+            "body_length_verified"
+        ] = (
+>>>             body_length
+            == expected_body_length
+        )
+
+    if expected_body_byte_length is not None:
+        if (
+            not isinstance(
+                expected_body_byte_length,
+                int,
+            )
+            or expected_body_byte_length < 0
+
+LINE 497
+            "body_length_verified"
+        ] = (
+            body_length
+>>>             == expected_body_length
+        )
+
+    if expected_body_byte_length is not None:
+        if (
+            not isinstance(
+                expected_body_byte_length,
+                int,
+            )
+            or expected_body_byte_length < 0
+        ):
+
+LINE 519
+            == expected_body_byte_length
+        )
+
+>>>     if expected_body_word_count is not None:
+        if (
+            not isinstance(
+                expected_body_word_count,
+                int,
+            )
+            or expected_body_word_count < 0
+        ):
+            raise BodyStoreAccessError(
+                "expected_body_word_count must be a non-negative integer."
+            )
+
+LINE 522
+    if expected_body_word_count is not None:
+        if (
+            not isinstance(
+>>>                 expected_body_word_count,
+                int,
+            )
+            or expected_body_word_count < 0
+        ):
+            raise BodyStoreAccessError(
+                "expected_body_word_count must be a non-negative integer."
+            )
+
+        checks[
+            "body_word_count_verified"
+
+LINE 525
+                expected_body_word_count,
+                int,
+            )
+>>>             or expected_body_word_count < 0
+        ):
+            raise BodyStoreAccessError(
+                "expected_body_word_count must be a non-negative integer."
+            )
+
+        checks[
+            "body_word_count_verified"
+        ] = (
+            body_word_count
+            == expected_body_word_count
+
+LINE 528
+            or expected_body_word_count < 0
+        ):
+            raise BodyStoreAccessError(
+>>>                 "expected_body_word_count must be a non-negative integer."
+            )
+
+        checks[
+            "body_word_count_verified"
+        ] = (
+            body_word_count
+            == expected_body_word_count
+        )
+
+    failed_checks = sorted(
+
+LINE 532
+            )
+
+        checks[
+>>>             "body_word_count_verified"
+        ] = (
+            body_word_count
+            == expected_body_word_count
+        )
+
+    failed_checks = sorted(
+        name
+        for name, passed
+        in checks.items()
+        if passed is not True
+
+LINE 534
+        checks[
+            "body_word_count_verified"
+        ] = (
+>>>             body_word_count
+            == expected_body_word_count
+        )
+
+    failed_checks = sorted(
+        name
+        for name, passed
+        in checks.items()
+        if passed is not True
+    )
+
+
+LINE 535
+            "body_word_count_verified"
+        ] = (
+            body_word_count
+>>>             == expected_body_word_count
+        )
+
+    failed_checks = sorted(
+        name
+        for name, passed
+        in checks.items()
+        if passed is not True
+    )
+
+    if failed_checks:
+
+LINE 570
+        "workspace_id":
+            workspace_id,
+
+>>>         "body_ref":
+            _body_ref_from_path(
+                project_root=root,
+                body_path=body_path,
+            ),
+
+        "stored_path":
+            str(
+                body_path
+            ),
+
+
+LINE 571
+            workspace_id,
+
+        "body_ref":
+>>>             _body_ref_from_path(
+                project_root=root,
+                body_path=body_path,
+            ),
+
+        "stored_path":
+            str(
+                body_path
+            ),
+
+        "content_hash":
+
+LINE 581
+                body_path
+            ),
+
+>>>         "content_hash":
+            content_hash,
+
+        "body_length":
+            body_length,
+
+        "body_byte_length":
+            body_byte_length,
+
+        "body_word_count":
+            body_word_count,
+
+LINE 582
+            ),
+
+        "content_hash":
+>>>             content_hash,
+
+        "body_length":
+            body_length,
+
+        "body_byte_length":
+            body_byte_length,
+
+        "body_word_count":
+            body_word_count,
+
+
+LINE 584
+        "content_hash":
+            content_hash,
+
+>>>         "body_length":
+            body_length,
+
+        "body_byte_length":
+            body_byte_length,
+
+        "body_word_count":
+            body_word_count,
+
+        "checks":
+            checks,
+
+LINE 585
+            content_hash,
+
+        "body_length":
+>>>             body_length,
+
+        "body_byte_length":
+            body_byte_length,
+
+        "body_word_count":
+            body_word_count,
+
+        "checks":
+            checks,
+
+
+LINE 590
+        "body_byte_length":
+            body_byte_length,
+
+>>>         "body_word_count":
+            body_word_count,
+
+        "checks":
+            checks,
+
+        "body_returned":
+            False,
+
+        "body_modified":
+            False,
+
+LINE 591
+            body_byte_length,
+
+        "body_word_count":
+>>>             body_word_count,
+
+        "checks":
+            checks,
+
+        "body_returned":
+            False,
+
+        "body_modified":
+            False,
+    }
+
+LINE 608
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+>>>     body_ref: str | Path,
+) -> dict[str, Any]:
+    """Return calculated metadata without returning the body content."""
+
+    verification = verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+        body_ref=body_ref,
+    )
+
+    body_path = Path(
+
+LINE 615
+    verification = verify_stored_body(
+        project_root=project_root,
+        workspace_id=workspace_id,
+>>>         body_ref=body_ref,
+    )
+
+    body_path = Path(
+        verification[
+            "stored_path"
+        ]
+    )
+
+    stat = body_path.stat()
+
+
+LINE 636
+        "workspace_id":
+            workspace_id,
+
+>>>         "body_ref":
+            verification[
+                "body_ref"
+            ],
+
+        "stored_path":
+            verification[
+                "stored_path"
+            ],
+
+        "filename":
+
+LINE 638
+
+        "body_ref":
+            verification[
+>>>                 "body_ref"
+            ],
+
+        "stored_path":
+            verification[
+                "stored_path"
+            ],
+
+        "filename":
+            body_path.name,
+
+
+LINE 652
+        "file_extension":
+            body_path.suffix.casefold(),
+
+>>>         "content_hash":
+            verification[
+                "content_hash"
+            ],
+
+        "body_length":
+            verification[
+                "body_length"
+            ],
+
+        "body_byte_length":
+
+LINE 654
+
+        "content_hash":
+            verification[
+>>>                 "content_hash"
+            ],
+
+        "body_length":
+            verification[
+                "body_length"
+            ],
+
+        "body_byte_length":
+            verification[
+                "body_byte_length"
+
+LINE 657
+                "content_hash"
+            ],
+
+>>>         "body_length":
+            verification[
+                "body_length"
+            ],
+
+        "body_byte_length":
+            verification[
+                "body_byte_length"
+            ],
+
+        "body_word_count":
+
+LINE 659
+
+        "body_length":
+            verification[
+>>>                 "body_length"
+            ],
+
+        "body_byte_length":
+            verification[
+                "body_byte_length"
+            ],
+
+        "body_word_count":
+            verification[
+                "body_word_count"
+
+LINE 667
+                "body_byte_length"
+            ],
+
+>>>         "body_word_count":
+            verification[
+                "body_word_count"
+            ],
+
+        "modified_timestamp":
+            stat.st_mtime,
+
+        "body_included":
+            False,
+    }
+
+LINE 669
+
+        "body_word_count":
+            verification[
+>>>                 "body_word_count"
+            ],
+
+        "modified_timestamp":
+            stat.st_mtime,
+
+        "body_included":
+            False,
+    }
+
+
+
+LINE 766
+        if candidate.suffix.casefold() != ".txt":
+            continue
+
+>>>         body_ref = _body_ref_from_path(
+            project_root=root,
+            body_path=candidate,
+        )
+
+        item: dict[str, Any] = {
+            "filename":
+                candidate.name,
+
+            "body_ref":
+                body_ref,
+
+LINE 775
+            "filename":
+                candidate.name,
+
+>>>             "body_ref":
+                body_ref,
+
+            "stored_path":
+                str(
+                    candidate
+                ),
+
+            "verified":
+                None,
+
+
+LINE 776
+                candidate.name,
+
+            "body_ref":
+>>>                 body_ref,
+
+            "stored_path":
+                str(
+                    candidate
+                ),
+
+            "verified":
+                None,
+
+            "corrupted":
+
+LINE 795
+                verification = verify_stored_body(
+                    project_root=root,
+                    workspace_id=workspace,
+>>>                     body_ref=body_ref,
+                )
+
+                item.update(
+                    {
+                        "verified":
+                            True,
+
+                        "corrupted":
+                            False,
+
+
+LINE 806
+                        "corrupted":
+                            False,
+
+>>>                         "content_hash":
+                            verification[
+                                "content_hash"
+                            ],
+
+                        "body_length":
+                            verification[
+                                "body_length"
+                            ],
+
+                        "body_byte_length":
+
+LINE 808
+
+                        "content_hash":
+                            verification[
+>>>                                 "content_hash"
+                            ],
+
+                        "body_length":
+                            verification[
+                                "body_length"
+                            ],
+
+                        "body_byte_length":
+                            verification[
+                                "body_byte_length"
+
+LINE 811
+                                "content_hash"
+                            ],
+
+>>>                         "body_length":
+                            verification[
+                                "body_length"
+                            ],
+
+                        "body_byte_length":
+                            verification[
+                                "body_byte_length"
+                            ],
+
+                        "body_word_count":
+
+LINE 813
+
+                        "body_length":
+                            verification[
+>>>                                 "body_length"
+                            ],
+
+                        "body_byte_length":
+                            verification[
+                                "body_byte_length"
+                            ],
+
+                        "body_word_count":
+                            verification[
+                                "body_word_count"
+
+LINE 821
+                                "body_byte_length"
+                            ],
+
+>>>                         "body_word_count":
+                            verification[
+                                "body_word_count"
+                            ],
+                    }
+                )
+
+                verified_count += 1
+
+            except (
+                BodyStoreAccessError,
+
+LINE 823
+
+                        "body_word_count":
+                            verification[
+>>>                                 "body_word_count"
+                            ],
+                    }
+                )
+
+                verified_count += 1
+
+            except (
+                BodyStoreAccessError,
+                BodyStoreCorruptionError,
+                BodyStoreMissingError,
+
+============================================================
+7. PACKAGE EXPORTS
+============================================================
+"""Canonical Universal Unified Content Document package."""
+
+from .uucd_engine_v1 import (
+    BODY_PAYLOAD_SCHEMA_VERSION,
+    HANDOFF_ENVELOPE_SCHEMA_VERSION,
+    UUCDContractError,
+    UUCD_ENGINE_VERSION,
+    UUCD_SCHEMA_VERSION,
+    build_transient_uucd_from_wuc_v1,
+    compute_canonical_content_hash_v1,
+    validate_universal_handoff_envelope_v1,
+)
+
+__all__ = [
+    "BODY_PAYLOAD_SCHEMA_VERSION",
+    "HANDOFF_ENVELOPE_SCHEMA_VERSION",
+    "UUCDContractError",
+    "UUCD_ENGINE_VERSION",
+    "UUCD_SCHEMA_VERSION",
+    "build_transient_uucd_from_wuc_v1",
+    "compute_canonical_content_hash_v1",
+    "validate_universal_handoff_envelope_v1",
+]
+
+============================================================
+8. PRE-IMPLEMENTATION STATUS
+============================================================
+ENGINE_EXISTS: True
+BODY_WRITER_EXISTS: True
+BODY_REPOSITORY_EXISTS: True
+BODY_MANAGER_EXISTS: True
+CANONICAL_STORE_EXISTS: False
+
+============================================================
+SCAN COMPLETE
+NO FILES MODIFIED
+NO UUCD RECORDS WRITTEN
+NO BODY STORE RECORDS WRITTEN
+NO RUNTIME JOBS CREATED
+============================================================

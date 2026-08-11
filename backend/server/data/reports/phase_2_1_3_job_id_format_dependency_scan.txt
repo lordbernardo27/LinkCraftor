@@ -1,0 +1,98 @@
+﻿PHASE 2.1.3 ? JOB ID FORMAT DEPENDENCY SCAN
+==============================================================================
+ROOT: C:\Users\HP\Documents\LinkCraftor\backend\server
+
+CONTRACT IDENTIFIER REGEX
+------------------------------------------------------------------------------
+_IDENTIFIER_RE TYPE: Pattern
+_IDENTIFIER_RE PATTERN: '^[A-Za-z0-9][A-Za-z0-9._:@/+\\-]{0,511}$'
+_MAX_IDENTIFIER_LENGTH: 512
+
+CONTRACT JOB-ID NORMALIZATION SOURCE
+------------------------------------------------------------------------------
+0748:     # Lifecycle timestamps
+0749:     created_at: Optional[str] = None
+0750:     scheduled_at: Optional[str] = None
+0751:     started_at: Optional[str] = None
+0752:     completed_at: Optional[str] = None
+0753:     failed_at: Optional[str] = None
+0754:     cancelled_at: Optional[str] = None
+0755: 
+0756:     # Diagnostics
+0757:     error_code: Optional[str] = None
+0758:     error_message: Optional[str] = None
+0759:     error_details: Mapping[str, Any] = _EMPTY_MAP
+0760: 
+0761:     # Contract version stamped onto every instance
+0762:     contract_version: str = UNIVERSAL_JOB_CONTRACT_VERSION
+0763: 
+0764:     def __post_init__(self) -> None:
+0765:         violations: list = []
+0766:         set_ = object.__setattr__
+0767: 
+0768:         set_(self, "job_id", _normalize_identifier(
+0769:             self.job_id, name="job_id", violations=violations, required=True) or "")
+0770:         set_(self, "workspace_id", _normalize_identifier(
+0771:             self.workspace_id, name="workspace_id", violations=violations,
+0772:             required=True) or "")
+0773:         set_(self, "user_id", _normalize_identifier(
+0774:             self.user_id, name="user_id", violations=violations, required=False)
+0775:             or "system")
+0776:         set_(self, "product_id", _normalize_identifier(
+0777:             self.product_id, name="product_id", violations=violations,
+0778:             required=False) or "linkcraftor")
+0779: 
+0780:         for name in ("pipeline", "stage"):
+0781:             value = _normalize_optional_text(
+0782:                 getattr(self, name), name=name, violations=violations,
+0783:                 max_length=_MAX_IDENTIFIER_LENGTH,
+0784:             )
+0785:             set_(self, name, value or "")
+0786: 
+0787:         job_type = _normalize_optional_text(
+0788:             self.job_type,
+0789:             name="job_type",
+0790:             violations=violations,
+0791:             max_length=_MAX_IDENTIFIER_LENGTH,
+0792:         )
+0793:         if job_type is None:
+0794:             violations.append("job_type is required")
+0795:         set_(self, "job_type", job_type or "")
+0796: 
+0797:         set_(self, "payload_reference", _normalize_optional_text(
+0798:             self.payload_reference, name="payload_reference", violations=violations))
+0799: 
+0800:         try:
+0801:             set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+0802:         except UniversalJobContractError as exc:
+0803:             violations.extend(exc.violations or (str(exc),))
+0804:             set_(self, "priority", UniversalJobPriority.NORMAL)
+0805: 
+0806:         try:
+0807:             set_(self, "status", UniversalJobStatus.coerce(self.status))
+0808:         except UniversalJobContractError as exc:
+
+UNIVERSAL JOB PREFIX REFERENCES
+------------------------------------------------------------------------------
+MATCHES: 1
+jobs\universal_knowledge_orchestrator.py:111: return "ukj_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+JOB-ID PARSING OR PREFIX ASSUMPTIONS
+------------------------------------------------------------------------------
+MATCHES: 0
+
+JOB-ID VALIDATION REFERENCES
+------------------------------------------------------------------------------
+MATCHES: 12
+tms\attachment_orchestration.py:76: def _job_id(prefix: str, attachment_id: str, job_type: str) -> str:
+tms\intelligence_orchestration.py:74: def _job_id(prefix: str, scope_id: str | None, job_type: str) -> str:
+tms\notification_orchestration.py:75: def _job_id(prefix: str, ticket_id: str | None, job_type: str) -> str:
+universal_article_body_store\body_store_queue_v1.py:351: normalized_job_id = _require_string(
+universal_article_body_store\body_store_runtime_registration_v1.py:295: job_id = _require_string(
+universal_article_body_store\body_store_worker_v1.py:329: job_id = _require_string(
+runtime\universal_jobs\contract.py:769: self.job_id, name="job_id", violations=violations, required=True) or "")
+runtime\universal_jobs\creation_engine.py:474: job_id_prefix: str = "uj"
+runtime\universal_jobs\creation_engine.py:630: prefix=request.job_id_prefix,
+runtime\universal_jobs\creation_engine.py:657: job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+runtime\universal_jobs\creation_engine.py:684: job_id_prefix: str = "uj",
+runtime\universal_jobs\creation_engine.py:714: job_id_prefix=job_id_prefix,

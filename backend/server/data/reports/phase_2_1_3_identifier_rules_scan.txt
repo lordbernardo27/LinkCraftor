@@ -1,0 +1,283 @@
+﻿PHASE 2.1.3 ? IDENTIFIER RULES AND LEGACY GENERATOR SCAN
+==============================================================================
+
+LEGACY make_job_id
+------------------------------------------------------------------------------
+def make_job_id(workspace_id: str, job_type: str, payload: Dict[str, Any]) -> str:
+    raw = json.dumps(
+        {
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "payload": payload,
+            "created_at": now_iso(),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+    return "ukj_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
+
+
+LEGACY safe_id
+------------------------------------------------------------------------------
+def safe_id(value: str | None, fallback: str = "default") -> str:
+    raw = str(value or fallback).strip() or fallback
+    return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in raw)[:160]
+
+
+CONTRACT _normalize_identifier
+------------------------------------------------------------------------------
+def _normalize_identifier(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+    required: bool,
+) -> Optional[str]:
+    text = _normalize_optional_text(
+        value, name=name, violations=violations, max_length=_MAX_IDENTIFIER_LENGTH
+    )
+    if text is None:
+        if required:
+            violations.append(name + " is required")
+        return None
+    if not _IDENTIFIER_RE.match(text):
+        violations.append(name + " is not a valid identifier: " + text)
+    return text
+
+
+CONTRACT _normalize_identifier_tuple
+------------------------------------------------------------------------------
+def _normalize_identifier_tuple(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+) -> Tuple[str, ...]:
+    if value is None:
+        return _EMPTY_TUPLE
+    if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
+        violations.append(name + " must be a sequence of identifiers")
+        return _EMPTY_TUPLE
+    try:
+        items = list(value)
+    except TypeError:
+        violations.append(name + " must be an iterable of identifiers")
+        return _EMPTY_TUPLE
+    if len(items) > _MAX_COLLECTION_ITEMS:
+        violations.append(name + " exceeds the maximum item count")
+        items = items[:_MAX_COLLECTION_ITEMS]
+    seen: Dict[str, None] = {}
+    for item in items:
+        identifier = _normalize_identifier(
+            item, name=name + "[]", violations=violations, required=True
+        )
+        if identifier is not None:
+            seen.setdefault(identifier, None)
+    return tuple(sorted(seen))
+
+
+CONTRACT IDENTIFIER CONSTANTS
+------------------------------------------------------------------------------
+_MAX_COLLECTION_ITEMS = 4096
+_MAX_IDENTIFIER_LENGTH = 512
+_MAX_REFERENCE_LENGTH = 4096
+_MAX_TEXT_LENGTH = 16384
+
+CONTRACT SOURCE AROUND IDENTIFIER HELPERS
+------------------------------------------------------------------------------
+
+def _normalize_identifier ? lines 285-380
+0285: ) -> Optional[str]:
+0286:     if value is None:
+0287:         return None
+0288:     if not isinstance(value, str):
+0289:         violations.append(name + " must be a string or null")
+0290:         return None
+0291:     text = value.strip()
+0292:     if not text:
+0293:         return None
+0294:     if len(text) > max_length:
+0295:         violations.append(name + " exceeds maximum length of " + str(max_length))
+0296:         return text[:max_length]
+0297:     return text
+0298: 
+0299: 
+0300: def _normalize_identifier(
+0301:     value: Any,
+0302:     *,
+0303:     name: str,
+0304:     violations: list,
+0305:     required: bool,
+0306: ) -> Optional[str]:
+0307:     text = _normalize_optional_text(
+0308:         value, name=name, violations=violations, max_length=_MAX_IDENTIFIER_LENGTH
+0309:     )
+0310:     if text is None:
+0311:         if required:
+0312:             violations.append(name + " is required")
+0313:         return None
+0314:     if not _IDENTIFIER_RE.match(text):
+0315:         violations.append(name + " is not a valid identifier: " + text)
+0316:     return text
+0317: 
+0318: 
+0319: def _normalize_timestamp(
+0320:     value: Any,
+0321:     *,
+0322:     name: str,
+0323:     violations: list,
+0324: ) -> Optional[str]:
+0325:     """Validate and normalize an ISO-8601 timestamp to canonical UTC."""
+0326:     if value is None:
+0327:         return None
+0328: 
+0329:     if not isinstance(value, str):
+0330:         violations.append(
+0331:             name + " must be an ISO-8601 string or null"
+0332:         )
+0333:         return None
+0334: 
+0335:     text = value.strip()
+0336: 
+0337:     if not text:
+0338:         return None
+0339: 
+0340:     if not _TIMESTAMP_RE.match(text):
+0341:         violations.append(
+0342:             name + " must be an ISO-8601 timestamp: " + text
+0343:         )
+0344:         return text
+0345: 
+0346:     parse_text = text
+0347: 
+0348:     if parse_text.endswith("Z"):
+0349:         parse_text = (
+0350:             parse_text[:-1]
+0351:             + "+00:00"
+0352:         )
+0353: 
+0354:     try:
+0355:         parsed = datetime.fromisoformat(
+0356:             parse_text
+0357:         )
+0358:     except ValueError:
+0359:         violations.append(
+0360:             name + " is not a valid calendar timestamp: " + text
+0361:         )
+0362:         return text
+0363: 
+0364:     if parsed.tzinfo is None:
+0365:         violations.append(
+0366:             name + " must include a timezone offset"
+0367:         )
+0368:         return text
+0369: 
+0370:     normalized = (
+0371:         parsed
+0372:         .astimezone(timezone.utc)
+0373:         .isoformat(
+0374:             timespec="microseconds"
+0375:         )
+0376:         .replace(
+0377:             "+00:00",
+0378:             "Z",
+0379:         )
+0380:     )
+
+def _normalize_identifier_tuple ? lines 391-486
+0391: ) -> int:
+0392:     if value is None:
+0393:         return default
+0394:     if isinstance(value, bool) or not isinstance(value, int):
+0395:         violations.append(name + " must be a non-negative integer")
+0396:         return default
+0397:     if value < 0:
+0398:         violations.append(name + " must not be negative")
+0399:         return default
+0400:     if value > _INT_MAX:
+0401:         violations.append(name + " exceeds the maximum permitted integer")
+0402:         return _INT_MAX
+0403:     return value
+0404: 
+0405: 
+0406: def _normalize_identifier_tuple(
+0407:     value: Any,
+0408:     *,
+0409:     name: str,
+0410:     violations: list,
+0411: ) -> Tuple[str, ...]:
+0412:     if value is None:
+0413:         return _EMPTY_TUPLE
+0414:     if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
+0415:         violations.append(name + " must be a sequence of identifiers")
+0416:         return _EMPTY_TUPLE
+0417:     try:
+0418:         items = list(value)
+0419:     except TypeError:
+0420:         violations.append(name + " must be an iterable of identifiers")
+0421:         return _EMPTY_TUPLE
+0422:     if len(items) > _MAX_COLLECTION_ITEMS:
+0423:         violations.append(name + " exceeds the maximum item count")
+0424:         items = items[:_MAX_COLLECTION_ITEMS]
+0425:     seen: Dict[str, None] = {}
+0426:     for item in items:
+0427:         identifier = _normalize_identifier(
+0428:             item, name=name + "[]", violations=violations, required=True
+0429:         )
+0430:         if identifier is not None:
+0431:             seen.setdefault(identifier, None)
+0432:     return tuple(sorted(seen))
+0433: 
+0434: 
+0435: def _normalize_reference_tuple(
+0436:     value: Any,
+0437:     *,
+0438:     name: str,
+0439:     violations: list,
+0440: ) -> Tuple[str, ...]:
+0441:     if value is None:
+0442:         return _EMPTY_TUPLE
+0443:     if isinstance(value, (str, bytes)) or isinstance(value, Mapping):
+0444:         violations.append(name + " must be a sequence of references")
+0445:         return _EMPTY_TUPLE
+0446:     try:
+0447:         items = list(value)
+0448:     except TypeError:
+0449:         violations.append(name + " must be an iterable of references")
+0450:         return _EMPTY_TUPLE
+0451:     if len(items) > _MAX_COLLECTION_ITEMS:
+0452:         violations.append(name + " exceeds the maximum item count")
+0453:         items = items[:_MAX_COLLECTION_ITEMS]
+0454:     references = []
+0455:     for item in items:
+0456:         reference = _normalize_optional_text(
+0457:             item, name=name + "[]", violations=violations
+0458:         )
+0459:         if reference is None:
+0460:             violations.append(name + " must not contain empty references")
+0461:             continue
+0462:         references.append(reference)
+0463:     return tuple(references)
+0464: 
+0465: 
+0466: def _normalize_mapping(value: Any, *, name: str, violations: list) -> Mapping[str, Any]:
+0467:     if value is None:
+0468:         return _EMPTY_MAP
+0469:     if not isinstance(value, Mapping):
+0470:         violations.append(name + " must be a mapping")
+0471:         return _EMPTY_MAP
+0472:     if len(value) > _MAX_COLLECTION_ITEMS:
+0473:         violations.append(name + " exceeds the maximum entry count")
+0474:     try:
+0475:         return _freeze(value)
+0476:     except UniversalJobContractError as exc:
+0477:         violations.append(name + ": " + str(exc))
+0478:         return _EMPTY_MAP
+0479: 
+0480: 
+0481: # ---------------------------------------------------------------------------
+0482: # Validation report
+0483: # ---------------------------------------------------------------------------
+0484: 
+0485: @dataclass(frozen=True)
+0486: class UniversalJobValidationReport:
