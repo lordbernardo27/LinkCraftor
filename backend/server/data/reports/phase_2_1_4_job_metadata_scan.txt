@@ -1,0 +1,1807 @@
+﻿PHASE 2.1.4 ? JOB METADATA SCAN
+==============================================================================
+ROOT: C:\Users\HP\Documents\LinkCraftor\backend\server
+
+UNIVERSAL JOB CONTRACT ? DATACLASS FIELDS
+------------------------------------------------------------------------------
+job_id: str
+workspace_id: str
+user_id: str
+product_id: str
+pipeline: str
+stage: str
+job_type: str
+payload_reference: Optional[str]
+priority: UniversalJobPriority
+status: UniversalJobStatus
+attempts: int
+maximum_attempts: int
+lease_owner: Optional[str]
+lease_id: Optional[str]
+lease_started_at: Optional[str]
+lease_expires_at: Optional[str]
+parent_job_id: Optional[str]
+dependency_job_ids: Tuple[str, ...]
+batch_id: Optional[str]
+pipeline_run_id: Optional[str]
+progress: UniversalJobProgress
+checkpoint_reference: Optional[str]
+result_reference: Optional[str]
+artifact_references: Tuple[str, ...]
+idempotency_key: Optional[str]
+AU_reserved: int
+AU_consumed: int
+cost_record: UniversalJobCostRecord
+created_at: Optional[str]
+scheduled_at: Optional[str]
+started_at: Optional[str]
+completed_at: Optional[str]
+failed_at: Optional[str]
+cancelled_at: Optional[str]
+error_code: Optional[str]
+error_message: Optional[str]
+error_details: Mapping[str, Any]
+contract_version: str
+
+CREATION ENGINE ? METADATA-RELATED STRUCTURES
+------------------------------------------------------------------------------
+
+### UniversalJobCreationRequest
+@dataclass(frozen=True)
+class UniversalJobCreationRequest:
+    workspace_id: str
+    job_type: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+    pipeline: str = ""
+    stage: str = ""
+    payload_reference: Optional[str] = None
+    priority: Any = UniversalJobPriority.NORMAL
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = ()
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    maximum_attempts: Optional[int] = None
+    enqueue: bool = True
+    job_id: Optional[str] = None
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX
+    created_at: Optional[str] = None
+
+
+### UniversalJobCreationResult
+@dataclass(frozen=True)
+class UniversalJobCreationResult:
+    job: UniversalJob
+    payload: Mapping[str, Any]
+    metadata: Mapping[str, Any]
+    registration: Optional[Mapping[str, Any]]
+    enqueue_requested: bool
+    job_type_source: str
+    creation_engine_version: str = UNIVERSAL_JOB_CREATION_ENGINE_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": UNIVERSAL_JOB_CREATION_RESULT_VERSION,
+            "ok": True,
+            "creation_engine_version": self.creation_engine_version,
+            "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+            "enqueue_requested": self.enqueue_requested,
+            "job_type_source": self.job_type_source,
+            "job": self.job.to_canonical_dict(),
+            "payload": _thaw_json(self.payload),
+            "metadata": _thaw_json(self.metadata),
+            "registration": (
+                _thaw_json(self.registration)
+                if self.registration is not None
+                else None
+            ),
+            "identity_fingerprint": self.job.identity_fingerprint(),
+            "contract_fingerprint": self.job.contract_fingerprint(),
+            "content_fingerprint": self.job.content_fingerprint(),
+        }
+
+
+### normalize_universal_job_creation_request
+def normalize_universal_job_creation_request(
+    request: UniversalJobCreationRequest,
+    *,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> tuple[
+    UniversalJobCreationRequest,
+    str,
+    Optional[Mapping[str, Any]],
+]:
+    if not isinstance(request, UniversalJobCreationRequest):
+        raise UniversalJobCreationError(
+            "request must be UniversalJobCreationRequest.",
+            code="invalid_creation_request",
+            violations=("request must be UniversalJobCreationRequest",),
+        )
+
+    workspace_id = _clean_text(request.workspace_id)
+
+    if not workspace_id:
+        raise UniversalJobCreationError(
+            "workspace_id is required.",
+            code="missing_workspace_id",
+            violations=("workspace_id is required",),
+        )
+
+    try:
+        job_type = validate_universal_job_type(
+            request.job_type
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    payload = _normalize_mapping(
+        request.payload,
+        field_name="payload",
+    )
+    metadata = _normalize_mapping(
+        request.metadata,
+        field_name="metadata",
+    )
+    dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+    static_job_types = _normalize_supported_job_types(
+        supported_job_types,
+    )
+    source, registration = _resolve_registration(
+        job_type=job_type,
+        supported_job_types=static_job_types,
+        runtime_registration=runtime_registration,
+    )
+    _validate_registered_payload(
+        registration=registration,
+        payload=payload,
+    )
+
+    registration_pipeline = (
+        registration.get("pipeline")
+        if registration is not None
+        else ""
+    )
+    registration_stage = (
+        registration.get("stage")
+        if registration is not None
+        else ""
+    )
+
+    pipeline = _first_text(
+        request.pipeline,
+        payload.get("pipeline"),
+        payload.get("pipeline_name"),
+        registration_pipeline,
+        fallback="universal_knowledge",
+    )
+    stage = _first_text(
+        request.stage,
+        payload.get("stage"),
+        payload.get("stage_name"),
+        registration_stage,
+        fallback=job_type,
+    )
+    user_id = _first_text(
+        request.user_id,
+        payload.get("user_id"),
+        fallback="system",
+    )
+    product_id = _first_text(
+        request.product_id,
+        payload.get("product_id"),
+        fallback="linkcraftor",
+    )
+    payload_reference = _first_text(
+        request.payload_reference,
+        payload.get("payload_reference"),
+        payload.get("payload_ref"),
+        payload.get("source_record_id"),
+        payload.get("html_id"),
+        fallback="",
+    ) or None
+    priority = _resolve_priority(request.priority)
+    maximum_attempts = _resolve_maximum_attempts(
+        request.maximum_attempts,
+        payload,
+        registration,
+    )
+
+    if not isinstance(request.enqueue, bool):
+        raise UniversalJobCreationError(
+            "enqueue must be a boolean.",
+            code="invalid_enqueue",
+            violations=(
+                "enqueue must be either True or False",
+            ),
+        )
+
+    if (
+        not isinstance(request.job_id_prefix, str)
+        or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+    ):
+        raise UniversalJobCreationError(
+            "job_id_prefix is fixed by the Universal Job identity namespace.",
+            code="invalid_job_id_prefix",
+            violations=(
+                f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+            ),
+        )
+
+    created_at = _clean_text(request.created_at) or _utc_now()
+
+    try:
+        job_id = resolve_universal_job_id(
+            request.job_id
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+
+    return normalized, source, registration
+
+
+### create_universal_job
+def create_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[Iterable[Any]] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    enqueue: bool = True,
+    job_id: Optional[str] = None,
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> UniversalJobCreationResult:
+    """Validate and construct one canonical Universal Job without I/O."""
+
+    request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+
+    normalized, source, registration = (
+        normalize_universal_job_creation_request(
+            request,
+            supported_job_types=supported_job_types,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    status = (
+        UniversalJobStatus.QUEUED
+        if normalized.enqueue
+        else UniversalJobStatus.CREATED
+    )
+    message = (
+        "Job queued."
+        if normalized.enqueue
+        else "Job created without queue dispatch."
+    )
+
+    try:
+        job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+    except UniversalJobContractError as exc:
+        raise UniversalJobCreationError(
+            "Universal Job Contract rejected the creation request.",
+            code="contract_validation_failed",
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    validation = validate_universal_job(job)
+    if not validation.is_valid:
+        raise UniversalJobCreationError(
+            "Created Universal Job failed final validation.",
+            code="final_validation_failed",
+            violations=validation.violations,
+        )
+
+    return UniversalJobCreationResult(
+        job=job,
+        payload=normalized.payload,
+        metadata=normalized.metadata,
+        registration=registration,
+        enqueue_requested=normalized.enqueue,
+        job_type_source=source,
+    )
+
+
+CREATION ENGINE ? METADATA REFERENCES
+------------------------------------------------------------------------------
+0299:                 "Runtime Registration metadata",
+0316:             "Runtime Registration metadata contains an invalid job_type.",
+0323:             "Runtime Registration metadata does not match the requested job type.",
+0423:     metadata: Mapping[str, Any] = field(default_factory=dict)
+0446:     metadata: Mapping[str, Any]
+0462:             "metadata": _thaw_json(self.metadata),
+0515:     metadata = _normalize_mapping(
+0516:         request.metadata,
+0517:         field_name="metadata",
+0624:         metadata=metadata,
+0651:     metadata: Optional[Mapping[str, Any]] = None,
+0677:         metadata={} if metadata is None else metadata,
+0782:         metadata=normalized.metadata,
+0798:             "resolve static job types or caller-supplied Runtime Registration metadata",
+
+REPO-WIDE JOB METADATA REFERENCES
+------------------------------------------------------------------------------
+MATCHES: 80
+article_validation\article_validation_runner_v3.py:654: metadata = payload.get(
+crawler\seed_registration_engine.py:13: - normalize registration metadata;
+crawler\seed_registration_engine.py:114: def normalize_registration_metadata(
+crawler\seed_registration_engine.py:117: """Normalize and copy registration metadata."""
+crawler\seed_registration_engine.py:203: normalize_registration_metadata(
+crawler\seed_registration_engine.py:384: "normalize registration metadata",
+crawler\seed_registration_engine.py:429: "normalize_registration_metadata",
+crawler\__init__.py:92: normalize_registration_metadata,
+crawler\__init__.py:210: "normalize_registration_metadata",
+orchestration\job_store.py:221: job.metadata
+orchestration\job_store.py:223: job.metadata,
+orchestration\job_store.py:229: job.metadata = {
+orchestration\job_store.py:321: job.metadata.update(metadata)
+orchestration\routes.py:41: metadata=payload.metadata,
+orchestration\routes.py:72: job = cancel_job(job_id, metadata={"reason": "manual_cancel"})
+orchestration\service.py:80: most stores but is wasteful and can clobber claim metadata; if the job is
+orchestration\service.py:89: if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+orchestration\service.py:92: job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+orchestration\service.py:99: return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+orchestration\service.py:110: return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+orchestration\service.py:130: return update_job_status(job_id, JOB_STATUS_CANCELLED, metadata=metadata or {})
+runtime\runtime_service_registry.py:89: """Immutable metadata for one registered runtime service."""
+runtime\universal_runtime_registration.py:131: "Registration metadata must be a mapping."
+runtime\universal_runtime_worker_v1.py:173: metadata = job.metadata
+runtime\universal_runtime_worker_v1.py:180: "Claimed orchestration job metadata must be a mapping."
+runtime\universal_runtime_worker_v1.py:656: claimed_job.metadata
+runtime\universal_runtime_worker_v1.py:658: claimed_job.metadata,
+runtime\uucd_runtime_handoff_v1.py:22: - build the minimum metadata/reference-only runtime payload;
+runtime\uucd_runtime_handoff_v1.py:24: - resolve Runtime Registration metadata;
+runtime\uucd_runtime_handoff_v1.py:438: Build the canonical metadata/reference-only runtime payload.
+runtime\uucd_runtime_handoff_v1.py:663: existing_orchestration_job.metadata
+runtime\uucd_runtime_handoff_v1.py:665: existing_orchestration_job.metadata,
+runtime\uucd_runtime_handoff_v1.py:683: "contain canonical_universal_job metadata."
+runtime\uucd_runtime_handoff_v1.py:758: existing_orchestration_job.metadata
+runtime\website_article_integrity_automation.py:327: def _job_metadata(
+runtime\website_article_integrity_automation.py:613: metadata = _job_metadata(
+runtime\website_article_integrity_automation.py:668: metadata = _job_metadata(
+stores\cross_document_reasoning.py:2824: "summary": "Can expose normalized comparison intent metadata without exposing or changing core scoring, ranking, routing, comparison logic, or runtime UI behavior.",
+stores\cross_document_reasoning.py:3089: "summary": "Can expose normalized intent-aware linking metadata without exposing or changing core scoring, ranking, routing, target intelligence, or runtime balancing logic.",
+stores\helix_smart_extractor.py:513: "runtime_metadata": {
+stores\semantic_runtime_foundation.py:63: "Provides governed semantic runtime foundation metadata without changing runtime routing.",
+stores\semantic_runtime_foundation.py:66: "runtime_semantic_metadata_support",
+stores\semantic_runtime_foundation.py:141: "Registers semantic runtime hook metadata without creating a new runtime engine.",
+stores\semantic_runtime_foundation.py:144: "runtime_hook_metadata",
+stores\udare_store.py:2555: "runtime references and operational metadata only"
+tms\billing_subscription_integration.py:277: metadata=payload,
+tms\product_activity_context.py:38: metadata=dict(payload.get("metadata") or {}),
+tms\product_activity_context.py:53: metadata=dict(payload.get("metadata") or {}),
+tms\product_activity_context.py:73: **dict(payload.get("metadata") or {}),
+tms\product_activity_context.py:94: **dict(payload.get("metadata") or {}),
+tms\product_activity_context.py:115: **dict(payload.get("metadata") or {}),
+tms\product_context.py:84: metadata=dict(payload.get("metadata") or {}),
+tms\product_context.py:98: metadata=dict(payload.get("metadata") or {}),
+tms\product_context.py:112: metadata=dict(payload.get("metadata") or {}),
+tms\shared_escalation_rooms.py:891: payload=metadata,
+tms\worker_infrastructure.py:84: metadata=job,
+universal_article_body_store\body_store_archive_repository_manager_v1.py:313: "metadata_payload":
+universal_article_body_store\body_store_archive_repository_manager_v1.py:584: "metadata_payload",
+universal_article_body_store\body_store_archive_repository_manager_v1.py:727: "metadata_payload"
+universal_article_body_store\body_store_archive_repository_manager_v1.py:907: metadata_payload = stored_repository[
+universal_article_body_store\body_store_archive_repository_manager_v1.py:938: metadata_payload[
+universal_article_body_store\body_store_archive_repository_manager_v1.py:956: metadata_payload[
+universal_article_body_store\body_store_archive_repository_verifier_v1.py:220: metadata_payload = stored_repository[
+universal_article_body_store\body_store_archive_repository_verifier_v1.py:254: == metadata_payload.get(
+universal_article_body_store\body_store_archive_repository_verifier_v1.py:267: == metadata_payload.get(
+universal_article_body_store\body_store_archive_repository_verifier_v1.py:280: == metadata_payload.get(
+runtime\runtime_schema\snapshots.py:220: _require(isinstance(data, Mapping), "metadata payload must be a mapping")
+runtime\runtime_schema\snapshots.py:503: metadata_payload = data.get("metadata")
+runtime\runtime_schema\snapshots.py:505: isinstance(metadata_payload, Mapping),
+runtime\runtime_schema\snapshots.py:506: "snapshot payload is missing its metadata",
+runtime\runtime_schema\snapshots.py:508: metadata = SnapshotMetadata.from_canonical_dict(metadata_payload)
+runtime\runtime_schema\snapshots.py:569: canonical_payload.get("metadata_fingerprint")
+runtime\universal_jobs\creation_engine.py:299: "Runtime Registration metadata",
+runtime\universal_jobs\creation_engine.py:316: "Runtime Registration metadata contains an invalid job_type.",
+runtime\universal_jobs\creation_engine.py:323: "Runtime Registration metadata does not match the requested job type.",
+runtime\universal_jobs\creation_engine.py:798: "resolve static job types or caller-supplied Runtime Registration metadata",
+runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py:305: "Runtime Registration metadata",
+runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py:321: "Runtime Registration metadata is missing a valid job_type.",
+runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py:332: "Runtime Registration metadata does not match the requested job type.",
+runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py:816: "resolve static job types or caller-supplied Runtime Registration metadata",
+
+POSSIBLE METADATA KEY LITERALS
+------------------------------------------------------------------------------
+metadata: 110
+workspace_id: 96
+schema_version: 44
+created_at: 43
+status: 33
+title: 31
+layer: 29
+phase: 29
+changes_highlight_selection: 24
+changes_phrase_scoring: 24
+changes_runtime_linking: 24
+changes_target_selection: 24
+changes_url_assignment: 24
+metadata_only: 24
+ok: 24
+build_id: 22
+safety_flags: 20
+document_id: 19
+source_type: 19
+url: 19
+source_url: 17
+patch: 16
+updated_at: 16
+headings: 14
+source_record_id: 14
+event_type: 13
+h1: 13
+statistics: 13
+advisory_only: 12
+can_change_runtime: 12
+metadata_path: 12
+physical_archive_performed: 12
+archive_id: 11
+job_type: 11
+article_path: 10
+body_id: 10
+boundary_rule: 10
+generated_at: 10
+queue_job_created: 10
+runtime_job_created: 10
+source_id: 10
+actor_id: 9
+applies_learning_to_target_workspace: 9
+archive_index_path: 9
+archive_metadata_path: 9
+article_id: 9
+article_sha256: 9
+content_body: 9
+content_body_included: 9
+contract_version: 9
+repository_write_performed: 9
+runtime_shadow_only: 9
+text: 9
+article: 8
+can_influence_runtime: 8
+description: 8
+html_id: 8
+metadata_sha256: 8
+section_id: 8
+shadow_runtime: 8
+source_workspace_id: 8
+stage: 8
+summary: 8
+target_workspace_id: 8
+NORMALIZE_LIFECYCLE_STATE: 7
+QUARANTINE_INVALID_RECORD: 7
+REBUILD_ARCHIVE_METADATA: 7
+REBUILD_LIFECYCLE_RECORD: 7
+REBUILD_TOMBSTONE_INDEX: 7
+REMOVE_TOMBSTONE_CONTENT_REFERENCE: 7
+REPAIR_REFERENCE_METADATA: 7
+RESOLVE_DUPLICATE_IDENTITY: 7
+archive_root: 7
+archive_verified: 7
+checks: 7
+display_title: 7
+domain_label: 7
+engine: 7
+job_id: 7
+name: 7
+pipeline: 7
+purpose: 7
+schema: 7
+source: 7
+api_sdk_summary: 6
+archive_checksum: 6
+archive_status: 6
+article_body: 6
+component: 6
+content_hash: 6
+evidence_normalization: 6
+explainability_type: 6
+explains: 6
+html: 6
+mutates_existing_intelligence: 6
+owner_console_summary: 6
+paragraphs: 6
+ready: 6
+required_payload_fields: 6
+runtime_effect: 6
+supported_explanation_fields: 6
+universal_design_rules: 6
+uses_existing_layers_only: 6
+actor_type: 5
+certification_status: 5
+completed_at: 5
+context: 5
+deferred_upstream_count: 5
+document_ids: 5
+errors: 5
+heading_count: 5
+intent_type: 5
+label: 5
+lifecycle_record_id: 5
+manager_version: 5
+paragraph_id: 5
+payload: 5
+phase_name: 5
+priority: 5
+responsibilities: 5
+source_format: 5
+source_name: 5
+source_store: 5
+source_store_version: 5
+store_version: 5
+title_source: 5
+archive_content_path: 4
+archived_at: 4
+article_document_format: 4
+block_id: 4
+blocks: 4
+body_length: 4
+body_ref: 4
+body_word_count: 4
+cancelled_at: 4
+certification: 4
+cleaning_version: 4
+content_length: 4
+content_write_performed: 4
+creation_engine_version: 4
+execution_status: 4
+filename: 4
+important_notes: 4
+incident_id: 4
+index_write_performed: 4
+metadata_write_performed: 4
+operation: 4
+page_type_hint: 4
+parser: 4
+passed: 4
+path: 4
+pipeline_stage: 4
+predecessor_stages: 4
+priority_bucket: 4
+reason: 4
+record: 4
+repository_root: 4
+repository_version: 4
+section_depth: 4
+selected_tag: 4
+source_identity: 4
+source_key: 4
+source_origin: 4
+stage_statuses: 4
+started_at: 4
+successor_stages: 4
+ticket_id: 4
+type: 4
+udare_engine: 4
+version: 4
+warnings: 4
+word_count: 4
+aliases: 3
+archive_reason: 3
+article_document: 3
+article_document_count: 3
+article_progress: 3
+articles_discovered: 3
+block_index: 3
+block_type: 3
+canonical_url: 3
+certificate_scope: 3
+cleaned_article_text: 3
+cleaning_report: 3
+cluster_count: 3
+concepts: 3
+confidence: 3
+consolidated_failure_reasons: 3
+content: 3
+content_block_count: 3
+content_fingerprint: 3
+content_type: 3
+context_fingerprint: 3
+context_metadata: 3
+correlation_id: 3
+cross_document_linking: 3
+doc_id: 3
+does_not: 3
+end_char: 3
+end_line: 3
+engine_version: 3
+excluded_responsibilities: 3
+expected_store_count: 3
+expected_upstream_count: 3
+expires_at: 3
+failed_at: 3
+index_path: 3
+lifecycle_state: 3
+main_content: 3
+manifest_schema_version: 3
+output: 3
+owner_id: 3
+paragraph_count: 3
+pipeline_version: 3
+placeholder_url: 3
+published_url: 3
+quality_grade: 3
+raw_article_text: 3
+raw_main_html: 3
+read_only: 3
+record_count: 3
+registration_version: 3
+rejection_reasons: 3
+removed_sections: 3
+repository_checksum: 3
+restorable: 3
+results_path: 3
+source_identity_present: 3
+source_models: 3
+source_patch: 3
+source_phase: 3
+source_schema_version: 3
+start_char: 3
+start_line: 3
+status_code: 3
+structure: 3
+target_store: 3
+uses_h1_heading_targets: 3
+validation_score: 3
+validation_version: 3
+validator_version: 3
+agriculture: 2
+all_stored_articles_validated: 2
+archive_index: 2
+archive_metadata: 2
+article_body_included: 2
+article_body_modified: 2
+article_sha256_valid: 2
+article_validation_status: 2
+articles: 2
+articles_validated: 2
+attempt: 2
+automotive: 2
+block_depth: 2
+body_cleaning: 2
+builder: 2
+byte_length: 2
+candidate_count: 2
+candidate_summary: 2
+canonical: 2
+canonical_operation: 2
+capabilities: 2
+captured_at_utc: 2
+category: 2
+certificate_id: 2
+checksum_algorithm: 2
+children_section_ids: 2
+cleaned_body: 2
+cleaned_word_count: 2
+clusters: 2
+concept_id: 2
+concurrency_policy: 2
+confidence_factors: 2
+construction: 2
+content_blocks: 2
+content_boundary_valid: 2
+content_id: 2
+content_present: 2
+context_radius: 2
+contract: 2
+contract_fingerprint: 2
+contract_id: 2
+coordinator_id: 2
+coordinator_version: 2
+crawl_session_id: 2
+created_at_utc: 2
+current_phase: 2
+deletion_eligible: 2
+delivery_mode: 2
+display: 2
+doc: 2
+document_count: 2
+document_sha256: 2
+document_structure_present: 2
+document_title: 2
+document_type: 2
+does: 2
+does_not_use: 2
+domain: 2
+edges: 2
+education: 2
+eligibility_reason: 2
+eligible_for_unified_content_document: 2
+eligible_for_wuc: 2
+enqueue_requested: 2
+entertainment: 2
+evaluated_at: 2
+event_id: 2
+evidence: 2
+ext: 2
+extraction_confidence: 2
+failure_reason: 2
+failure_reason_counts: 2
+failure_reasons: 2
+finance: 2
+future_content: 2
+gaming: 2
+generated_by: 2
+governance_decision: 2
+governance_status: 2
+graph_lineage: 2
+handler: 2
+handoff: 2
+heading_ancestry_depth: 2
+heading_depth: 2
+heading_level: 2
+heading_structure: 2
+hold_expires_at: 2
+hold_reason: 2
+hold_started_at: 2
+hold_type: 2
+home_improvement: 2
+html_length: 2
+idempotency_fields: 2
+idempotency_key: 2
+identity_fingerprint: 2
+indexes: 2
+input_decision_items: 2
+input_symbol_count: 2
+integrity_certificate_certified: 2
+integrity_certificate_id: 2
+integrity_certificate_present: 2
+integrity_record_passed: 2
+is_html: 2
+is_on_hold: 2
+is_placeholder_url: 2
+job: 2
+job_type_source: 2
+key: 2
+kind: 2
+learning_pack_id: 2
+legal: 2
+lifecycle: 2
+lifecycle_transition_performed: 2
+limits: 2
+link_target: 2
+list_type: 2
+local_services: 2
+manifests: 2
+manufacturing: 2
+max_attempts: 2
+metadata_only_action: 2
+metadata_record_count: 2
+metadata_sha256_valid: 2
+metadata_status: 2
+mode: 2
+module: 2
+namespace: 2
+next_component: 2
+next_pipeline_stage: 2
+next_stage: 2
+nonprofit: 2
+null_byte_free: 2
+operational_metadata: 2
+original_word_count: 2
+overall_integrity_status: 2
+owner_review_required: 2
+parent_section_id: 2
+parenting_family: 2
+paused_at: 2
+persistence_status: 2
+planned_content: 2
+printable_text: 2
+prohibited_content_fields: 2
+prohibitions: 2
+publish_readiness: 2
+quarantine_article_path: 2
+quarantine_metadata_path: 2
+quarantine_version: 2
+real_estate: 2
+reasoning_chain: 2
+recommendation_strength: 2
+recommended_anchor_purposes: 2
+recommended_failure_patterns_to_avoid: 2
+recommended_reasoning_patterns: 2
+recommended_success_patterns: 2
+reconstruction_status: 2
+record_schema_version: 2
+registered_at: 2
+registration: 2
+registry_priority_signals: 2
+registry_version: 2
+relationship_type: 2
+religion_faith: 2
+removed_length: 2
+repair_action_type: 2
+replacement_character_ratio: 2
+replacement_record_valid: 2
+required_udare_engine: 2
+resumed_at: 2
+retain_until: 2
+retention_class: 2
+retention_period_days: 2
+retention_policy_id: 2
+retention_policy_name: 2
+retention_satisfied: 2
+retention_started_at: 2
+retention_status: 2
+retry_policy: 2
+review_path: 2
+review_relative_path: 2
+runtime_version: 2
+score: 2
+section_index: 2
+section_title: 2
+section_word_count: 2
+selected_root: 2
+semantic_intent_signals: 2
+semantic_processing_performed: 2
+semantic_type: 2
+sentence_global_index: 2
+sentence_id: 2
+sentence_index: 2
+sentences: 2
+serialization_format_version: 2
+session_name: 2
+snapshot_id: 2
+snapshot_schema_version: 2
+source_files_modified: 2
+source_kind: 2
+source_layer: 2
+source_line_index: 2
+source_metadata: 2
+start_offset: 2
+state: 2
+state_reason: 2
+stats: 2
+stop_requested_at: 2
+stored_name: 2
+stored_path: 2
+target: 2
+title_present: 2
+top_failure_patterns: 2
+top_success_patterns: 2
+trace_id: 2
+transfer_suitability: 2
+truncated: 2
+universal: 2
+updated_at_utc: 2
+user_id: 2
+uses: 2
+workflow_type: 2
+workflow_version: 2
+write_ready: 2
+MANUAL_REVIEW_REQUIRED: 1
+REVIEW_RETENTION_STATE: 1
+_uploaded_at: 1
+acceptance_rate: 1
+accepted_count: 1
+accepted_decisions: 1
+action_allowed_target_stores: 1
+action_type: 1
+active_and_quarantine_scopes_do_not_overlap: 1
+active_article_and_metadata_counts_match: 1
+active_article_count: 1
+active_articles_directory: 1
+active_ledger_path: 1
+active_metadata_count: 1
+active_metadata_directory: 1
+active_record_count_after: 1
+active_record_count_before: 1
+actor: 1
+ai_machine_learning: 1
+all_active_articles_have_metadata: 1
+all_active_articles_have_pass_status: 1
+all_candidates: 1
+all_metadata_records_resolved: 1
+all_stored_articles_structurally_valid: 1
+allow_replace: 1
+allowed_purpose: 1
+allowed_transitions: 1
+amount: 1
+annotations_fingerprint: 1
+approval_inputs: 1
+approval_reason: 1
+approval_scope: 1
+approval_status: 1
+archive_checksum_matches: 1
+archive_content: 1
+archive_execution_id: 1
+archived_by: 1
+article_bodies_copied: 1
+article_bodies_loaded: 1
+article_body_copied: 1
+article_body_copied_to_intermediate_store: 1
+article_body_hash: 1
+article_body_in_json: 1
+article_body_loaded_transiently: 1
+article_body_persisted_by_wuc: 1
+article_body_present: 1
+article_count: 1
+article_document_bytes: 1
+article_document_html: 1
+article_document_sha256: 1
+article_documents: 1
+article_evidence_summary: 1
+article_hashes_match_integrity_evidence: 1
+article_html: 1
+article_integrity: 1
+article_intent: 1
+article_intent_summary: 1
+article_links: 1
+article_position: 1
+article_reconstruction: 1
+article_reference: 1
+article_storage: 1
+article_tag_count: 1
+article_validation_certificate_id: 1
+article_validation_run_id: 1
+article_word_count: 1
+articles_checked: 1
+artifact_references: 1
+arts_design: 1
+assigned_worker_id: 1
+atomic_json_write_enabled: 1
+attempt_count: 1
+attempts: 1
+au_used: 1
+audit_head_changed: 1
+audit_head_fingerprint: 1
+authority_extraction: 1
+authorized_apply_supported: 1
+auto_run: 1
+automatic_transfer_allowed: 1
+available_signal_count: 1
+available_signals: 1
+backup_before_mutation: 1
+base_generation: 1
+base_snapshot_id: 1
+batch_id: 1
+beauty_fashion: 1
+beauty_skincare: 1
+billing_status: 1
+block_contexts: 1
+block_count: 1
+block_ids: 1
+blogging: 1
+body: 1
+body_byte_length: 1
+body_content_in_job: 1
+body_included: 1
+body_status: 1
+body_store.list: 1
+body_store.metadata: 1
+body_store.read: 1
+body_store.store: 1
+body_store.verify: 1
+body_text: 1
+boilerplate_intelligence: 1
+boundary: 1
+builder_version: 1
+bundle_complete: 1
+bundle_version: 1
+business_logic_executed: 1
+business_saas: 1
+calculated_archive_checksum: 1
+candidate_metadata_field_coverage: 1
+candidate_scores: 1
+candidates: 1
+canonical_concept_count: 1
+canonical_concepts: 1
+canonical_lifecycle_states: 1
+canonical_rule: 1
+canonical_text: 1
+canonical_universal_job: 1
+capability: 1
+careers: 1
+careers_hr: 1
+certificate_html_path: 1
+certificate_path: 1
+certificate_status: 1
+certification_id: 1
+certification_outcome: 1
+certification_scope: 1
+certified_active_count: 1
+certified_active_ledger_path: 1
+certified_at: 1
+certified_pipeline: 1
+certified_quarantine_ledger_path: 1
+certifier_version: 1
+changed_at: 1
+channel: 1
+child_section_count: 1
+cleaned_length: 1
+closed_by: 1
+commerce: 1
+community: 1
+company: 1
+compatibility_mode: 1
+completed_stages: 1
+completion: 1
+component_fail_count: 1
+component_id: 1
+component_pass_count: 1
+component_type: 1
+component_version: 1
+concept_candidates: 1
+concept_count: 1
+concept_count_after_consolidation: 1
+confidence_inputs: 1
+confidence_reasons: 1
+confidence_summary: 1
+configuration_schema_version: 1
+connection_id: 1
+consolidated_evidence: 1
+consolidation_enabled: 1
+consumer_tech: 1
+contact_reference: 1
+contains_article_body: 1
+content_block_present: 1
+content_exists: 1
+content_html: 1
+content_integrity: 1
+content_path: 1
+content_payload: 1
+content_ref: 1
+corruption_detected_count: 1
+corruption_reason_counts: 1
+counts: 1
+courses_info_products: 1
+coverage: 1
+crawler_session_id: 1
+cross_reference_index: 1
+cryptocurrency_web3: 1
+currency: 1
+current_stage: 1
+current_status: 1
+current_word_count: 1
+decoded_length: 1
+deferred_opportunities: 1
+deferred_upstream_records_are_explicit: 1
+delete_reason: 1
+deleted_by: 1
+deprecated: 1
+descriptor: 1
+directory: 1
+disabled_at: 1
+dispatch: 1
+display_text: 1
+document: 1
+document_context: 1
+document_status: 1
+document_title_length: 1
+document_title_present: 1
+document_word_count: 1
+dominant_anchor_purposes: 1
+dominant_article_intent: 1
+dominant_intent_family: 1
+dominant_reasoning_patterns: 1
+dominant_terms: 1
+downstream_stage: 1
+draft_id: 1
+draft_priority_signals: 1
+draft_status: 1
+draft_topic_id: 1
+dry_run_supported: 1
+duplicate_boundary: 1
+duplicates: 1
+ecommerce: 1
+ecommerce_retail: 1
+edge_count: 1
+edge_count_after_consolidation: 1
+edge_score: 1
+emergency_kill_switch: 1
+enabled: 1
+enabled_at: 1
+endpoint: 1
+energy: 1
+energy_utilities: 1
+enqueue: 1
+entity_candidates: 1
+entrypoint: 1
+environment_sustainability: 1
+environments: 1
+events_weddings: 1
+evidence_count: 1
+evidence_manifest_path: 1
+evidence_roles: 1
+evidence_root_sha256: 1
+evidence_score: 1
+evidence_sources: 1
+evidence_strength: 1
+evidence_summary: 1
+execute: 1
+executed_at: 1
+execution_completed: 1
+execution_controls: 1
+execution_model: 1
+execution_modes: 1
+execution_order: 1
+execution_started: 1
+executor_contract_version: 1
+expected_document_sha256: 1
+explainability_inputs: 1
+explainability_scope: 1
+explainability_score: 1
+explanation: 1
+explanation_chain: 1
+explanation_strength: 1
+explanation_summary: 1
+explicit_authorization_required_for_apply: 1
+export_contract: 1
+extension: 1
+extraction_method: 1
+extraction_source: 1
+extraction_status: 1
+extraction_timestamp: 1
+extractor_version: 1
+failed_checks: 1
+failed_records_are_excluded_from_active_store: 1
+failed_records_are_preserved_in_quarantine: 1
+failed_stages: 1
+failure: 1
+failure_code: 1
+failure_details: 1
+failure_message: 1
+family_id: 1
+family_role: 1
+file_extension: 1
+file_size: 1
+final_advisory_decision: 1
+final_highlights: 1
+final_learning_pack: 1
+final_url: 1
+fitness: 1
+food_recipes: 1
+food_restaurant: 1
+form_count: 1
+format: 1
+fragments_replaced: 1
+freeze_marker: 1
+from_state: 1
+gardening: 1
+generated_at_utc: 1
+generated_from_certification: 1
+generation: 1
+generation_delta: 1
+global_artifacts_deferred: 1
+governance_inputs: 1
+government: 1
+government_public_sector: 1
+graph: 1
+graph_decision: 1
+graph_metadata: 1
+graph_score: 1
+handler_dispatched: 1
+handler_ref: 1
+handler_reference: 1
+handoff_status: 1
+handoff_version: 1
+has_next_context: 1
+has_next_section: 1
+has_next_sentence: 1
+has_parent_section: 1
+has_previous_context: 1
+has_previous_section: 1
+has_previous_sentence: 1
+health_medical: 1
+hr_recruiting: 1
+href: 1
+html_text: 1
+idempotent_reuse: 1
+identical: 1
+identity: 1
+identity_prefix: 1
+identity_reference_count: 1
+identity_unresolved_count: 1
+identity_unresolved_paths: 1
+image_count: 1
+image_metadata_status: 1
+import_source: 1
+index: 1
+index_article_count: 1
+index_entry: 1
+index_exists: 1
+index_payload: 1
+influencers_personal_brands: 1
+ingested_at: 1
+input: 1
+input_payload: 1
+input_reference: 1
+input_stage: 1
+insurance: 1
+integrity: 1
+integrity_assertions: 1
+integrity_certificate_status: 1
+integrity_fail_count: 1
+integrity_pass_count: 1
+integrity_quarantined_count: 1
+integrity_status: 1
+integrity_status_counts: 1
+integrity_verified: 1
+intent_pattern_count: 1
+intent_patterns: 1
+interactive: 1
+interior_design: 1
+is_section_entry: 1
+is_section_exit: 1
+is_terminal: 1
+it_cybersecurity: 1
+job_contract_version: 1
+job_payload: 1
+json_metadata: 1
+json_storage: 1
+keeps_internal_and_semantic_linking_separate: 1
+kernel_api_version: 1
+knowledge: 1
+last_editor_id: 1
+last_transition: 1
+learned_relationship_count: 1
+learned_relationships: 1
+learning_fingerprint: 1
+learning_signals: 1
+learning_snapshot: 1
+learning_statistics: 1
+lease_expiration: 1
+lease_id: 1
+leased_at: 1
+lifecycle_decision: 1
+line_count: 1
+link_count: 1
+list_item_count: 1
+loader_version: 1
+local_word_count: 1
+location: 1
+locations: 1
+logistics: 1
+logistics_supply_chain: 1
+main_text: 1
+manager_completed: 1
+manifest: 1
+manifest_path: 1
+manifest_record_count: 1
+manual_review_only: 1
+marketing: 1
+marketing_seo: 1
+matched_rule_count: 1
+matched_rules: 1
+media: 1
+medical_healthcare: 1
+memory_id: 1
+memory_role: 1
+mental_health: 1
+mention_ids: 1
+mentions: 1
+message_id: 1
+message_type: 1
+metadata_body_boundary_enforced: 1
+metadata_changed: 1
+metadata_count: 1
+metadata_diagnostics: 1
+metadata_exists: 1
+metadata_fingerprint: 1
+metadata_key_coverage: 1
+metadata_match_count: 1
+metadata_match_is_unambiguous: 1
+metadata_missing_count: 1
+metadata_payload: 1
+metadata_record_resolved: 1
+metadata_records: 1
+metadata_records_discovered: 1
+metadata_reference: 1
+metadata_resolution_method: 1
+metadata_resolution_method_counts: 1
+metadata_resolved_count: 1
+metadata_schema_version: 1
+metadata_title: 1
+metadata_unresolved_count: 1
+metadata_version: 1
+metadata_workspace_id: 1
+method: 1
+missing_input_count: 1
+missing_inputs: 1
+modified_timestamp: 1
+multi_niche_publishers: 1
+multiword_concepts: 1
+music: 1
+namespace_count_delta: 1
+namespaces_added: 1
+namespaces_removed: 1
+navigation: 1
+negative_words: 1
+neighborhoods: 1
+neural_confidence_level: 1
+neural_confidence_score: 1
+neural_reasoning: 1
+neural_signal_strength: 1
+neural_signal_summary: 1
+new_orchestration_job_created: 1
+new_universal_job_created: 1
+news_media: 1
+next_phase: 1
+node_count: 1
+node_score: 1
+nodes: 1
+noisy_cluster_count: 1
+noisy_clusters: 1
+non_executable_planner_action_types: 1
+normalization_source: 1
+normalized_phrase: 1
+normalized_value: 1
+note_id: 1
+nutrition: 1
+object_neighborhoods: 1
+object_type: 1
+observations: 1
+observed_at: 1
+old_universal_knowledge_jsonl_used: 1
+operation_name: 1
+operation_scope: 1
+orchestration_job: 1
+original_article_path: 1
+original_length: 1
+original_metadata_path: 1
+original_name: 1
+original_text: 1
+original_value: 1
+orphan_articles: 1
+other_generation: 1
+other_snapshot_id: 1
+output_file: 1
+outputs: 1
+overall_signature: 1
+overall_similarity_score: 1
+overall_status: 1
+owner: 1
+owner_kind: 1
+owner_organization_id: 1
+owner_user_id: 1
+owner_workspace_id: 1
+package_complete: 1
+paragraph_evidence: 1
+paragraph_ids: 1
+parent_block_word_count: 1
+parent_workflow_id: 1
+parser_completed: 1
+parser_error: 1
+path_containment_enforced: 1
+paths: 1
+paths_verified: 1
+pattern: 1
+pattern_learning_mode: 1
+payload_ref: 1
+payload_reference: 1
+pending_stages: 1
+persisted_at_utc: 1
+persistent: 1
+pets: 1
+pets_veterinary: 1
+pharmacy: 1
+phase_1_exclusions: 1
+photography_creative_services: 1
+phrase: 1
+pipeline_name: 1
+pipelines: 1
+placeholder_generated: 1
+plan: 1
+plan_ids: 1
+planned_url: 1
+policy: 1
+population_included: 1
+population_started: 1
+population_status: 1
+position: 1
+preflight_required: 1
+preflight_status: 1
+previous_state: 1
+previous_status: 1
+priority_rank: 1
+processing_status: 1
+product_id: 1
+professional_training: 1
+profiles: 1
+programming_development: 1
+prohibited_direct_execution_action_types: 1
+protocols: 1
+provenance: 1
+public_operations: 1
+publishing_authors: 1
+qualification: 1
+quarantine_article_count: 1
+quarantine_articles_directory: 1
+quarantine_candidate: 1
+quarantine_copy_before_source_removal: 1
+quarantine_hashes_match_quarantine_evidence: 1
+quarantine_index_path: 1
+quarantine_is_reversible: 1
+quarantine_metadata_count: 1
+quarantine_metadata_directory: 1
+quarantine_record_id: 1
+quarantine_records_path: 1
+quarantine_status: 1
+quarantined_at: 1
+quarantined_record_count: 1
+quarantined_records: 1
+quarantined_source_ids: 1
+queue: 1
+queue_created: 1
+queue_job_creation: 1
+queue_job_id: 1
+queue_name: 1
+queue_or_worker_included: 1
+queue_schema_version: 1
+queue_version: 1
+raw_html: 1
+reading_order: 1
+realignment_step: 1
+reasoned_phrases: 1
+reasoned_yellow_phrases: 1
+reconstruction: 1
+reconstruction_engine: 1
+record_type: 1
+recorded_at: 1
+records: 1
+recoverable: 1
+registered_by: 1
+registered_source: 1
+registry_fingerprint: 1
+registry_fingerprint_changed: 1
+registry_timestamps_available: 1
+rejected: 1
+rejected_cluster_count: 1
+rejected_clusters: 1
+rejected_count: 1
+rejected_decisions: 1
+rejection_rate: 1
+relationship_count: 1
+relationship_decision: 1
+relationship_score: 1
+relationships: 1
+relative_path: 1
+release_channel: 1
+remote_work: 1
+repair_action_strategies: 1
+replacement_boundary: 1
+replacement_record_checksum: 1
+report_record_id: 1
+report_version: 1
+repository_checksum_present: 1
+repository_read_performed: 1
+repository_schema: 1
+required_directories: 1
+required_fields: 1
+required_input_count: 1
+required_record_fields: 1
+required_safety_gates: 1
+requires_human_approval: 1
+resolution_summary: 1
+responsibility: 1
+restore_reason: 1
+restore_rule: 1
+restored_by: 1
+result_reference: 1
+review_byte_length: 1
+review_format: 1
+review_href: 1
+review_image_count: 1
+review_sha256: 1
+revision: 1
+risk_inputs: 1
+risk_level: 1
+risk_reasons: 1
+risk_score: 1
+rollout_percentage: 1
+room_id: 1
+root: 1
+root_cause: 1
+root_domain: 1
+root_mode: 1
+root_workflow_id: 1
+rule_decision: 1
+rule_id: 1
+run_immediately: 1
+runner_version: 1
+runtime_context: 1
+runtime_integrated: 1
+runtime_integration_included: 1
+runtime_job_creation: 1
+runtime_metadata: 1
+runtime_name: 1
+runtime_permissions: 1
+runtime_policy: 1
+runtime_request: 1
+runtime_transfer_allowed: 1
+runtime_versions: 1
+saas: 1
+safe_default_enabled: 1
+safety_inputs: 1
+schema_count_delta: 1
+schema_id: 1
+schema_name: 1
+schema_types: 1
+schema_versions: 1
+science_research: 1
+scope_id: 1
+scope_type: 1
+scores: 1
+section_contexts: 1
+section_evidence: 1
+section_evidence_summaries: 1
+section_intents: 1
+section_paragraph_count: 1
+section_sentence_count: 1
+sections: 1
+security_cybersecurity: 1
+seed_id: 1
+seed_type: 1
+selected: 1
+semantic_object_id: 1
+semantic_objects: 1
+semantic_richness_score: 1
+sender_id: 1
+sentence_contexts: 1
+sentence_is_block_entry: 1
+sentence_is_block_exit: 1
+sentence_word_count: 1
+serialization_formats: 1
+service_contract_version: 1
+service_id: 1
+shared_patterns: 1
+signals: 1
+similarity_score: 1
+similarity_scores: 1
+skipped_stages: 1
+small_business: 1
+snapshot_metadata: 1
+snapshot_role: 1
+snippet: 1
+source_articles_directory: 1
+source_failure_ledger: 1
+source_graph: 1
+source_html: 1
+source_identifier: 1
+source_integrity_report: 1
+source_path: 1
+source_pool: 1
+source_ref: 1
+source_reference: 1
+source_registry: 1
+source_report_record_id: 1
+source_result_ids: 1
+source_route: 1
+source_target_id: 1
+source_url_present: 1
+sources: 1
+sports: 1
+sports_fitness: 1
+staff_id: 1
+stage_job_types: 1
+stage_name: 1
+stages: 1
+state_schema_version: 1
+step: 1
+store_name: 1
+store_root: 1
+stored_archive_checksum: 1
+stored_repository_verified: 1
+stored_without_mutation: 1
+strength: 1
+strong_phrases: 1
+strong_words: 1
+structural_extraction: 1
+structural_fail_count: 1
+structural_pass_count: 1
+structure_can_be_reused_as_pattern: 1
+structure_metadata: 1
+structured_headings: 1
+subscribed_at: 1
+subscriber_id: 1
+subscription_id: 1
+success_statuses: 1
+supported_block_types: 1
+supported_executor_action_types: 1
+supported_seed_types: 1
+supported_sources: 1
+supported_target_stores: 1
+sustainability: 1
+symbol_count: 1
+symbolic_reasoning: 1
+symbolic_rule_score: 1
+symbols: 1
+system: 1
+target_change_detection_enabled: 1
+target_id: 1
+target_state: 1
+target_status: 1
+target_type: 1
+task_type: 1
+technology_developer: 1
+telecom: 1
+telecommunications: 1
+tenant_id: 1
+timeline_token_count: 1
+title_fallback_used: 1
+to_state: 1
+tombstone_content_boundary_enforced: 1
+tombstone_target: 1
+top_evidence: 1
+topic: 1
+total_decisions: 1
+transaction_backup_root: 1
+transaction_id: 1
+transaction_rollback_supported: 1
+transfer_blocked: 1
+transfer_readiness: 1
+transfer_safe: 1
+transition_count: 1
+transition_number: 1
+transition_reason: 1
+transition_validator: 1
+transitioned_at: 1
+travel: 1
+travel_hospitality: 1
+truncation_detected_count: 1
+truncation_reason_counts: 1
+udare_article_body_sha256: 1
+udare_html: 1
+udare_index_path: 1
+udare_manifest_path: 1
+udare_metadata: 1
+unified_neural_signal_score: 1
+unknown: 1
+upload_metadata: 1
+upload_source: 1
+uploaded_at: 1
+validated_at: 1
+validation: 1
+validation_reasons: 1
+value: 1
+verification: 1
+verification_success: 1
+verified_record_count: 1
+version_count_delta: 1
+versioning: 1
+vertical: 1
+visible_body_text_length: 1
+vocabulary_registry: 1
+warning_article_count: 1
+warning_reason_counts: 1
+warning_reasons: 1
+weak_words: 1
+web3_crypto: 1
+weighted_parts: 1
+weights: 1
+worker: 1
+worker_classes: 1
+worker_executed: 1
+worker_id: 1
+worker_type: 1
+workers_created: 1
+workflow_contract_version: 1
+workflow_id: 1
+workspace_ids: 1
+workspace_isolated: 1
+write_plan_valid: 1
+youtube_video_creators: 1
+
+LEGACY UNIVERSAL KNOWLEDGE ORCHESTRATOR ? METADATA REFERENCES
+------------------------------------------------------------------------------
+0542:     metadata=None,
+0560:         metadata=metadata,

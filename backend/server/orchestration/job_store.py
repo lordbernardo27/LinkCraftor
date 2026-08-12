@@ -206,14 +206,53 @@ def update_job_status(
     job.status = new_status
     job.updated_at = utc_now()
 
+    normalized_metadata = (
+        dict(metadata)
+        if isinstance(
+            metadata,
+            dict,
+        )
+        else {}
+    )
+
+    if normalized_metadata:
+
+        existing_metadata = (
+            job.metadata
+            if isinstance(
+                job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        job.metadata = {
+            **existing_metadata,
+            **normalized_metadata,
+        }
+
     if error_message:
         job.error_message = error_message
+
         if new_status == JOB_STATUS_FAILED:
-            job.progress_percent = min(job.progress_percent, 99.0)
+            job.progress_percent = min(
+                job.progress_percent,
+                99.0,
+            )
 
     jobs[job_id] = job
-    save_jobs(jobs)
-    append_job_event(job_id, old_status, new_status, metadata or {})
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        job_id,
+        old_status,
+        new_status,
+        normalized_metadata,
+    )
+
     return job
 
 

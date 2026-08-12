@@ -1,0 +1,468 @@
+﻿PHASE 2.1.3 ? CREATION ENGINE IDENTITY INTEGRATION SCAN
+==============================================================================
+FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_jobs\creation_engine.py
+LINES: 844
+SHA256: 881120C0F070755D766F9DA8137F6EA954D0DBB198213FE027EBA2F1EB55230A
+
+IDENTITY MODULE
+------------------------------------------------------------------------------
+FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_jobs\identity.py
+VERSION: universal_job_identity_v2.1.3
+
+CURRENT CREATION ENGINE IDENTITY FUNCTIONS
+------------------------------------------------------------------------------
+
+### _make_job_id
+def _make_job_id(
+    *,
+    prefix: str,
+    workspace_id: str,
+    job_type: str,
+    pipeline: str,
+    stage: str,
+    created_at: str,
+) -> str:
+    canonical_prefix = _clean_text(prefix) or "uj"
+    material = json.dumps(
+        {
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "pipeline": pipeline,
+            "stage": stage,
+            "created_at": created_at,
+            "nonce": secrets.token_hex(16),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+    return f"{canonical_prefix}_{digest}"
+
+
+### _clean_text
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+### normalize_universal_job_creation_request
+def normalize_universal_job_creation_request(
+    request: UniversalJobCreationRequest,
+    *,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> tuple[
+    UniversalJobCreationRequest,
+    str,
+    Optional[Mapping[str, Any]],
+]:
+    if not isinstance(request, UniversalJobCreationRequest):
+        raise UniversalJobCreationError(
+            "request must be UniversalJobCreationRequest.",
+            code="invalid_creation_request",
+            violations=("request must be UniversalJobCreationRequest",),
+        )
+
+    workspace_id = _clean_text(request.workspace_id)
+    job_type = _clean_text(request.job_type)
+
+    if not workspace_id:
+        raise UniversalJobCreationError(
+            "workspace_id is required.",
+            code="missing_workspace_id",
+            violations=("workspace_id is required",),
+        )
+
+    if not job_type:
+        raise UniversalJobCreationError(
+            "job_type is required.",
+            code="missing_job_type",
+            violations=("job_type is required",),
+        )
+
+    payload = _normalize_mapping(
+        request.payload,
+        field_name="payload",
+    )
+    metadata = _normalize_mapping(
+        request.metadata,
+        field_name="metadata",
+    )
+    dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+    static_job_types = _normalize_supported_job_types(
+        supported_job_types,
+    )
+    source, registration = _resolve_registration(
+        job_type=job_type,
+        supported_job_types=static_job_types,
+        runtime_registration=runtime_registration,
+    )
+    _validate_registered_payload(
+        registration=registration,
+        payload=payload,
+    )
+
+    registration_pipeline = (
+        registration.get("pipeline")
+        if registration is not None
+        else ""
+    )
+    registration_stage = (
+        registration.get("stage")
+        if registration is not None
+        else ""
+    )
+
+    pipeline = _first_text(
+        request.pipeline,
+        payload.get("pipeline"),
+        payload.get("pipeline_name"),
+        registration_pipeline,
+        fallback="universal_knowledge",
+    )
+    stage = _first_text(
+        request.stage,
+        payload.get("stage"),
+        payload.get("stage_name"),
+        registration_stage,
+        fallback=job_type,
+    )
+    user_id = _first_text(
+        request.user_id,
+        payload.get("user_id"),
+        fallback="system",
+    )
+    product_id = _first_text(
+        request.product_id,
+        payload.get("product_id"),
+        fallback="linkcraftor",
+    )
+    payload_reference = _first_text(
+        request.payload_reference,
+        payload.get("payload_reference"),
+        payload.get("payload_ref"),
+        payload.get("source_record_id"),
+        payload.get("html_id"),
+        fallback="",
+    ) or None
+    priority = _resolve_priority(request.priority)
+    maximum_attempts = _resolve_maximum_attempts(
+        request.maximum_attempts,
+        payload,
+        registration,
+    )
+
+    if not isinstance(request.enqueue, bool):
+        raise UniversalJobCreationError(
+            "enqueue must be a boolean.",
+            code="invalid_enqueue",
+            violations=(
+                "enqueue must be either True or False",
+            ),
+        )
+
+    created_at = _clean_text(request.created_at) or _utc_now()
+    job_id = _clean_text(request.job_id) or _make_job_id(
+        prefix=request.job_id_prefix,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        pipeline=pipeline,
+        stage=stage,
+        created_at=created_at,
+    )
+
+    normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+        created_at=created_at,
+    )
+
+    return normalized, source, registration
+
+
+### create_universal_job
+def create_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[Iterable[Any]] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    enqueue: bool = True,
+    job_id: Optional[str] = None,
+    job_id_prefix: str = "uj",
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> UniversalJobCreationResult:
+    """Validate and construct one canonical Universal Job without I/O."""
+
+    request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+
+    normalized, source, registration = (
+        normalize_universal_job_creation_request(
+            request,
+            supported_job_types=supported_job_types,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    status = (
+        UniversalJobStatus.QUEUED
+        if normalized.enqueue
+        else UniversalJobStatus.CREATED
+    )
+    message = (
+        "Job queued."
+        if normalized.enqueue
+        else "Job created without queue dispatch."
+    )
+
+    try:
+        job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+    except UniversalJobContractError as exc:
+        raise UniversalJobCreationError(
+            "Universal Job Contract rejected the creation request.",
+            code="contract_validation_failed",
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    validation = validate_universal_job(job)
+    if not validation.is_valid:
+        raise UniversalJobCreationError(
+            "Created Universal Job failed final validation.",
+            code="final_validation_failed",
+            violations=validation.violations,
+        )
+
+    return UniversalJobCreationResult(
+        job=job,
+        payload=normalized.payload,
+        metadata=normalized.metadata,
+        registration=registration,
+        enqueue_requested=normalized.enqueue,
+        job_type_source=source,
+    )
+
+
+CURRENT IMPORTS
+------------------------------------------------------------------------------
+from __future__ import annotations
+import hashlib
+import json
+import math
+import secrets
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Any, Final, Iterable, Mapping, Optional, Sequence, Tuple
+from backend.server.runtime.universal_jobs.contract import (
+    UNIVERSAL_JOB_CONTRACT_VERSION,
+    UniversalJob,
+    UniversalJobContractError,
+    UniversalJobCostRecord,
+    UniversalJobPriority,
+    UniversalJobProgress,
+    UniversalJobStatus,
+    validate_universal_job,
+)
+
+IDENTITY-RELATED REFERENCES
+------------------------------------------------------------------------------
+0009: import hashlib
+0012: import secrets
+0245: def _normalize_supported_job_types(
+0253:             "supported_job_types must be an iterable of job-type strings.",
+0254:             code="invalid_supported_job_types",
+0256:                 "supported_job_types must not be a string, bytes value, or mapping",
+0265:                 "supported_job_types contains a non-string value.",
+0266:                 code="invalid_supported_job_types",
+0268:                     "every supported_job_types entry must be a non-empty string",
+0272:         job_type = value.strip()
+0274:         if not job_type:
+0276:                 "supported_job_types contains an empty job type.",
+0277:                 code="invalid_supported_job_types",
+0279:                     "every supported_job_types entry must be a non-empty string",
+0283:         normalized.setdefault(job_type, None)
+0290:     job_type: str,
+0291:     supported_job_types: frozenset[str],
+0296:     if job_type in supported_job_types:
+0301:             f"Unsupported Universal Job type: {job_type}",
+0302:             code="unsupported_job_type",
+0304:                 "job_type must be statically supported or supplied through "
+0314:     raw_registered_job_type = registration.get("job_type")
+0317:         not isinstance(raw_registered_job_type, str)
+0318:         or not raw_registered_job_type.strip()
+0321:             "Runtime Registration metadata is missing a valid job_type.",
+0324:                 "runtime_registration.job_type must be a non-empty string",
+0328:     registered_job_type = raw_registered_job_type.strip()
+0330:     if registered_job_type != job_type:
+0333:             code="runtime_registration_job_type_mismatch",
+0335:                 "runtime_registration.job_type must match job_type",
+0427: def _make_job_id(
+0431:     job_type: str,
+0440:             "job_type": job_type,
+0444:             "nonce": secrets.token_hex(16),
+0450:     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+0457:     job_type: str
+0466:     parent_job_id: Optional[str] = None
+0467:     dependency_job_ids: Tuple[str, ...] = ()
+0473:     job_id: Optional[str] = None
+0474:     job_id_prefix: str = "uj"
+0485:     job_type_source: str
+0495:             "job_type_source": self.job_type_source,
+0513:     supported_job_types: Optional[Iterable[Any]] = None,
+0528:     job_type = _clean_text(request.job_type)
+0537:     if not job_type:
+0539:             "job_type is required.",
+0540:             code="missing_job_type",
+0541:             violations=("job_type is required",),
+0553:         request.dependency_job_ids,
+0554:         field_name="dependency_job_ids",
+0556:     static_job_types = _normalize_supported_job_types(
+0557:         supported_job_types,
+0560:         job_type=job_type,
+0561:         supported_job_types=static_job_types,
+0592:         fallback=job_type,
+0629:     job_id = _clean_text(request.job_id) or _make_job_id(
+0630:         prefix=request.job_id_prefix,
+0632:         job_type=job_type,
+0640:         job_type=job_type,
+0649:         parent_job_id=_clean_text(request.parent_job_id) or None,
+0650:         dependency_job_ids=dependencies,
+0656:         job_id=job_id,
+0657:         job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+0667:     job_type: str,
+0676:     parent_job_id: Optional[str] = None,
+0677:     dependency_job_ids: Optional[Iterable[Any]] = None,
+0683:     job_id: Optional[str] = None,
+0684:     job_id_prefix: str = "uj",
+0686:     supported_job_types: Optional[Iterable[Any]] = None,
+0693:         job_type=job_type,
+0702:         parent_job_id=parent_job_id,
+0703:         dependency_job_ids=(
+0705:             if dependency_job_ids is None
+0706:             else dependency_job_ids
+0713:         job_id=job_id,
+0714:         job_id_prefix=job_id_prefix,
+0721:             supported_job_types=supported_job_types,
+0739:             job_id=normalized.job_id or "",
+0745:             job_type=normalized.job_type,
+0755:             parent_job_id=normalized.parent_job_id,
+0756:             dependency_job_ids=normalized.dependency_job_ids,
+0803:         job_type_source=source,
+
+IDENTITY MODULE PUBLIC API
+------------------------------------------------------------------------------
+UNIVERSAL_JOB_IDENTITY_VERSION = 'universal_job_identity_v2.1.3'
+UNIVERSAL_JOB_ID_PREFIX = 'uj'
+UNIVERSAL_JOB_ID_HEX_LENGTH = 32
+UNIVERSAL_JOB_ID_LENGTH = 35
+UNIVERSAL_JOB_TYPE_MAX_LENGTH = 512
+UniversalJobIdentityError(message: 'str', *, code: 'str', violations: 'tuple[str, ...]' = ()) -> 'None'
+is_canonical_universal_job_id(value: 'Any') -> 'bool'
+validate_universal_job_id(value: 'Any') -> 'str'
+generate_universal_job_id() -> 'str'
+resolve_universal_job_id(explicit_job_id: 'Any' = None) -> 'str'
+is_canonical_universal_job_type(value: 'Any') -> 'bool'
+validate_universal_job_type(value: 'Any') -> 'str'
+explain_universal_job_identity_v1() -> 'dict[str, Any]'

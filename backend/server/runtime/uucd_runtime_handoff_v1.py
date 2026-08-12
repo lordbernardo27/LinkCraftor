@@ -50,6 +50,7 @@ from typing import Any, Mapping
 
 from backend.server.orchestration.job_store import (
     create_job as create_orchestration_job,
+    load_jobs as load_orchestration_jobs,
 )
 from backend.server.runtime.universal_jobs.creation_engine import (
     create_universal_job,
@@ -425,8 +426,8 @@ def build_uucd_runtime_idempotency_key_v1(
     ).hexdigest()
 
     return (
-        "uucd_runtime_"
-        + digest[:32]
+        "uucd_runtime_handoff_"
+        + digest
     )
 
 
@@ -532,6 +533,70 @@ def _resolve_runtime_registration(
     return registration
 
 
+def _find_existing_orchestration_job_by_idempotency_key_v1(
+    *,
+    workspace_id: str,
+    job_type: str,
+    idempotency_key: str,
+):
+    """
+    Return an existing canonical orchestration job for the same logical
+    UUCD runtime handoff.
+
+    Idempotency is logical identity, not a replacement job_id generator.
+    """
+
+    jobs = load_orchestration_jobs()
+
+    matches = []
+
+    for candidate in jobs.values():
+
+        if (
+            candidate.workspace_id
+            != workspace_id
+        ):
+            continue
+
+        if (
+            candidate.job_type
+            != job_type
+        ):
+            continue
+
+        metadata = (
+            candidate.metadata
+            if isinstance(
+                candidate.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        if (
+            metadata.get(
+                "idempotency_key"
+            )
+            != idempotency_key
+        ):
+            continue
+
+        matches.append(
+            candidate
+        )
+
+    if not matches:
+        return None
+
+    if len(matches) > 1:
+        raise UUCDRuntimeHandoffPersistenceError(
+            "Canonical orchestration store contains multiple jobs "
+            "for the same UUCD runtime idempotency_key."
+        )
+
+    return matches[0]
+
+
 def handoff_persisted_uucd_to_runtime_v1(
     persisted_uucd_record: Mapping[str, Any],
     *,
@@ -581,6 +646,152 @@ def handoff_persisted_uucd_to_runtime_v1(
             runtime_registration=runtime_registration,
         )
     )
+
+    existing_orchestration_job = (
+        _find_existing_orchestration_job_by_idempotency_key_v1(
+            workspace_id=validated[
+                "workspace_id"
+            ],
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    if existing_orchestration_job is not None:
+
+        existing_metadata = (
+            existing_orchestration_job.metadata
+            if isinstance(
+                existing_orchestration_job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        existing_canonical_job = (
+            existing_metadata.get(
+                "canonical_universal_job"
+            )
+        )
+
+        if not isinstance(
+            existing_canonical_job,
+            Mapping,
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing idempotent orchestration job does not "
+                "contain canonical_universal_job metadata."
+            )
+
+        existing_job_id = (
+            _require_non_empty_string(
+                existing_orchestration_job.job_id,
+                field_name="existing_orchestration_job.job_id",
+            )
+        )
+
+        if (
+            existing_canonical_job.get(
+                "job_id"
+            )
+            != existing_job_id
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing idempotent job violates canonical "
+                "job identity preservation."
+            )
+
+        if (
+            existing_canonical_job.get(
+                "idempotency_key"
+            )
+            != idempotency_key
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing canonical Universal Job idempotency_key "
+                "does not match orchestration metadata."
+            )
+
+        return {
+            "schema_version":
+                UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+
+            "handoff_version":
+                UUCD_RUNTIME_HANDOFF_VERSION,
+
+            "handoff_status":
+                "IDEMPOTENT_REUSE",
+
+            "job_id":
+                existing_job_id,
+
+            "canonical_universal_job":
+                deepcopy(
+                    dict(
+                        existing_canonical_job
+                    )
+                ),
+
+            "orchestration_job": {
+                "job_id":
+                    existing_orchestration_job.job_id,
+
+                "workspace_id":
+                    existing_orchestration_job.workspace_id,
+
+                "job_type":
+                    existing_orchestration_job.job_type,
+
+                "status":
+                    existing_orchestration_job.status,
+
+                "priority":
+                    existing_orchestration_job.priority,
+
+                "payload":
+                    deepcopy(
+                        existing_orchestration_job.payload
+                    ),
+
+                "metadata":
+                    deepcopy(
+                        existing_orchestration_job.metadata
+                    ),
+
+                "assigned_worker_id":
+                    existing_orchestration_job.assigned_worker_id,
+            },
+
+            "idempotency_key":
+                idempotency_key,
+
+            "idempotent_reuse":
+                True,
+
+            "new_universal_job_created":
+                False,
+
+            "new_orchestration_job_created":
+                False,
+
+            "body_content_in_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+
+            "worker_executed":
+                False,
+
+            "handler_dispatched":
+                False,
+
+            "semantic_processing_performed":
+                False,
+
+            "next_stage":
+                "universal_runtime_worker",
+        }
 
     creation_result = create_universal_job(
         workspace_id=validated[
@@ -955,3 +1166,4 @@ __all__ = [
     "handoff_persisted_uucd_to_runtime_v1",
     "explain_uucd_runtime_handoff_v1",
 ]
+

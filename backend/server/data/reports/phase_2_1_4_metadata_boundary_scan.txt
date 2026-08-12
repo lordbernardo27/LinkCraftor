@@ -1,0 +1,620 @@
+﻿PHASE 2.1.4 ? JOB METADATA BOUNDARY SCAN
+==============================================================================
+ROOT: C:\Users\HP\Documents\LinkCraftor\backend\server
+
+
+==============================================================================
+FILE: orchestration/models.py
+==============================================================================
+TOTAL LINES: 122
+
+--- LINES 1-260 ---
+0001: from __future__ import annotations
+0002: 
+0003: from dataclasses import dataclass, field
+0004: from datetime import datetime, timezone
+0005: from typing import Any, Dict, Optional
+0006: 
+0007: 
+0008: JOB_STATUS_PENDING = "pending"
+0009: JOB_STATUS_QUEUED = "queued"
+0010: JOB_STATUS_RUNNING = "running"
+0011: JOB_STATUS_COMPLETED = "completed"
+0012: JOB_STATUS_FAILED = "failed"
+0013: JOB_STATUS_CANCELLED = "cancelled"
+0014: 
+0015: VALID_JOB_STATUSES = {
+0016:     JOB_STATUS_PENDING,
+0017:     JOB_STATUS_QUEUED,
+0018:     JOB_STATUS_RUNNING,
+0019:     JOB_STATUS_COMPLETED,
+0020:     JOB_STATUS_FAILED,
+0021:     JOB_STATUS_CANCELLED,
+0022: }
+0023: 
+0024: 
+0025: def utc_now() -> datetime:
+0026:     return datetime.now(timezone.utc)
+0027: 
+0028: 
+0029: @dataclass
+0030: class OrchestrationJob:
+0031:     job_id: str
+0032:     workspace_id: str
+0033:     job_type: str
+0034:     status: str = JOB_STATUS_QUEUED
+0035:     priority: int = 5
+0036:     created_at: datetime = field(default_factory=utc_now)
+0037:     updated_at: datetime = field(default_factory=utc_now)
+0038:     payload: Dict[str, Any] = field(default_factory=dict)
+0039:     metadata: Dict[str, Any] = field(default_factory=dict)
+0040:     assigned_worker_id: Optional[str] = None
+0041:     progress_percent: float = 0.0
+0042:     current_step: str = ""
+0043:     total_steps: int = 0
+0044:     processed_count: int = 0
+0045:     failed_count: int = 0
+0046:     warning_count: int = 0
+0047: 
+0048:     total_documents: int = 0
+0049:     processed_documents: int = 0
+0050:     failed_documents: int = 0
+0051:     skipped_documents: int = 0
+0052: 
+0053:     current_document_id: str = ""
+0054:     current_document_name: str = ""
+0055: 
+0056:     progress_message: str = ""
+0057:     started_at: Optional[datetime] = None
+0058:     completed_at: Optional[datetime] = None
+0059:     error_message: Optional[str] = None
+0060: 
+0061: 
+0062: @dataclass
+0063: class JobStep:
+0064:     step_id: str
+0065:     job_id: str
+0066:     step_name: str
+0067: 
+0068:     status: str = JOB_STATUS_PENDING
+0069:     progress_percent: float = 0.0
+0070: 
+0071:     started_at: Optional[datetime] = None
+0072:     completed_at: Optional[datetime] = None
+0073: 
+0074:     message: str = ""
+0075:     metadata: Dict[str, Any] = field(default_factory=dict)
+0076: 
+0077: @dataclass
+0078: class JobStatusEvent:
+0079:     event_id: str
+0080:     job_id: str
+0081:     old_status: str
+0082:     new_status: str
+0083:     created_at: datetime = field(default_factory=utc_now)
+0084:     metadata: Dict[str, Any] = field(default_factory=dict)
+0085: 
+0086: 
+0087: @dataclass
+0088: class JobWorkerAssignment:
+0089:     assignment_id: str
+0090:     job_id: str
+0091:     worker_id: str
+0092:     assigned_at: datetime = field(default_factory=utc_now)
+0093:     released_at: Optional[datetime] = None
+0094: 
+0095: 
+0096: @dataclass
+0097: class JobResult:
+0098:     result_id: str
+0099:     job_id: str
+0100:     success: bool = True
+0101:     output: Dict[str, Any] = field(default_factory=dict)
+0102:     created_at: datetime = field(default_factory=utc_now)
+0103: 
+0104: 
+0105: @dataclass
+0106: class QueueStats:
+0107:     total_jobs: int = 0
+0108:     queued_jobs: int = 0
+0109:     running_jobs: int = 0
+0110:     completed_jobs: int = 0
+0111:     failed_jobs: int = 0
+0112: 
+0113: 
+0114: @dataclass
+0115: class WorkerHeartbeat:
+0116:     worker_id: str
+0117:     last_seen_at: datetime = field(default_factory=utc_now)
+0118:     status: str = "online"
+0119:     metadata: Dict[str, Any] = field(default_factory=dict)
+0120: 
+0121: 
+0122: 
+
+==============================================================================
+FILE: orchestration/job_store.py
+==============================================================================
+TOTAL LINES: 360
+
+--- LINES 190-245 ---
+0190: 
+0191: def update_job_status(
+0192:     job_id: str,
+0193:     new_status: str,
+0194:     metadata: Optional[Dict[str, Any]] = None,
+0195:     error_message: Optional[str] = None,
+0196: ) -> OrchestrationJob:
+0197:     if new_status not in VALID_JOB_STATUSES:
+0198:         raise ValueError(f"Invalid job status: {new_status}")
+0199: 
+0200:     jobs = load_jobs()
+0201:     if job_id not in jobs:
+0202:         raise KeyError(f"Job not found: {job_id}")
+0203: 
+0204:     job = jobs[job_id]
+0205:     old_status = job.status
+0206:     job.status = new_status
+0207:     job.updated_at = utc_now()
+0208: 
+0209:     normalized_metadata = (
+0210:         dict(metadata)
+0211:         if isinstance(
+0212:             metadata,
+0213:             dict,
+0214:         )
+0215:         else {}
+0216:     )
+0217: 
+0218:     if normalized_metadata:
+0219: 
+0220:         existing_metadata = (
+0221:             job.metadata
+0222:             if isinstance(
+0223:                 job.metadata,
+0224:                 dict,
+0225:             )
+0226:             else {}
+0227:         )
+0228: 
+0229:         job.metadata = {
+0230:             **existing_metadata,
+0231:             **normalized_metadata,
+0232:         }
+0233: 
+0234:     if error_message:
+0235:         job.error_message = error_message
+0236: 
+0237:         if new_status == JOB_STATUS_FAILED:
+0238:             job.progress_percent = min(
+0239:                 job.progress_percent,
+0240:                 99.0,
+0241:             )
+0242: 
+0243:     jobs[job_id] = job
+0244: 
+0245:     save_jobs(
+
+--- LINES 300-335 ---
+0300:         job.warning_count = max(0, int(warning_count))
+0301: 
+0302:     if total_documents is not None:
+0303:         job.total_documents = max(0, int(total_documents))
+0304: 
+0305:     if processed_documents is not None:
+0306:         job.processed_documents = max(0, int(processed_documents))
+0307: 
+0308:     if failed_documents is not None:
+0309:         job.failed_documents = max(0, int(failed_documents))
+0310: 
+0311:     if skipped_documents is not None:
+0312:         job.skipped_documents = max(0, int(skipped_documents))
+0313: 
+0314:     if current_document_id is not None:
+0315:         job.current_document_id = str(current_document_id)
+0316: 
+0317:     if current_document_name is not None:
+0318:         job.current_document_name = str(current_document_name)
+0319: 
+0320:     if metadata:
+0321:         job.metadata.update(metadata)
+0322: 
+0323:     jobs[job_id] = job
+0324:     save_jobs(jobs)
+0325:     return job
+0326: 
+0327: 
+0328: def append_job_event(
+0329:     job_id: str,
+0330:     old_status: str,
+0331:     new_status: str,
+0332:     metadata: Optional[Dict[str, Any]] = None,
+0333: ) -> JobStatusEvent:
+0334:     events = _read_json(EVENTS_FILE, {})
+0335:     if not isinstance(events, dict):
+
+==============================================================================
+FILE: orchestration/service.py
+==============================================================================
+TOTAL LINES: 188
+
+--- LINES 65-140 ---
+0065: 
+0066: def list_orchestration_jobs() -> Dict[str, Any]:
+0067:     jobs = load_jobs()
+0068:     return {
+0069:         "jobs": [asdict(job) for job in jobs.values()],
+0070:         "queue": queue_snapshot(),
+0071:     }
+0072: 
+0073: 
+0074: def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+0075:     """Transition a job to RUNNING.
+0076: 
+0077:     FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+0078:     RUNNING atomically, so by the time the worker calls this the job is
+0079:     usually already running. Re-issuing the transition would be harmless in
+0080:     most stores but is wasteful and can clobber claim metadata; if the job is
+0081:     already RUNNING we just return it (merging in the worker_id if it wasn't
+0082:     recorded yet).
+0083:     """
+0084:     job = get_job(job_id)
+0085:     if job is None:
+0086:         raise KeyError(f"unknown job: {job_id}")
+0087: 
+0088:     if job.status == JOB_STATUS_RUNNING:
+0089:         if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+0090:             # Record the worker identity without re-transitioning status.
+0091:             return update_job_status(
+0092:                 job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+0093:             )
+0094:         return job
+0095: 
+0096:     metadata: Dict[str, Any] = {}
+0097:     if worker_id:
+0098:         metadata["worker_id"] = worker_id
+0099:     return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+0100: 
+0101: 
+0102: def mark_job_completed(
+0103:     job_id: str,
+0104:     metadata: Optional[Dict[str, Any]] = None,
+0105: ) -> OrchestrationJob:
+0106:     # FIX: metadata was previously passed to BOTH the progress update and the
+0107:     # status update, merging the same dict twice. Progress just records 100%;
+0108:     # metadata rides on the terminal status change.
+0109:     update_job_progress(job_id, 100.0)
+0110:     return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+0111: 
+0112: 
+0113: def mark_job_failed(
+0114:     job_id: str,
+0115:     error_message: str,
+0116:     metadata: Optional[Dict[str, Any]] = None,
+0117: ) -> OrchestrationJob:
+0118:     return update_job_status(
+0119:         job_id,
+0120:         JOB_STATUS_FAILED,
+0121:         metadata=metadata or {},
+0122:         error_message=error_message,
+0123:     )
+0124: 
+0125: 
+0126: def cancel_job(
+0127:     job_id: str,
+0128:     metadata: Optional[Dict[str, Any]] = None,
+0129: ) -> OrchestrationJob:
+0130:     return update_job_status(job_id, JOB_STATUS_CANCELLED, metadata=metadata or {})
+0131: 
+0132: 
+0133: def update_orchestration_progress(
+0134:     job_id: str,
+0135:     progress_percent: float,
+0136:     metadata: Optional[Dict[str, Any]] = None,
+0137:     current_step: Optional[str] = None,
+0138:     progress_message: Optional[str] = None,
+0139:     total_steps: Optional[int] = None,
+0140:     processed_count: Optional[int] = None,
+
+==============================================================================
+FILE: runtime/universal_runtime_worker_v1.py
+==============================================================================
+TOTAL LINES: 1045
+
+--- LINES 155-195 ---
+0155:         )
+0156: 
+0157:     if job.status != JOB_STATUS_RUNNING:
+0158:         raise UniversalRuntimeWorkerContractError(
+0159:             "Worker may execute only a job already atomically "
+0160:             "claimed as RUNNING."
+0161:         )
+0162: 
+0163:     payload = job.payload
+0164: 
+0165:     if not isinstance(
+0166:         payload,
+0167:         Mapping,
+0168:     ):
+0169:         raise UniversalRuntimeWorkerContractError(
+0170:             "Claimed orchestration job payload must be a mapping."
+0171:         )
+0172: 
+0173:     metadata = job.metadata
+0174: 
+0175:     if not isinstance(
+0176:         metadata,
+0177:         Mapping,
+0178:     ):
+0179:         raise UniversalRuntimeWorkerContractError(
+0180:             "Claimed orchestration job metadata must be a mapping."
+0181:         )
+0182: 
+0183:     return {
+0184:         "job_id":
+0185:             job_id,
+0186: 
+0187:         "workspace_id":
+0188:             workspace_id,
+0189: 
+0190:         "job_type":
+0191:             job_type,
+0192: 
+0193:         "status":
+0194:             job.status,
+0195: 
+
+--- LINES 640-675 ---
+0640:                 True,
+0641: 
+0642:             "old_universal_knowledge_jsonl_used":
+0643:                 False,
+0644:         }
+0645: 
+0646:     except UniversalRuntimeWorkerFinalizationError:
+0647:         raise
+0648: 
+0649:     except Exception as exc:
+0650: 
+0651:         error_message = (
+0652:             f"{type(exc).__name__}: {exc}"
+0653:         )
+0654: 
+0655:         claimed_metadata = (
+0656:             claimed_job.metadata
+0657:             if isinstance(
+0658:                 claimed_job.metadata,
+0659:                 Mapping,
+0660:             )
+0661:             else {}
+0662:         )
+0663: 
+0664:         attempt_number = (
+0665:             _runtime_failure_attempt_number_v1(
+0666:                 claimed_metadata
+0667:             )
+0668:         )
+0669: 
+0670:         retry_policy = (
+0671:             _runtime_retry_policy_v1(
+0672:                 job_type=
+0673:                     claimed_job.job_type
+0674:             )
+0675:         )
+
+==============================================================================
+FILE: runtime/uucd_runtime_handoff_v1.py
+==============================================================================
+TOTAL LINES: 1169
+
+--- LINES 425-475 ---
+0425:         )
+0426:     ).hexdigest()
+0427: 
+0428:     return (
+0429:         "uucd_runtime_handoff_"
+0430:         + digest
+0431:     )
+0432: 
+0433: 
+0434: def build_uucd_runtime_payload_v1(
+0435:     persisted_uucd_record: Mapping[str, Any],
+0436: ) -> dict[str, Any]:
+0437:     """
+0438:     Build the canonical metadata/reference-only runtime payload.
+0439: 
+0440:     Article body bytes are never included here.
+0441:     """
+0442: 
+0443:     validated = _validate_persisted_uucd(
+0444:         persisted_uucd_record
+0445:     )
+0446: 
+0447:     payload = {
+0448:         "document_id":
+0449:             validated[
+0450:                 "document_id"
+0451:             ],
+0452: 
+0453:         "content_ref":
+0454:             validated[
+0455:                 "content_ref"
+0456:             ],
+0457: 
+0458:         "body_ref":
+0459:             validated[
+0460:                 "body_ref"
+0461:             ],
+0462: 
+0463:         "source_type":
+0464:             validated[
+0465:                 "source_type"
+0466:             ],
+0467: 
+0468:         "content_hash":
+0469:             validated[
+0470:                 "content_hash"
+0471:             ],
+0472: 
+0473:         "persistence_fingerprint":
+0474:             validated[
+0475:                 "persistence_fingerprint"
+
+--- LINES 645-705 ---
+0645:             job_type=UUCD_RUNTIME_JOB_TYPE,
+0646:             runtime_registration=runtime_registration,
+0647:         )
+0648:     )
+0649: 
+0650:     existing_orchestration_job = (
+0651:         _find_existing_orchestration_job_by_idempotency_key_v1(
+0652:             workspace_id=validated[
+0653:                 "workspace_id"
+0654:             ],
+0655:             job_type=UUCD_RUNTIME_JOB_TYPE,
+0656:             idempotency_key=idempotency_key,
+0657:         )
+0658:     )
+0659: 
+0660:     if existing_orchestration_job is not None:
+0661: 
+0662:         existing_metadata = (
+0663:             existing_orchestration_job.metadata
+0664:             if isinstance(
+0665:                 existing_orchestration_job.metadata,
+0666:                 dict,
+0667:             )
+0668:             else {}
+0669:         )
+0670: 
+0671:         existing_canonical_job = (
+0672:             existing_metadata.get(
+0673:                 "canonical_universal_job"
+0674:             )
+0675:         )
+0676: 
+0677:         if not isinstance(
+0678:             existing_canonical_job,
+0679:             Mapping,
+0680:         ):
+0681:             raise UUCDRuntimeHandoffPersistenceError(
+0682:                 "Existing idempotent orchestration job does not "
+0683:                 "contain canonical_universal_job metadata."
+0684:             )
+0685: 
+0686:         existing_job_id = (
+0687:             _require_non_empty_string(
+0688:                 existing_orchestration_job.job_id,
+0689:                 field_name="existing_orchestration_job.job_id",
+0690:             )
+0691:         )
+0692: 
+0693:         if (
+0694:             existing_canonical_job.get(
+0695:                 "job_id"
+0696:             )
+0697:             != existing_job_id
+0698:         ):
+0699:             raise UUCDRuntimeHandoffPersistenceError(
+0700:                 "Existing idempotent job violates canonical "
+0701:                 "job identity preservation."
+0702:             )
+0703: 
+0704:         if (
+0705:             existing_canonical_job.get(
+
+--- LINES 745-775 ---
+0745:                 "status":
+0746:                     existing_orchestration_job.status,
+0747: 
+0748:                 "priority":
+0749:                     existing_orchestration_job.priority,
+0750: 
+0751:                 "payload":
+0752:                     deepcopy(
+0753:                         existing_orchestration_job.payload
+0754:                     ),
+0755: 
+0756:                 "metadata":
+0757:                     deepcopy(
+0758:                         existing_orchestration_job.metadata
+0759:                     ),
+0760: 
+0761:                 "assigned_worker_id":
+0762:                     existing_orchestration_job.assigned_worker_id,
+0763:             },
+0764: 
+0765:             "idempotency_key":
+0766:                 idempotency_key,
+0767: 
+0768:             "idempotent_reuse":
+0769:                 True,
+0770: 
+0771:             "new_universal_job_created":
+0772:                 False,
+0773: 
+0774:             "new_orchestration_job_created":
+0775:                 False,
+
+==============================================================================
+FILE: jobs/universal_knowledge_orchestrator.py
+==============================================================================
+TOTAL LINES: 622
+
+--- LINES 520-575 ---
+0520:         "pipeline_chains": {
+0521:             "upload_document_batch": get_pipeline_job_chain_v1("upload_document_batch"),
+0522:             "website_connection_batch": get_pipeline_job_chain_v1("website_connection_batch"),
+0523:             "semantic_pipeline": get_pipeline_job_chain_v1("semantic_pipeline"),
+0524:         },
+0525:         "semantic_gate": "Semantic jobs are created only when certification.semantic_ready is true.",
+0526:         "next_stage": "Job Status API + real stage adapters",
+0527:     }
+0528: 
+0529: def register_universal_runtime_handler(
+0530:     *,
+0531:     job_type: str,
+0532:     handler: Any,
+0533:     pipeline: str = "",
+0534:     stage: str = "",
+0535:     description: str = "",
+0536:     required_payload_fields=None,
+0537:     predecessor_stages=None,
+0538:     successor_stages=None,
+0539:     idempotency_fields=None,
+0540:     retry_policy=None,
+0541:     concurrency_policy=None,
+0542:     metadata=None,
+0543:     replace: bool = False,
+0544:     persist: bool = False,
+0545: ) -> Dict[str, Any]:
+0546:     """Register business logic with the Universal Runtime Infrastructure."""
+0547: 
+0548:     return register_runtime_handler(
+0549:         job_type=job_type,
+0550:         handler=handler,
+0551:         pipeline=pipeline,
+0552:         stage=stage,
+0553:         description=description,
+0554:         required_payload_fields=required_payload_fields,
+0555:         predecessor_stages=predecessor_stages,
+0556:         successor_stages=successor_stages,
+0557:         idempotency_fields=idempotency_fields,
+0558:         retry_policy=retry_policy,
+0559:         concurrency_policy=concurrency_policy,
+0560:         metadata=metadata,
+0561:         replace=replace,
+0562:         persist=persist,
+0563:     )
+0564: 
+0565: 
+0566: def unregister_universal_runtime_handler(
+0567:     job_type: str,
+0568:     *,
+0569:     persist: bool = False,
+0570: ) -> Dict[str, Any] | None:
+0571:     return unregister_runtime_handler(
+0572:         job_type,
+0573:         persist=persist,
+0574:     )
+0575: 

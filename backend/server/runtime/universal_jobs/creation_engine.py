@@ -6,10 +6,8 @@ queue, worker, dispatch, persistence, ledger, progress-file, or status-file I/O.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import math
-import secrets
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -24,6 +22,19 @@ from backend.server.runtime.universal_jobs.contract import (
     UniversalJobProgress,
     UniversalJobStatus,
     validate_universal_job,
+)
+
+from backend.server.runtime.universal_jobs.identity import (
+    UNIVERSAL_JOB_ID_PREFIX,
+    UniversalJobIdentityError,
+    resolve_universal_job_id,
+    validate_universal_job_type,
+)
+
+from backend.server.runtime.universal_jobs.metadata import (
+    UniversalJobMetadataError,
+    normalize_universal_job_metadata,
+    thaw_universal_job_metadata,
 )
 UNIVERSAL_JOB_CREATION_ENGINE_VERSION: Final[str] = (
     "universal_job_creation_engine_v2.1.2"
@@ -260,25 +271,14 @@ def _normalize_supported_job_types(
     normalized: dict[str, None] = {}
 
     for value in values:
-        if not isinstance(value, str):
+        try:
+            job_type = validate_universal_job_type(value)
+        except UniversalJobIdentityError as exc:
             raise UniversalJobCreationError(
-                "supported_job_types contains a non-string value.",
+                "supported_job_types contains a non-canonical job type.",
                 code="invalid_supported_job_types",
-                violations=(
-                    "every supported_job_types entry must be a non-empty string",
-                ),
-            )
-
-        job_type = value.strip()
-
-        if not job_type:
-            raise UniversalJobCreationError(
-                "supported_job_types contains an empty job type.",
-                code="invalid_supported_job_types",
-                violations=(
-                    "every supported_job_types entry must be a non-empty string",
-                ),
-            )
+                violations=exc.violations or (str(exc),),
+            ) from exc
 
         normalized.setdefault(job_type, None)
 
@@ -313,19 +313,16 @@ def _resolve_registration(
 
     raw_registered_job_type = registration.get("job_type")
 
-    if (
-        not isinstance(raw_registered_job_type, str)
-        or not raw_registered_job_type.strip()
-    ):
-        raise UniversalJobCreationError(
-            "Runtime Registration metadata is missing a valid job_type.",
-            code="invalid_runtime_registration",
-            violations=(
-                "runtime_registration.job_type must be a non-empty string",
-            ),
+    try:
+        registered_job_type = validate_universal_job_type(
+            raw_registered_job_type
         )
-
-    registered_job_type = raw_registered_job_type.strip()
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            "Runtime Registration metadata contains an invalid job_type.",
+            code="invalid_runtime_registration",
+            violations=exc.violations or (str(exc),),
+        ) from exc
 
     if registered_job_type != job_type:
         raise UniversalJobCreationError(
@@ -424,33 +421,6 @@ def _validate_registered_payload(
         )
 
 
-def _make_job_id(
-    *,
-    prefix: str,
-    workspace_id: str,
-    job_type: str,
-    pipeline: str,
-    stage: str,
-    created_at: str,
-) -> str:
-    canonical_prefix = _clean_text(prefix) or "uj"
-    material = json.dumps(
-        {
-            "workspace_id": workspace_id,
-            "job_type": job_type,
-            "pipeline": pipeline,
-            "stage": stage,
-            "created_at": created_at,
-            "nonce": secrets.token_hex(16),
-        },
-        sort_keys=True,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
-    return f"{canonical_prefix}_{digest}"
-
-
 @dataclass(frozen=True)
 class UniversalJobCreationRequest:
     workspace_id: str
@@ -471,7 +441,7 @@ class UniversalJobCreationRequest:
     maximum_attempts: Optional[int] = None
     enqueue: bool = True
     job_id: Optional[str] = None
-    job_id_prefix: str = "uj"
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX
     created_at: Optional[str] = None
 
 
@@ -495,7 +465,7 @@ class UniversalJobCreationResult:
             "job_type_source": self.job_type_source,
             "job": self.job.to_canonical_dict(),
             "payload": _thaw_json(self.payload),
-            "metadata": _thaw_json(self.metadata),
+            "metadata": thaw_universal_job_metadata(self.metadata),
             "registration": (
                 _thaw_json(self.registration)
                 if self.registration is not None
@@ -525,7 +495,6 @@ def normalize_universal_job_creation_request(
         )
 
     workspace_id = _clean_text(request.workspace_id)
-    job_type = _clean_text(request.job_type)
 
     if not workspace_id:
         raise UniversalJobCreationError(
@@ -534,21 +503,31 @@ def normalize_universal_job_creation_request(
             violations=("workspace_id is required",),
         )
 
-    if not job_type:
-        raise UniversalJobCreationError(
-            "job_type is required.",
-            code="missing_job_type",
-            violations=("job_type is required",),
+    try:
+        job_type = validate_universal_job_type(
+            request.job_type
         )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
 
     payload = _normalize_mapping(
         request.payload,
         field_name="payload",
     )
-    metadata = _normalize_mapping(
-        request.metadata,
-        field_name="metadata",
-    )
+    try:
+        metadata = normalize_universal_job_metadata(
+            request.metadata
+        )
+    except UniversalJobMetadataError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
     dependencies = _normalize_string_tuple(
         request.dependency_job_ids,
         field_name="dependency_job_ids",
@@ -625,15 +604,30 @@ def normalize_universal_job_creation_request(
             ),
         )
 
+    if (
+        not isinstance(request.job_id_prefix, str)
+        or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+    ):
+        raise UniversalJobCreationError(
+            "job_id_prefix is fixed by the Universal Job identity namespace.",
+            code="invalid_job_id_prefix",
+            violations=(
+                f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+            ),
+        )
+
     created_at = _clean_text(request.created_at) or _utc_now()
-    job_id = _clean_text(request.job_id) or _make_job_id(
-        prefix=request.job_id_prefix,
-        workspace_id=workspace_id,
-        job_type=job_type,
-        pipeline=pipeline,
-        stage=stage,
-        created_at=created_at,
-    )
+
+    try:
+        job_id = resolve_universal_job_id(
+            request.job_id
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
 
     normalized = UniversalJobCreationRequest(
         workspace_id=workspace_id,
@@ -654,7 +648,7 @@ def normalize_universal_job_creation_request(
         maximum_attempts=maximum_attempts,
         enqueue=request.enqueue,
         job_id=job_id,
-        job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
         created_at=created_at,
     )
 
@@ -681,7 +675,7 @@ def create_universal_job(
     maximum_attempts: Optional[int] = None,
     enqueue: bool = True,
     job_id: Optional[str] = None,
-    job_id_prefix: str = "uj",
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
     created_at: Optional[str] = None,
     supported_job_types: Optional[Iterable[Any]] = None,
     runtime_registration: Optional[Mapping[str, Any]] = None,
