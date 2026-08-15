@@ -1,0 +1,799 @@
+﻿PHASE 2.1.5 ? PAYLOAD REFERENCE BOUNDARY SCAN
+========================================================================================
+
+SECTION 1 ? CONTRACT NORMALIZATION
+========================================================================================
+
+### contract._normalize_optional_text
+----------------------------------------------------------------------------------------
+def _normalize_optional_text(
+    value: Any,
+    *,
+    name: str,
+    violations: list,
+    max_length: int = _MAX_REFERENCE_LENGTH,
+) -> Optional[str]:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        violations.append(name + " must be a string or null")
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > max_length:
+        violations.append(name + " exceeds maximum length of " + str(max_length))
+        return text[:max_length]
+    return text
+
+
+### contract._clean_text
+----------------------------------------------------------------------------------------
+NOT FOUND
+
+SECTION 2 ? CREATION ENGINE RESOLUTION HELPERS
+========================================================================================
+
+### creation_engine._first_text
+----------------------------------------------------------------------------------------
+def _first_text(*values: Any, fallback: str = "") -> str:
+    for value in values:
+        text = _clean_text(value)
+        if text:
+            return text
+    return fallback
+
+
+### creation_engine._clean_text
+----------------------------------------------------------------------------------------
+def _clean_text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+### Creation Engine payload_reference block
+----------------------------------------------------------------------------------------
+    0100:         request.product_id,
+    0101:         payload.get("product_id"),
+    0102:         fallback="linkcraftor",
+    0103:     )
+>>> 0104:     payload_reference = _first_text(
+    0105:         request.payload_reference,
+    0106:         payload.get("payload_reference"),
+    0107:         payload.get("payload_ref"),
+    0108:         payload.get("source_record_id"),
+    0109:         payload.get("html_id"),
+    0110:         fallback="",
+    0111:     ) or None
+    0112:     priority = _resolve_priority(request.priority)
+    0113:     maximum_attempts = _resolve_maximum_attempts(
+    0114:         request.maximum_attempts,
+    0115:         payload,
+    0116:         registration,
+
+SECTION 3 ? UUCD RUNTIME HANDOFF
+========================================================================================
+
+FUNCTION: handoff_persisted_uucd_to_runtime_v1
+LINES: 600-1081
+MATCHED: create_universal_job, payload_reference, content_ref, body_ref
+----------------------------------------------------------------------------------------
+def handoff_persisted_uucd_to_runtime_v1(
+    persisted_uucd_record: Mapping[str, Any],
+    *,
+    runtime_registration: Mapping[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    priority: int = 5,
+) -> dict[str, Any]:
+    """
+    Create and persist one canonical Universal Job for a persisted UUCD.
+
+    The Universal Job Creation Engine remains I/O-free.
+
+    The resulting canonical Universal Job job_id is then supplied to the
+    orchestration store through Stage 10.5's caller-owned identity ingress.
+    """
+
+    validated = _validate_persisted_uucd(
+        persisted_uucd_record
+    )
+
+    payload = build_uucd_runtime_payload_v1(
+        persisted_uucd_record
+    )
+
+    idempotency_key = (
+        build_uucd_runtime_idempotency_key_v1(
+            workspace_id=validated[
+                "workspace_id"
+            ],
+            document_id=validated[
+                "document_id"
+            ],
+            content_hash=validated[
+                "content_hash"
+            ],
+            persistence_fingerprint=validated[
+                "persistence_fingerprint"
+            ],
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+        )
+    )
+
+    registration = (
+        _resolve_runtime_registration(
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    existing_orchestration_job = (
+        _find_existing_orchestration_job_by_idempotency_key_v1(
+            workspace_id=validated[
+                "workspace_id"
+            ],
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    if existing_orchestration_job is not None:
+
+        existing_metadata = (
+            existing_orchestration_job.metadata
+            if isinstance(
+                existing_orchestration_job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        existing_canonical_job = (
+            existing_metadata.get(
+                "canonical_universal_job"
+            )
+        )
+
+        if not isinstance(
+            existing_canonical_job,
+            Mapping,
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing idempotent orchestration job does not "
+                "contain canonical_universal_job metadata."
+            )
+
+        existing_job_id = (
+            _require_non_empty_string(
+                existing_orchestration_job.job_id,
+                field_name="existing_orchestration_job.job_id",
+            )
+        )
+
+        if (
+            existing_canonical_job.get(
+                "job_id"
+            )
+            != existing_job_id
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing idempotent job violates canonical "
+                "job identity preservation."
+            )
+
+        if (
+            existing_canonical_job.get(
+                "idempotency_key"
+            )
+            != idempotency_key
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing canonical Universal Job idempotency_key "
+                "does not match orchestration metadata."
+            )
+
+        return {
+            "schema_version":
+                UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+
+            "handoff_version":
+                UUCD_RUNTIME_HANDOFF_VERSION,
+
+            "handoff_status":
+                "IDEMPOTENT_REUSE",
+
+            "job_id":
+                existing_job_id,
+
+            "canonical_universal_job":
+                deepcopy(
+                    dict(
+                        existing_canonical_job
+                    )
+                ),
+
+            "orchestration_job": {
+                "job_id":
+                    existing_orchestration_job.job_id,
+
+                "workspace_id":
+                    existing_orchestration_job.workspace_id,
+
+                "job_type":
+                    existing_orchestration_job.job_type,
+
+                "status":
+                    existing_orchestration_job.status,
+
+                "priority":
+                    existing_orchestration_job.priority,
+
+                "payload":
+                    deepcopy(
+                        existing_orchestration_job.payload
+                    ),
+
+                "metadata":
+                    deepcopy(
+                        existing_orchestration_job.metadata
+                    ),
+
+                "assigned_worker_id":
+                    existing_orchestration_job.assigned_worker_id,
+            },
+
+            "idempotency_key":
+                idempotency_key,
+
+            "idempotent_reuse":
+                True,
+
+            "new_universal_job_created":
+                False,
+
+            "new_orchestration_job_created":
+                False,
+
+            "body_content_in_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+
+            "worker_executed":
+                False,
+
+            "handler_dispatched":
+                False,
+
+            "semantic_processing_performed":
+                False,
+
+            "next_stage":
+                "universal_runtime_worker",
+        }
+
+    creation_result = create_universal_job(
+        workspace_id=validated[
+            "workspace_id"
+        ],
+        job_type=UUCD_RUNTIME_JOB_TYPE,
+        payload=payload,
+        metadata={
+            "source_component":
+                "Canonical UUCD Persistence",
+
+            "handoff_adapter":
+                UUCD_RUNTIME_HANDOFF_VERSION,
+
+            "document_id":
+                validated[
+                    "document_id"
+                ],
+
+            "persistence_fingerprint":
+                validated[
+                    "persistence_fingerprint"
+                ],
+
+            "body_content_in_job":
+                False,
+        },
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=UUCD_RUNTIME_PIPELINE,
+        stage=UUCD_RUNTIME_STAGE,
+        payload_reference=validated[
+            "content_ref"
+        ],
+        idempotency_key=idempotency_key,
+        enqueue=True,
+        runtime_registration=registration,
+    )
+
+    universal_job = (
+        creation_result.job
+    )
+
+    canonical_job = (
+        universal_job.to_canonical_dict()
+    )
+
+    canonical_job_id = (
+        _require_non_empty_string(
+            canonical_job.get(
+                "job_id"
+            ),
+            field_name="canonical_job.job_id",
+        )
+    )
+
+    if (
+        canonical_job.get(
+            "workspace_id"
+        )
+        != validated[
+            "workspace_id"
+        ]
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "Universal Job workspace_id drifted "
+            "from the persisted UUCD."
+        )
+
+    if (
+        canonical_job.get(
+            "payload_reference"
+        )
+        != validated[
+            "content_ref"
+        ]
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "Universal Job payload_reference drifted "
+            "from canonical UUCD content_ref."
+        )
+
+    if (
+        canonical_job.get(
+            "idempotency_key"
+        )
+        != idempotency_key
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "Universal Job idempotency_key drifted."
+        )
+
+    try:
+
+        orchestration_job = (
+            create_orchestration_job(
+                workspace_id=validated[
+                    "workspace_id"
+                ],
+                job_type=UUCD_RUNTIME_JOB_TYPE,
+                payload=deepcopy(
+                    payload
+                ),
+                metadata={
+                    "canonical_universal_job":
+                        canonical_job,
+
+                    "universal_job_contract_version":
+                        canonical_job.get(
+                            "contract_version"
+                        ),
+
+                    "payload_reference":
+                        validated[
+                            "content_ref"
+                        ],
+
+                    "idempotency_key":
+                        idempotency_key,
+
+                    "persistence_fingerprint":
+                        validated[
+                            "persistence_fingerprint"
+                        ],
+
+                    "handoff_adapter":
+                        UUCD_RUNTIME_HANDOFF_VERSION,
+
+                    "body_content_in_job":
+                        False,
+                },
+                priority=priority,
+                job_id=canonical_job_id,
+            )
+        )
+
+    except Exception as exc:
+        raise UUCDRuntimeHandoffPersistenceError(
+            "Canonical orchestration ingress failed."
+        ) from exc
+
+    if (
+        orchestration_job.job_id
+        != canonical_job_id
+    ):
+        raise UUCDRuntimeHandoffPersistenceError(
+            "Orchestration layer changed the "
+            "canonical Universal Job identity."
+        )
+
+    if (
+        orchestration_job.status
+        != "queued"
+    ):
+        raise UUCDRuntimeHandoffPersistenceError(
+            "New orchestration job must enter "
+            "the canonical queue as status=queued."
+        )
+
+    certificate = {
+        "certificate_schema_version":
+            UUCD_RUNTIME_HANDOFF_CERTIFICATE_SCHEMA_VERSION,
+
+        "certificate_status":
+            "CERTIFIED",
+
+        "handoff_version":
+            UUCD_RUNTIME_HANDOFF_VERSION,
+
+        "workspace_id":
+            validated[
+                "workspace_id"
+            ],
+
+        "document_id":
+            validated[
+                "document_id"
+            ],
+
+        "job_id":
+            canonical_job_id,
+
+        "job_type":
+            UUCD_RUNTIME_JOB_TYPE,
+
+        "pipeline":
+            UUCD_RUNTIME_PIPELINE,
+
+        "stage":
+            UUCD_RUNTIME_STAGE,
+
+        "payload_reference":
+            validated[
+                "content_ref"
+            ],
+
+        "body_ref":
+            validated[
+                "body_ref"
+            ],
+
+        "content_hash":
+            validated[
+                "content_hash"
+            ],
+
+        "persistence_fingerprint":
+            validated[
+                "persistence_fingerprint"
+            ],
+
+        "idempotency_key":
+            idempotency_key,
+
+        "job_identity_preserved":
+            True,
+
+        "orchestration_status":
+            orchestration_job.status,
+
+        "body_content_in_job":
+            False,
+
+        "old_universal_knowledge_jsonl_used":
+            False,
+
+        "runtime_registration_modified":
+            False,
+
+        "worker_executed":
+            False,
+
+        "handler_dispatched":
+            False,
+
+        "semantic_processing_performed":
+            False,
+
+        "certified_at":
+            _utc_now_iso(),
+    }
+
+    return {
+        "schema_version":
+            UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+
+        "handoff_status":
+            "QUEUED",
+
+        "job_id":
+            canonical_job_id,
+
+        "job_type":
+            UUCD_RUNTIME_JOB_TYPE,
+
+        "payload":
+            deepcopy(
+                payload
+            ),
+
+        "canonical_universal_job":
+            canonical_job,
+
+        "orchestration_job":
+            {
+                "job_id":
+                    orchestration_job.job_id,
+
+                "workspace_id":
+                    orchestration_job.workspace_id,
+
+                "job_type":
+                    orchestration_job.job_type,
+
+                "status":
+                    orchestration_job.status,
+
+                "priority":
+                    orchestration_job.priority,
+            },
+
+        "handoff_certificate":
+            certificate,
+
+        "next_stage":
+            "universal_runtime_worker",
+    }
+
+FUNCTION: explain_uucd_runtime_handoff_v1
+LINES: 1084-1149
+MATCHED: payload_reference, payload_reference_rule, content_ref, body_ref
+----------------------------------------------------------------------------------------
+def explain_uucd_runtime_handoff_v1() -> dict[str, Any]:
+    """Return the canonical Stage 10.7 handoff contract."""
+
+    return {
+        "component":
+            "Canonical UUCD Runtime Handoff Adapter",
+
+        "version":
+            UUCD_RUNTIME_HANDOFF_VERSION,
+
+        "job_type":
+            UUCD_RUNTIME_JOB_TYPE,
+
+        "pipeline":
+            UUCD_RUNTIME_PIPELINE,
+
+        "stage":
+            UUCD_RUNTIME_STAGE,
+
+        "required_payload_fields":
+            list(
+                UUCD_RUNTIME_REQUIRED_PAYLOAD_FIELDS
+            ),
+
+        "payload_reference_rule":
+            "persisted_uucd.content_ref",
+
+        "body_reference_rule":
+            "payload.body_ref only; body bytes excluded",
+
+        "idempotency_material": [
+            "workspace_id",
+            "document_id",
+            "content_hash",
+            "persistence_fingerprint",
+            "job_type",
+        ],
+
+        "job_identity_rule":
+            (
+                "Universal Job Creation Engine creates one "
+                "canonical job_id; orchestration persists "
+                "that exact same job_id."
+            ),
+
+        "runtime_registration_required":
+            True,
+
+        "runtime_registration_mutated":
+            False,
+
+        "old_jsonl_queue_used":
+            False,
+
+        "worker_executed":
+            False,
+
+        "handler_dispatched":
+            False,
+
+        "semantic_processing_performed":
+            False,
+
+        "next_stage":
+            "universal_runtime_worker",
+    }
+
+SECTION 4 ? LEGACY UNIVERSAL KNOWLEDGE ORCHESTRATOR
+========================================================================================
+
+FUNCTION: create_universal_knowledge_job
+LINES: 145-266
+MATCHED: payload_reference, payload_ref, source_record_id, html_id
+----------------------------------------------------------------------------------------
+def create_universal_knowledge_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Dict[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_ref: str = "",
+    priority: int = 5,
+    parent_job_id: str = "",
+    batch_id: str = "",
+    enqueue: bool = True,
+) -> Dict[str, Any]:
+    if (
+        job_type not in SUPPORTED_JOB_TYPES
+        and not is_runtime_job_type_registered(job_type)
+    ):
+        raise ValueError(f"Unsupported universal knowledge job_type: {job_type}")
+
+    ws = safe_id(workspace_id)
+    payload = payload or {}
+    initial_status = "queued" if enqueue else "registered"
+
+    canonical_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or "system"
+    ).strip() or "system"
+
+    canonical_product_id = str(
+        product_id
+        or payload.get("product_id")
+        or "linkcraftor"
+    ).strip() or "linkcraftor"
+
+    canonical_pipeline = str(
+        pipeline
+        or payload.get("pipeline")
+        or payload.get("pipeline_name")
+        or "universal_knowledge"
+    ).strip() or "universal_knowledge"
+
+    canonical_stage = str(
+        stage
+        or payload.get("stage")
+        or payload.get("stage_name")
+        or job_type
+    ).strip() or job_type
+
+    canonical_payload_ref = str(
+        payload_ref
+        or payload.get("payload_ref")
+        or payload.get("payload_reference")
+        or payload.get("source_record_id")
+        or payload.get("html_id")
+        or ""
+    ).strip()
+
+    initial_progress = {
+        "percent": 0,
+        "message": (
+            "Job queued."
+            if enqueue
+            else "Job registered without queue dispatch."
+        ),
+        "steps": [],
+    }
+
+    job_id = make_job_id(ws, job_type, payload)
+
+    job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+    if enqueue:
+        append_jsonl(queue_path(ws), job)
+
+    append_jsonl(job_ledger_path(ws), {"event": "job_created", **job})
+
+    write_json(job_status_path(ws, job_id), job)
+
+    write_json(progress_path(ws, job_id), {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "status": initial_status,
+        "percent": initial_progress["percent"],
+        "message": initial_progress["message"],
+        "steps": initial_progress["steps"],
+        "updated_at": now_iso(),
+    })
+
+    return job
+
+SECTION 5 ? CURRENT CREATE_UNIVERSAL_JOB CALL-SITE PROOF
+========================================================================================
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+create_universal_job CALLS: 1
+CALL LINE: 796
+payload_reference: validated[
+            "content_ref"
+        ]
+payload: payload
+metadata: {
+            "source_component":
+                "Canonical UUCD Persistence",
+
+            "handoff_adapter":
+                UUCD_RUNTIME_HANDOFF_VERSION,
+
+            "document_id":
+                validated[
+                    "document_id"
+                ],
+
+            "persistence_fingerprint":
+                validated[
+                    "persistence_fingerprint"
+                ],
+
+            "body_content_in_job":
+                False,
+        }
+
+FILE: backend\server\jobs\universal_knowledge_orchestrator.py
+create_universal_job CALLS: 0
+
+========================================================================================
+BOUNDARY SCAN RESULT: COMPLETE

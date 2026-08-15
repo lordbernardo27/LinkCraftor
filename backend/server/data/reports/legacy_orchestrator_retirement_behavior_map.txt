@@ -1,0 +1,1283 @@
+﻿LEGACY ORCHESTRATOR ? RETIREMENT BEHAVIOR MAP
+============================================================================================
+
+SECTION 1 ? LEGACY API BEHAVIOR
+============================================================================================
+
+FUNCTION: safe_id
+LINES: 78-80
+--------------------------------------------------------------------------------------------
+def safe_id(value: str | None, fallback: str = "default") -> str:
+    raw = str(value or fallback).strip() or fallback
+    return "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in raw)[:160]
+
+FUNCTION: job_ledger_path
+LINES: 134-136
+--------------------------------------------------------------------------------------------
+def job_ledger_path(workspace_id: str) -> Path:
+    ws = safe_id(workspace_id)
+    return JOB_LEDGER_DIR / ws / f"job_ledger_{ws}.jsonl"
+
+FUNCTION: create_universal_knowledge_job
+LINES: 145-266
+--------------------------------------------------------------------------------------------
+def create_universal_knowledge_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Dict[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_ref: str = "",
+    priority: int = 5,
+    parent_job_id: str = "",
+    batch_id: str = "",
+    enqueue: bool = True,
+) -> Dict[str, Any]:
+    if (
+        job_type not in SUPPORTED_JOB_TYPES
+        and not is_runtime_job_type_registered(job_type)
+    ):
+        raise ValueError(f"Unsupported universal knowledge job_type: {job_type}")
+
+    ws = safe_id(workspace_id)
+    payload = payload or {}
+    initial_status = "queued" if enqueue else "registered"
+
+    canonical_user_id = str(
+        user_id
+        or payload.get("user_id")
+        or "system"
+    ).strip() or "system"
+
+    canonical_product_id = str(
+        product_id
+        or payload.get("product_id")
+        or "linkcraftor"
+    ).strip() or "linkcraftor"
+
+    canonical_pipeline = str(
+        pipeline
+        or payload.get("pipeline")
+        or payload.get("pipeline_name")
+        or "universal_knowledge"
+    ).strip() or "universal_knowledge"
+
+    canonical_stage = str(
+        stage
+        or payload.get("stage")
+        or payload.get("stage_name")
+        or job_type
+    ).strip() or job_type
+
+    canonical_payload_ref = str(
+        payload_ref
+        or payload.get("payload_ref")
+        or payload.get("payload_reference")
+        or payload.get("source_record_id")
+        or payload.get("html_id")
+        or ""
+    ).strip()
+
+    initial_progress = {
+        "percent": 0,
+        "message": (
+            "Job queued."
+            if enqueue
+            else "Job registered without queue dispatch."
+        ),
+        "steps": [],
+    }
+
+    job_id = make_job_id(ws, job_type, payload)
+
+    job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+    if enqueue:
+        append_jsonl(queue_path(ws), job)
+
+    append_jsonl(job_ledger_path(ws), {"event": "job_created", **job})
+
+    write_json(job_status_path(ws, job_id), job)
+
+    write_json(progress_path(ws, job_id), {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "status": initial_status,
+        "percent": initial_progress["percent"],
+        "message": initial_progress["message"],
+        "steps": initial_progress["steps"],
+        "updated_at": now_iso(),
+    })
+
+    return job
+
+FUNCTION: update_job_status
+LINES: 269-295
+--------------------------------------------------------------------------------------------
+def update_job_status(
+    *,
+    workspace_id: str,
+    job_id: str,
+    status: str,
+    message: str = "",
+    result: Dict[str, Any] | None = None,
+    error: str = "",
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    path = job_status_path(ws, job_id)
+    job = read_json(path, {})
+
+    job.update({
+        "workspace_id": ws,
+        "job_id": job_id,
+        "status": status,
+        "message": message,
+        "result": result or job.get("result") or {},
+        "error": error,
+        "updated_at": now_iso(),
+    })
+
+    write_json(path, job)
+    append_jsonl(job_ledger_path(ws), {"event": "job_status_updated", **job})
+
+    return job
+
+FUNCTION: update_job_progress
+LINES: 298-331
+--------------------------------------------------------------------------------------------
+def update_job_progress(
+    *,
+    workspace_id: str,
+    job_id: str,
+    percent: int,
+    message: str,
+    step: str = "",
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    path = progress_path(ws, job_id)
+    progress = read_json(path, {
+        "schema_version": "universal_knowledge_job_progress_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "status": "running",
+        "percent": 0,
+        "message": "",
+        "steps": [],
+    })
+
+    progress["percent"] = max(0, min(int(percent), 100))
+    progress["message"] = message
+    progress["updated_at"] = now_iso()
+
+    if step:
+        progress.setdefault("steps", []).append({
+            "step": step,
+            "percent": progress["percent"],
+            "message": message,
+            "created_at": now_iso(),
+        })
+
+    write_json(path, progress)
+    return progress
+
+FUNCTION: record_job_failure
+LINES: 334-362
+--------------------------------------------------------------------------------------------
+def record_job_failure(
+    *,
+    workspace_id: str,
+    job_id: str,
+    job_type: str,
+    error: str,
+    payload: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    ws = safe_id(workspace_id)
+    failure = {
+        "schema_version": "universal_knowledge_failure_v1",
+        "workspace_id": ws,
+        "job_id": job_id,
+        "job_type": job_type,
+        "error": error,
+        "payload": payload or {},
+        "created_at": now_iso(),
+    }
+
+    append_jsonl(failure_path(ws), failure)
+    update_job_status(
+        workspace_id=ws,
+        job_id=job_id,
+        status="failed",
+        message="Job failed.",
+        error=error,
+    )
+
+    return failure
+
+FUNCTION: read_job_status
+LINES: 365-366
+--------------------------------------------------------------------------------------------
+def read_job_status(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    return read_json(job_status_path(workspace_id, job_id), {})
+
+FUNCTION: read_job_progress
+LINES: 369-370
+--------------------------------------------------------------------------------------------
+def read_job_progress(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    return read_json(progress_path(workspace_id, job_id), {})
+
+FUNCTION: read_queue
+LINES: 373-387
+--------------------------------------------------------------------------------------------
+def read_queue(workspace_id: str, limit: int = 500) -> List[Dict[str, Any]]:
+    path = queue_path(workspace_id)
+    if not path.exists():
+        return []
+
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+        if not line.strip():
+            continue
+        try:
+            rows.append(json.loads(line))
+        except Exception:
+            continue
+
+    return rows
+
+FUNCTION: register_universal_runtime_handler
+LINES: 529-563
+--------------------------------------------------------------------------------------------
+def register_universal_runtime_handler(
+    *,
+    job_type: str,
+    handler: Any,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields=None,
+    predecessor_stages=None,
+    successor_stages=None,
+    idempotency_fields=None,
+    retry_policy=None,
+    concurrency_policy=None,
+    metadata=None,
+    replace: bool = False,
+    persist: bool = False,
+) -> Dict[str, Any]:
+    """Register business logic with the Universal Runtime Infrastructure."""
+
+    return register_runtime_handler(
+        job_type=job_type,
+        handler=handler,
+        pipeline=pipeline,
+        stage=stage,
+        description=description,
+        required_payload_fields=required_payload_fields,
+        predecessor_stages=predecessor_stages,
+        successor_stages=successor_stages,
+        idempotency_fields=idempotency_fields,
+        retry_policy=retry_policy,
+        concurrency_policy=concurrency_policy,
+        metadata=metadata,
+        replace=replace,
+        persist=persist,
+    )
+
+SECTION 2 ? MODERN AUTHORITY CANDIDATES
+============================================================================================
+
+FILE: backend\server\orchestration\queue.py
+--------------------------------------------------------------------------------------------
+NAME: _dequeue_lock
+TYPE: FunctionDef
+LINES: 80-90
+TERMS: queue
+--------------------------------------------------------------------------------------------
+def _dequeue_lock() -> Iterator[None]:
+    """Serialize the select-and-claim critical section across threads and
+    processes on this machine."""
+    with _thread_lock:
+        _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(_LOCK_PATH, "a+") as fh:
+            _flock(fh)
+            try:
+                yield
+            finally:
+                _funlock(fh)
+
+NAME: _queued_jobs
+TYPE: FunctionDef
+LINES: 97-103
+TERMS: job, queue
+--------------------------------------------------------------------------------------------
+def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+    """All jobs currently persisted as queued, in service order."""
+    if jobs is None:
+        jobs = load_jobs()
+    queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+    queued.sort(key=_sort_key)
+    return queued
+
+NAME: enqueue_job
+TYPE: FunctionDef
+LINES: 106-115
+TERMS: job, queue, enqueue
+--------------------------------------------------------------------------------------------
+def enqueue_job(job_id: str) -> bool:
+    """Kept for API compatibility.
+
+    Enqueueing is now implicit: create_job persists the job with status
+    JOB_STATUS_QUEUED, and that persisted status is the queue membership.
+    This function only verifies the job actually exists in a queued state,
+    which catches caller bugs (e.g. enqueueing an ID that was never created).
+    """
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+NAME: dequeue_job
+TYPE: FunctionDef
+LINES: 118-145
+TERMS: job, queue
+--------------------------------------------------------------------------------------------
+def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+            if worker_id:
+                metadata["worker_id"] = worker_id
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write ù
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+NAME: queue_length
+TYPE: FunctionDef
+LINES: 148-149
+TERMS: queue
+--------------------------------------------------------------------------------------------
+def queue_length() -> int:
+    return len(_queued_jobs())
+
+NAME: refresh_queue_from_store
+TYPE: FunctionDef
+LINES: 152-158
+TERMS: queue, store
+--------------------------------------------------------------------------------------------
+def refresh_queue_from_store() -> None:
+    """Kept for API compatibility.
+
+    There is no longer any in-memory queue state to refresh ù every read
+    goes straight to the job store ù so this is a no-op.
+    """
+    return None
+
+NAME: queue_snapshot
+TYPE: FunctionDef
+LINES: 161-181
+TERMS: queue
+--------------------------------------------------------------------------------------------
+def queue_snapshot() -> Dict[str, object]:
+    queued = _queued_jobs()
+
+    return {
+        "queue_length": len(queued),
+        "queued_job_ids": [job.job_id for job in queued],
+        "queued_jobs": [
+            {
+                "job_id": job.job_id,
+                "workspace_id": job.workspace_id,
+                "job_type": job.job_type,
+                "priority": job.priority,
+                "created_at": (
+                    job.created_at.isoformat()
+                    if hasattr(job.created_at, "isoformat")
+                    else str(job.created_at)
+                ),
+            }
+            for job in queued
+        ],
+    }
+
+NAME: is_job_queued
+TYPE: FunctionDef
+LINES: 184-186
+TERMS: job, queue
+--------------------------------------------------------------------------------------------
+def is_job_queued(job_id: str) -> bool:
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+FILE: backend\server\runtime\universal_runtime_registration.py
+--------------------------------------------------------------------------------------------
+NAME: _persist_registry_snapshot
+TYPE: FunctionDef
+LINES: 358-388
+TERMS: persist
+--------------------------------------------------------------------------------------------
+def _persist_registry_snapshot() -> None:
+    persistent_records = [
+        registration.to_public_dict()
+        for registration in sorted(
+            _RUNTIME_HANDLER_REGISTRY.values(),
+            key=lambda item: item.job_type,
+        )
+        if registration.persistent
+    ]
+
+    document = {
+        "schema_version": (
+            REGISTRATION_SCHEMA_VERSION
+        ),
+        "updated_at": utc_now(),
+        "registration_count": len(
+            persistent_records
+        ),
+        "registrations": persistent_records,
+    }
+
+    _atomic_write_text(
+        REGISTRY_PATH,
+        json.dumps(
+            document,
+            indent=2,
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        + "\n",
+    )
+
+NAME: load_persisted_runtime_registrations
+TYPE: FunctionDef
+LINES: 609-764
+TERMS: persist
+
+NAME: ensure_persisted_runtime_registrations_loaded
+TYPE: FunctionDef
+LINES: 767-770
+TERMS: persist
+--------------------------------------------------------------------------------------------
+def ensure_persisted_runtime_registrations_loaded() -> None:
+    load_persisted_runtime_registrations(
+        force=False
+    )
+
+NAME: is_runtime_job_type_registered
+TYPE: FunctionDef
+LINES: 792-797
+TERMS: job
+--------------------------------------------------------------------------------------------
+def is_runtime_job_type_registered(
+    job_type: Any,
+) -> bool:
+    return has_runtime_handler(
+        job_type
+    )
+
+NAME: execute_registered_runtime_job_v1
+TYPE: FunctionDef
+LINES: 1024-1134
+TERMS: job
+--------------------------------------------------------------------------------------------
+def execute_registered_runtime_job_v1(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        record_job_failure,
+        update_job_progress,
+        update_job_status,
+    )
+
+    workspace_id = str(
+        job.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+
+    job_id = str(
+        job.get("job_id")
+        or ""
+    ).strip()
+
+    job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    try:
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="running",
+            message=(
+                f"Running registered runtime handler "
+                f"for {job_type}."
+            ),
+        )
+
+        update_job_progress(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            percent=10,
+            message=(
+                "Universal Runtime Registration "
+                "accepted the job."
+            ),
+            step="runtime_registration_dispatch",
+        )
+
+        result = (
+            dispatch_registered_runtime_handler(
+                job
+            )
+        )
+
+        update_job_progress(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            percent=100,
+            message=(
+                "Registered runtime handler completed."
+            ),
+            step="runtime_registration_completed",
+        )
+
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="completed",
+            message=(
+                "Registered runtime handler completed."
+            ),
+            result=result,
+        )
+
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "dispatch_mode": (
+                "universal_runtime_registration"
+            ),
+            "result": result,
+        }
+
+    except Exception as exc:
+        failure = record_job_failure(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            job_type=job_type,
+            error=str(exc),
+            payload=dict(payload),
+        )
+
+        return {
+            "ok": False,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "dispatch_mode": (
+                "universal_runtime_registration"
+            ),
+            "failure": failure,
+        }
+
+FILE: backend\server\runtime\universal_runtime_infrastructure.py
+--------------------------------------------------------------------------------------------
+NAME: runtime_job_summary
+TYPE: FunctionDef
+LINES: 48-63
+TERMS: job
+--------------------------------------------------------------------------------------------
+def runtime_job_summary(workspace_id: str) -> Dict[str, Any]:
+    queue = read_queue(workspace_id, limit=10000)
+    statuses = [read_job_status(workspace_id, j.get("job_id", "")) for j in queue]
+    statuses = [s for s in statuses if s]
+
+    by_status = Counter(s.get("status", "unknown") for s in statuses)
+    by_type = Counter(s.get("job_type", "unknown") for s in statuses)
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "total_jobs": len(statuses),
+        "by_status": dict(by_status),
+        "by_type": dict(by_type),
+        "latest_job": statuses[-1] if statuses else {},
+        "generated_at": now_iso(),
+    }
+
+NAME: runtime_progress_summary
+TYPE: FunctionDef
+LINES: 66-80
+TERMS: progress
+--------------------------------------------------------------------------------------------
+def runtime_progress_summary(workspace_id: str, job_id: str) -> Dict[str, Any]:
+    status = read_job_status(workspace_id, job_id)
+    progress = read_job_progress(workspace_id, job_id)
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "job_id": job_id,
+        "status": status.get("status"),
+        "job_type": status.get("job_type"),
+        "percent": progress.get("percent", 0),
+        "message": progress.get("message", ""),
+        "steps": progress.get("steps", []),
+        "eta_seconds": None,
+        "generated_at": now_iso(),
+    }
+
+NAME: inspect_queue
+TYPE: FunctionDef
+LINES: 83-96
+TERMS: queue
+--------------------------------------------------------------------------------------------
+def inspect_queue(workspace_id: str) -> Dict[str, Any]:
+    queue = read_queue(workspace_id, limit=10000)
+    job_ids = [j.get("job_id") for j in queue if j.get("job_id")]
+    duplicate_job_ids = [j for j, c in Counter(job_ids).items() if c > 1]
+
+    return {
+        "workspace_id": safe_id(workspace_id),
+        "queue_size": len(queue),
+        "oldest_job": queue[0] if queue else {},
+        "newest_job": queue[-1] if queue else {},
+        "duplicate_job_ids": duplicate_job_ids,
+        "healthy": len(duplicate_job_ids) == 0,
+        "generated_at": now_iso(),
+    }
+
+NAME: retry_job
+TYPE: FunctionDef
+LINES: 153-178
+TERMS: job
+--------------------------------------------------------------------------------------------
+def retry_job(workspace_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+    attempts = int(job.get("attempts") or 0) + 1
+    max_attempts = int(job.get("max_attempts") or 3)
+
+    if attempts > max_attempts:
+        return {
+            "ok": False,
+            "dead_letter": move_to_dead_letter(workspace_id, job, "Retry ceiling reached."),
+        }
+
+    payload = dict(job.get("payload") or {})
+    payload["retry_of"] = job.get("job_id")
+    payload["retry_attempt"] = attempts
+
+    retry = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job.get("job_type"),
+        payload=payload,
+        priority=job.get("priority", 5),
+        parent_job_id=job.get("job_id", ""),
+        batch_id=job.get("batch_id", ""),
+    )
+
+    retry["attempts"] = attempts
+
+    return {"ok": True, "retry_job": retry}
+
+FILE: backend\server\runtime\runtime_state_store.py
+--------------------------------------------------------------------------------------------
+NAME: RuntimeStateStoreError
+TYPE: ClassDef
+LINES: 42-43
+TERMS: store, state
+
+NAME: RuntimeStateStoreValidationError
+TYPE: ClassDef
+LINES: 46-47
+TERMS: store, state
+
+NAME: RuntimeStateStoreNotFoundError
+TYPE: ClassDef
+LINES: 50-51
+TERMS: store, state
+
+NAME: RuntimeStateStoreConflictError
+TYPE: ClassDef
+LINES: 54-55
+TERMS: store, state
+
+NAME: RuntimeStateStoreRegistrationError
+TYPE: ClassDef
+LINES: 58-59
+TERMS: store, state
+
+NAME: RuntimeStateDomain
+TYPE: ClassDef
+LINES: 62-80
+TERMS: state
+
+NAME: RuntimeStateLifecycle
+TYPE: ClassDef
+LINES: 83-87
+TERMS: state
+
+NAME: RuntimeStateMutationMode
+TYPE: ClassDef
+LINES: 90-94
+TERMS: state
+
+NAME: _state_namespace
+TYPE: FunctionDef
+LINES: 184-201
+TERMS: state
+--------------------------------------------------------------------------------------------
+def _state_namespace(
+    domain: RuntimeStateDomain,
+    *,
+    partition: str | None = None,
+) -> str:
+    base = f"runtime.state.{domain.value}"
+
+    if partition is None:
+        return base
+
+    return (
+        base
+        + "."
+        + _normalise_text(
+            partition,
+            field_name="partition",
+        )
+    )
+
+NAME: RuntimeStateIdentity
+TYPE: ClassDef
+LINES: 205-268
+TERMS: state
+
+NAME: RuntimeStateEnvelope
+TYPE: ClassDef
+LINES: 272-555
+TERMS: state
+
+NAME: RuntimeStoredState
+TYPE: ClassDef
+LINES: 559-607
+TERMS: store, state
+
+NAME: RuntimeStateMutation
+TYPE: ClassDef
+LINES: 611-677
+TERMS: state
+
+NAME: RuntimeStateDelete
+TYPE: ClassDef
+LINES: 681-717
+TERMS: state
+
+NAME: RuntimeStatePage
+TYPE: ClassDef
+LINES: 721-767
+TERMS: state
+
+NAME: RuntimeStateStoreSnapshot
+TYPE: ClassDef
+LINES: 771-808
+TERMS: store, state
+
+NAME: RuntimeStateTransactionResult
+TYPE: ClassDef
+LINES: 812-841
+TERMS: state
+
+NAME: _persistence_condition
+TYPE: FunctionDef
+LINES: 844-869
+TERMS: persist
+--------------------------------------------------------------------------------------------
+def _persistence_condition(
+    *,
+    mode: RuntimeStateMutationMode,
+    expected_revision: int | None,
+    expected_fingerprint: str | None,
+) -> RuntimePersistenceWriteCondition:
+    mode_map = {
+        RuntimeStateMutationMode.UPSERT: (
+            RuntimePersistenceWriteMode.UPSERT
+        ),
+        RuntimeStateMutationMode.CREATE_ONLY: (
+            RuntimePersistenceWriteMode.CREATE_ONLY
+        ),
+        RuntimeStateMutationMode.UPDATE_ONLY: (
+            RuntimePersistenceWriteMode.UPDATE_ONLY
+        ),
+        RuntimeStateMutationMode.COMPARE_AND_SET: (
+            RuntimePersistenceWriteMode.COMPARE_AND_SET
+        ),
+    }
+
+    return RuntimePersistenceWriteCondition(
+        mode=mode_map[mode],
+        expected_revision=expected_revision,
+        expected_fingerprint=expected_fingerprint,
+    )
+
+NAME: _stored_state_from_record
+TYPE: FunctionDef
+LINES: 872-895
+TERMS: store, state
+--------------------------------------------------------------------------------------------
+def _stored_state_from_record(
+    record: RuntimePersistenceRecord,
+) -> RuntimeStoredState:
+    envelope = RuntimeStateEnvelope.from_dict(
+        record.value
+    )
+
+    if (
+        envelope.identity.persistence_key
+        != record.key
+    ):
+        raise RuntimeStateStoreValidationError(
+            "Stored envelope identity does not match "
+            "its persistence key."
+        )
+
+    return RuntimeStoredState(
+        envelope=envelope,
+        revision=record.revision,
+        persistence_fingerprint=(
+            record.fingerprint
+        ),
+        persisted_at=record.updated_at,
+    )
+
+NAME: RuntimeStateStore
+TYPE: ClassDef
+LINES: 898-1504
+TERMS: store, state
+
+NAME: RuntimeStateStoreRegistrySnapshot
+TYPE: ClassDef
+LINES: 1508-1513
+TERMS: store, state
+
+NAME: RuntimeStateStoreRegistry
+TYPE: ClassDef
+LINES: 1516-1762
+TERMS: store, state
+
+NAME: create_default_runtime_state_stores
+TYPE: FunctionDef
+LINES: 1765-1790
+TERMS: store, state
+--------------------------------------------------------------------------------------------
+def create_default_runtime_state_stores(
+    *,
+    backend: RuntimePersistenceBackend,
+    registry: RuntimeStateStoreRegistry | None = None,
+) -> RuntimeStateStoreRegistry:
+    effective_registry = (
+        registry
+        or RuntimeStateStoreRegistry()
+    )
+
+    for domain in RuntimeStateDomain:
+        effective_registry.register(
+            RuntimeStateStore(
+                store_id=(
+                    "runtime-state-"
+                    + domain.value.replace(
+                        "_",
+                        "-",
+                    )
+                ),
+                domain=domain,
+                backend=backend,
+            )
+        )
+
+    return effective_registry
+
+NAME: get_runtime_state_store_registry
+TYPE: FunctionDef
+LINES: 1796-1798
+TERMS: store, state
+--------------------------------------------------------------------------------------------
+def get_runtime_state_store_registry(
+) -> RuntimeStateStoreRegistry:
+    return _default_registry
+
+NAME: register_runtime_state_store
+TYPE: FunctionDef
+LINES: 1801-1809
+TERMS: store, state
+--------------------------------------------------------------------------------------------
+def register_runtime_state_store(
+    store: RuntimeStateStore,
+    *,
+    replace: bool = False,
+) -> RuntimeStateStore:
+    return _default_registry.register(
+        store,
+        replace=replace,
+    )
+
+FILE: backend\server\runtime\runtime_persistence.py
+--------------------------------------------------------------------------------------------
+NAME: RuntimePersistenceError
+TYPE: ClassDef
+LINES: 29-30
+TERMS: persist
+
+NAME: RuntimePersistenceValidationError
+TYPE: ClassDef
+LINES: 33-34
+TERMS: persist
+
+NAME: RuntimePersistenceNotFoundError
+TYPE: ClassDef
+LINES: 37-38
+TERMS: persist
+
+NAME: RuntimePersistenceConflictError
+TYPE: ClassDef
+LINES: 41-42
+TERMS: persist
+
+NAME: RuntimePersistenceBackendError
+TYPE: ClassDef
+LINES: 45-46
+TERMS: persist
+
+NAME: RuntimePersistenceTransactionError
+TYPE: ClassDef
+LINES: 49-50
+TERMS: persist
+
+NAME: RuntimePersistenceCapability
+TYPE: ClassDef
+LINES: 53-62
+TERMS: persist
+
+NAME: RuntimePersistenceWriteMode
+TYPE: ClassDef
+LINES: 65-69
+TERMS: persist
+
+NAME: RuntimePersistenceOperationType
+TYPE: ClassDef
+LINES: 72-74
+TERMS: persist
+
+NAME: RuntimePersistenceHealthStatus
+TYPE: ClassDef
+LINES: 77-80
+TERMS: status, persist
+
+NAME: RuntimePersistenceKey
+TYPE: ClassDef
+LINES: 173-198
+TERMS: persist
+
+NAME: RuntimePersistenceRecord
+TYPE: ClassDef
+LINES: 202-335
+TERMS: persist
+
+NAME: RuntimePersistenceWriteCondition
+TYPE: ClassDef
+LINES: 339-396
+TERMS: persist
+
+NAME: RuntimePersistenceWriteResult
+TYPE: ClassDef
+LINES: 400-439
+TERMS: persist
+
+NAME: RuntimePersistenceDeleteResult
+TYPE: ClassDef
+LINES: 443-482
+TERMS: persist
+
+NAME: RuntimePersistencePage
+TYPE: ClassDef
+LINES: 486-514
+TERMS: persist
+
+NAME: RuntimePersistenceOperation
+TYPE: ClassDef
+LINES: 518-605
+TERMS: persist
+
+NAME: RuntimePersistenceTransactionResult
+TYPE: ClassDef
+LINES: 609-659
+TERMS: persist
+
+NAME: RuntimePersistenceHealth
+TYPE: ClassDef
+LINES: 663-724
+TERMS: persist
+
+NAME: RuntimePersistenceSnapshot
+TYPE: ClassDef
+LINES: 728-772
+TERMS: persist
+
+NAME: RuntimePersistenceBackend
+TYPE: ClassDef
+LINES: 775-849
+TERMS: persist
+
+NAME: InMemoryRuntimePersistenceBackend
+TYPE: ClassDef
+LINES: 852-1461
+TERMS: persist
+
+NAME: RuntimePersistenceRegistrySnapshot
+TYPE: ClassDef
+LINES: 1465-1470
+TERMS: persist
+
+NAME: RuntimePersistenceRegistry
+TYPE: ClassDef
+LINES: 1473-1645
+TERMS: persist
+
+NAME: get_runtime_persistence_registry
+TYPE: FunctionDef
+LINES: 1651-1653
+TERMS: persist
+--------------------------------------------------------------------------------------------
+def get_runtime_persistence_registry(
+) -> RuntimePersistenceRegistry:
+    return _default_registry
+
+NAME: register_runtime_persistence_backend
+TYPE: FunctionDef
+LINES: 1656-1666
+TERMS: persist
+--------------------------------------------------------------------------------------------
+def register_runtime_persistence_backend(
+    backend: RuntimePersistenceBackend,
+    *,
+    replace: bool = False,
+    make_active: bool = False,
+) -> RuntimePersistenceBackend:
+    return _default_registry.register(
+        backend,
+        replace=replace,
+        make_active=make_active,
+    )
+
+NAME: get_active_runtime_persistence_backend
+TYPE: FunctionDef
+LINES: 1669-1671
+TERMS: persist
+--------------------------------------------------------------------------------------------
+def get_active_runtime_persistence_backend(
+) -> RuntimePersistenceBackend:
+    return _default_registry.get_active()
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+--------------------------------------------------------------------------------------------
+NAME: UniversalJobCreationError
+TYPE: ClassDef
+LINES: 47-68
+TERMS: job
+
+NAME: _normalize_supported_job_types
+TYPE: FunctionDef
+LINES: 256-285
+TERMS: job
+--------------------------------------------------------------------------------------------
+def _normalize_supported_job_types(
+    values: Optional[Iterable[Any]],
+) -> frozenset[str]:
+    if values is None:
+        return frozenset()
+
+    if isinstance(values, (str, bytes, Mapping)):
+        raise UniversalJobCreationError(
+            "supported_job_types must be an iterable of job-type strings.",
+            code="invalid_supported_job_types",
+            violations=(
+                "supported_job_types must not be a string, bytes value, or mapping",
+            ),
+        )
+
+    normalized: dict[str, None] = {}
+
+    for value in values:
+        try:
+            job_type = validate_universal_job_type(value)
+        except UniversalJobIdentityError as exc:
+            raise UniversalJobCreationError(
+                "supported_job_types contains a non-canonical job type.",
+                code="invalid_supported_job_types",
+                violations=exc.violations or (str(exc),),
+            ) from exc
+
+        normalized.setdefault(job_type, None)
+
+    return frozenset(normalized)
+
+NAME: UniversalJobCreationRequest
+TYPE: ClassDef
+LINES: 425-445
+TERMS: job
+
+NAME: UniversalJobCreationResult
+TYPE: ClassDef
+LINES: 449-477
+TERMS: job
+
+NAME: normalize_universal_job_creation_request
+TYPE: FunctionDef
+LINES: 480-655
+TERMS: job
+
+NAME: create_universal_job
+TYPE: FunctionDef
+LINES: 658-798
+TERMS: job
+
+NAME: explain_universal_job_creation_engine_v1
+TYPE: FunctionDef
+LINES: 801-826
+TERMS: job
+--------------------------------------------------------------------------------------------
+def explain_universal_job_creation_engine_v1() -> dict[str, Any]:
+    return {
+        "phase": "2.1.2",
+        "component": "Universal Job Creation Engine",
+        "creation_engine_version": UNIVERSAL_JOB_CREATION_ENGINE_VERSION,
+        "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+        "canonical_operation": "create_universal_job",
+        "responsibilities": [
+            "validate creation inputs",
+            "resolve static job types or caller-supplied Runtime Registration metadata",
+            "validate registered required payload fields",
+            "normalize creation identity and classification",
+            "construct the certified Universal Job Contract",
+            "return a normalized creation result",
+        ],
+        "prohibitions": [
+            "no queue writes",
+            "no persistence writes",
+            "no worker execution",
+            "no handler dispatch",
+            "no ledger writes",
+            "no progress-file writes",
+            "no persistent Runtime Registration loading",
+            "no state transitions beyond initial creation status",
+        ],
+    }
+
+SECTION 3 ? ORCHESTRATION QUEUE PUBLIC SURFACE
+============================================================================================
+
+FUNCTION: enqueue_job
+ARGS: job_id
+LINES: 106-115
+
+FUNCTION: dequeue_job
+ARGS: worker_id
+LINES: 118-145
+
+FUNCTION: queue_length
+ARGS: 
+LINES: 148-149
+
+FUNCTION: refresh_queue_from_store
+ARGS: 
+LINES: 152-158
+
+FUNCTION: queue_snapshot
+ARGS: 
+LINES: 161-181
+
+FUNCTION: is_job_queued
+ARGS: job_id
+LINES: 184-186
+
+SECTION 4 ? ORCHESTRATION QUEUE DEPENDENCIES
+============================================================================================
+
+FROM: __future__ IMPORT annotations
+IMPORT: os
+IMPORT: threading
+FROM: contextlib IMPORT contextmanager
+FROM: pathlib IMPORT Path
+FROM: typing IMPORT Dict, Iterator, List, Optional
+FROM: job_store IMPORT get_job, load_jobs, update_job_status
+FROM: models IMPORT JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, OrchestrationJob
+
+SECTION 5 ? MIGRATION DECISIONS TO RESOLVE
+============================================================================================
+
+1. Does orchestration.queue already provide the canonical replacement for read_queue?
+2. What persistence authority backs enqueue_job and queue_snapshot?
+3. Is there an existing canonical job-state authority for status reads/writes?
+4. Is there an existing canonical progress authority?
+5. Is there an existing canonical failure recording authority?
+6. Is there an existing runtime ledger or event-store authority?
+7. What exact orchestration ingress should follow create_universal_job?
+
+============================================================================================
+BEHAVIOR MAP SCAN: COMPLETE

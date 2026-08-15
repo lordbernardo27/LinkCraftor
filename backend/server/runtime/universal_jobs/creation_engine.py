@@ -36,6 +36,39 @@ from backend.server.runtime.universal_jobs.metadata import (
     normalize_universal_job_metadata,
     thaw_universal_job_metadata,
 )
+
+from backend.server.runtime.universal_jobs.payload_reference import (
+    normalize_universal_job_payload_reference,
+)
+
+from backend.server.runtime.universal_jobs.priority import (
+    UniversalJobPriorityError,
+    normalize_universal_job_priority,
+)
+
+from backend.server.runtime.universal_jobs.status import (
+    initial_universal_job_status,
+)
+
+from backend.server.runtime.universal_jobs.attempts import (
+    UniversalJobAttemptsError,
+    initial_universal_job_attempts,
+    normalize_universal_job_maximum_attempts,
+)
+
+from backend.server.runtime.universal_jobs.lineage import (
+    UniversalJobLineageError,
+    normalize_batch_id,
+    normalize_dependency_job_ids,
+    normalize_parent_job_id,
+    normalize_pipeline_run_id,
+    validate_universal_job_lineage,
+)
+
+from backend.server.runtime.universal_jobs.idempotency_key import (
+    UniversalJobIdempotencyKeyError,
+    normalize_universal_job_idempotency_key,
+)
 UNIVERSAL_JOB_CREATION_ENGINE_VERSION: Final[str] = (
     "universal_job_creation_engine_v2.1.2"
 )
@@ -200,14 +233,19 @@ def _normalize_string_tuple(
     return tuple(normalized)
 
 
-def _resolve_priority(value: Any) -> UniversalJobPriority:
+def _resolve_priority(
+    value: Any,
+) -> UniversalJobPriority:
     try:
-        return UniversalJobPriority.coerce(value)
-    except UniversalJobContractError as exc:
+        return normalize_universal_job_priority(
+            value
+        )
+
+    except UniversalJobPriorityError as exc:
         raise UniversalJobCreationError(
             "Invalid canonical job priority.",
             code="invalid_priority",
-            violations=exc.violations or (str(exc),),
+            violations=(str(exc),),
         ) from exc
 
 
@@ -233,24 +271,17 @@ def _resolve_maximum_attempts(
                 else retry_policy.get("max_attempts")
             )
 
-    if candidate is None:
-        candidate = 3
-
-    if isinstance(candidate, bool) or not isinstance(candidate, int):
-        raise UniversalJobCreationError(
-            "maximum_attempts must be an integer.",
-            code="invalid_maximum_attempts",
-            violations=("maximum_attempts must be an integer",),
+    try:
+        return normalize_universal_job_maximum_attempts(
+            candidate
         )
 
-    if candidate < 1:
+    except UniversalJobAttemptsError as exc:
         raise UniversalJobCreationError(
-            "maximum_attempts must be at least 1.",
+            str(exc),
             code="invalid_maximum_attempts",
-            violations=("maximum_attempts must be at least 1",),
-        )
-
-    return candidate
+            violations=(str(exc),),
+        ) from exc
 
 
 def _normalize_supported_job_types(
@@ -528,10 +559,26 @@ def normalize_universal_job_creation_request(
             code=exc.code,
             violations=exc.violations or (str(exc),),
         ) from exc
-    dependencies = _normalize_string_tuple(
-        request.dependency_job_ids,
-        field_name="dependency_job_ids",
-    )
+    try:
+        parent_job_id = normalize_parent_job_id(
+            request.parent_job_id
+        )
+        dependencies = normalize_dependency_job_ids(
+            request.dependency_job_ids
+        )
+        batch_id = normalize_batch_id(
+            request.batch_id
+        )
+        pipeline_run_id = normalize_pipeline_run_id(
+            request.pipeline_run_id
+        )
+
+    except UniversalJobLineageError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
     static_job_types = _normalize_supported_job_types(
         supported_job_types,
     )
@@ -580,14 +627,9 @@ def normalize_universal_job_creation_request(
         payload.get("product_id"),
         fallback="linkcraftor",
     )
-    payload_reference = _first_text(
-        request.payload_reference,
-        payload.get("payload_reference"),
-        payload.get("payload_ref"),
-        payload.get("source_record_id"),
-        payload.get("html_id"),
-        fallback="",
-    ) or None
+    payload_reference = normalize_universal_job_payload_reference(
+        request.payload_reference
+    )
     priority = _resolve_priority(request.priority)
     maximum_attempts = _resolve_maximum_attempts(
         request.maximum_attempts,
@@ -629,6 +671,36 @@ def normalize_universal_job_creation_request(
             violations=exc.violations or (str(exc),),
         ) from exc
 
+    try:
+        lineage = validate_universal_job_lineage(
+            job_id=job_id,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=dependencies,
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+        )
+
+    except UniversalJobLineageError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+
+    try:
+        idempotency_key = (
+            normalize_universal_job_idempotency_key(
+                request.idempotency_key
+            )
+        )
+
+    except UniversalJobIdempotencyKeyError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+
     normalized = UniversalJobCreationRequest(
         workspace_id=workspace_id,
         job_type=job_type,
@@ -640,11 +712,11 @@ def normalize_universal_job_creation_request(
         stage=stage,
         payload_reference=payload_reference,
         priority=priority,
-        parent_job_id=_clean_text(request.parent_job_id) or None,
-        dependency_job_ids=dependencies,
-        batch_id=_clean_text(request.batch_id) or None,
-        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
-        idempotency_key=_clean_text(request.idempotency_key) or None,
+        parent_job_id=lineage.parent_job_id,
+        dependency_job_ids=lineage.dependency_job_ids,
+        batch_id=lineage.batch_id,
+        pipeline_run_id=lineage.pipeline_run_id,
+        idempotency_key=idempotency_key,
         maximum_attempts=maximum_attempts,
         enqueue=request.enqueue,
         job_id=job_id,
@@ -717,10 +789,8 @@ def create_universal_job(
         )
     )
 
-    status = (
-        UniversalJobStatus.QUEUED
-        if normalized.enqueue
-        else UniversalJobStatus.CREATED
+    status = initial_universal_job_status(
+        enqueue=normalized.enqueue,
     )
     message = (
         "Job queued."
@@ -740,8 +810,8 @@ def create_universal_job(
             payload_reference=normalized.payload_reference,
             priority=normalized.priority,
             status=status,
-            attempts=0,
-            maximum_attempts=normalized.maximum_attempts or 3,
+            attempts=initial_universal_job_attempts(),
+            maximum_attempts=normalized.maximum_attempts,
             lease_owner=None,
             lease_id=None,
             lease_started_at=None,

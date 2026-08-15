@@ -227,3 +227,75 @@ print(
     "No production mutation was requested."
 )
 print("=" * 120)
+
+print()
+print("=" * 120)
+print("UPSTREAM CONSTRUCTOR SIGNATURES")
+print("=" * 120)
+print()
+
+constructors = (
+    (
+        "create_lifecycle_repair_planner_request_v1",
+        create_lifecycle_repair_planner_request_v1,
+    ),
+    (
+        "build_lifecycle_repair_plan_v1",
+        build_lifecycle_repair_plan_v1,
+    ),
+    (
+        "build_lifecycle_repair_planner_certification_bundle_v1",
+        build_lifecycle_repair_planner_certification_bundle_v1,
+    ),
+    (
+        "create_lifecycle_repair_execution_authorization_v1",
+        create_lifecycle_repair_execution_authorization_v1,
+    ),
+    (
+        "create_lifecycle_repair_execution_request_v1",
+        create_lifecycle_repair_execution_request_v1,
+    ),
+)
+
+for name, function in constructors:
+    print(name)
+    print(inspect.signature(function))
+    print()
+
+print("=" * 120)
+
+print()
+print("=" * 120)
+print("UPSTREAM CONSTRUCTOR SIGNATURES")
+print("=" * 120)
+print()
+
+constructors = (
+    (
+        "create_lifecycle_repair_planner_request_v1",
+        create_lifecycle_repair_planner_request_v1,
+    ),
+    (
+        "build_lifecycle_repair_plan_v1",
+        build_lifecycle_repair_plan_v1,
+    ),
+    (
+        "build_lifecycle_repair_planner_certification_bundle_v1",
+        build_lifecycle_repair_planner_certification_bundle_v1,
+    ),
+    (
+        "create_lifecycle_repair_execution_authorization_v1",
+        create_lifecycle_repair_execution_authorization_v1,
+    ),
+    (
+        "create_lifecycle_repair_execution_request_v1",
+        create_lifecycle_repair_execution_request_v1,
+    ),
+)
+
+for name, function in constructors:
+    print(name)
+    print(inspect.signature(function))
+    print()
+
+print("=" * 120)

@@ -1,0 +1,688 @@
+﻿UNIVERSAL RUNTIME ? ORCHESTRATION INGRESS SCAN
+============================================================================================
+
+FILE: backend\server\orchestration\service.py
+============================================================================================
+
+IMPORTS
+--------------------------------------------------------------------------------------------
+from __future__ import annotations
+from dataclasses import asdict
+from typing import Any, Dict, Optional
+from job_store import create_job, get_job, list_job_events, load_jobs, update_job_progress, update_job_status
+from models import JOB_STATUS_CANCELLED, JOB_STATUS_COMPLETED, JOB_STATUS_FAILED, JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, OrchestrationJob
+from queue import enqueue_job, queue_snapshot
+
+PUBLIC CLASSES
+--------------------------------------------------------------------------------------------
+none
+
+PUBLIC FUNCTIONS
+--------------------------------------------------------------------------------------------
+FUNCTION: create_orchestration_job
+LINES: 26-52
+ARGS: workspace_id, job_type, payload, metadata, priority
+--------------------------------------------------------------------------------------------
+def create_orchestration_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+) -> OrchestrationJob:
+    """Create and enqueue a job.
+
+    NOTE on priority: jobs are served in ascending (priority, created_at)
+    order ù a LOWER number means served sooner. The default of 5 leaves
+    room on both sides (e.g. 1 for urgent user-facing work, 9 for bulk
+    background rebuilds).
+    """
+    job = create_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+    # Enqueueing is implicit (queue membership == persisted "queued" status);
+    # enqueue_job is retained as a sanity check that the job landed in the
+    # store correctly.
+    if not enqueue_job(job.job_id):
+        print(f"[ORCHESTRATION_ENQUEUE_WARNING] job {job.job_id} not visible as queued after create")
+    return job
+
+FUNCTION: get_orchestration_job
+LINES: 55-63
+ARGS: job_id
+--------------------------------------------------------------------------------------------
+def get_orchestration_job(job_id: str) -> Optional[Dict[str, Any]]:
+    job = get_job(job_id)
+    if job is None:
+        return None
+
+    return {
+        "job": asdict(job),
+        "events": list_job_events(job_id),
+    }
+
+FUNCTION: list_orchestration_jobs
+LINES: 66-71
+ARGS: 
+--------------------------------------------------------------------------------------------
+def list_orchestration_jobs() -> Dict[str, Any]:
+    jobs = load_jobs()
+    return {
+        "jobs": [asdict(job) for job in jobs.values()],
+        "queue": queue_snapshot(),
+    }
+
+FUNCTION: mark_job_running
+LINES: 74-99
+ARGS: job_id, worker_id
+--------------------------------------------------------------------------------------------
+def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+    """Transition a job to RUNNING.
+
+    FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+    RUNNING atomically, so by the time the worker calls this the job is
+    usually already running. Re-issuing the transition would be harmless in
+    most stores but is wasteful and can clobber claim metadata; if the job is
+    already RUNNING we just return it (merging in the worker_id if it wasn't
+    recorded yet).
+    """
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"unknown job: {job_id}")
+
+    if job.status == JOB_STATUS_RUNNING:
+        if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+            # Record the worker identity without re-transitioning status.
+            return update_job_status(
+                job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+            )
+        return job
+
+    metadata: Dict[str, Any] = {}
+    if worker_id:
+        metadata["worker_id"] = worker_id
+    return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+
+FUNCTION: mark_job_completed
+LINES: 102-110
+ARGS: job_id, metadata
+--------------------------------------------------------------------------------------------
+def mark_job_completed(
+    job_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    # FIX: metadata was previously passed to BOTH the progress update and the
+    # status update, merging the same dict twice. Progress just records 100%;
+    # metadata rides on the terminal status change.
+    update_job_progress(job_id, 100.0)
+    return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+
+FUNCTION: mark_job_failed
+LINES: 113-123
+ARGS: job_id, error_message, metadata
+--------------------------------------------------------------------------------------------
+def mark_job_failed(
+    job_id: str,
+    error_message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    return update_job_status(
+        job_id,
+        JOB_STATUS_FAILED,
+        metadata=metadata or {},
+        error_message=error_message,
+    )
+
+FUNCTION: cancel_job
+LINES: 126-130
+ARGS: job_id, metadata
+--------------------------------------------------------------------------------------------
+def cancel_job(
+    job_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    return update_job_status(job_id, JOB_STATUS_CANCELLED, metadata=metadata or {})
+
+FUNCTION: update_orchestration_progress
+LINES: 133-166
+ARGS: job_id, progress_percent, metadata, current_step, progress_message, total_steps, processed_count, failed_count, warning_count, total_documents, processed_documents, failed_documents, skipped_documents, current_document_id, current_document_name
+--------------------------------------------------------------------------------------------
+def update_orchestration_progress(
+    job_id: str,
+    progress_percent: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    current_step: Optional[str] = None,
+    progress_message: Optional[str] = None,
+    total_steps: Optional[int] = None,
+    processed_count: Optional[int] = None,
+    failed_count: Optional[int] = None,
+    warning_count: Optional[int] = None,
+    total_documents: Optional[int] = None,
+    processed_documents: Optional[int] = None,
+    failed_documents: Optional[int] = None,
+    skipped_documents: Optional[int] = None,
+    current_document_id: Optional[str] = None,
+    current_document_name: Optional[str] = None,
+) -> OrchestrationJob:
+    return update_job_progress(
+        job_id,
+        progress_percent,
+        metadata=metadata or {},
+        current_step=current_step,
+        progress_message=progress_message,
+        total_steps=total_steps,
+        processed_count=processed_count,
+        failed_count=failed_count,
+        warning_count=warning_count,
+        total_documents=total_documents,
+        processed_documents=processed_documents,
+        failed_documents=failed_documents,
+        skipped_documents=skipped_documents,
+        current_document_id=current_document_id,
+        current_document_name=current_document_name,
+    )
+
+EXPORT DECLARATIONS
+--------------------------------------------------------------------------------------------
+No __all__ declaration.
+
+FILE: backend\server\orchestration\job_store.py
+============================================================================================
+
+IMPORTS
+--------------------------------------------------------------------------------------------
+from __future__ import annotations
+import json
+from dataclasses import asdict
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+from models import JOB_STATUS_FAILED, VALID_JOB_STATUSES, JobStatusEvent, OrchestrationJob, utc_now
+
+PUBLIC CLASSES
+--------------------------------------------------------------------------------------------
+none
+
+PUBLIC FUNCTIONS
+--------------------------------------------------------------------------------------------
+FUNCTION: load_jobs
+LINES: 97-105
+ARGS: 
+--------------------------------------------------------------------------------------------
+def load_jobs() -> Dict[str, OrchestrationJob]:
+    raw = _read_json(JOBS_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        job_id: _job_from_dict(item)
+        for job_id, item in raw.items()
+        if isinstance(item, dict)
+    }
+
+FUNCTION: save_jobs
+LINES: 108-109
+ARGS: jobs
+--------------------------------------------------------------------------------------------
+def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+    _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+
+FUNCTION: get_job
+LINES: 112-113
+ARGS: job_id
+--------------------------------------------------------------------------------------------
+def get_job(job_id: str) -> Optional[OrchestrationJob]:
+    return load_jobs().get(job_id)
+
+FUNCTION: create_job
+LINES: 116-188
+ARGS: workspace_id, job_type, payload, metadata, priority
+--------------------------------------------------------------------------------------------
+def create_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+    *,
+    job_id: Optional[str] = None,
+) -> OrchestrationJob:
+    """Persist one orchestration job.
+
+    ``job_id`` is optional for backward compatibility.
+
+    When omitted, this function preserves the historical orchestration
+    behaviour and allocates a local ``job_*`` identity.
+
+    When supplied, the caller owns the canonical job identity.  This is the
+    ingress required by Universal Job / Runtime Registration integrations:
+    the orchestration layer MUST persist that exact identity rather than
+    minting a second job ID.
+    """
+    jobs = load_jobs()
+
+    canonical_job_id = str(
+        job_id
+        or f"job_{uuid4().hex[:16]}"
+    ).strip()
+
+    if not canonical_job_id:
+        raise ValueError(
+            "job_id must be a non-empty string when supplied"
+        )
+
+    existing = jobs.get(
+        canonical_job_id
+    )
+
+    if existing is not None:
+        raise ValueError(
+            "Job already exists: "
+            + canonical_job_id
+        )
+
+    job = OrchestrationJob(
+        job_id=canonical_job_id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+
+    jobs[
+        canonical_job_id
+    ] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        canonical_job_id,
+        "none",
+        job.status,
+        {
+            "reason": "job_created",
+            "caller_supplied_job_id": (
+                job_id is not None
+            ),
+        },
+    )
+
+    return job
+
+FUNCTION: update_job_status
+LINES: 191-256
+ARGS: job_id, new_status, metadata, error_message
+--------------------------------------------------------------------------------------------
+def update_job_status(
+    job_id: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> OrchestrationJob:
+    if new_status not in VALID_JOB_STATUSES:
+        raise ValueError(f"Invalid job status: {new_status}")
+
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    old_status = job.status
+    job.status = new_status
+    job.updated_at = utc_now()
+
+    normalized_metadata = (
+        dict(metadata)
+        if isinstance(
+            metadata,
+            dict,
+        )
+        else {}
+    )
+
+    if normalized_metadata:
+
+        existing_metadata = (
+            job.metadata
+            if isinstance(
+                job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        job.metadata = {
+            **existing_metadata,
+            **normalized_metadata,
+        }
+
+    if error_message:
+        job.error_message = error_message
+
+        if new_status == JOB_STATUS_FAILED:
+            job.progress_percent = min(
+                job.progress_percent,
+                99.0,
+            )
+
+    jobs[job_id] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        job_id,
+        old_status,
+        new_status,
+        normalized_metadata,
+    )
+
+    return job
+
+FUNCTION: update_job_progress
+LINES: 259-325
+ARGS: job_id, progress_percent, metadata, current_step, progress_message, total_steps, processed_count, failed_count, warning_count, total_documents, processed_documents, failed_documents, skipped_documents, current_document_id, current_document_name
+--------------------------------------------------------------------------------------------
+def update_job_progress(
+    job_id: str,
+    progress_percent: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    current_step: Optional[str] = None,
+    progress_message: Optional[str] = None,
+    total_steps: Optional[int] = None,
+    processed_count: Optional[int] = None,
+    failed_count: Optional[int] = None,
+    warning_count: Optional[int] = None,
+    total_documents: Optional[int] = None,
+    processed_documents: Optional[int] = None,
+    failed_documents: Optional[int] = None,
+    skipped_documents: Optional[int] = None,
+    current_document_id: Optional[str] = None,
+    current_document_name: Optional[str] = None,
+) -> OrchestrationJob:
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    job.progress_percent = max(0.0, min(100.0, float(progress_percent)))
+    job.updated_at = utc_now()
+
+    if current_step is not None:
+        job.current_step = str(current_step)
+
+    if progress_message is not None:
+        job.progress_message = str(progress_message)
+
+    if total_steps is not None:
+        job.total_steps = max(0, int(total_steps))
+
+    if processed_count is not None:
+        job.processed_count = max(0, int(processed_count))
+
+    if failed_count is not None:
+        job.failed_count = max(0, int(failed_count))
+
+    if warning_count is not None:
+        job.warning_count = max(0, int(warning_count))
+
+    if total_documents is not None:
+        job.total_documents = max(0, int(total_documents))
+
+    if processed_documents is not None:
+        job.processed_documents = max(0, int(processed_documents))
+
+    if failed_documents is not None:
+        job.failed_documents = max(0, int(failed_documents))
+
+    if skipped_documents is not None:
+        job.skipped_documents = max(0, int(skipped_documents))
+
+    if current_document_id is not None:
+        job.current_document_id = str(current_document_id)
+
+    if current_document_name is not None:
+        job.current_document_name = str(current_document_name)
+
+    if metadata:
+        job.metadata.update(metadata)
+
+    jobs[job_id] = job
+    save_jobs(jobs)
+    return job
+
+FUNCTION: append_job_event
+LINES: 328-349
+ARGS: job_id, old_status, new_status, metadata
+--------------------------------------------------------------------------------------------
+def append_job_event(
+    job_id: str,
+    old_status: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobStatusEvent:
+    events = _read_json(EVENTS_FILE, {})
+    if not isinstance(events, dict):
+        events = {}
+
+    event = JobStatusEvent(
+        event_id=f"evt_{uuid4().hex[:16]}",
+        job_id=job_id,
+        old_status=old_status,
+        new_status=new_status,
+        metadata=metadata or {},
+    )
+
+    events.setdefault(job_id, [])
+    events[job_id].append(asdict(event))
+    _write_json(EVENTS_FILE, events)
+    return event
+
+FUNCTION: list_job_events
+LINES: 352-356
+ARGS: job_id
+--------------------------------------------------------------------------------------------
+def list_job_events(job_id: str) -> List[Dict[str, Any]]:
+    events = _read_json(EVENTS_FILE, {})
+    if not isinstance(events, dict):
+        return []
+    return events.get(job_id, [])
+
+EXPORT DECLARATIONS
+--------------------------------------------------------------------------------------------
+No __all__ declaration.
+
+FILE: backend\server\orchestration\models.py
+============================================================================================
+
+IMPORTS
+--------------------------------------------------------------------------------------------
+from __future__ import annotations
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
+
+PUBLIC CLASSES
+--------------------------------------------------------------------------------------------
+CLASS: OrchestrationJob
+LINES: 30-59
+
+CLASS: JobStep
+LINES: 63-75
+
+CLASS: JobStatusEvent
+LINES: 78-84
+
+CLASS: JobWorkerAssignment
+LINES: 88-93
+
+CLASS: JobResult
+LINES: 97-102
+
+CLASS: QueueStats
+LINES: 106-111
+
+CLASS: WorkerHeartbeat
+LINES: 115-119
+
+PUBLIC FUNCTIONS
+--------------------------------------------------------------------------------------------
+none
+
+EXPORT DECLARATIONS
+--------------------------------------------------------------------------------------------
+No __all__ declaration.
+
+FILE: backend\server\orchestration\queue.py
+============================================================================================
+
+IMPORTS
+--------------------------------------------------------------------------------------------
+from __future__ import annotations
+import os
+import threading
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Dict, Iterator, List, Optional
+from job_store import get_job, load_jobs, update_job_status
+from models import JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, OrchestrationJob
+
+PUBLIC CLASSES
+--------------------------------------------------------------------------------------------
+none
+
+PUBLIC FUNCTIONS
+--------------------------------------------------------------------------------------------
+FUNCTION: enqueue_job
+LINES: 106-115
+ARGS: job_id
+--------------------------------------------------------------------------------------------
+def enqueue_job(job_id: str) -> bool:
+    """Kept for API compatibility.
+
+    Enqueueing is now implicit: create_job persists the job with status
+    JOB_STATUS_QUEUED, and that persisted status is the queue membership.
+    This function only verifies the job actually exists in a queued state,
+    which catches caller bugs (e.g. enqueueing an ID that was never created).
+    """
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+FUNCTION: dequeue_job
+LINES: 118-145
+ARGS: worker_id
+--------------------------------------------------------------------------------------------
+def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+            if worker_id:
+                metadata["worker_id"] = worker_id
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write ù
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+FUNCTION: queue_length
+LINES: 148-149
+ARGS: 
+--------------------------------------------------------------------------------------------
+def queue_length() -> int:
+    return len(_queued_jobs())
+
+FUNCTION: refresh_queue_from_store
+LINES: 152-158
+ARGS: 
+--------------------------------------------------------------------------------------------
+def refresh_queue_from_store() -> None:
+    """Kept for API compatibility.
+
+    There is no longer any in-memory queue state to refresh ù every read
+    goes straight to the job store ù so this is a no-op.
+    """
+    return None
+
+FUNCTION: queue_snapshot
+LINES: 161-181
+ARGS: 
+--------------------------------------------------------------------------------------------
+def queue_snapshot() -> Dict[str, object]:
+    queued = _queued_jobs()
+
+    return {
+        "queue_length": len(queued),
+        "queued_job_ids": [job.job_id for job in queued],
+        "queued_jobs": [
+            {
+                "job_id": job.job_id,
+                "workspace_id": job.workspace_id,
+                "job_type": job.job_type,
+                "priority": job.priority,
+                "created_at": (
+                    job.created_at.isoformat()
+                    if hasattr(job.created_at, "isoformat")
+                    else str(job.created_at)
+                ),
+            }
+            for job in queued
+        ],
+    }
+
+FUNCTION: is_job_queued
+LINES: 184-186
+ARGS: job_id
+--------------------------------------------------------------------------------------------
+def is_job_queued(job_id: str) -> bool:
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+EXPORT DECLARATIONS
+--------------------------------------------------------------------------------------------
+No __all__ declaration.
+
+FILE: backend\server\orchestration\__init__.py
+============================================================================================
+
+IMPORTS
+--------------------------------------------------------------------------------------------
+
+PUBLIC CLASSES
+--------------------------------------------------------------------------------------------
+none
+
+PUBLIC FUNCTIONS
+--------------------------------------------------------------------------------------------
+none
+
+EXPORT DECLARATIONS
+--------------------------------------------------------------------------------------------
+No __all__ declaration.
+
+============================================================================================
+ORCHESTRATION INGRESS SCAN: COMPLETE

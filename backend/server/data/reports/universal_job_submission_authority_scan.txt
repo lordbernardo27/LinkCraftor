@@ -1,0 +1,600 @@
+﻿UNIVERSAL JOB SUBMISSION ? AUTHORITY SCAN
+============================================================================================
+
+SECTION 1 ? RUNTIME REGISTRATION LOOKUP AUTHORITIES
+============================================================================================
+
+FUNCTION: register_runtime_handler
+LINES: 391-517
+--------------------------------------------------------------------------------------------
+def register_runtime_handler(
+    *,
+    job_type: str,
+    handler: Callable[..., Any] | str,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields: Iterable[Any] | None = None,
+    predecessor_stages: Iterable[Any] | None = None,
+    successor_stages: Iterable[Any] | None = None,
+    idempotency_fields: Iterable[Any] | None = None,
+    retry_policy: Mapping[str, Any] | None = None,
+    concurrency_policy: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    replace: bool = False,
+    persist: bool = False,
+    _loaded_from_persistence: bool = False,
+) -> dict[str, Any]:
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    canonical_pipeline = (
+        _normalize_optional_name(
+            pipeline,
+            fallback="universal_knowledge",
+            field_name="pipeline",
+        )
+    )
+
+    canonical_stage = (
+        _normalize_optional_name(
+            stage,
+            fallback=canonical_job_type,
+            field_name="stage",
+        )
+    )
+
+    resolved_handler, handler_ref = (
+        _resolve_handler(
+... BODY CONTINUES TO LINE 517
+
+FUNCTION: runtime_handler
+LINES: 520-571
+--------------------------------------------------------------------------------------------
+def runtime_handler(
+    *,
+    job_type: str,
+    pipeline: str = "",
+    stage: str = "",
+    description: str = "",
+    required_payload_fields: Iterable[Any] | None = None,
+    predecessor_stages: Iterable[Any] | None = None,
+    successor_stages: Iterable[Any] | None = None,
+    idempotency_fields: Iterable[Any] | None = None,
+    retry_policy: Mapping[str, Any] | None = None,
+    concurrency_policy: Mapping[str, Any] | None = None,
+    metadata: Mapping[str, Any] | None = None,
+    replace: bool = False,
+    persist: bool = False,
+) -> Callable[
+    [Callable[..., Any]],
+    Callable[..., Any],
+]:
+    def decorator(
+        handler: Callable[..., Any],
+    ) -> Callable[..., Any]:
+        register_runtime_handler(
+            job_type=job_type,
+            handler=handler,
+            pipeline=pipeline,
+            stage=stage,
+            description=description,
+            required_payload_fields=(
+                required_payload_fields
+            ),
+            predecessor_stages=(
+                predecessor_stages
+            ),
+            successor_stages=(
+                successor_stages
+            ),
+            idempotency_fields=(
+                idempotency_fields
+            ),
+            retry_policy=retry_policy,
+            concurrency_policy=(
+                concurrency_policy
+            ),
+            metadata=metadata,
+            replace=replace,
+            persist=persist,
+        )
+
+        return handler
+
+    return decorator
+
+FUNCTION: unregister_runtime_handler
+LINES: 574-598
+--------------------------------------------------------------------------------------------
+def unregister_runtime_handler(
+    job_type: str,
+    *,
+    persist: bool = False,
+) -> dict[str, Any] | None:
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.pop(
+                canonical_job_type,
+                None,
+            )
+        )
+
+        if persist:
+            _persist_registry_snapshot()
+
+    if registration is None:
+        return None
+
+    return registration.to_public_dict()
+
+FUNCTION: clear_runtime_registration_memory
+LINES: 601-606
+--------------------------------------------------------------------------------------------
+def clear_runtime_registration_memory() -> None:
+    global _PERSISTED_REGISTRY_LOADED
+
+    with _REGISTRY_LOCK:
+        _RUNTIME_HANDLER_REGISTRY.clear()
+        _PERSISTED_REGISTRY_LOADED = False
+
+FUNCTION: load_persisted_runtime_registrations
+LINES: 609-764
+--------------------------------------------------------------------------------------------
+def load_persisted_runtime_registrations(
+    *,
+    force: bool = False,
+) -> dict[str, Any]:
+    global _PERSISTED_REGISTRY_LOADED
+
+    with _REGISTRY_LOCK:
+        if (
+            _PERSISTED_REGISTRY_LOADED
+            and not force
+        ):
+            return {
+                "ok": True,
+                "loaded": False,
+                "reason": "already_loaded",
+                "registration_count": len(
+                    _RUNTIME_HANDLER_REGISTRY
+                ),
+            }
+
+        if force:
+            persistent_job_types = [
+                job_type
+                for job_type, registration
+                in _RUNTIME_HANDLER_REGISTRY.items()
+                if registration.persistent
+            ]
+
+            for job_type in persistent_job_types:
+                _RUNTIME_HANDLER_REGISTRY.pop(
+                    job_type,
+                    None,
+                )
+
+        if not REGISTRY_PATH.is_file():
+            _PERSISTED_REGISTRY_LOADED = True
+
+            return {
+                "ok": True,
+                "loaded": True,
+                "reason": "registry_file_absent",
+... BODY CONTINUES TO LINE 764
+
+FUNCTION: ensure_persisted_runtime_registrations_loaded
+LINES: 767-770
+--------------------------------------------------------------------------------------------
+def ensure_persisted_runtime_registrations_loaded() -> None:
+    load_persisted_runtime_registrations(
+        force=False
+    )
+
+FUNCTION: has_runtime_handler
+LINES: 773-789
+--------------------------------------------------------------------------------------------
+def has_runtime_handler(
+    job_type: Any,
+) -> bool:
+    ensure_persisted_runtime_registrations_loaded()
+
+    normalized = str(
+        job_type or ""
+    ).strip()
+
+    if not normalized:
+        return False
+
+    with _REGISTRY_LOCK:
+        return (
+            normalized
+            in _RUNTIME_HANDLER_REGISTRY
+        )
+
+FUNCTION: is_runtime_job_type_registered
+LINES: 792-797
+--------------------------------------------------------------------------------------------
+def is_runtime_job_type_registered(
+    job_type: Any,
+) -> bool:
+    return has_runtime_handler(
+        job_type
+    )
+
+FUNCTION: get_runtime_registration
+LINES: 800-820
+--------------------------------------------------------------------------------------------
+def get_runtime_registration(
+    job_type: str,
+) -> dict[str, Any] | None:
+    ensure_persisted_runtime_registrations_loaded()
+
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.get(
+                canonical_job_type
+            )
+        )
+
+    if registration is None:
+        return None
+
+    return registration.to_public_dict()
+
+FUNCTION: list_runtime_registrations
+LINES: 823-837
+--------------------------------------------------------------------------------------------
+def list_runtime_registrations() -> list[
+    dict[str, Any]
+]:
+    ensure_persisted_runtime_registrations_loaded()
+
+    with _REGISTRY_LOCK:
+        registrations = sorted(
+            _RUNTIME_HANDLER_REGISTRY.values(),
+            key=lambda item: item.job_type,
+        )
+
+    return [
+        registration.to_public_dict()
+        for registration in registrations
+    ]
+
+FUNCTION: runtime_registration_snapshot
+LINES: 840-866
+--------------------------------------------------------------------------------------------
+def runtime_registration_snapshot() -> dict[str, Any]:
+    registrations = (
+        list_runtime_registrations()
+    )
+
+    canonical_json = json.dumps(
+        registrations,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+    return {
+        "schema_version": (
+            REGISTRATION_SCHEMA_VERSION
+        ),
+        "registration_count": len(
+            registrations
+        ),
+        "registrations": registrations,
+        "registry_sha256": hashlib.sha256(
+            canonical_json.encode("utf-8")
+        ).hexdigest(),
+        "persistent_registry_path": str(
+            REGISTRY_PATH
+        ),
+    }
+
+FUNCTION: dispatch_registered_runtime_handler
+LINES: 945-1021
+--------------------------------------------------------------------------------------------
+def dispatch_registered_runtime_handler(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    ensure_persisted_runtime_registrations_loaded()
+
+    if not isinstance(job, Mapping):
+        raise TypeError(
+            "Universal runtime job must be a mapping."
+        )
+
+    job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    if not job_type:
+        raise ValueError(
+            "Universal runtime job has no job_type."
+        )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.get(
+                job_type
+            )
+        )
+
+    if registration is None:
+        raise ValueError(
+            f"No runtime handler registered for: {job_type}"
+        )
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(payload, Mapping):
+        raise TypeError(
+            "Universal runtime job payload must be a mapping."
+        )
+
+    _validate_required_payload_fields(
+        registration=registration,
+        payload=payload,
+    )
+
+    handler_result = _invoke_handler(
+        registration.handler,
+        job,
+    )
+
+    if handler_result is None:
+        handler_result = {}
+
+    if not isinstance(
+        handler_result,
+        dict,
+    ):
+        handler_result = {
+            "value": handler_result,
+        }
+
+    return {
+        "handled": True,
+        "dispatch_mode": (
+            "universal_runtime_registration"
+        ),
+        "job_type": job_type,
+        "pipeline": registration.pipeline,
+        "stage": registration.stage,
+        "handler_ref": (
+            registration.handler_ref
+        ),
+        "handler_result": handler_result,
+    }
+
+FUNCTION: execute_registered_runtime_job_v1
+LINES: 1024-1134
+--------------------------------------------------------------------------------------------
+def execute_registered_runtime_job_v1(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        record_job_failure,
+        update_job_progress,
+        update_job_status,
+    )
+
+    workspace_id = str(
+        job.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+
+    job_id = str(
+        job.get("job_id")
+        or ""
+    ).strip()
+
+    job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    try:
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="running",
+            message=(
+                f"Running registered runtime handler "
+                f"for {job_type}."
+... BODY CONTINUES TO LINE 1134
+
+SECTION 2 ? REGISTRATION RECORD TYPES
+============================================================================================
+
+CLASS: RuntimeHandlerRegistration
+LINES: 294-355
+--------------------------------------------------------------------------------------------
+METHOD: to_public_dict LINES 320-355
+
+SECTION 3 ? UNIVERSAL JOB CREATION RESULT
+============================================================================================
+
+class UniversalJobCreationResult:
+    job: UniversalJob
+    payload: Mapping[str, Any]
+    metadata: Mapping[str, Any]
+    registration: Optional[Mapping[str, Any]]
+    enqueue_requested: bool
+    job_type_source: str
+    creation_engine_version: str = UNIVERSAL_JOB_CREATION_ENGINE_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": UNIVERSAL_JOB_CREATION_RESULT_VERSION,
+            "ok": True,
+            "creation_engine_version": self.creation_engine_version,
+            "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+            "enqueue_requested": self.enqueue_requested,
+            "job_type_source": self.job_type_source,
+            "job": self.job.to_canonical_dict(),
+            "payload": _thaw_json(self.payload),
+            "metadata": thaw_universal_job_metadata(self.metadata),
+            "registration": (
+                _thaw_json(self.registration)
+                if self.registration is not None
+                else None
+            ),
+            "identity_fingerprint": self.job.identity_fingerprint(),
+            "contract_fingerprint": self.job.contract_fingerprint(),
+            "content_fingerprint": self.job.content_fingerprint(),
+        }
+
+SECTION 4 ? CREATE_UNIVERSAL_JOB REGISTRATION HANDLING
+============================================================================================
+
+[context around line 680]
+    0674:     idempotency_key: Optional[str] = None,
+    0675:     maximum_attempts: Optional[int] = None,
+    0676:     enqueue: bool = True,
+    0677:     job_id: Optional[str] = None,
+    0678:     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    0679:     created_at: Optional[str] = None,
+>>> 0680:     supported_job_types: Optional[Iterable[Any]] = None,
+    0681:     runtime_registration: Optional[Mapping[str, Any]] = None,
+    0682: ) -> UniversalJobCreationResult:
+    0683:     """Validate and construct one canonical Universal Job without I/O."""
+    0684: 
+    0685:     request = UniversalJobCreationRequest(
+    0686:         workspace_id=workspace_id,
+    0687:         job_type=job_type,
+    0688:         payload={} if payload is None else payload,
+    0689:         metadata={} if metadata is None else metadata,
+    0690:         user_id=user_id,
+    0691:         product_id=product_id,
+    0692:         pipeline=pipeline,
+
+[context around line 681]
+    0675:     maximum_attempts: Optional[int] = None,
+    0676:     enqueue: bool = True,
+    0677:     job_id: Optional[str] = None,
+    0678:     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    0679:     created_at: Optional[str] = None,
+    0680:     supported_job_types: Optional[Iterable[Any]] = None,
+>>> 0681:     runtime_registration: Optional[Mapping[str, Any]] = None,
+    0682: ) -> UniversalJobCreationResult:
+    0683:     """Validate and construct one canonical Universal Job without I/O."""
+    0684: 
+    0685:     request = UniversalJobCreationRequest(
+    0686:         workspace_id=workspace_id,
+    0687:         job_type=job_type,
+    0688:         payload={} if payload is None else payload,
+    0689:         metadata={} if metadata is None else metadata,
+    0690:         user_id=user_id,
+    0691:         product_id=product_id,
+    0692:         pipeline=pipeline,
+    0693:         stage=stage,
+
+[context around line 712]
+    0706:         enqueue=enqueue,
+    0707:         job_id=job_id,
+    0708:         job_id_prefix=job_id_prefix,
+    0709:         created_at=created_at,
+    0710:     )
+    0711: 
+>>> 0712:     normalized, source, registration = (
+    0713:         normalize_universal_job_creation_request(
+    0714:             request,
+    0715:             supported_job_types=supported_job_types,
+    0716:             runtime_registration=runtime_registration,
+    0717:         )
+    0718:     )
+    0719: 
+    0720:     status = (
+    0721:         UniversalJobStatus.QUEUED
+    0722:         if normalized.enqueue
+    0723:         else UniversalJobStatus.CREATED
+    0724:     )
+
+[context around line 715]
+    0709:         created_at=created_at,
+    0710:     )
+    0711: 
+    0712:     normalized, source, registration = (
+    0713:         normalize_universal_job_creation_request(
+    0714:             request,
+>>> 0715:             supported_job_types=supported_job_types,
+    0716:             runtime_registration=runtime_registration,
+    0717:         )
+    0718:     )
+    0719: 
+    0720:     status = (
+    0721:         UniversalJobStatus.QUEUED
+    0722:         if normalized.enqueue
+    0723:         else UniversalJobStatus.CREATED
+    0724:     )
+    0725:     message = (
+    0726:         "Job queued."
+    0727:         if normalized.enqueue
+
+[context around line 716]
+    0710:     )
+    0711: 
+    0712:     normalized, source, registration = (
+    0713:         normalize_universal_job_creation_request(
+    0714:             request,
+    0715:             supported_job_types=supported_job_types,
+>>> 0716:             runtime_registration=runtime_registration,
+    0717:         )
+    0718:     )
+    0719: 
+    0720:     status = (
+    0721:         UniversalJobStatus.QUEUED
+    0722:         if normalized.enqueue
+    0723:         else UniversalJobStatus.CREATED
+    0724:     )
+    0725:     message = (
+    0726:         "Job queued."
+    0727:         if normalized.enqueue
+    0728:         else "Job created without queue dispatch."
+
+[context around line 795]
+    0789:         )
+    0790: 
+    0791:     return UniversalJobCreationResult(
+    0792:         job=job,
+    0793:         payload=normalized.payload,
+    0794:         metadata=normalized.metadata,
+>>> 0795:         registration=registration,
+    0796:         enqueue_requested=normalized.enqueue,
+    0797:         job_type_source=source,
+    0798:     )
+
+SECTION 5 ? STATIC JOB TYPE AUTHORITY
+============================================================================================
+
+============================================================================================
+AUTHORITY SCAN RESULT: COMPLETE

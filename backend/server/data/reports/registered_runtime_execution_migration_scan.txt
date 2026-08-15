@@ -1,0 +1,303 @@
+﻿REGISTERED RUNTIME EXECUTION ? LEGACY DEPENDENCY MIGRATION SCAN
+============================================================================================
+
+SECTION 1 ? CALLERS OF execute_registered_runtime_job_v1
+============================================================================================
+
+CALLERS: NONE FOUND
+
+SECTION 2 ? FAILURE RESULT FIELD CONSUMPTION
+============================================================================================
+
+FILE: inspect_latest_udare_first5_failure.py
+LINE: 50
+CODE: failure = row.get("failure")
+
+FILE: patch_universal_runtime_registration.py
+LINE: 1044
+CODE: "dispatch_mode": (
+
+FILE: patch_universal_runtime_registration.py
+LINE: 1143
+CODE: "dispatch_mode": (
+
+FILE: patch_universal_runtime_registration.py
+LINE: 1163
+CODE: "dispatch_mode": (
+
+FILE: patch_universal_runtime_registration.py
+LINE: 1166
+CODE: "failure": failure,
+
+FILE: verify_body_store_queue_core_v1.py
+LINE: 384
+CODE: "failure"
+
+FILE: verify_stage_10_9_lifecycle_eligibility_dispatch_isolated.py
+LINE: 385
+CODE: "dispatch_mode"
+
+FILE: verify_udare_worker_dispatch_phase_3d.py
+LINE: 128
+CODE: "failure"
+
+FILE: verify_udare_worker_dispatch_phase_3d.py
+LINE: 699
+CODE: "failure"
+
+FILE: verify_universal_runtime_registration.py
+LINE: 530
+CODE: execution.get("dispatch_mode")
+
+FILE: verify_website_article_integrity_runtime_registration.py
+LINE: 571
+CODE: "dispatch_mode"
+
+FILE: backend\server\runtime\universal_runtime_registration.py
+LINE: 1011
+CODE: "dispatch_mode": (
+
+FILE: backend\server\runtime\universal_runtime_registration.py
+LINE: 1110
+CODE: "dispatch_mode": (
+
+FILE: backend\server\runtime\universal_runtime_registration.py
+LINE: 1130
+CODE: "dispatch_mode": (
+
+FILE: backend\server\runtime\universal_runtime_registration.py
+LINE: 1133
+CODE: "failure": failure,
+
+SECTION 3 ? CURRENT REGISTERED EXECUTION FUNCTION
+============================================================================================
+
+def execute_registered_runtime_job_v1(
+    job: Mapping[str, Any],
+) -> dict[str, Any]:
+    from backend.server.jobs.universal_knowledge_orchestrator import (
+        record_job_failure,
+        update_job_progress,
+        update_job_status,
+    )
+
+    workspace_id = str(
+        job.get("workspace_id")
+        or "default"
+    ).strip() or "default"
+
+    job_id = str(
+        job.get("job_id")
+        or ""
+    ).strip()
+
+    job_type = str(
+        job.get("job_type")
+        or job.get("stage")
+        or ""
+    ).strip()
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(payload, Mapping):
+        payload = {}
+
+    try:
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="running",
+            message=(
+                f"Running registered runtime handler "
+                f"for {job_type}."
+            ),
+        )
+
+        update_job_progress(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            percent=10,
+            message=(
+                "Universal Runtime Registration "
+                "accepted the job."
+            ),
+            step="runtime_registration_dispatch",
+        )
+
+        result = (
+            dispatch_registered_runtime_handler(
+                job
+            )
+        )
+
+        update_job_progress(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            percent=100,
+            message=(
+                "Registered runtime handler completed."
+            ),
+            step="runtime_registration_completed",
+        )
+
+        update_job_status(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            status="completed",
+            message=(
+                "Registered runtime handler completed."
+            ),
+            result=result,
+        )
+
+        return {
+            "ok": True,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "dispatch_mode": (
+                "universal_runtime_registration"
+            ),
+            "result": result,
+        }
+
+    except Exception as exc:
+        failure = record_job_failure(
+            workspace_id=workspace_id,
+            job_id=job_id,
+            job_type=job_type,
+            error=str(exc),
+            payload=dict(payload),
+        )
+
+        return {
+            "ok": False,
+            "job_id": job_id,
+            "workspace_id": workspace_id,
+            "job_type": job_type,
+            "dispatch_mode": (
+                "universal_runtime_registration"
+            ),
+            "failure": failure,
+        }
+
+SECTION 4 ? MODERN ORCHESTRATION SERVICE AUTHORITIES
+============================================================================================
+
+FUNCTION: get_orchestration_job
+LINES: 63-71
+--------------------------------------------------------------------------------------------
+def get_orchestration_job(job_id: str) -> Optional[Dict[str, Any]]:
+    job = get_job(job_id)
+    if job is None:
+        return None
+
+    return {
+        "job": asdict(job),
+        "events": list_job_events(job_id),
+    }
+
+FUNCTION: mark_job_running
+LINES: 82-107
+--------------------------------------------------------------------------------------------
+def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+    """Transition a job to RUNNING.
+
+    FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+    RUNNING atomically, so by the time the worker calls this the job is
+    usually already running. Re-issuing the transition would be harmless in
+    most stores but is wasteful and can clobber claim metadata; if the job is
+    already RUNNING we just return it (merging in the worker_id if it wasn't
+    recorded yet).
+    """
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"unknown job: {job_id}")
+
+    if job.status == JOB_STATUS_RUNNING:
+        if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+            # Record the worker identity without re-transitioning status.
+            return update_job_status(
+                job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+            )
+        return job
+
+    metadata: Dict[str, Any] = {}
+    if worker_id:
+        metadata["worker_id"] = worker_id
+    return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+
+FUNCTION: mark_job_completed
+LINES: 110-118
+--------------------------------------------------------------------------------------------
+def mark_job_completed(
+    job_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    # FIX: metadata was previously passed to BOTH the progress update and the
+    # status update, merging the same dict twice. Progress just records 100%;
+    # metadata rides on the terminal status change.
+    update_job_progress(job_id, 100.0)
+    return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+
+FUNCTION: mark_job_failed
+LINES: 121-131
+--------------------------------------------------------------------------------------------
+def mark_job_failed(
+    job_id: str,
+    error_message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    return update_job_status(
+        job_id,
+        JOB_STATUS_FAILED,
+        metadata=metadata or {},
+        error_message=error_message,
+    )
+
+FUNCTION: update_orchestration_progress
+LINES: 141-174
+--------------------------------------------------------------------------------------------
+def update_orchestration_progress(
+    job_id: str,
+    progress_percent: float,
+    metadata: Optional[Dict[str, Any]] = None,
+    current_step: Optional[str] = None,
+    progress_message: Optional[str] = None,
+    total_steps: Optional[int] = None,
+    processed_count: Optional[int] = None,
+    failed_count: Optional[int] = None,
+    warning_count: Optional[int] = None,
+    total_documents: Optional[int] = None,
+    processed_documents: Optional[int] = None,
+    failed_documents: Optional[int] = None,
+    skipped_documents: Optional[int] = None,
+    current_document_id: Optional[str] = None,
+    current_document_name: Optional[str] = None,
+) -> OrchestrationJob:
+    return update_job_progress(
+        job_id,
+        progress_percent,
+        metadata=metadata or {},
+        current_step=current_step,
+        progress_message=progress_message,
+        total_steps=total_steps,
+        processed_count=processed_count,
+        failed_count=failed_count,
+        warning_count=warning_count,
+        total_documents=total_documents,
+        processed_documents=processed_documents,
+        failed_documents=failed_documents,
+        skipped_documents=skipped_documents,
+        current_document_id=current_document_id,
+        current_document_name=current_document_name,
+    )
+
+============================================================================================
+CALLER COUNT: 0
+LIKELY FAILURE-RESULT CONSUMER COUNT: 15
+
+SCAN RESULT: COMPLETE

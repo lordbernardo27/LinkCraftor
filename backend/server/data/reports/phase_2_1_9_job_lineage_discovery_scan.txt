@@ -1,0 +1,3891 @@
+﻿PHASE 2.1.9 ? JOB LINEAGE DISCOVERY SCAN
+================================================================================================
+
+PURPOSE
+-------
+Discover the current Universal Job lineage representation, creation-time normalization, parent/dependency relationships, batch and pipeline-run correlation fields, retry lineage markers, and unrelated orchestration/execution dependency systems before defining the canonical Phase 2.1.9 Job Lineage authority.
+
+SECTION 1 ? CORE UNIVERSAL JOB LINEAGE DEFINITIONS
+------------------------------------------------------------------------------------------------
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+  LINE 47 [ASSIGNMENT]
+    REQUIRED_UNIVERSAL_JOB_FIELDS: Final[Tuple[str, ...]] = (
+        "job_id",
+        "workspace_id",
+        "user_id",
+        "product_id",
+        "pipeline",
+        "stage",
+        "job_type",
+        "payload_reference",
+        "priority",
+        "status",
+        "attempts",
+        "maximum_attempts",
+        "lease_owner",
+        "lease_id",
+        "lease_started_at",
+        "lease_expires_at",
+        "parent_job_id",
+        "dependency_job_ids",
+        "batch_id",
+        "pipeline_run_id",
+        "progress",
+        "checkpoint_reference",
+        "result_reference",
+        "artifact_references",
+        "idempotency_key",
+        "AU_reserved",
+        "AU_consumed",
+        "cost_record",
+        "created_at",
+        "scheduled_at",
+        "started_at",
+        "completed_at",
+        "failed_at",
+        "cancelled_at",
+        "error_code",
+        "error_message",
+        "error_details",
+        "contract_version",
+    )
+
+  LINE 725 [ASSIGNMENT]
+    parent_job_id: Optional[str] = None
+
+  LINE 726 [ASSIGNMENT]
+    dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+
+  LINE 727 [ASSIGNMENT]
+    batch_id: Optional[str] = None
+
+  LINE 728 [ASSIGNMENT]
+    pipeline_run_id: Optional[str] = None
+
+  LINE 838 [CALL]
+    set_(self, "parent_job_id", _normalize_identifier(
+                self.parent_job_id, name="parent_job_id", violations=violations,
+                required=False))
+
+  LINE 838 [CALL]
+    _normalize_identifier(
+                self.parent_job_id, name="parent_job_id", violations=violations,
+                required=False)
+
+  LINE 841 [CALL]
+    set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+                self.dependency_job_ids, name="dependency_job_ids",
+                violations=violations))
+
+  LINE 841 [CALL]
+    _normalize_identifier_tuple(
+                self.dependency_job_ids, name="dependency_job_ids",
+                violations=violations)
+
+  LINE 845 [CALL]
+    violations.append("dependency_job_ids must not contain job_id")
+
+  LINE 846 [CALL]
+    set_(self, "batch_id", _normalize_identifier(
+                self.batch_id, name="batch_id", violations=violations, required=False))
+
+  LINE 846 [CALL]
+    _normalize_identifier(
+                self.batch_id, name="batch_id", violations=violations, required=False)
+
+  LINE 848 [CALL]
+    set_(self, "pipeline_run_id", _normalize_identifier(
+                self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+                required=False))
+
+  LINE 848 [CALL]
+    _normalize_identifier(
+                self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+                required=False)
+
+  LINE 974 [CALL]
+    list(self.dependency_job_ids)
+
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+  LINE 453 [ASSIGNMENT]
+    parent_job_id: Optional[str] = None
+
+  LINE 454 [ASSIGNMENT]
+    dependency_job_ids: Tuple[str, ...] = ()
+
+  LINE 455 [ASSIGNMENT]
+    batch_id: Optional[str] = None
+
+  LINE 456 [ASSIGNMENT]
+    pipeline_run_id: Optional[str] = None
+
+  LINE 548 [ASSIGNMENT]
+    dependencies = _normalize_string_tuple(
+            request.dependency_job_ids,
+            field_name="dependency_job_ids",
+        )
+
+  LINE 548 [CALL]
+    _normalize_string_tuple(
+            request.dependency_job_ids,
+            field_name="dependency_job_ids",
+        )
+
+  LINE 644 [ASSIGNMENT]
+    normalized = UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+  LINE 644 [CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+  LINE 655 [CALL]
+    _clean_text(request.parent_job_id)
+
+  LINE 657 [CALL]
+    _clean_text(request.batch_id)
+
+  LINE 658 [CALL]
+    _clean_text(request.pipeline_run_id)
+
+  LINE 697 [ASSIGNMENT]
+    request = UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+  LINE 697 [CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+  LINE 742 [ASSIGNMENT]
+    job = UniversalJob(
+                job_id=normalized.job_id or "",
+                workspace_id=normalized.workspace_id,
+                user_id=normalized.user_id,
+                product_id=normalized.product_id,
+                pipeline=normalized.pipeline,
+                stage=normalized.stage,
+                job_type=normalized.job_type,
+                payload_reference=normalized.payload_reference,
+                priority=normalized.priority,
+                status=status,
+                attempts=initial_universal_job_attempts(),
+                maximum_attempts=normalized.maximum_attempts,
+                lease_owner=None,
+                lease_id=None,
+                lease_started_at=None,
+                lease_expires_at=None,
+                parent_job_id=normalized.parent_job_id,
+                dependency_job_ids=normalized.dependency_job_ids,
+                batch_id=normalized.batch_id,
+                pipeline_run_id=normalized.pipeline_run_id,
+                progress=UniversalJobProgress(
+                    percent=0,
+                    step=normalized.stage,
+                    message=message,
+                    updated_at=normalized.created_at,
+                ),
+                checkpoint_reference=None,
+                result_reference=None,
+                artifact_references=(),
+                idempotency_key=normalized.idempotency_key,
+                AU_reserved=0,
+                AU_consumed=0,
+                cost_record=UniversalJobCostRecord(),
+                created_at=normalized.created_at,
+                scheduled_at=None,
+                started_at=None,
+                completed_at=None,
+                failed_at=None,
+                cancelled_at=None,
+                error_code=None,
+                error_message=None,
+                error_details={},
+            )
+
+  LINE 742 [CALL]
+    UniversalJob(
+                job_id=normalized.job_id or "",
+                workspace_id=normalized.workspace_id,
+                user_id=normalized.user_id,
+                product_id=normalized.product_id,
+                pipeline=normalized.pipeline,
+                stage=normalized.stage,
+                job_type=normalized.job_type,
+                payload_reference=normalized.payload_reference,
+                priority=normalized.priority,
+                status=status,
+                attempts=initial_universal_job_attempts(),
+                maximum_attempts=normalized.maximum_attempts,
+                lease_owner=None,
+                lease_id=None,
+                lease_started_at=None,
+                lease_expires_at=None,
+                parent_job_id=normalized.parent_job_id,
+                dependency_job_ids=normalized.dependency_job_ids,
+                batch_id=normalized.batch_id,
+                pipeline_run_id=normalized.pipeline_run_id,
+                progress=UniversalJobProgress(
+                    percent=0,
+                    step=normalized.stage,
+                    message=message,
+                    updated_at=normalized.created_at,
+                ),
+                checkpoint_reference=None,
+                result_reference=None,
+                artifact_references=(),
+                idempotency_key=normalized.idempotency_key,
+                AU_reserved=0,
+                AU_consumed=0,
+                cost_record=UniversalJobCostRecord(),
+                created_at=normalized.created_at,
+                scheduled_at=None,
+                started_at=None,
+                completed_at=None,
+                failed_at=None,
+                cancelled_at=None,
+                error_code=None,
+                error_message=None,
+                error_details={},
+            )
+
+
+FILE: backend\server\runtime\universal_job_submission.py
+  LINE 256 [ASSIGNMENT]
+    creation_result = (
+            create_universal_job(
+                workspace_id=workspace_id,
+                job_type=job_type,
+                payload=payload,
+                metadata=metadata,
+                user_id=user_id,
+                product_id=product_id,
+                pipeline=pipeline,
+                stage=stage,
+                payload_reference=(
+                    payload_reference
+                ),
+                priority=priority,
+                parent_job_id=(
+                    parent_job_id
+                ),
+                dependency_job_ids=(
+                    dependency_job_ids
+                ),
+                batch_id=batch_id,
+                pipeline_run_id=(
+                    pipeline_run_id
+                ),
+                idempotency_key=(
+                    idempotency_key
+                ),
+                maximum_attempts=(
+                    maximum_attempts
+                ),
+                enqueue=True,
+                job_id=job_id,
+                created_at=created_at,
+                supported_job_types=(
+                    supported_job_types
+                ),
+                runtime_registration=(
+                    effective_registration
+                ),
+            )
+        )
+
+  LINE 257 [CALL]
+    create_universal_job(
+                workspace_id=workspace_id,
+                job_type=job_type,
+                payload=payload,
+                metadata=metadata,
+                user_id=user_id,
+                product_id=product_id,
+                pipeline=pipeline,
+                stage=stage,
+                payload_reference=(
+                    payload_reference
+                ),
+                priority=priority,
+                parent_job_id=(
+                    parent_job_id
+                ),
+                dependency_job_ids=(
+                    dependency_job_ids
+                ),
+                batch_id=batch_id,
+                pipeline_run_id=(
+                    pipeline_run_id
+                ),
+                idempotency_key=(
+                    idempotency_key
+                ),
+                maximum_attempts=(
+                    maximum_attempts
+                ),
+                enqueue=True,
+                job_id=job_id,
+                created_at=created_at,
+                supported_job_types=(
+                    supported_job_types
+                ),
+                runtime_registration=(
+                    effective_registration
+                ),
+            )
+
+
+
+SECTION 2 ? ACTIVE PYTHON LINEAGE REFERENCES
+------------------------------------------------------------------------------------------------
+
+FILE: backend\server\backups\pipeline2_coordinator_wiring_20260730_153606\__init__.py
+  LINE 7 [ASSIGNMENT] __all__ = [
+    "run_uploaded_document_to_uduc_pipeline",
+    "UploadIntakeDependencies",
+    "run_upload_intake",
+]
+
+FILE: backend\server\backups\pipeline2_coordinator_wiring_20260730_153606\files.py
+  LINE 737 [ASSIGNMENT] dependencies = UploadIntakeDependencies(
+        guess_extension=_guess_ext,
+        normalize_workspace_id=_ws,
+        extract_preview=_extract_preview_from_bytes,
+        store_and_index=_store_and_index,
+        workspace_directory=_ws_dir,
+        allowed_extensions=ALLOWED_EXT,
+    )
+
+FILE: backend\server\backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py
+  LINE 66 [ASSIGNMENT] extension = dependencies.guess_extension(file.filename)
+  LINE 68 [ASSIGNMENT] allowed_extensions = {
+        str(value or "").strip().lower()
+        for value in dependencies.allowed_extensions
+        if str(value or "").strip()
+    }
+  LINE 80 [ASSIGNMENT] normalized_workspace_id = dependencies.normalize_workspace_id(
+        workspace_id
+    )
+  LINE 86 [ASSIGNMENT] preview = dependencies.extract_preview(
+        Path(file.filename).name,
+        extension,
+        raw,
+    )
+  LINE 92 [ASSIGNMENT] metadata = dependencies.store_and_index(
+        normalized_workspace_id,
+        file,
+        raw,
+        preview_html=str(preview.get("html") or ""),
+        preview_text=str(preview.get("text") or ""),
+    )
+  LINE 107 [ASSIGNMENT] stored_path = str(
+            dependencies.workspace_directory(
+                normalized_workspace_id
+            )
+            / str(metadata.get("stored_name") or "")
+        )
+
+FILE: backend\server\backups\pipeline2_route_to_coordinator_20260730_153848\__init__.py
+  LINE 9 [ASSIGNMENT] __all__ = [
+    "run_uploaded_document_to_uduc_pipeline",
+    "UploadIntakeDependencies",
+    "run_upload_intake",
+]
+
+FILE: backend\server\backups\pipeline2_route_to_coordinator_20260730_153848\coordinator.py
+  LINE 43 [ASSIGNMENT] result = await run_upload_intake(
+        workspace_id=workspace_id,
+        file=file,
+        dependencies=dependencies,
+    )
+
+FILE: backend\server\backups\pipeline2_route_to_coordinator_20260730_153848\files.py
+  LINE 737 [ASSIGNMENT] dependencies = UploadIntakeDependencies(
+        guess_extension=_guess_ext,
+        normalize_workspace_id=_ws,
+        extract_preview=_extract_preview_from_bytes,
+        store_and_index=_store_and_index,
+        workspace_directory=_ws_dir,
+        allowed_extensions=ALLOWED_EXT,
+    )
+
+FILE: backend\server\backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py
+  LINE 66 [ASSIGNMENT] extension = dependencies.guess_extension(file.filename)
+  LINE 68 [ASSIGNMENT] allowed_extensions = {
+        str(value or "").strip().lower()
+        for value in dependencies.allowed_extensions
+        if str(value or "").strip()
+    }
+  LINE 80 [ASSIGNMENT] normalized_workspace_id = dependencies.normalize_workspace_id(
+        workspace_id
+    )
+  LINE 86 [ASSIGNMENT] preview = dependencies.extract_preview(
+        Path(file.filename).name,
+        extension,
+        raw,
+    )
+  LINE 92 [ASSIGNMENT] metadata = dependencies.store_and_index(
+        normalized_workspace_id,
+        file,
+        raw,
+        preview_html=str(preview.get("html") or ""),
+        preview_text=str(preview.get("text") or ""),
+    )
+  LINE 107 [ASSIGNMENT] stored_path = str(
+            dependencies.workspace_directory(
+                normalized_workspace_id
+            )
+            / str(metadata.get("stored_name") or "")
+        )
+
+FILE: backend\server\backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py
+  LINE 204 [ASSIGNMENT] job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+  LINE 476 [ASSIGNMENT] jobs = create_pipeline_batch_jobs_v1(
+        workspace_id=workspace_id,
+        chain_name="semantic_pipeline",
+        payload=payload or {},
+        batch_id=f"{safe_id(workspace_id)}_semantic_pipeline",
+    )
+  LINE 449 [ASSIGNMENT] job = create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=stage_payload,
+            parent_job_id=parent_job_id,
+            batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}",
+        )
+  LINE 476 [LINEAGE KWARG] create_pipeline_batch_jobs_v1(batch_id=f"{safe_id(workspace_id)}_semantic_pipeline")
+  LINE 449 [LINEAGE KWARG] create_universal_knowledge_job(parent_job_id=parent_job_id)
+  LINE 449 [LINEAGE KWARG] create_universal_knowledge_job(batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}")
+
+FILE: backend\server\backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\__init__.py
+  LINE 7 [ASSIGNMENT] __all__ = [
+    "run_ingestion_unified_content_pipeline",
+    "UploadIntakeDependencies",
+    "run_upload_intake",
+]
+
+FILE: backend\server\backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py
+  LINE 66 [ASSIGNMENT] extension = dependencies.guess_extension(file.filename)
+  LINE 68 [ASSIGNMENT] allowed_extensions = {
+        str(value or "").strip().lower()
+        for value in dependencies.allowed_extensions
+        if str(value or "").strip()
+    }
+  LINE 80 [ASSIGNMENT] normalized_workspace_id = dependencies.normalize_workspace_id(
+        workspace_id
+    )
+  LINE 86 [ASSIGNMENT] preview = dependencies.extract_preview(
+        Path(file.filename).name,
+        extension,
+        raw,
+    )
+  LINE 92 [ASSIGNMENT] metadata = dependencies.store_and_index(
+        normalized_workspace_id,
+        file,
+        raw,
+        preview_html=str(preview.get("html") or ""),
+        preview_text=str(preview.get("text") or ""),
+    )
+  LINE 107 [ASSIGNMENT] stored_path = str(
+            dependencies.workspace_directory(
+                normalized_workspace_id
+            )
+            / str(metadata.get("stored_name") or "")
+        )
+
+FILE: backend\server\backups\upload_document_top_coordinator_20260730_155905\files.py
+  LINE 737 [ASSIGNMENT] dependencies = UploadIntakeDependencies(
+        guess_extension=_guess_ext,
+        normalize_workspace_id=_ws,
+        extract_preview=_extract_preview_from_bytes,
+        store_and_index=_store_and_index,
+        workspace_directory=_ws_dir,
+        allowed_extensions=ALLOWED_EXT,
+    )
+
+FILE: backend\server\backups\wuc_full_reset_20260724_215019\backend\server\workers\website_unified_content_orchestrator.py
+  LINE 195 [ASSIGNMENT] job = create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type=
+                "build_website_unified_content",
+            payload={
+                "workspace_id":
+                    workspace_id,
+                "mode":
+                    "assigned_raw_html_ids",
+                "assigned_html_ids":
+                    html_ids,
+                "assigned_count":
+                    len(html_ids),
+                "batch_index":
+                    index,
+                "batch_count":
+                    len(batches),
+                "batch_id":
+                    batch_group_id,
+                "trigger":
+                    "website_content_fanout_orchestrator",
+                "source_stage":
+                    "raw_website_html_store",
+                "html_cleaner_used":
+                    False,
+            },
+            batch_id=batch_group_id,
+        )
+  LINE 195 [LINEAGE KWARG] create_universal_knowledge_job(batch_id=batch_group_id)
+
+FILE: backend\server\jobs\universal_knowledge_orchestrator.py
+  LINE 217 [ASSIGNMENT] job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+  LINE 489 [ASSIGNMENT] jobs = create_pipeline_batch_jobs_v1(
+        workspace_id=workspace_id,
+        chain_name="semantic_pipeline",
+        payload=payload or {},
+        batch_id=f"{safe_id(workspace_id)}_semantic_pipeline",
+    )
+  LINE 462 [ASSIGNMENT] job = create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=stage_payload,
+            parent_job_id=parent_job_id,
+            batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}",
+        )
+  LINE 489 [LINEAGE KWARG] create_pipeline_batch_jobs_v1(batch_id=f"{safe_id(workspace_id)}_semantic_pipeline")
+  LINE 462 [LINEAGE KWARG] create_universal_knowledge_job(parent_job_id=parent_job_id)
+  LINE 462 [LINEAGE KWARG] create_universal_knowledge_job(batch_id=batch_id or f"{safe_id(workspace_id)}_{chain_name}")
+
+FILE: backend\server\pipelines\upload_document\coordinator.py
+  LINE 69 [ASSIGNMENT] pipeline_2 = await run_uploaded_document_to_uduc_pipeline(
+        workspace_id=workspace_id,
+        file=file,
+        dependencies=dependencies,
+    )
+
+FILE: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\__init__.py
+  LINE 9 [ASSIGNMENT] __all__ = [
+    "run_uploaded_document_to_uduc_pipeline",
+    "UploadIntakeDependencies",
+    "run_upload_intake",
+]
+
+FILE: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py
+  LINE 43 [ASSIGNMENT] result = await run_upload_intake(
+        workspace_id=workspace_id,
+        file=file,
+        dependencies=dependencies,
+    )
+
+FILE: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py
+  LINE 66 [ASSIGNMENT] extension = dependencies.guess_extension(file.filename)
+  LINE 68 [ASSIGNMENT] allowed_extensions = {
+        str(value or "").strip().lower()
+        for value in dependencies.allowed_extensions
+        if str(value or "").strip()
+    }
+  LINE 80 [ASSIGNMENT] normalized_workspace_id = dependencies.normalize_workspace_id(
+        workspace_id
+    )
+  LINE 86 [ASSIGNMENT] preview = dependencies.extract_preview(
+        Path(file.filename).name,
+        extension,
+        raw,
+    )
+  LINE 92 [ASSIGNMENT] metadata = dependencies.store_and_index(
+        normalized_workspace_id,
+        file,
+        raw,
+        preview_html=str(preview.get("html") or ""),
+        preview_text=str(preview.get("text") or ""),
+    )
+  LINE 107 [ASSIGNMENT] stored_path = str(
+            dependencies.workspace_directory(
+                normalized_workspace_id
+            )
+            / str(metadata.get("stored_name") or "")
+        )
+
+FILE: backend\server\routes\files.py
+  LINE 669 [ASSIGNMENT] dependencies = UploadIntakeDependencies(
+        guess_extension=_guess_ext,
+        normalize_workspace_id=_ws,
+        extract_preview=_extract_preview_from_bytes,
+        store_and_index=_store_and_index,
+        workspace_directory=_ws_dir,
+        allowed_extensions=ALLOWED_EXT,
+    )
+
+FILE: backend\server\runtime\runtime_boot_process.py
+  LINE 632 [ASSIGNMENT] service_keys = (
+                    service_registry
+                    .dependency_order()
+                )
+
+FILE: backend\server\runtime\runtime_foundation_certification.py
+  LINE 761 [ASSIGNMENT] builders = (
+            ("COMPONENT_PRESENCE", self._component_presence_checks),
+            ("INTERFACE_INTEGRITY", self._interface_integrity_checks),
+            ("DEPENDENCY_CONSISTENCY", self._dependency_consistency_checks),
+            ("RUNTIME_BOUNDARIES", self._runtime_boundary_checks),
+            ("LIFECYCLE_INTEGRITY", self._lifecycle_checks),
+            ("BOOT_SHUTDOWN_COMPOSITION", self._boot_shutdown_checks),
+            ("CROSS_COMPONENT_CONTRACTS", self._cross_component_checks),
+            ("DETERMINISM", self._determinism_checks),
+            ("FOUNDATION_COMPLETENESS", self._completeness_checks),
+        )
+  LINE 907 [ASSIGNMENT] s = "DEPENDENCY_CONSISTENCY"
+
+FILE: backend\server\runtime\runtime_lifecycle_manager.py
+  LINE 376 [ASSIGNMENT] order = self._registry.dependency_order()
+
+FILE: backend\server\runtime\runtime_service_registry.py
+  LINE 22 [ASSIGNMENT] __all__ = [
+    "RuntimeServiceBinding",
+    "RuntimeServiceDependencyError",
+    "RuntimeServiceMissingError",
+    "RuntimeServiceRegistrationError",
+    "RuntimeServiceRegistry",
+    "RuntimeServiceRegistryError",
+    "RuntimeServiceRegistrySnapshot",
+    "RuntimeServiceRegistryStateError",
+]
+  LINE 94 [ASSIGNMENT] dependencies: tuple[str, ...]
+  LINE 109 [ASSIGNMENT] unresolved_dependencies: tuple[
+        tuple[str, str],
+        ...
+    ]
+  LINE 265 [ASSIGNMENT] resolved_dependencies = tuple(
+            sorted(
+                {
+                    self.normalize_service_key(item)
+                    for item in dependencies
+                }
+            )
+        )
+  LINE 478 [ASSIGNMENT] unresolved = self.unresolved_dependencies()
+  LINE 509 [ASSIGNMENT] indegree = {
+            key: len(binding.dependencies)
+            for key, binding in bindings.items()
+        }
+  LINE 289 [ASSIGNMENT] binding = RuntimeServiceBinding(
+                key=key,
+                service_type=_qualified_type_name(service),
+                capabilities=resolved_capabilities,
+                dependencies=resolved_dependencies,
+                startup_order=resolved_startup_order,
+                critical=bool(critical),
+                registered_at=_utc_now(),
+                generation=generation,
+            )
+  LINE 339 [ASSIGNMENT] dependents = tuple(
+                binding.key
+                for binding in self._bindings.values()
+                if key in binding.dependencies
+            )
+  LINE 461 [ASSIGNMENT] unresolved = tuple(
+                sorted(
+                    (
+                        binding.key,
+                        dependency,
+                    )
+                    for binding in self._bindings.values()
+                    for dependency in binding.dependencies
+                    if dependency not in registered
+                )
+            )
+  LINE 481 [ASSIGNMENT] formatted = ", ".join(
+                f"{service}->{dependency}"
+                for service, dependency in unresolved
+            )
+  LINE 580 [ASSIGNMENT] unresolved = tuple(
+                sorted(
+                    (
+                        binding.key,
+                        dependency,
+                    )
+                    for binding in self._bindings.values()
+                    for dependency in binding.dependencies
+                    if dependency not in registered
+                )
+            )
+
+FILE: backend\server\runtime\universal_job_submission.py
+  LINE 256 [ASSIGNMENT] creation_result = (
+        create_universal_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=(
+                payload_reference
+            ),
+            priority=priority,
+            parent_job_id=(
+                parent_job_id
+            ),
+            dependency_job_ids=(
+                dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=(
+                pipeline_run_id
+            ),
+            idempotency_key=(
+                idempotency_key
+            ),
+            maximum_attempts=(
+                maximum_attempts
+            ),
+            enqueue=True,
+            job_id=job_id,
+            created_at=created_at,
+            supported_job_types=(
+                supported_job_types
+            ),
+            runtime_registration=(
+                effective_registration
+            ),
+        )
+    )
+  LINE 257 [LINEAGE KWARG] create_universal_job(parent_job_id=parent_job_id)
+  LINE 257 [LINEAGE KWARG] create_universal_job(dependency_job_ids=dependency_job_ids)
+  LINE 257 [LINEAGE KWARG] create_universal_job(batch_id=batch_id)
+  LINE 257 [LINEAGE KWARG] create_universal_job(pipeline_run_id=pipeline_run_id)
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+  LINE 47 [ASSIGNMENT] REQUIRED_UNIVERSAL_JOB_FIELDS: Final[Tuple[str, ...]] = (
+    "job_id",
+    "workspace_id",
+    "user_id",
+    "product_id",
+    "pipeline",
+    "stage",
+    "job_type",
+    "payload_reference",
+    "priority",
+    "status",
+    "attempts",
+    "maximum_attempts",
+    "lease_owner",
+    "lease_id",
+    "lease_started_at",
+    "lease_expires_at",
+    "parent_job_id",
+    "dependency_job_ids",
+    "batch_id",
+    "pipeline_run_id",
+    "progress",
+    "checkpoint_reference",
+    "result_reference",
+    "artifact_references",
+    "idempotency_key",
+    "AU_reserved",
+    "AU_consumed",
+    "cost_record",
+    "created_at",
+    "scheduled_at",
+    "started_at",
+    "completed_at",
+    "failed_at",
+    "cancelled_at",
+    "error_code",
+    "error_message",
+    "error_details",
+    "contract_version",
+)
+  LINE 725 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 726 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+  LINE 727 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 728 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 973 [ATTRIBUTE] self.parent_job_id
+  LINE 975 [ATTRIBUTE] self.batch_id
+  LINE 976 [ATTRIBUTE] self.pipeline_run_id
+  LINE 839 [ATTRIBUTE] self.parent_job_id
+  LINE 842 [ATTRIBUTE] self.dependency_job_ids
+  LINE 844 [ATTRIBUTE] self.dependency_job_ids
+  LINE 847 [ATTRIBUTE] self.batch_id
+  LINE 849 [ATTRIBUTE] self.pipeline_run_id
+  LINE 974 [ATTRIBUTE] self.dependency_job_ids
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+  LINE 453 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 454 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 455 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 456 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 548 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 644 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 697 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 644 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 644 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 644 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 644 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 697 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 697 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 697 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 697 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 742 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=initial_universal_job_attempts(),
+            maximum_attempts=normalized.maximum_attempts,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 549 [ATTRIBUTE] request.dependency_job_ids
+  LINE 742 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 742 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 742 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 742 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 759 [ATTRIBUTE] normalized.parent_job_id
+  LINE 760 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 761 [ATTRIBUTE] normalized.batch_id
+  LINE 762 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 655 [ATTRIBUTE] request.parent_job_id
+  LINE 657 [ATTRIBUTE] request.batch_id
+  LINE 658 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_before_attempts_integration.py
+  LINE 454 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 455 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 456 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 457 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 549 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 645 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 698 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 645 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 645 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 645 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 645 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 698 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 698 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 698 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 698 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 743 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 550 [ATTRIBUTE] request.dependency_job_ids
+  LINE 743 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 743 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 743 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 743 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 760 [ATTRIBUTE] normalized.parent_job_id
+  LINE 761 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 762 [ATTRIBUTE] normalized.batch_id
+  LINE 763 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 656 [ATTRIBUTE] request.parent_job_id
+  LINE 658 [ATTRIBUTE] request.batch_id
+  LINE 659 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_before_payload_reference_integration.py
+  LINE 436 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 437 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 438 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 439 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 531 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 632 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 685 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 632 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 632 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 632 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 632 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 685 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 685 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 685 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 685 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 732 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 532 [ATTRIBUTE] request.dependency_job_ids
+  LINE 732 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 732 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 732 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 732 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 749 [ATTRIBUTE] normalized.parent_job_id
+  LINE 750 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 751 [ATTRIBUTE] normalized.batch_id
+  LINE 752 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 643 [ATTRIBUTE] request.parent_job_id
+  LINE 645 [ATTRIBUTE] request.batch_id
+  LINE 646 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_before_priority_integration.py
+  LINE 440 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 441 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 442 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 443 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 535 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 631 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 684 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 631 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 631 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 631 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 631 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 684 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 684 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 684 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 684 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 731 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 536 [ATTRIBUTE] request.dependency_job_ids
+  LINE 731 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 731 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 731 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 731 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 748 [ATTRIBUTE] normalized.parent_job_id
+  LINE 749 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 750 [ATTRIBUTE] normalized.batch_id
+  LINE 751 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 642 [ATTRIBUTE] request.parent_job_id
+  LINE 644 [ATTRIBUTE] request.batch_id
+  LINE 645 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_before_status_integration.py
+  LINE 450 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 451 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 452 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 453 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 545 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 641 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 694 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 641 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 641 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 641 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 641 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 694 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 694 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 694 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 694 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 741 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 546 [ATTRIBUTE] request.dependency_job_ids
+  LINE 741 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 741 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 741 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 741 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 758 [ATTRIBUTE] normalized.parent_job_id
+  LINE 759 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 760 [ATTRIBUTE] normalized.batch_id
+  LINE 761 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 652 [ATTRIBUTE] request.parent_job_id
+  LINE 654 [ATTRIBUTE] request.batch_id
+  LINE 655 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+  LINE 466 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 467 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 468 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 469 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 552 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 638 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+        created_at=created_at,
+    )
+  LINE 691 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 638 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 638 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 638 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 638 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 691 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 691 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 691 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 691 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 738 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 553 [ATTRIBUTE] request.dependency_job_ids
+  LINE 738 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 738 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 738 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 738 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 755 [ATTRIBUTE] normalized.parent_job_id
+  LINE 756 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 757 [ATTRIBUTE] normalized.batch_id
+  LINE 758 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 649 [ATTRIBUTE] request.parent_job_id
+  LINE 651 [ATTRIBUTE] request.batch_id
+  LINE 652 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+  LINE 430 [ASSIGNMENT] parent_job_id: Optional[str] = None
+  LINE 431 [ASSIGNMENT] dependency_job_ids: Tuple[str, ...] = ()
+  LINE 432 [ASSIGNMENT] batch_id: Optional[str] = None
+  LINE 433 [ASSIGNMENT] pipeline_run_id: Optional[str] = None
+  LINE 519 [ASSIGNMENT] dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+  LINE 620 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 673 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 620 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=_clean_text(request.parent_job_id) or None)
+  LINE 620 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=dependencies)
+  LINE 620 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=_clean_text(request.batch_id) or None)
+  LINE 620 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=_clean_text(request.pipeline_run_id) or None)
+  LINE 673 [LINEAGE KWARG] UniversalJobCreationRequest(parent_job_id=parent_job_id)
+  LINE 673 [LINEAGE KWARG] UniversalJobCreationRequest(dependency_job_ids=()
+            if dependency_job_ids is None
+            else dependency_job_ids)
+  LINE 673 [LINEAGE KWARG] UniversalJobCreationRequest(batch_id=batch_id)
+  LINE 673 [LINEAGE KWARG] UniversalJobCreationRequest(pipeline_run_id=pipeline_run_id)
+  LINE 720 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 520 [ATTRIBUTE] request.dependency_job_ids
+  LINE 720 [LINEAGE KWARG] UniversalJob(parent_job_id=normalized.parent_job_id)
+  LINE 720 [LINEAGE KWARG] UniversalJob(dependency_job_ids=normalized.dependency_job_ids)
+  LINE 720 [LINEAGE KWARG] UniversalJob(batch_id=normalized.batch_id)
+  LINE 720 [LINEAGE KWARG] UniversalJob(pipeline_run_id=normalized.pipeline_run_id)
+  LINE 737 [ATTRIBUTE] normalized.parent_job_id
+  LINE 738 [ATTRIBUTE] normalized.dependency_job_ids
+  LINE 739 [ATTRIBUTE] normalized.batch_id
+  LINE 740 [ATTRIBUTE] normalized.pipeline_run_id
+  LINE 631 [ATTRIBUTE] request.parent_job_id
+  LINE 633 [ATTRIBUTE] request.batch_id
+  LINE 634 [ATTRIBUTE] request.pipeline_run_id
+
+FILE: backend\server\runtime\universal_runtime_infrastructure.py
+  LINE 164 [ASSIGNMENT] payload["retry_of"] = job.get("job_id")
+  LINE 165 [ASSIGNMENT] payload["retry_attempt"] = attempts
+  LINE 167 [ASSIGNMENT] retry = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job.get("job_type"),
+        payload=payload,
+        priority=job.get("priority", 5),
+        parent_job_id=job.get("job_id", ""),
+        batch_id=job.get("batch_id", ""),
+    )
+  LINE 183 [ASSIGNMENT] payload = {
+        "workspace_id": ws,
+        "batch_id": safe_id(batch_id),
+        "job_ids": [j.get("job_id") for j in jobs],
+        "job_count": len(jobs),
+        "status": "created",
+        "created_at": now_iso(),
+        "updated_at": now_iso(),
+    }
+  LINE 198 [ASSIGNMENT] batch = read_json(BATCH_DIR / ws / f"{safe_id(batch_id)}.json", {})
+  LINE 398 [ASSIGNMENT] batch = safe_id(upload_batch_id, "upload_batch")
+  LINE 453 [ASSIGNMENT] gate = {
+        "schema_version": "upload_batch_completion_gate_v1",
+        "workspace_id": ws,
+        "upload_batch_id": batch,
+        "document_count": document_count,
+        "completed_count": len(completed_documents),
+        "failed_count": len(failed_documents),
+        "pending_count": len(pending_documents),
+        "status_counts": dict(status_counts),
+        "completed_documents": completed_documents,
+        "failed_documents": failed_documents,
+        "pending_documents": pending_documents,
+        "all_terminal": all_terminal,
+        "all_completed": all_completed,
+        "decision": decision,
+        "upload_ready_for_certification": upload_ready_for_certification,
+        "created_at": now_iso(),
+    }
+  LINE 167 [LINEAGE KWARG] create_universal_knowledge_job(parent_job_id=job.get("job_id", ""))
+  LINE 167 [LINEAGE KWARG] create_universal_knowledge_job(batch_id=job.get("batch_id", ""))
+
+FILE: backend\server\runtime\website_article_integrity_automation.py
+  LINE 556 [ASSIGNMENT] job = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=job_payload,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=PIPELINE,
+        stage=stage,
+        payload_ref=str(
+            job_payload.get(
+                "payload_ref"
+            )
+            or job_payload.get(
+                "udare_manifest_path"
+            )
+            or integrity_run_id
+        ),
+        priority=priority,
+        parent_job_id=parent_job_id,
+        batch_id=(
+            batch_id
+            or integrity_run_id
+        ),
+        enqueue=True,
+    )
+  LINE 870 [ASSIGNMENT] population_batch_id = (
+        _derive_population_batch_id(
+            processed_udare_jobs
+        )
+    )
+  LINE 876 [ASSIGNMENT] run_seed = "|".join(
+        (
+            workspace_id,
+            population_batch_id,
+            str(expected_upstream_count),
+            str(record_count),
+            manifest_sha256,
+        )
+    )
+  LINE 1620 [ASSIGNMENT] created = _create_pipeline_job_once(
+        workspace_id=workspace_id,
+        integrity_run_id=(
+            integrity_run_id
+        ),
+        job_type=successor_job_type,
+        stage=successor_stage,
+        payload=successor_payload,
+        parent_job_id=str(
+            job.get("job_id")
+            or ""
+        ),
+        batch_id=str(
+            job.get("batch_id")
+            or integrity_run_id
+        ),
+        user_id=str(
+            job.get("user_id")
+            or "system"
+        ),
+        product_id=str(
+            job.get("product_id")
+            or "linkcraftor"
+        ),
+        priority=int(
+            job.get("priority")
+            or 4
+        ),
+    )
+  LINE 556 [LINEAGE KWARG] create_universal_knowledge_job(parent_job_id=parent_job_id)
+  LINE 556 [LINEAGE KWARG] create_universal_knowledge_job(batch_id=batch_id
+            or integrity_run_id)
+  LINE 672 [ASSIGNMENT] value = str(
+            job.get("batch_id")
+            or metadata.get(
+                "population_batch_id"
+            )
+            or payload.get(
+                "correlation_id"
+            )
+            or ""
+        ).strip()
+  LINE 1070 [ASSIGNMENT] payload = {
+            "schema_version": (
+                AUTOMATION_VERSION
+            ),
+            "operation": "execute",
+            "auto_continue": True,
+            "project_root": str(
+                PROJECT_ROOT
+            ),
+            "workspace_id": workspace_id,
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+            "expected_store_count": (
+                record_count
+            ),
+            "expected_store_count_before": (
+                record_count
+            ),
+            "expected_assessed_count": (
+                record_count
+            ),
+            "expected_upstream_count": (
+                expected_upstream_count
+            ),
+            "deferred_upstream_count": (
+                deferred_upstream_count
+            ),
+            "udare_manifest_path": str(
+                manifest_path
+            ),
+            "udare_manifest_sha256": (
+                manifest_sha256
+            ),
+            "payload_ref": str(
+                manifest_path
+            ),
+            "trigger": {
+                "type": (
+                    "udare_queue_drained"
+                ),
+                "source_pipeline": (
+                    "website_reconstruction"
+                ),
+                "source_stage": (
+                    "udare_reconstruction"
+                ),
+                "population_batch_id": (
+                    population_batch_id
+                ),
+                "processed_final_batch_count": (
+                    len(
+                        processed_udare_jobs
+                    )
+                ),
+                "failed_final_batch_count": (
+                    failed_execution_count
+                ),
+                "triggered_at": utc_now(),
+            },
+            "max_attempts": 3,
+        }
+  LINE 1133 [ASSIGNMENT] created = (
+            _create_pipeline_job_once(
+                workspace_id=workspace_id,
+                integrity_run_id=(
+                    integrity_run_id
+                ),
+                job_type=(
+                    JOB_TYPE_STRUCTURE
+                ),
+                stage=STAGE_STRUCTURE,
+                payload=payload,
+                parent_job_id=str(
+                    final_udare_job.get(
+                        "job_id"
+                    )
+                    or ""
+                ),
+                batch_id=(
+                    population_batch_id
+                    or integrity_run_id
+                ),
+                user_id=user_id,
+                product_id=product_id,
+                priority=4,
+            )
+        )
+  LINE 1160 [ASSIGNMENT] marker = {
+            "schema_version": (
+                AUTOMATION_VERSION
+            ),
+            "status": "TRIGGERED",
+            "workspace_id": workspace_id,
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+            "first_job_id": created.get(
+                "job_id"
+            ),
+            "created": created.get(
+                "created"
+            ),
+            "expected_upstream_count": (
+                expected_upstream_count
+            ),
+            "expected_store_count": (
+                record_count
+            ),
+            "deferred_upstream_count": (
+                deferred_upstream_count
+            ),
+            "udare_manifest_path": str(
+                manifest_path
+            ),
+            "udare_manifest_sha256": (
+                manifest_sha256
+            ),
+            "population_batch_id": (
+                population_batch_id
+            ),
+            "triggered_at": utc_now(),
+        }
+  LINE 1620 [LINEAGE KWARG] _create_pipeline_job_once(parent_job_id=str(
+            job.get("job_id")
+            or ""
+        ))
+  LINE 1620 [LINEAGE KWARG] _create_pipeline_job_once(batch_id=str(
+            job.get("batch_id")
+            or integrity_run_id
+        ))
+  LINE 1134 [LINEAGE KWARG] _create_pipeline_job_once(parent_job_id=str(
+                    final_udare_job.get(
+                        "job_id"
+                    )
+                    or ""
+                ))
+  LINE 1134 [LINEAGE KWARG] _create_pipeline_job_once(batch_id=population_batch_id
+                    or integrity_run_id)
+
+FILE: backend\server\stores\dom_article_structure_extractor.py
+  LINE 265 [ASSIGNMENT] ancestor = _nearest_selected_ancestor_v1(
+            node,
+            selected_names,
+        )
+
+FILE: backend\server\stores\enterprise_raw_html_acquisition_engine.py
+  LINE 485 [ASSIGNMENT] retry_attempt_total = 0
+  LINE 711 [ASSIGNMENT] report = {
+        "ok": True,
+        "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+        "workspace_id": workspace_id,
+        "dry_run": False,
+        "resume": resume,
+        "force": force,
+        "started_at_utc": started_at,
+        "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+        "elapsed_seconds": round(elapsed, 3),
+        "input": {
+            "site_pages_count": site_pages_count,
+            "selected_pages_count": selected_pages_count,
+            "existing_raw_html_count_before": len(existing_ids) - succeeded,
+            "missing_pages_selected": missing_pages_count,
+            "missing_only_queue_enabled": bool(resume and not force),
+            "batch_size": batch_size,
+            "limit": limit,
+        },
+        "processing": {
+            "attempted": attempted,
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped_existing": skipped_existing,
+            "skipped_no_url": skipped_no_url,
+        },
+        "stores": {
+            "raw_html_store_count": raw_html_count,
+            "raw_html_store_path": str(_raw_html_store_path_v1(workspace_id)),
+        },
+        "diagnostics": {
+            "http_status_distribution": http_status_distribution,
+            "content_type_distribution": content_type_distribution,
+            "redirect_count": redirect_count,
+            "retry_attempt_total": retry_attempt_total,
+            "average_fetch_seconds": round(average_fetch_seconds, 3),
+            "pages_per_minute": round(pages_per_minute, 3),
+            "max_consecutive_failures": max_consecutive_failures,
+            "temporary_failures": temporary_failures,
+            "permanent_failures": permanent_failures,
+            "newly_excluded": newly_excluded,
+            "already_excluded": already_excluded,
+            "failure_registry_count": len(failure_registry.get("failures", {}) or {}),
+            "failure_registry_path": str(_failure_registry_path_v1(workspace_id)),
+        },
+        "certification": certification,
+        "samples": {
+            "successes": successes[:20],
+            "errors": errors[:50],
+        },
+        "ledger_tail": ledger[-100:],
+    }
+  LINE 643 [ASSIGNMENT] checkpoint = {
+                "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+                "workspace_id": workspace_id,
+                "started_at_utc": started_at,
+                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                "processed_selected_pages": processed,
+                "selected_pages_count": selected_pages_count,
+                "attempted": attempted,
+                "succeeded": succeeded,
+                "failed": failed,
+                "skipped_existing": skipped_existing,
+                "skipped_no_url": skipped_no_url,
+                "raw_html_store_count": len(store.get("pages", {}) or {}),
+                "http_status_distribution": http_status_distribution,
+                "content_type_distribution": content_type_distribution,
+                "redirect_count": redirect_count,
+                "retry_attempt_total": retry_attempt_total,
+                "max_consecutive_failures": max_consecutive_failures,
+                "last_index": index,
+                "last_url": url,
+                "elapsed_seconds": round(elapsed, 3),
+                "pages_per_second": round(rate, 4),
+                "eta_seconds": round(eta_seconds, 3) if eta_seconds is not None else None,
+                "recent_ledger": ledger[-25:],
+            }
+
+FILE: backend\server\stores\rebuild_governance.py
+  LINE 230 [ASSIGNMENT] dependency_pairs = [
+        ("document_structure", "upload_phrase_pool"),
+        ("upload_phrase_pool", "active_phrase_pool"),
+        ("active_phrase_pool", "rb2_runtime"),
+        ("active_target_pool", "rb2_runtime"),
+        ("rb2_runtime", "editor_repaint"),
+    ]
+
+FILE: backend\server\stores\semantic_relationship_graph.py
+  LINE 432 [ASSIGNMENT] graph_lineage = {
+        "semantic_context_model": evidence_model.get("source_models", {}).get("semantic_context", {}),
+        "entity_concept_extraction_model": evidence_model.get("source_models", {}).get("entity_concept_extraction", {}),
+        "phrase_neighborhood_model": evidence_model.get("source_models", {}).get("phrase_neighborhoods", {}),
+        "topic_intent_model": evidence_model.get("source_models", {}).get("topic_intent", {}),
+        "section_evidence_model": {
+            "schema_version": evidence_model.get("schema_version"),
+            "phase": evidence_model.get("phase"),
+            "patch": evidence_model.get("patch"),
+        },
+    }
+  LINE 444 [ASSIGNMENT] graph_model = {
+        "schema_version": "semantic_relationship_graph_v1",
+        "phase": "4.6.7",
+        "patch": "4.6.7A",
+        "patch": "4.6.7A",
+        "created_at": _now_iso(),
+        "source_models": {
+            "section_evidence": {
+                "schema_version": evidence_model.get("schema_version"),
+                "phase": evidence_model.get("phase"),
+                "patch": evidence_model.get("patch"),
+            },
+        },
+        "graph_lineage": graph_lineage,
+        "article": article,
+        "domain_label": evidence_model.get("domain_label"),
+        "graph": {
+            "nodes": sorted(nodes.values(), key=lambda item: (item["node_type"], item["label"], item["node_id"])),
+            "edges": sorted(edges, key=lambda item: (item["edge_type"], item["source_id"], item["target_id"])),
+        },
+        "metadata": {
+            "node_count": len(nodes),
+            "edge_count": len(edges),
+            "node_type_counts": node_type_counts,
+            "edge_type_counts": edge_type_counts,
+            "node_layer_counts": node_layer_counts,
+            "partition_counts": partition_counts,
+            "article_node_id": article_node_id,
+        },
+        "boundary_rule": (
+            "Semantic Relationship Graph converts section evidence into a graph representation only. "
+            "It does not resolve links, create blue highlights, create yellow highlights, score target pages, "
+            "write memory, perform reasoning, or generate explanations."
+        ),
+    }
+
+FILE: backend\server\stores\udare_store.py
+  LINE 1599 [ASSIGNMENT] record = {
+        "schema_version":
+            RECORD_SCHEMA_VERSION,
+
+        "store_version":
+            STORE_VERSION,
+
+        "record_type":
+            "udare_reconstructed_article",
+
+        "workspace_id":
+            workspace_id,
+
+        "document_id":
+            document_id,
+
+        "html_id":
+            html_id,
+
+        "source_url":
+            source_url,
+
+        "source_store_version":
+            source_store_version,
+
+        "source_record_id":
+            (
+                source_record_id
+                or html_id
+            ),
+
+        "title":
+            str(
+                title or ""
+            ),
+
+        "h1":
+            str(
+                h1 or ""
+            ),
+
+        "headings":
+            heading_values,
+
+        "heading_count":
+            len(
+                heading_values
+            ),
+
+        "udare_engine":
+            udare_engine,
+
+        "reconstruction_status":
+            str(
+                reconstruction_status
+                or ""
+            ),
+
+        "selected_tag":
+            str(
+                selected_tag
+                or ""
+            ),
+
+        "article_document": {
+            "format":
+                ARTICLE_DOCUMENT_FORMAT,
+
+            "media_type":
+                "text/html",
+
+            "encoding":
+                "utf-8",
+
+            "filename":
+                final_article_filename,
+
+            "relative_path":
+                _relative_path_v1(
+                    article_path,
+                    paths["root"],
+                ),
+
+            "sha256":
+                document_sha256,
+
+            "byte_length":
+                len(
+                    document_bytes
+                ),
+
+            "stored_without_mutation":
+                True,
+        },
+
+        "content_integrity": {
+            "udare_article_body_sha256":
+                str(
+                    udare_article_body_sha256
+                    or ""
+                ),
+
+            "reader_body_text_sha256":
+                document_validation[
+                    "reader_body_text_sha256"
+                ],
+
+            "reader_body_word_count":
+                document_validation[
+                    "reader_body_word_count"
+                ],
+
+            "reader_body_character_count":
+                document_validation[
+                    "reader_body_character_count"
+                ],
+
+            "content_block_count":
+                (
+                    int(
+                        content_block_count
+                    )
+                    if (
+                        content_block_count
+                        is not None
+                    )
+                    else None
+                ),
+        },
+
+        "runtime_context": {
+            "job_id":
+                job_id,
+
+            "batch_id":
+                batch_id,
+
+            "attempt":
+                (
+                    int(
+                        attempt
+                    )
+                    if attempt is not None
+                    else None
+                ),
+        },
+
+        "created_at_utc":
+            created_at,
+
+        "updated_at_utc":
+            now,
+
+        "persisted_at_utc":
+            now,
+
+        "persistence_status":
+            "stored",
+
+        "operational_metadata":
+            extra_metadata,
+    }
+
+FILE: backend\server\stores\universal_dom_article_reconstruction_engine.py
+  LINE 93 [ASSIGNMENT] SUBSTANTIAL_DESCENDANT_MIN_WORDS = 3
+  LINE 100 [ASSIGNMENT] NAVIGATION_ANCESTOR_LEVELS = 4
+  LINE 149 [ASSIGNMENT] _SUBSTANTIAL_DESCENDANT_TAGS = [
+    "div", "section", "article",
+    "h1", "h2", "h3", "h4", "h5", "h6",
+    "p", "li", "blockquote",
+    "figcaption", "pre", "dt", "dd",
+]
+  LINE 1003 [ASSIGNMENT] ancestor: Tag | None = parent_list
+  LINE 907 [ASSIGNMENT] text = _node_text(descendant, cache)
+  LINE 1013 [ASSIGNMENT] ancestor = ancestor.parent
+  LINE 489 [ASSIGNMENT] name = str(descendant.name or "").lower()
+
+FILE: backend\server\stores\upload_intel_store_old.py
+  LINE 707 [ASSIGNMENT] penalty = _context_dependency_penalty(tokens)
+
+FILE: backend\server\stores\workspace_governance.py
+  LINE 2519 [ASSIGNMENT] MAX_REPAIR_RETRY_ATTEMPTS = 3
+
+FILE: backend\server\tms\attachment_orchestration.py
+  LINE 22 [ASSIGNMENT] MAX_ATTACHMENT_RETRY_ATTEMPTS = 3
+
+FILE: backend\server\tms\intelligence_orchestration.py
+  LINE 22 [ASSIGNMENT] MAX_INTELLIGENCE_RETRY_ATTEMPTS = 3
+
+FILE: backend\server\tms\notification_delivery.py
+  LINE 34 [ASSIGNMENT] MAX_DELIVERY_RETRY_ATTEMPTS = 3
+
+FILE: backend\server\tms\notification_orchestration.py
+  LINE 22 [ASSIGNMENT] MAX_NOTIFICATION_RETRY_ATTEMPTS = 3
+
+FILE: backend\server\tms\ticket_orchestration.py
+  LINE 17 [ASSIGNMENT] MAX_RETRY_ATTEMPTS = 3
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py
+  LINE 7955 [ASSIGNMENT] retry_attempts = 10
+
+FILE: backend\server\workers\certified_website_article_batch_worker.py
+  LINE 262 [ASSIGNMENT] reconstruction = (
+                reconstruct_universal_dom_article_v1(
+                    html_text=
+                        raw_html,
+
+                    url=
+                        url,
+
+                    title=
+                        source_title,
+
+                    metadata={
+                        "workspace_id":
+                            workspace_id,
+
+                        "html_id":
+                            html_id,
+
+                        "batch_id":
+                            batch_id,
+
+                        "batch_index":
+                            batch_index,
+
+                        "batch_count":
+                            batch_count,
+
+                        "source_stage":
+                            "raw_website_html_store",
+
+                        "target_stage":
+                            (
+                                "certified_website_"
+                                "article_store"
+                            ),
+                    },
+                )
+            )
+  LINE 438 [ASSIGNMENT] integrity = (
+                build_website_article_integrity_result_v1(
+                    raw_main_html=str(
+                        reconstruction.get(
+                            "selected_html"
+                        )
+                        or reconstruction.get(
+                            "raw_main_html"
+                        )
+                        or raw_html
+                    ),
+
+                    raw_article_text=
+                        article_body,
+
+                    headings=
+                        headings,
+
+                    title=
+                        title,
+
+                    url=
+                        url,
+
+                    metadata={
+                        "workspace_id":
+                            workspace_id,
+
+                        "html_id":
+                            html_id,
+
+                        "batch_id":
+                            batch_id,
+
+                        "batch_index":
+                            batch_index,
+
+                        "batch_count":
+                            batch_count,
+
+                        "source_stage":
+                            EXPECTED_UDARE_ENGINE,
+                    },
+
+                    content_blocks=
+                        content_blocks,
+                )
+            )
+  LINE 584 [ASSIGNMENT] validation = (
+                validate_article_v1(
+                    cleaned_article_text=
+                        certified_body,
+
+                    title=
+                        title,
+
+                    headings=
+                        final_headings,
+
+                    removed_sections=
+                        removed_sections,
+
+                    metadata={
+                        "workspace_id":
+                            workspace_id,
+
+                        "html_id":
+                            html_id,
+
+                        "url":
+                            url,
+
+                        "batch_id":
+                            batch_id,
+
+                        "batch_index":
+                            batch_index,
+
+                        "batch_count":
+                            batch_count,
+
+                        "integrity_passed":
+                            True,
+
+                        "source_stage":
+                            EXPECTED_INTEGRITY_ENGINE,
+                    },
+                )
+            )
+  LINE 744 [ASSIGNMENT] certified_article = (
+                build_certified_website_article_v1(
+                    workspace_id=
+                        workspace_id,
+
+                    html_id=
+                        html_id,
+
+                    url=
+                        url,
+
+                    title=
+                        title,
+
+                    h1=
+                        h1,
+
+                    headings=
+                        final_headings,
+
+                    content_blocks=
+                        content_blocks,
+
+                    article_body=
+                        certified_body,
+
+                    reconstruction=
+                        reconstruction,
+
+                    integrity=
+                        integrity,
+
+                    validation=
+                        validation,
+
+                    metadata={
+                        "worker_version":
+                            WORKER_VERSION,
+
+                        "batch_id":
+                            batch_id,
+
+                        "batch_index":
+                            batch_index,
+
+                        "batch_count":
+                            batch_count,
+
+                        "raw_html_length":
+                            len(
+                                raw_html
+                            ),
+
+                        "udare_engine":
+                            reconstruction_engine,
+
+                        "integrity_engine":
+                            EXPECTED_INTEGRITY_ENGINE,
+
+                        "validation_version":
+                            validation_version,
+
+                        "wuc_written":
+                            False,
+
+                        "uucd_written":
+                            False,
+
+                        "body_store_written":
+                            False,
+                    },
+                )
+            )
+
+FILE: backend\server\workers\udare_reconstruction_worker.py
+  LINE 830 [ASSIGNMENT] batch_id = str(
+        job_mapping.get(
+            "batch_id"
+        )
+        or ""
+    )
+  LINE 1215 [ASSIGNMENT] persistence_result = _call_by_signature_v1(
+            store_persister,
+            {
+                "workspace_id":
+                    workspace_id,
+
+                "document_id":
+                    document_id,
+
+                "html_id":
+                    html_id,
+
+                "source_url":
+                    source_url,
+
+                "title":
+                    str(
+                        reconstruction.get(
+                            "title"
+                        )
+                        or built_document.get(
+                            "title"
+                        )
+                        or source_title
+                        or ""
+                    ),
+
+                "h1":
+                    str(
+                        reconstruction.get(
+                            "h1"
+                        )
+                        or built_document.get(
+                            "h1"
+                        )
+                        or ""
+                    ),
+
+                "headings":
+                    _heading_values_v1(
+                        reconstruction
+                    ),
+
+                "article_document":
+                    article_document,
+
+                "udare_engine":
+                    UDARE_ENGINE,
+
+                "source_store_version":
+                    UDARE_SOURCE_STORE,
+
+                "source_record_id":
+                    source_record_id,
+
+                "reconstruction_status":
+                    "completed",
+
+                "selected_tag":
+                    selected_tag,
+
+                "udare_article_body_sha256":
+                    str(
+                        built_document.get(
+                            "article_body_sha256"
+                        )
+                        or ""
+                    ),
+
+                "content_block_count":
+                    int(
+                        built_document.get(
+                            "content_block_count"
+                        )
+                        or len(
+                            reconstruction.get(
+                                "content_blocks"
+                            )
+                            or []
+                        )
+                    ),
+
+                "job_id":
+                    job_id,
+
+                "batch_id":
+                    batch_id,
+
+                "attempt":
+                    attempt,
+
+                "operational_metadata": {
+                    "worker":
+                        WORKER_NAME,
+
+                    "pipeline":
+                        UDARE_PIPELINE,
+
+                    "stage":
+                        UDARE_JOB_TYPE,
+
+                    "builder":
+                        str(
+                            built_document.get(
+                                "builder"
+                            )
+                            or ""
+                        ),
+
+                    "correlation_id":
+                        str(
+                            payload.get(
+                                "correlation_id"
+                            )
+                            or ""
+                        ),
+                },
+
+                "expected_document_sha256":
+                    str(
+                        built_document.get(
+                            "article_document_sha256"
+                        )
+                        or ""
+                    ),
+
+                "allow_replace":
+                    False,
+            },
+        )
+
+FILE: backend\server\workers\website_raw_html_acquisition_orchestrator.py
+  LINE 125 [ASSIGNMENT] job = create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type="raw_html_acquisition",
+            payload={
+                "workspace_id": workspace_id,
+                "mode": "assigned_urls",
+                "assigned_urls": [page["url"] for page in batch],
+                "assigned_count": len(batch),
+                "batch_index": index,
+                "batch_count": len(batches),
+                "batch_size": int(batch_size),
+                "checkpoint_every": int(checkpoint_every),
+                "sleep_seconds": float(sleep_seconds),
+                "auto_continue": False,
+                "trigger": "raw_html_fanout_orchestrator",
+            },
+            batch_id=batch_group_id,
+        )
+  LINE 125 [LINEAGE KWARG] create_universal_knowledge_job(batch_id=batch_group_id)
+
+
+SECTION 3 ? CONTRACT LINEAGE VALIDATION / NORMALIZATION
+------------------------------------------------------------------------------------------------
+
+FUNCTION: __post_init__ @ LINE 764
+    def __post_init__(self) -> None:
+            violations: list = []
+            set_ = object.__setattr__
+    
+            set_(self, "job_id", _normalize_identifier(
+                self.job_id, name="job_id", violations=violations, required=True) or "")
+            set_(self, "workspace_id", _normalize_identifier(
+                self.workspace_id, name="workspace_id", violations=violations,
+                required=True) or "")
+            set_(self, "user_id", _normalize_identifier(
+                self.user_id, name="user_id", violations=violations, required=False)
+                or "system")
+            set_(self, "product_id", _normalize_identifier(
+                self.product_id, name="product_id", violations=violations,
+                required=False) or "linkcraftor")
+    
+            for name in ("pipeline", "stage"):
+                value = _normalize_optional_text(
+                    getattr(self, name), name=name, violations=violations,
+                    max_length=_MAX_IDENTIFIER_LENGTH,
+                )
+                set_(self, name, value or "")
+    
+            job_type = _normalize_optional_text(
+                self.job_type,
+                name="job_type",
+                violations=violations,
+                max_length=_MAX_IDENTIFIER_LENGTH,
+            )
+            if job_type is None:
+                violations.append("job_type is required")
+            set_(self, "job_type", job_type or "")
+    
+            set_(self, "payload_reference", _normalize_optional_text(
+                self.payload_reference, name="payload_reference", violations=violations))
+    
+            try:
+                set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+            except UniversalJobContractError as exc:
+                violations.extend(exc.violations or (str(exc),))
+                set_(self, "priority", UniversalJobPriority.NORMAL)
+    
+            try:
+                set_(self, "status", UniversalJobStatus.coerce(self.status))
+            except UniversalJobContractError as exc:
+                violations.extend(exc.violations or (str(exc),))
+                set_(self, "status", UniversalJobStatus.CREATED)
+    
+            set_(self, "attempts", _normalize_non_negative_int(
+                self.attempts, name="attempts", violations=violations))
+            maximum_attempts = _normalize_non_negative_int(
+                self.maximum_attempts, name="maximum_attempts", violations=violations,
+                default=1,
+            )
+            if maximum_attempts < 1:
+                violations.append("maximum_attempts must be at least 1")
+                maximum_attempts = 1
+            set_(self, "maximum_attempts", maximum_attempts)
+            if self.attempts > maximum_attempts:
+                violations.append("attempts must not exceed maximum_attempts")
+    
+            for name in ("lease_owner", "lease_id"):
+                set_(self, name, _normalize_identifier(
+                    getattr(self, name), name=name, violations=violations,
+                    required=False))
+            set_(self, "lease_started_at", _normalize_timestamp(
+                self.lease_started_at, name="lease_started_at", violations=violations))
+            set_(self, "lease_expires_at", _normalize_timestamp(
+                self.lease_expires_at, name="lease_expires_at", violations=violations))
+            if self.lease_started_at and self.lease_expires_at:
+                if self.lease_expires_at < self.lease_started_at:
+                    violations.append(
+                        "lease_expires_at must not precede lease_started_at")
+    
+            set_(self, "parent_job_id", _normalize_identifier(
+                self.parent_job_id, name="parent_job_id", violations=violations,
+                required=False))
+            set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+                self.dependency_job_ids, name="dependency_job_ids",
+                violations=violations))
+            if self.job_id and self.job_id in self.dependency_job_ids:
+                violations.append("dependency_job_ids must not contain job_id")
+            set_(self, "batch_id", _normalize_identifier(
+                self.batch_id, name="batch_id", violations=violations, required=False))
+            set_(self, "pipeline_run_id", _normalize_identifier(
+                self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+                required=False))
+    
+            try:
+                set_(self, "progress", UniversalJobProgress.from_value(self.progress))
+            except UniversalJobContractError as exc:
+                violations.extend(exc.violations or (str(exc),))
+                set_(self, "progress", UniversalJobProgress())
+    
+            set_(self, "checkpoint_reference", _normalize_optional_text(
+                self.checkpoint_reference, name="checkpoint_reference",
+                violations=violations))
+            set_(self, "result_reference", _normalize_optional_text(
+                self.result_reference, name="result_reference", violations=violations))
+            set_(self, "artifact_references", _normalize_reference_tuple(
+                self.artifact_references, name="artifact_references",
+                violations=violations))
+    
+            set_(self, "idempotency_key", _normalize_identifier(
+                self.idempotency_key, name="idempotency_key", violations=violations,
+                required=False))
+    
+            set_(self, "AU_reserved", _normalize_non_negative_int(
+                self.AU_reserved, name="AU_reserved", violations=violations))
+            set_(self, "AU_consumed", _normalize_non_negative_int(
+                self.AU_consumed, name="AU_consumed", violations=violations))
+    
+            try:
+                set_(self, "cost_record", UniversalJobCostRecord.from_value(
+                    self.cost_record))
+            except UniversalJobContractError as exc:
+                violations.extend(exc.violations or (str(exc),))
+                set_(self, "cost_record", UniversalJobCostRecord())
+    
+            for name in _TIMESTAMP_ORDER + ("failed_at", "cancelled_at"):
+                set_(self, name, _normalize_timestamp(
+                    getattr(self, name), name=name, violations=violations))
+    
+            if self.created_at is None:
+                violations.append("created_at is required")
+    
+            self._check_timestamp_ordering(violations)
+    
+            set_(self, "error_code", _normalize_identifier(
+                self.error_code, name="error_code", violations=violations,
+                required=False))
+            set_(self, "error_message", _normalize_optional_text(
+                self.error_message, name="error_message", violations=violations,
+                max_length=_MAX_TEXT_LENGTH))
+            set_(self, "error_details", _normalize_mapping(
+                self.error_details, name="error_details", violations=violations))
+    
+            version = _normalize_optional_text(
+                self.contract_version, name="contract_version", violations=violations,
+                max_length=_MAX_IDENTIFIER_LENGTH,
+            )
+            if version != UNIVERSAL_JOB_CONTRACT_VERSION:
+                violations.append(
+                    "contract_version must be " + UNIVERSAL_JOB_CONTRACT_VERSION)
+            set_(self, "contract_version", version or UNIVERSAL_JOB_CONTRACT_VERSION)
+    
+            if violations:
+                raise UniversalJobContractError(
+                    "invalid universal job: " + "; ".join(violations),
+                    violations=violations,
+                )
+
+FUNCTION: to_canonical_dict @ LINE 954
+    def to_canonical_dict(self) -> Dict[str, Any]:
+            """Return a plain, JSON-safe dict in canonical field order."""
+            return {
+                "job_id": self.job_id,
+                "workspace_id": self.workspace_id,
+                "user_id": self.user_id,
+                "product_id": self.product_id,
+                "pipeline": self.pipeline,
+                "stage": self.stage,
+                "job_type": self.job_type,
+                "payload_reference": self.payload_reference,
+                "priority": str(self.priority),
+                "status": self.status.value,
+                "attempts": self.attempts,
+                "maximum_attempts": self.maximum_attempts,
+                "lease_owner": self.lease_owner,
+                "lease_id": self.lease_id,
+                "lease_started_at": self.lease_started_at,
+                "lease_expires_at": self.lease_expires_at,
+                "parent_job_id": self.parent_job_id,
+                "dependency_job_ids": list(self.dependency_job_ids),
+                "batch_id": self.batch_id,
+                "pipeline_run_id": self.pipeline_run_id,
+                "progress": self.progress.to_dict(),
+                "checkpoint_reference": self.checkpoint_reference,
+                "result_reference": self.result_reference,
+                "artifact_references": list(self.artifact_references),
+                "idempotency_key": self.idempotency_key,
+                "AU_reserved": self.AU_reserved,
+                "AU_consumed": self.AU_consumed,
+                "cost_record": self.cost_record.to_dict(),
+                "created_at": self.created_at,
+                "scheduled_at": self.scheduled_at,
+                "started_at": self.started_at,
+                "completed_at": self.completed_at,
+                "failed_at": self.failed_at,
+                "cancelled_at": self.cancelled_at,
+                "error_code": self.error_code,
+                "error_message": self.error_message,
+                "error_details": _thaw(self.error_details),
+                "contract_version": self.contract_version,
+            }
+
+
+SECTION 4 ? CREATION ENGINE LINEAGE NORMALIZATION
+------------------------------------------------------------------------------------------------
+
+FUNCTION: _normalize_string_tuple @ LINE 193
+    def _normalize_string_tuple(
+        value: Optional[Iterable[Any]],
+        *,
+        field_name: str,
+    ) -> Tuple[str, ...]:
+        if value is None:
+            return ()
+    
+        if isinstance(value, (str, bytes, Mapping)):
+            raise UniversalJobCreationError(
+                f"{field_name} must be an iterable of identifiers.",
+                code=f"invalid_{field_name}",
+                violations=(f"{field_name} must not be a string or mapping",),
+            )
+    
+        normalized: dict[str, None] = {}
+        for item in value:
+            text = _clean_text(item)
+            if not text:
+                raise UniversalJobCreationError(
+                    f"{field_name} contains an empty identifier.",
+                    code=f"invalid_{field_name}",
+                    violations=(f"{field_name} must not contain empty values",),
+                )
+            normalized.setdefault(text, None)
+    
+        return tuple(normalized)
+
+FUNCTION: normalize_universal_job_creation_request @ LINE 497
+    def normalize_universal_job_creation_request(
+        request: UniversalJobCreationRequest,
+        *,
+        supported_job_types: Optional[Iterable[Any]] = None,
+        runtime_registration: Optional[Mapping[str, Any]] = None,
+    ) -> tuple[
+        UniversalJobCreationRequest,
+        str,
+        Optional[Mapping[str, Any]],
+    ]:
+        if not isinstance(request, UniversalJobCreationRequest):
+            raise UniversalJobCreationError(
+                "request must be UniversalJobCreationRequest.",
+                code="invalid_creation_request",
+                violations=("request must be UniversalJobCreationRequest",),
+            )
+    
+        workspace_id = _clean_text(request.workspace_id)
+    
+        if not workspace_id:
+            raise UniversalJobCreationError(
+                "workspace_id is required.",
+                code="missing_workspace_id",
+                violations=("workspace_id is required",),
+            )
+    
+        try:
+            job_type = validate_universal_job_type(
+                request.job_type
+            )
+        except UniversalJobIdentityError as exc:
+            raise UniversalJobCreationError(
+                str(exc),
+                code=exc.code,
+                violations=exc.violations or (str(exc),),
+            ) from exc
+    
+        payload = _normalize_mapping(
+            request.payload,
+            field_name="payload",
+        )
+        try:
+            metadata = normalize_universal_job_metadata(
+                request.metadata
+            )
+        except UniversalJobMetadataError as exc:
+            raise UniversalJobCreationError(
+                str(exc),
+                code=exc.code,
+                violations=exc.violations or (str(exc),),
+            ) from exc
+        dependencies = _normalize_string_tuple(
+            request.dependency_job_ids,
+            field_name="dependency_job_ids",
+        )
+        static_job_types = _normalize_supported_job_types(
+            supported_job_types,
+        )
+        source, registration = _resolve_registration(
+            job_type=job_type,
+            supported_job_types=static_job_types,
+            runtime_registration=runtime_registration,
+        )
+        _validate_registered_payload(
+            registration=registration,
+            payload=payload,
+        )
+    
+        registration_pipeline = (
+            registration.get("pipeline")
+            if registration is not None
+            else ""
+        )
+        registration_stage = (
+            registration.get("stage")
+            if registration is not None
+            else ""
+        )
+    
+        pipeline = _first_text(
+            request.pipeline,
+            payload.get("pipeline"),
+            payload.get("pipeline_name"),
+            registration_pipeline,
+            fallback="universal_knowledge",
+        )
+        stage = _first_text(
+            request.stage,
+            payload.get("stage"),
+            payload.get("stage_name"),
+            registration_stage,
+            fallback=job_type,
+        )
+        user_id = _first_text(
+            request.user_id,
+            payload.get("user_id"),
+            fallback="system",
+        )
+        product_id = _first_text(
+            request.product_id,
+            payload.get("product_id"),
+            fallback="linkcraftor",
+        )
+        payload_reference = normalize_universal_job_payload_reference(
+            request.payload_reference
+        )
+        priority = _resolve_priority(request.priority)
+        maximum_attempts = _resolve_maximum_attempts(
+            request.maximum_attempts,
+            payload,
+            registration,
+        )
+    
+        if not isinstance(request.enqueue, bool):
+            raise UniversalJobCreationError(
+                "enqueue must be a boolean.",
+                code="invalid_enqueue",
+                violations=(
+                    "enqueue must be either True or False",
+                ),
+            )
+    
+        if (
+            not isinstance(request.job_id_prefix, str)
+            or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+        ):
+            raise UniversalJobCreationError(
+                "job_id_prefix is fixed by the Universal Job identity namespace.",
+                code="invalid_job_id_prefix",
+                violations=(
+                    f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+                ),
+            )
+    
+        created_at = _clean_text(request.created_at) or _utc_now()
+    
+        try:
+            job_id = resolve_universal_job_id(
+                request.job_id
+            )
+        except UniversalJobIdentityError as exc:
+            raise UniversalJobCreationError(
+                str(exc),
+                code=exc.code,
+                violations=exc.violations or (str(exc),),
+            ) from exc
+    
+        normalized = UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+    
+        return normalized, source, registration
+
+FUNCTION: create_universal_job @ LINE 670
+    def create_universal_job(
+        *,
+        workspace_id: str,
+        job_type: str,
+        payload: Optional[Mapping[str, Any]] = None,
+        metadata: Optional[Mapping[str, Any]] = None,
+        user_id: str = "system",
+        product_id: str = "linkcraftor",
+        pipeline: str = "",
+        stage: str = "",
+        payload_reference: Optional[str] = None,
+        priority: Any = UniversalJobPriority.NORMAL,
+        parent_job_id: Optional[str] = None,
+        dependency_job_ids: Optional[Iterable[Any]] = None,
+        batch_id: Optional[str] = None,
+        pipeline_run_id: Optional[str] = None,
+        idempotency_key: Optional[str] = None,
+        maximum_attempts: Optional[int] = None,
+        enqueue: bool = True,
+        job_id: Optional[str] = None,
+        job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+        created_at: Optional[str] = None,
+        supported_job_types: Optional[Iterable[Any]] = None,
+        runtime_registration: Optional[Mapping[str, Any]] = None,
+    ) -> UniversalJobCreationResult:
+        """Validate and construct one canonical Universal Job without I/O."""
+    
+        request = UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+    
+        normalized, source, registration = (
+            normalize_universal_job_creation_request(
+                request,
+                supported_job_types=supported_job_types,
+                runtime_registration=runtime_registration,
+            )
+        )
+    
+        status = initial_universal_job_status(
+            enqueue=normalized.enqueue,
+        )
+        message = (
+            "Job queued."
+            if normalized.enqueue
+            else "Job created without queue dispatch."
+        )
+    
+        try:
+            job = UniversalJob(
+                job_id=normalized.job_id or "",
+                workspace_id=normalized.workspace_id,
+                user_id=normalized.user_id,
+                product_id=normalized.product_id,
+                pipeline=normalized.pipeline,
+                stage=normalized.stage,
+                job_type=normalized.job_type,
+                payload_reference=normalized.payload_reference,
+                priority=normalized.priority,
+                status=status,
+                attempts=initial_universal_job_attempts(),
+                maximum_attempts=normalized.maximum_attempts,
+                lease_owner=None,
+                lease_id=None,
+                lease_started_at=None,
+                lease_expires_at=None,
+                parent_job_id=normalized.parent_job_id,
+                dependency_job_ids=normalized.dependency_job_ids,
+                batch_id=normalized.batch_id,
+                pipeline_run_id=normalized.pipeline_run_id,
+                progress=UniversalJobProgress(
+                    percent=0,
+                    step=normalized.stage,
+                    message=message,
+                    updated_at=normalized.created_at,
+                ),
+                checkpoint_reference=None,
+                result_reference=None,
+                artifact_references=(),
+                idempotency_key=normalized.idempotency_key,
+                AU_reserved=0,
+                AU_consumed=0,
+                cost_record=UniversalJobCostRecord(),
+                created_at=normalized.created_at,
+                scheduled_at=None,
+                started_at=None,
+                completed_at=None,
+                failed_at=None,
+                cancelled_at=None,
+                error_code=None,
+                error_message=None,
+                error_details={},
+            )
+        except UniversalJobContractError as exc:
+            raise UniversalJobCreationError(
+                "Universal Job Contract rejected the creation request.",
+                code="contract_validation_failed",
+                violations=exc.violations or (str(exc),),
+            ) from exc
+    
+        validation = validate_universal_job(job)
+        if not validation.is_valid:
+            raise UniversalJobCreationError(
+                "Created Universal Job failed final validation.",
+                code="final_validation_failed",
+                violations=validation.violations,
+            )
+    
+        return UniversalJobCreationResult(
+            job=job,
+            payload=normalized.payload,
+            metadata=normalized.metadata,
+            registration=registration,
+            enqueue_requested=normalized.enqueue,
+            job_type_source=source,
+        )
+
+
+SECTION 5 ? RETRY / LEGACY LINEAGE MARKERS
+------------------------------------------------------------------------------------------------
+
+backend\server\runtime\universal_runtime_infrastructure.py:164
+    payload["retry_of"] = job.get("job_id")
+
+backend\server\runtime\universal_runtime_infrastructure.py:165
+    payload["retry_attempt"] = attempts
+
+backend\server\stores\enterprise_raw_html_acquisition_engine.py:485
+    retry_attempt_total = 0
+
+backend\server\stores\enterprise_raw_html_acquisition_engine.py:711
+    report = {
+            "ok": True,
+            "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+            "workspace_id": workspace_id,
+            "dry_run": False,
+            "resume": resume,
+            "force": force,
+            "started_at_utc": started_at,
+            "finished_at_utc": datetime.now(timezone.utc).isoformat(),
+            "elapsed_seconds": round(elapsed, 3),
+            "input": {
+                "site_pages_count": site_pages_count,
+                "selected_pages_count": selected_pages_count,
+                "existing_raw_html_count_before": len(existing_ids) - succeeded,
+                "missing_pages_selected": missing_pages_count,
+                "missing_only_queue_enabled": bool(resume and not force),
+                "batch_size": batch_size,
+                "limit": limit,
+            },
+            "processing": {
+                "attempted": attempted,
+                "succeeded": succeeded,
+                "failed": failed,
+                "skipped_existing": skipped_existing,
+                "skipped_no_url": skipped_no_url,
+            },
+            "stores": {
+                "raw_html_store_count": raw_html_count,
+                "raw_html_store_path": str(_raw_html_store_path_v1(workspace_id)),
+            },
+            "diagnostics": {
+                "http_status_distribution": http_status_distribution,
+                "content_type_distribution": content_type_distribution,
+                "redirect_count": redirect_count,
+                "retry_attempt_total": retry_attempt_total,
+                "average_fetch_seconds": round(average_fetch_seconds, 3),
+                "pages_per_minute": round(pages_per_minute, 3),
+                "max_consecutive_failures": max_consecutive_failures,
+                "temporary_failures": temporary_failures,
+                "permanent_failures": permanent_failures,
+                "newly_excluded": newly_excluded,
+                "already_excluded": already_excluded,
+                "failure_registry_count": len(failure_registry.get("failures", {}) or {}),
+                "failure_registry_path": str(_failure_registry_path_v1(workspace_id)),
+            },
+            "certification": certification,
+            "samples": {
+                "successes": successes[:20],
+                "errors": errors[:50],
+            },
+            "ledger_tail": ledger[-100:],
+        }
+
+backend\server\stores\enterprise_raw_html_acquisition_engine.py:643
+    checkpoint = {
+                    "engine": "enterprise_raw_html_acquisition_engine_v1_1_failure_registry",
+                    "workspace_id": workspace_id,
+                    "started_at_utc": started_at,
+                    "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                    "processed_selected_pages": processed,
+                    "selected_pages_count": selected_pages_count,
+                    "attempted": attempted,
+                    "succeeded": succeeded,
+                    "failed": failed,
+                    "skipped_existing": skipped_existing,
+                    "skipped_no_url": skipped_no_url,
+                    "raw_html_store_count": len(store.get("pages", {}) or {}),
+                    "http_status_distribution": http_status_distribution,
+                    "content_type_distribution": content_type_distribution,
+                    "redirect_count": redirect_count,
+                    "retry_attempt_total": retry_attempt_total,
+                    "max_consecutive_failures": max_consecutive_failures,
+                    "last_index": index,
+                    "last_url": url,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "pages_per_second": round(rate, 4),
+                    "eta_seconds": round(eta_seconds, 3) if eta_seconds is not None else None,
+                    "recent_ledger": ledger[-25:],
+                }
+
+backend\server\stores\workspace_governance.py:2519
+    MAX_REPAIR_RETRY_ATTEMPTS = 3
+
+backend\server\tms\attachment_orchestration.py:22
+    MAX_ATTACHMENT_RETRY_ATTEMPTS = 3
+
+backend\server\tms\intelligence_orchestration.py:22
+    MAX_INTELLIGENCE_RETRY_ATTEMPTS = 3
+
+backend\server\tms\notification_delivery.py:34
+    MAX_DELIVERY_RETRY_ATTEMPTS = 3
+
+backend\server\tms\notification_orchestration.py:22
+    MAX_NOTIFICATION_RETRY_ATTEMPTS = 3
+
+backend\server\tms\ticket_orchestration.py:17
+    MAX_RETRY_ATTEMPTS = 3
+
+backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py:7955
+    retry_attempts = 10
+
+backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py:7971
+    range(
+                retry_attempts
+            )
+
+backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py:8040
+    range(
+                retry_attempts
+            )
+
+
+SECTION 6 ? DEPENDENCY EXECUTION / ORCHESTRATION LOGIC
+------------------------------------------------------------------------------------------------
+
+backend\server\backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\main.py:216 FUNCTION _already_mounted
+    def _already_mounted(module_path: str, prefix: str) -> bool:
+    
+    
+        pfx = _normalize_prefix(prefix)
+    
+    
+        for r in app.routes:
+    
+    
+            path = getattr(r, "path", None) or getattr(r, "path_format", "")
+    
+    
+            endpoint = getattr(r, "endpoint", None)
+    
+    
+            mod = getattr(endpoint, "__module__", "") if endpoint else ""
+    
+    
+            if mod.startswith(module_path) and str(path).startswith(pfx):
+    
+    
+                return True
+    
+    
+        return False
+
+backend\server\main.py:192 FUNCTION _already_mounted
+    def _already_mounted(module_path: str, prefix: str) -> bool:
+    
+    
+        pfx = _normalize_prefix(prefix)
+    
+    
+        for r in app.routes:
+    
+    
+            path = getattr(r, "path", None) or getattr(r, "path_format", "")
+    
+    
+            endpoint = getattr(r, "endpoint", None)
+    
+    
+            mod = getattr(endpoint, "__module__", "") if endpoint else ""
+    
+    
+            if mod.startswith(module_path) and str(path).startswith(pfx):
+    
+    
+                return True
+    
+    
+        return False
+
+backend\server\runtime\runtime_foundation_certification.py:904 FUNCTION _dependency_consistency_checks
+    def _dependency_consistency_checks(
+            self, resolutions: Mapping[str, dict[str, Any]]
+        ) -> list[CertificationCheck]:
+            s = "DEPENDENCY_CONSISTENCY"
+            out: list[CertificationCheck] = []
+    
+            def all_resolved() -> str:
+                unresolved = [
+                    spec.role
+                    for spec in FOUNDATION_COMPONENTS
+                    if resolutions[spec.role]["module"] is None
+                ]
+                _expect(not unresolved, f"unresolved: {', '.join(unresolved)}")
+                return "every declared dependency resolves"
+    
+            out.append(self._check(s, "dependency.resolved",
+                                   "dependency graph resolves",
+                                   "all components import", all_resolved))
+    
+            def idempotent() -> str:
+                for spec in FOUNDATION_COMPONENTS:
+                    module = self._module_of(resolutions, spec.role)
+                    reimported, _ = self._import_module(spec.candidates)
+                    _expect(
+                        reimported is module,
+                        f"{spec.role} re-import is not idempotent",
+                    )
+                return "re-import is idempotent for every component"
+    
+            out.append(self._check(s, "dependency.idempotent",
+                                   "idempotent imports",
+                                   "imports are idempotent", idempotent))
+    
+            def unique_modules() -> str:
+                identities = {
+                    id(self._module_of(resolutions, spec.role))
+                    for spec in FOUNDATION_COMPONENTS
+                }
+                _expect(
+                    len(identities) == len(FOUNDATION_COMPONENTS),
+                    "distinct components collapsed to the same module",
+                )
+                return "each component is a distinct module"
+    
+            out.append(self._check(s, "dependency.unique",
+                                   "distinct component modules",
+                                   "components are distinct", unique_modules))
+            return out
+
+backend\server\runtime\runtime_schema\versioning.py:383 FUNCTION minimum_successor
+    def minimum_successor(
+        old: SchemaVersion,
+        change_class: ChangeClass,
+    ) -> SchemaVersion:
+        """Return the minimum legal successor for a change class."""
+        effective_old = _require_version(
+            old,
+            field_name="old",
+        )
+    
+        return effective_old.bump_for(
+            change_class
+        )
+
+backend\server\runtime\runtime_schema\versioning.py:222 FUNCTION is_successor_of
+    def is_successor_of(
+            self,
+            other: "SchemaVersion",
+        ) -> bool:
+            """Return whether this version is strictly newer than *other*."""
+            _require_version(
+                other,
+                field_name="other",
+            )
+    
+            return self > other
+
+backend\server\runtime\runtime_service_registry.py:496 FUNCTION dependency_order
+    def dependency_order(self) -> tuple[str, ...]:
+            """
+            Return deterministic dependency-aware startup order.
+    
+            Dependencies always appear before their dependents. Services at
+            the same dependency level are ordered by startup_order and key.
+            """
+    
+            self.validate_dependencies()
+    
+            with self._lock:
+                bindings = dict(self._bindings)
+    
+            indegree = {
+                key: len(binding.dependencies)
+                for key, binding in bindings.items()
+            }
+    
+            dependents: dict[str, set[str]] = {
+                key: set()
+                for key in bindings
+            }
+    
+            for key, binding in bindings.items():
+                for dependency in binding.dependencies:
+                    dependents[dependency].add(key)
+    
+            ready = [
+                key
+                for key, degree in indegree.items()
+                if degree == 0
+            ]
+    
+            ordered: list[str] = []
+    
+            while ready:
+                ready.sort(
+                    key=lambda key: (
+                        bindings[key].startup_order,
+                        key,
+                    )
+                )
+    
+                key = ready.pop(0)
+                ordered.append(key)
+    
+                for dependent in sorted(dependents[key]):
+                    indegree[dependent] -= 1
+    
+                    if indegree[dependent] == 0:
+                        ready.append(dependent)
+    
+            if len(ordered) != len(bindings):
+                raise RuntimeServiceDependencyError(
+                    "A runtime-service dependency cycle exists."
+                )
+    
+            return tuple(ordered)
+
+backend\server\runtime\website_article_integrity_automation.py:1480 FUNCTION enqueue_website_article_integrity_successor
+    def enqueue_website_article_integrity_successor(
+        *,
+        job: Mapping[str, Any],
+        current_stage: str,
+        stage_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        successor = STAGE_SUCCESSORS.get(
+            current_stage
+        )
+    
+        if successor is None:
+            return {
+                "ok": True,
+                "status": (
+                    "PIPELINE_COMPLETE"
+                ),
+                "created": False,
+                "current_stage": (
+                    current_stage
+                ),
+            }
+    
+        payload = _job_payload(
+            job
+        )
+    
+        if (
+            payload.get(
+                "auto_continue",
+                True,
+            )
+            is False
+        ):
+            return {
+                "ok": True,
+                "status": (
+                    "AUTO_CONTINUATION_DISABLED"
+                ),
+                "created": False,
+                "current_stage": (
+                    current_stage
+                ),
+            }
+    
+        workspace_id = safe_id(
+            job.get("workspace_id")
+            or payload.get(
+                "workspace_id"
+            )
+            or ""
+        )
+    
+        integrity_run_id = str(
+            payload.get(
+                "integrity_run_id"
+            )
+            or ""
+        ).strip()
+    
+        if not integrity_run_id:
+            seed = "|".join(
+                (
+                    workspace_id,
+                    str(
+                        payload.get(
+                            "udare_manifest_sha256"
+                        )
+                        or payload.get(
+                            "payload_ref"
+                        )
+                        or ""
+                    ),
+                    str(
+                        payload.get(
+                            "expected_store_count"
+                        )
+                        or ""
+                    ),
+                )
+            )
+    
+            integrity_run_id = (
+                "waini_"
+                + hashlib.sha256(
+                    seed.encode("utf-8")
+                ).hexdigest()[:24]
+            )
+    
+        successor_job_type, successor_stage = (
+            successor
+        )
+    
+        successor_payload = dict(
+            payload
+        )
+    
+        successor_payload[
+            "operation"
+        ] = "execute"
+    
+        successor_payload[
+            "auto_continue"
+        ] = True
+    
+        successor_payload[
+            "integrity_run_id"
+        ] = integrity_run_id
+    
+        successor_payload[
+            "previous_stage"
+        ] = current_stage
+    
+        successor_payload[
+            "stage"
+        ] = successor_stage
+    
+        successor_payload[
+            "job_type"
+        ] = successor_job_type
+    
+        document = _extract_stage_document(
+            stage_result
+        )
+    
+        if current_stage == STAGE_REPORT:
+            successor_payload.update(
+                _derive_report_counts(
+                    document,
+                    successor_payload,
+                )
+            )
+    
+        if current_stage == STAGE_QUARANTINE:
+            successor_payload.update(
+                _derive_quarantine_counts(
+                    document,
+                    successor_payload,
+                )
+            )
+    
+        created = _create_pipeline_job_once(
+            workspace_id=workspace_id,
+            integrity_run_id=(
+                integrity_run_id
+            ),
+            job_type=successor_job_type,
+            stage=successor_stage,
+            payload=successor_payload,
+            parent_job_id=str(
+                job.get("job_id")
+                or ""
+            ),
+            batch_id=str(
+                job.get("batch_id")
+                or integrity_run_id
+            ),
+            user_id=str(
+                job.get("user_id")
+                or "system"
+            ),
+            product_id=str(
+                job.get("product_id")
+                or "linkcraftor"
+            ),
+            priority=int(
+                job.get("priority")
+                or 4
+            ),
+        )
+    
+        return {
+            "ok": True,
+            "status": (
+                "SUCCESSOR_CREATED"
+                if created.get("created")
+                else "SUCCESSOR_ALREADY_EXISTS"
+            ),
+            "created": created.get(
+                "created"
+            ),
+            "current_stage": (
+                current_stage
+            ),
+            "successor_stage": (
+                successor_stage
+            ),
+            "successor_job_type": (
+                successor_job_type
+            ),
+            "successor_job_id": (
+                created.get("job_id")
+            ),
+            "integrity_run_id": (
+                integrity_run_id
+            ),
+        }
+
+
+SECTION 7 ? UNIVERSAL JOB-SPECIFIC LINEAGE REFERENCES
+------------------------------------------------------------------------------------------------
+
+backend\server\runtime\universal_job_submission.py
+backend\server\runtime\universal_jobs\contract.py
+backend\server\runtime\universal_jobs\creation_engine.py
+backend\server\runtime\universal_jobs\creation_engine_before_attempts_integration.py
+backend\server\runtime\universal_jobs\creation_engine_before_payload_reference_integration.py
+backend\server\runtime\universal_jobs\creation_engine_before_priority_integration.py
+backend\server\runtime\universal_jobs\creation_engine_before_status_integration.py
+backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+
+SECTION 8 ? DISCOVERY SUMMARY
+------------------------------------------------------------------------------------------------
+
+ACTIVE PYTHON FILES SCANNED: 577
+FILES WITH LINEAGE REFERENCES: 50
+LINEAGE REFERENCE RECORDS: 333
+RETRY LINEAGE MARKER FINDINGS: 14
+DEPENDENCY EXECUTION / ORCHESTRATION FINDINGS: 7
+UNIVERSAL JOB-SPECIFIC LINEAGE FILES: 9
+PARSE ERRORS: 0
+
+STATUS: DISCOVERY ONLY ? NO CODE MODIFIED
+
+NEXT: determine the canonical Phase 2.1.9 Job Lineage authority boundary, including parent_job_id, dependency_job_ids, batch_id, pipeline_run_id, normalization, identity validity, self-reference protection, duplicate-dependency handling, and which dependency/retry execution semantics belong to later runtime lifecycle/orchestration phases.

@@ -1,0 +1,488 @@
+﻿LEGACY JOB CREATION CALLERS ? MIGRATION MAP
+============================================================================================
+
+FILE: backend\server\pipelines\connect_domain\coordinator.py
+============================================================================================
+
+CALL 1
+--------------------------------------------------------------------------------------------
+LINE: 178
+ASSIGNED TO: pipeline_1_job
+
+ARGUMENTS:
+  workspace_id = resolved_workspace_id
+  job_type = LINKING_TARGET_PIPELINE_BATCH
+  pipeline = "linking_target_pipeline"
+  stage = LINKING_TARGET_PIPELINE_BATCH
+  payload = {
+            "workspace_id": resolved_workspace_id,
+            "workspace_name": resolved_workspace_name,
+            "workspace_mode": normalized_mode,
+            "domain": clean_domain,
+            "site_url": str(site_url or "").strip(),
+            "source_type": "website",
+            "pipeline": "linking_target_pipeline",
+            "trigger": "canonical_connect_domain_coordinator",
+        }
+
+CALL CONTEXT:
+    0170:         workspace_name=resolved_workspace_name,
+    0171:         workspace_mode=normalized_mode,
+    0172:         domain=clean_domain,
+    0173:         site_url=site_url,
+    0174:     )
+    0175: 
+    0176:     registration = ensure_linking_target_pipeline_registration()
+    0177: 
+>>> 0178:     pipeline_1_job = create_universal_knowledge_job(
+>>> 0179:         workspace_id=resolved_workspace_id,
+>>> 0180:         job_type=LINKING_TARGET_PIPELINE_BATCH,
+>>> 0181:         pipeline="linking_target_pipeline",
+>>> 0182:         stage=LINKING_TARGET_PIPELINE_BATCH,
+>>> 0183:         payload={
+>>> 0184:             "workspace_id": resolved_workspace_id,
+>>> 0185:             "workspace_name": resolved_workspace_name,
+>>> 0186:             "workspace_mode": normalized_mode,
+>>> 0187:             "domain": clean_domain,
+>>> 0188:             "site_url": str(site_url or "").strip(),
+>>> 0189:             "source_type": "website",
+>>> 0190:             "pipeline": "linking_target_pipeline",
+>>> 0191:             "trigger": "canonical_connect_domain_coordinator",
+>>> 0192:         },
+>>> 0193:     )
+    0194: 
+    0195:     pipeline_2 = run_website_knowledge_pipeline(
+    0196:         workspace_id=resolved_workspace_id,
+    0197:         domain=clean_domain,
+    0198:         url=url,
+    0199:     )
+    0200: 
+    0201:     pipeline_1_queued = (
+    0202:         pipeline_1_job.get("status") == "queued"
+    0203:     )
+    0204: 
+    0205:     overall_ok = bool(
+    0206:         pipeline_1_queued
+    0207:         and pipeline_2.get("ok")
+    0208:     )
+    0209: 
+    0210:     return {
+    0211:         "ok": overall_ok,
+
+DOWNSTREAM RESULT USE:
+  202: pipeline_1_job.get("status") == "queued"
+  230: "job": pipeline_1_job,
+
+FILE: backend\server\pipelines\connect_domain\website_knowledge_pipeline\coordinator.py
+============================================================================================
+
+CALL 1
+--------------------------------------------------------------------------------------------
+LINE: 166
+ASSIGNED TO: job
+
+ARGUMENTS:
+  workspace_id = resolved_workspace_id
+  job_type = WEBSITE_CONNECTION_BATCH
+  payload = {
+            "workspace_id": resolved_workspace_id,
+            "domain": clean_domain,
+            "urls": [],
+            "source_type": "website",
+            "pipeline": "website_knowledge_pipeline",
+            "trigger": "live_connect_domain_route",
+        }
+
+CALL CONTEXT:
+    0158:         / f"live_domain_{resolved_workspace_id}.json"
+    0159:     )
+    0160: 
+    0161:     _write_json(
+    0162:         live_domain_path,
+    0163:         live_domain_payload,
+    0164:     )
+    0165: 
+>>> 0166:     job = create_universal_knowledge_job(
+>>> 0167:         workspace_id=resolved_workspace_id,
+>>> 0168:         job_type=WEBSITE_CONNECTION_BATCH,
+>>> 0169:         payload={
+>>> 0170:             "workspace_id": resolved_workspace_id,
+>>> 0171:             "domain": clean_domain,
+>>> 0172:             "urls": [],
+>>> 0173:             "source_type": "website",
+>>> 0174:             "pipeline": "website_knowledge_pipeline",
+>>> 0175:             "trigger": "live_connect_domain_route",
+>>> 0176:         },
+>>> 0177:     )
+    0178: 
+    0179:     return {
+    0180:         "ok": True,
+    0181:         "workspace_id": resolved_workspace_id,
+    0182:         "domain": clean_domain,
+    0183:         "connected": True,
+    0184:         "connection_status": "processing",
+    0185:         "execution_status": "QUEUED_AWAITING_WORKER",
+    0186:         "pipeline": "website_knowledge_pipeline",
+    0187:         "live_domain_record": str(live_domain_path),
+    0188:         "job": job,
+    0189:     }
+    0190: 
+
+DOWNSTREAM RESULT USE:
+  188: "job": job,
+
+FILE: backend\server\runtime\website_article_integrity_automation.py
+============================================================================================
+
+CALL 1
+--------------------------------------------------------------------------------------------
+LINE: 556
+ASSIGNED TO: job
+
+ARGUMENTS:
+  workspace_id = workspace_id
+  job_type = job_type
+  payload = job_payload
+  user_id = user_id
+  product_id = product_id
+  pipeline = PIPELINE
+  stage = stage
+  payload_ref = str(
+            job_payload.get(
+                "payload_ref"
+            )
+            or job_payload.get(
+                "udare_manifest_path"
+            )
+            or integrity_run_id
+        )
+  priority = priority
+  parent_job_id = parent_job_id
+  batch_id = batch_id
+            or integrity_run_id
+  enqueue = True
+
+CALL CONTEXT:
+    0548:     job_payload[
+    0549:         "stage"
+    0550:     ] = stage
+    0551: 
+    0552:     job_payload[
+    0553:         "auto_continue"
+    0554:     ] = True
+    0555: 
+>>> 0556:     job = create_universal_knowledge_job(
+>>> 0557:         workspace_id=workspace_id,
+>>> 0558:         job_type=job_type,
+>>> 0559:         payload=job_payload,
+>>> 0560:         user_id=user_id,
+>>> 0561:         product_id=product_id,
+>>> 0562:         pipeline=PIPELINE,
+>>> 0563:         stage=stage,
+>>> 0564:         payload_ref=str(
+>>> 0565:             job_payload.get(
+>>> 0566:                 "payload_ref"
+>>> 0567:             )
+>>> 0568:             or job_payload.get(
+>>> 0569:                 "udare_manifest_path"
+>>> 0570:             )
+>>> 0571:             or integrity_run_id
+>>> 0572:         ),
+>>> 0573:         priority=priority,
+>>> 0574:         parent_job_id=parent_job_id,
+>>> 0575:         batch_id=(
+>>> 0576:             batch_id
+>>> 0577:             or integrity_run_id
+>>> 0578:         ),
+>>> 0579:         enqueue=True,
+>>> 0580:     )
+    0581: 
+    0582:     return {
+    0583:         "ok": True,
+    0584:         "created": True,
+    0585:         "already_exists": False,
+    0586:         "job_id": job.get(
+    0587:             "job_id"
+    0588:         ),
+    0589:         "job_type": job_type,
+    0590:         "stage": stage,
+    0591:         "status": job.get(
+    0592:             "status"
+    0593:         ),
+    0594:         "job": job,
+    0595:     }
+    0596: 
+    0597: 
+    0598: def _derive_expected_upstream_count(
+
+DOWNSTREAM RESULT USE:
+  586: "job_id": job.get(
+  587: "job_id"
+  589: "job_type": job_type,
+  591: "status": job.get(
+  594: "job": job,
+  600: processed_udare_jobs: list[
+  608: for job in processed_udare_jobs:
+  609: payload = _job_payload(
+  610: job
+  613: metadata = _job_metadata(
+  614: job
+  657: processed_udare_jobs: list[
+  661: for job in reversed(
+  662: processed_udare_jobs
+  664: payload = _job_payload(
+  665: job
+  668: metadata = _job_metadata(
+  669: job
+  673: job.get("batch_id")
+  704: processed_jobs: Iterable[
+  710: remaining_jobs: Iterable[
+  714: processed_udare_jobs = [
+  715: job
+  716: for job in processed_jobs
+  717: if _job_type(job)
+  721: if not processed_udare_jobs:
+  726: "No UDARE jobs were processed."
+  730: remaining_udare_jobs = [
+  731: job
+  732: for job in remaining_jobs
+  734: _job_type(job)
+  737: job.get("status")
+  749: if remaining_udare_jobs:
+  753: "remaining_udare_jobs": len(
+  754: remaining_udare_jobs
+  839: processed_udare_jobs=(
+  840: processed_udare_jobs
+  872: processed_udare_jobs
+  913: _find_existing_pipeline_job(
+  918: job_type=(
+  931: "job_id": (
+  932: existing.get("job_id")
+  935: "first_job_id"
+  963: _find_existing_pipeline_job(
+  968: job_type=(
+  986: "first_job_id": existing.get(
+  987: "job_id"
+  990: "recovered_existing_job": True,
+  1021: "job_id": existing.get(
+  1022: "job_id"
+  1029: final_udare_job = (
+  1030: processed_udare_jobs[-1]
+  1033: final_payload = _job_payload(
+  1034: final_udare_job
+  1038: final_udare_job.get(
+  1048: final_udare_job.get(
+  1122: processed_udare_jobs
+  1134: _create_pipeline_job_once(
+  1139: job_type=(
+  1144: parent_job_id=str(
+  1145: final_udare_job.get(
+  1146: "job_id"
+  1169: "first_job_id": created.get(
+  1170: "job_id"
+  1210: "job_id": created.get(
+  1211: "job_id"
+  1482: job: Mapping[str, Any],
+  1502: payload = _job_payload(
+  1503: job
+  1525: job.get("workspace_id")
+  1568: successor_job_type, successor_stage = (
+  1597: "job_type"
+  1598: ] = successor_job_type
+  1620: created = _create_pipeline_job_once(
+  1625: job_type=successor_job_type,
+  1628: parent_job_id=str(
+  1629: job.get("job_id")
+  1633: job.get("batch_id")
+  1637: job.get("user_id")
+  1641: job.get("product_id")
+  1645: job.get("priority")
+  1666: "successor_job_type": (
+  1667: successor_job_type
+  1669: "successor_job_id": (
+  1670: created.get("job_id")
+
+FILE: backend\server\workers\website_raw_html_acquisition_orchestrator.py
+============================================================================================
+
+CALL 1
+--------------------------------------------------------------------------------------------
+LINE: 125
+ASSIGNED TO: job
+
+ARGUMENTS:
+  workspace_id = workspace_id
+  job_type = "raw_html_acquisition"
+  payload = {
+                "workspace_id": workspace_id,
+                "mode": "assigned_urls",
+                "assigned_urls": [page["url"] for page in batch],
+                "assigned_count": len(batch),
+                "batch_index": index,
+                "batch_count": len(batches),
+                "batch_size": int(batch_size),
+                "checkpoint_every": int(checkpoint_every),
+                "sleep_seconds": float(sleep_seconds),
+                "auto_continue": False,
+                "trigger": "raw_html_fanout_orchestrator",
+            }
+  batch_id = batch_group_id
+
+CALL CONTEXT:
+    0117:         batches = batches[: int(max_batches)]
+    0118: 
+    0119:     created_jobs = []
+    0120:     batch_group_id = "raw_html_batch_" + hashlib.sha256(
+    0121:         f"{workspace_id}:{len(pages)}:{len(existing_ids)}:{len(remaining)}".encode("utf-8")
+    0122:     ).hexdigest()[:16]
+    0123: 
+    0124:     for index, batch in enumerate(batches, start=1):
+>>> 0125:         job = create_universal_knowledge_job(
+>>> 0126:             workspace_id=workspace_id,
+>>> 0127:             job_type="raw_html_acquisition",
+>>> 0128:             payload={
+>>> 0129:                 "workspace_id": workspace_id,
+>>> 0130:                 "mode": "assigned_urls",
+>>> 0131:                 "assigned_urls": [page["url"] for page in batch],
+>>> 0132:                 "assigned_count": len(batch),
+>>> 0133:                 "batch_index": index,
+>>> 0134:                 "batch_count": len(batches),
+>>> 0135:                 "batch_size": int(batch_size),
+>>> 0136:                 "checkpoint_every": int(checkpoint_every),
+>>> 0137:                 "sleep_seconds": float(sleep_seconds),
+>>> 0138:                 "auto_continue": False,
+>>> 0139:                 "trigger": "raw_html_fanout_orchestrator",
+>>> 0140:             },
+>>> 0141:             batch_id=batch_group_id,
+>>> 0142:         )
+    0143:         created_jobs.append({
+    0144:             "job_id": job.get("job_id"),
+    0145:             "batch_index": index,
+    0146:             "assigned_count": len(batch),
+    0147:         })
+    0148: 
+    0149:     return {
+    0150:         "ok": True,
+    0151:         "workspace_id": workspace_id,
+    0152:         "site_pages_count": len(pages),
+    0153:         "existing_raw_html_count": len(existing_ids),
+    0154:         "remaining_raw_html_count": len(remaining),
+    0155:         "batch_size": int(batch_size),
+    0156:         "batch_count": len(batches),
+    0157:         "created_job_count": len(created_jobs),
+    0158:         "batch_group_id": batch_group_id,
+    0159:         "created_jobs": created_jobs[:50],
+    0160:     }
+
+DOWNSTREAM RESULT USE:
+  143: created_jobs.append({
+  144: "job_id": job.get("job_id"),
+  157: "created_job_count": len(created_jobs),
+  159: "created_jobs": created_jobs[:50],
+
+FILE: backend\server\runtime\universal_runtime_infrastructure.py
+============================================================================================
+
+CALL 1
+--------------------------------------------------------------------------------------------
+LINE: 167
+ASSIGNED TO: retry
+
+ARGUMENTS:
+  workspace_id = workspace_id
+  job_type = job.get("job_type")
+  payload = payload
+  priority = job.get("priority", 5)
+  parent_job_id = job.get("job_id", "")
+  batch_id = job.get("batch_id", "")
+
+CALL CONTEXT:
+    0159:             "ok": False,
+    0160:             "dead_letter": move_to_dead_letter(workspace_id, job, "Retry ceiling reached."),
+    0161:         }
+    0162: 
+    0163:     payload = dict(job.get("payload") or {})
+    0164:     payload["retry_of"] = job.get("job_id")
+    0165:     payload["retry_attempt"] = attempts
+    0166: 
+>>> 0167:     retry = create_universal_knowledge_job(
+>>> 0168:         workspace_id=workspace_id,
+>>> 0169:         job_type=job.get("job_type"),
+>>> 0170:         payload=payload,
+>>> 0171:         priority=job.get("priority", 5),
+>>> 0172:         parent_job_id=job.get("job_id", ""),
+>>> 0173:         batch_id=job.get("batch_id", ""),
+>>> 0174:     )
+    0175: 
+    0176:     retry["attempts"] = attempts
+    0177: 
+    0178:     return {"ok": True, "retry_job": retry}
+    0179: 
+    0180: 
+    0181: def create_batch(workspace_id: str, batch_id: str, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    0182:     ws = safe_id(workspace_id)
+    0183:     payload = {
+    0184:         "workspace_id": ws,
+    0185:         "batch_id": safe_id(batch_id),
+    0186:         "job_ids": [j.get("job_id") for j in jobs],
+    0187:         "job_count": len(jobs),
+    0188:         "status": "created",
+    0189:         "created_at": now_iso(),
+    0190:         "updated_at": now_iso(),
+    0191:     }
+    0192:     write_json(BATCH_DIR / ws / f"{safe_id(batch_id)}.json", payload)
+
+DOWNSTREAM RESULT USE:
+  176: retry["attempts"] = attempts
+  178: return {"ok": True, "retry_job": retry}
+  260: "retry_manager_ready": True,
+
+CANONICAL NEW CREATION / ORCHESTRATION APIs
+============================================================================================
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+FUNCTION: create_universal_job
+LINES: 658-798
+--------------------------------------------------------------------------------------------
+def create_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[Iterable[Any]] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    enqueue: bool = True,
+    job_id: Optional[str] = None,
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> UniversalJobCreationResult:
+
+FILE: backend\server\orchestration\service.py
+FUNCTION: create_orchestration_job
+LINES: 26-60
+--------------------------------------------------------------------------------------------
+def create_orchestration_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+    *,
+    job_id: Optional[str] = None,
+) -> OrchestrationJob:
+
+============================================================================================
+MIGRATION MAP RESULT: COMPLETE

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Runtime Registration for Connect Domain Pipeline 1.
 
 Registered job:
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from backend.server.jobs.universal_knowledge_orchestrator import (
-    register_universal_runtime_handler,
+from backend.server.runtime.universal_runtime_registration import (
+    register_runtime_handler,
 )
 from backend.server.pipelines.connect_domain.job_types import (
     LINKING_TARGET_PIPELINE_BATCH,
@@ -117,7 +117,7 @@ def ensure_linking_target_pipeline_registration() -> Dict[str, Any]:
     persist=True records the registration for later runtime loading.
     """
 
-    return register_universal_runtime_handler(
+    return register_runtime_handler(
         job_type=LINKING_TARGET_PIPELINE_BATCH,
         handler=execute_linking_target_pipeline_job,
         pipeline="linking_target_pipeline",

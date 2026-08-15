@@ -1,0 +1,1888 @@
+﻿PHASE 2.1.5 ? JOB PAYLOAD REFERENCE SCAN
+========================================================================================
+
+SECTION 1 ? UNIVERSAL JOB CONTRACT
+========================================================================================
+
+payload_reference FIELD: FOUND
+type annotation: Optional[str]
+default: None
+
+[UniversalJob context around line 23]
+    0013:     workspace_id: str
+    0014:     user_id: str = "system"
+    0015:     product_id: str = "linkcraftor"
+    0016: 
+    0017:     # Classification
+    0018:     pipeline: str = ""
+    0019:     stage: str = ""
+    0020:     job_type: str = ""
+    0021: 
+    0022:     # Payload
+>>> 0023:     payload_reference: Optional[str] = None
+    0024: 
+    0025:     # Scheduling inputs
+    0026:     priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+    0027:     status: UniversalJobStatus = UniversalJobStatus.CREATED
+    0028: 
+    0029:     # Attempts
+    0030:     attempts: int = 0
+    0031:     maximum_attempts: int = 1
+    0032: 
+    0033:     # Lease (declared shape only; no lease operations here)
+
+[UniversalJob context around line 112]
+    0102:         job_type = _normalize_optional_text(
+    0103:             self.job_type,
+    0104:             name="job_type",
+    0105:             violations=violations,
+    0106:             max_length=_MAX_IDENTIFIER_LENGTH,
+    0107:         )
+    0108:         if job_type is None:
+    0109:             violations.append("job_type is required")
+    0110:         set_(self, "job_type", job_type or "")
+    0111: 
+>>> 0112:         set_(self, "payload_reference", _normalize_optional_text(
+    0113:             self.payload_reference, name="payload_reference", violations=violations))
+    0114: 
+    0115:         try:
+    0116:             set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+    0117:         except UniversalJobContractError as exc:
+    0118:             violations.extend(exc.violations or (str(exc),))
+    0119:             set_(self, "priority", UniversalJobPriority.NORMAL)
+    0120: 
+    0121:         try:
+    0122:             set_(self, "status", UniversalJobStatus.coerce(self.status))
+
+[UniversalJob context around line 113]
+    0103:             self.job_type,
+    0104:             name="job_type",
+    0105:             violations=violations,
+    0106:             max_length=_MAX_IDENTIFIER_LENGTH,
+    0107:         )
+    0108:         if job_type is None:
+    0109:             violations.append("job_type is required")
+    0110:         set_(self, "job_type", job_type or "")
+    0111: 
+    0112:         set_(self, "payload_reference", _normalize_optional_text(
+>>> 0113:             self.payload_reference, name="payload_reference", violations=violations))
+    0114: 
+    0115:         try:
+    0116:             set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+    0117:         except UniversalJobContractError as exc:
+    0118:             violations.extend(exc.violations or (str(exc),))
+    0119:             set_(self, "priority", UniversalJobPriority.NORMAL)
+    0120: 
+    0121:         try:
+    0122:             set_(self, "status", UniversalJobStatus.coerce(self.status))
+    0123:         except UniversalJobContractError as exc:
+
+[UniversalJob context around line 279]
+    0269:     def to_canonical_dict(self) -> Dict[str, Any]:
+    0270:         """Return a plain, JSON-safe dict in canonical field order."""
+    0271:         return {
+    0272:             "job_id": self.job_id,
+    0273:             "workspace_id": self.workspace_id,
+    0274:             "user_id": self.user_id,
+    0275:             "product_id": self.product_id,
+    0276:             "pipeline": self.pipeline,
+    0277:             "stage": self.stage,
+    0278:             "job_type": self.job_type,
+>>> 0279:             "payload_reference": self.payload_reference,
+    0280:             "priority": str(self.priority),
+    0281:             "status": self.status.value,
+    0282:             "attempts": self.attempts,
+    0283:             "maximum_attempts": self.maximum_attempts,
+    0284:             "lease_owner": self.lease_owner,
+    0285:             "lease_id": self.lease_id,
+    0286:             "lease_started_at": self.lease_started_at,
+    0287:             "lease_expires_at": self.lease_expires_at,
+    0288:             "parent_job_id": self.parent_job_id,
+    0289:             "dependency_job_ids": list(self.dependency_job_ids),
+
+SECTION 2 ? CREATION ENGINE STRUCTURES
+========================================================================================
+
+### UniversalJobCreationRequest
+----------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class UniversalJobCreationRequest:
+    workspace_id: str
+    job_type: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+    pipeline: str = ""
+    stage: str = ""
+    payload_reference: Optional[str] = None
+    priority: Any = UniversalJobPriority.NORMAL
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = ()
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    maximum_attempts: Optional[int] = None
+    enqueue: bool = True
+    job_id: Optional[str] = None
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX
+    created_at: Optional[str] = None
+
+
+### UniversalJobCreationResult
+----------------------------------------------------------------------------------------
+@dataclass(frozen=True)
+class UniversalJobCreationResult:
+    job: UniversalJob
+    payload: Mapping[str, Any]
+    metadata: Mapping[str, Any]
+    registration: Optional[Mapping[str, Any]]
+    enqueue_requested: bool
+    job_type_source: str
+    creation_engine_version: str = UNIVERSAL_JOB_CREATION_ENGINE_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": UNIVERSAL_JOB_CREATION_RESULT_VERSION,
+            "ok": True,
+            "creation_engine_version": self.creation_engine_version,
+            "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+            "enqueue_requested": self.enqueue_requested,
+            "job_type_source": self.job_type_source,
+            "job": self.job.to_canonical_dict(),
+            "payload": _thaw_json(self.payload),
+            "metadata": thaw_universal_job_metadata(self.metadata),
+            "registration": (
+                _thaw_json(self.registration)
+                if self.registration is not None
+                else None
+            ),
+            "identity_fingerprint": self.job.identity_fingerprint(),
+            "contract_fingerprint": self.job.contract_fingerprint(),
+            "content_fingerprint": self.job.content_fingerprint(),
+        }
+
+
+SECTION 3 ? CREATION ENGINE PAYLOAD REFERENCE FLOW
+========================================================================================
+
+### normalize_universal_job_creation_request
+----------------------------------------------------------------------------------------
+[context around line 104]
+    0096:         payload.get("user_id"),
+    0097:         fallback="system",
+    0098:     )
+    0099:     product_id = _first_text(
+    0100:         request.product_id,
+    0101:         payload.get("product_id"),
+    0102:         fallback="linkcraftor",
+    0103:     )
+>>> 0104:     payload_reference = _first_text(
+    0105:         request.payload_reference,
+    0106:         payload.get("payload_reference"),
+    0107:         payload.get("payload_ref"),
+    0108:         payload.get("source_record_id"),
+    0109:         payload.get("html_id"),
+    0110:         fallback="",
+    0111:     ) or None
+    0112:     priority = _resolve_priority(request.priority)
+
+[context around line 105]
+    0097:         fallback="system",
+    0098:     )
+    0099:     product_id = _first_text(
+    0100:         request.product_id,
+    0101:         payload.get("product_id"),
+    0102:         fallback="linkcraftor",
+    0103:     )
+    0104:     payload_reference = _first_text(
+>>> 0105:         request.payload_reference,
+    0106:         payload.get("payload_reference"),
+    0107:         payload.get("payload_ref"),
+    0108:         payload.get("source_record_id"),
+    0109:         payload.get("html_id"),
+    0110:         fallback="",
+    0111:     ) or None
+    0112:     priority = _resolve_priority(request.priority)
+    0113:     maximum_attempts = _resolve_maximum_attempts(
+
+[context around line 106]
+    0098:     )
+    0099:     product_id = _first_text(
+    0100:         request.product_id,
+    0101:         payload.get("product_id"),
+    0102:         fallback="linkcraftor",
+    0103:     )
+    0104:     payload_reference = _first_text(
+    0105:         request.payload_reference,
+>>> 0106:         payload.get("payload_reference"),
+    0107:         payload.get("payload_ref"),
+    0108:         payload.get("source_record_id"),
+    0109:         payload.get("html_id"),
+    0110:         fallback="",
+    0111:     ) or None
+    0112:     priority = _resolve_priority(request.priority)
+    0113:     maximum_attempts = _resolve_maximum_attempts(
+    0114:         request.maximum_attempts,
+
+[context around line 162]
+    0154:         workspace_id=workspace_id,
+    0155:         job_type=job_type,
+    0156:         payload=payload,
+    0157:         metadata=metadata,
+    0158:         user_id=user_id,
+    0159:         product_id=product_id,
+    0160:         pipeline=pipeline,
+    0161:         stage=stage,
+>>> 0162:         payload_reference=payload_reference,
+    0163:         priority=priority,
+    0164:         parent_job_id=_clean_text(request.parent_job_id) or None,
+    0165:         dependency_job_ids=dependencies,
+    0166:         batch_id=_clean_text(request.batch_id) or None,
+    0167:         pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+    0168:         idempotency_key=_clean_text(request.idempotency_key) or None,
+    0169:         maximum_attempts=maximum_attempts,
+    0170:         enqueue=request.enqueue,
+
+### create_universal_job
+----------------------------------------------------------------------------------------
+[context around line 11]
+    0003:     workspace_id: str,
+    0004:     job_type: str,
+    0005:     payload: Optional[Mapping[str, Any]] = None,
+    0006:     metadata: Optional[Mapping[str, Any]] = None,
+    0007:     user_id: str = "system",
+    0008:     product_id: str = "linkcraftor",
+    0009:     pipeline: str = "",
+    0010:     stage: str = "",
+>>> 0011:     payload_reference: Optional[str] = None,
+    0012:     priority: Any = UniversalJobPriority.NORMAL,
+    0013:     parent_job_id: Optional[str] = None,
+    0014:     dependency_job_ids: Optional[Iterable[Any]] = None,
+    0015:     batch_id: Optional[str] = None,
+    0016:     pipeline_run_id: Optional[str] = None,
+    0017:     idempotency_key: Optional[str] = None,
+    0018:     maximum_attempts: Optional[int] = None,
+    0019:     enqueue: bool = True,
+
+[context around line 37]
+    0029:         workspace_id=workspace_id,
+    0030:         job_type=job_type,
+    0031:         payload={} if payload is None else payload,
+    0032:         metadata={} if metadata is None else metadata,
+    0033:         user_id=user_id,
+    0034:         product_id=product_id,
+    0035:         pipeline=pipeline,
+    0036:         stage=stage,
+>>> 0037:         payload_reference=payload_reference,
+    0038:         priority=priority,
+    0039:         parent_job_id=parent_job_id,
+    0040:         dependency_job_ids=(
+    0041:             ()
+    0042:             if dependency_job_ids is None
+    0043:             else dependency_job_ids
+    0044:         ),
+    0045:         batch_id=batch_id,
+
+[context around line 83]
+    0075:         job = UniversalJob(
+    0076:             job_id=normalized.job_id or "",
+    0077:             workspace_id=normalized.workspace_id,
+    0078:             user_id=normalized.user_id,
+    0079:             product_id=normalized.product_id,
+    0080:             pipeline=normalized.pipeline,
+    0081:             stage=normalized.stage,
+    0082:             job_type=normalized.job_type,
+>>> 0083:             payload_reference=normalized.payload_reference,
+    0084:             priority=normalized.priority,
+    0085:             status=status,
+    0086:             attempts=0,
+    0087:             maximum_attempts=normalized.maximum_attempts or 3,
+    0088:             lease_owner=None,
+    0089:             lease_id=None,
+    0090:             lease_started_at=None,
+    0091:             lease_expires_at=None,
+
+SECTION 4 ? EXECUTABLE CODE REFERENCE SCAN
+========================================================================================
+
+PYTHON FILES SCANNED: 562
+REFERENCE MATCHES: 312
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 188
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 198
+TERMS: body_ref
+body_ref
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 215
+TERMS: body_ref
+"body_ref escapes the canonical workspace Body Store."
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 220
+TERMS: body_ref
+"body_ref must point directly inside the workspace bodies directory."
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 234
+TERMS: body_ref
+def _body_ref_from_path(
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 303
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 322
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 356
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 364
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 382
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 389
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 407
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 418
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 568
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 569
+TERMS: body_ref
+_body_ref_from_path(
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 606
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 613
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 634
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 636
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 764
+TERMS: body_ref
+body_ref = _body_ref_from_path(
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 773
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 774
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\body_store_manager_text_statistics_step4_20260728_222133\body_store_manager_v1.py
+LINE: 793
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 275
+TERMS: body_ref
+body_ref: str,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 290
+TERMS: body_ref
+normalized_body_ref = _require_string(
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 291
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 292
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 303
+TERMS: body_ref
+normalized_body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 461
+TERMS: body_ref
+body_ref = _require_string(
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 463
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 465
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 485
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 591
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 592
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 631
+TERMS: body_ref
+body_ref: str,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 652
+TERMS: body_ref
+normalized_body_ref = _require_string(
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 653
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 654
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 687
+TERMS: body_ref
+body_ref=normalized_body_ref,
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 721
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_state_transition_engine_v1_20260802_233804\body_store_lifecycle_state_manager_v1.py
+LINE: 722
+TERMS: body_ref
+normalized_body_ref,
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 147
+TERMS: body_ref
+def _canonical_body_ref(
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 151
+TERMS: body_ref
+supplied_body_ref: str,
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 169
+TERMS: body_ref
+supplied_body_ref
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 188
+TERMS: body_ref
+"body_ref escapes the canonical workspace Body Store."
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 196
+TERMS: body_ref
+"body_ref must point directly inside the workspace bodies directory."
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 391
+TERMS: body_ref
+body_ref = _require_non_empty_string(
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 393
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 395
+TERMS: body_ref
+field_name="body_payload.body_ref",
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 401
+TERMS: body_ref
+) = _canonical_body_ref(
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 404
+TERMS: body_ref
+supplied_body_ref=body_ref,
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 486
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 487
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 627
+TERMS: body_ref
+"A different body already exists at body_ref."
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 818
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\body_store_writer_text_statistics_step3_20260728_221315\body_store_writer_v1.py
+LINE: 820
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\backups\fresh_wuc_phase_1_20260725_221257\certified_wuc_input.py
+LINE: 465
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 83
+TERMS: body_ref
+"semantic_reader_loads_body_from_body_ref": True,
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 141
+TERMS: body_ref
+body_ref = body_dir / f"{document_id}.txt"
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 146
+TERMS: body_ref
+if previous_hash != content_hash or not body_ref.exists():
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 147
+TERMS: body_ref
+body_ref.write_text(content_body, encoding="utf-8")
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 156
+TERMS: body_ref
+"body_ref": str(body_ref),
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 174
+TERMS: content_ref, body_ref
+doc["content_ref"] = str(body_ref)
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 177
+TERMS: content_ref, body_ref
+doc.setdefault("metadata", {})["content_ref"] = str(body_ref)
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 204
+TERMS: body_ref
+"semantic_reader_loads_body_from_body_ref": True,
+
+FILE: backend\server\backups\legacy_universal_article_body_store_retirement_20260727_002057\backend\server\stores\universal_article_body_store.py
+LINE: 273
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py
+LINE: 186
+TERMS: payload_reference
+or payload.get("payload_reference")
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 89
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 90
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 243
+TERMS: body_ref
+def _stable_body_ref(
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 269
+TERMS: content_ref
+def _stable_content_ref(
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 634
+TERMS: content_ref
+content_ref = _stable_content_ref(
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 639
+TERMS: body_ref
+body_ref = _stable_body_ref(
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 746
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 747
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 749
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 750
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 888
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 889
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 891
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\backups\uucd_option3_contract_replacement_20260727_004338\backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 892
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\backups\wuc_final_residual_cleanup_20260724_215757\backend\server\stores\site_pages_content_linker.py
+LINE: 50
+TERMS: content_ref
+page["unified_content_ref"] = {
+
+FILE: backend\server\backups\wuc_full_reset_20260724_215019\scan_wuc_article_validation_handoff.py
+LINE: 1245
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\backups\wuc_full_reset_20260724_215019\backend\server\stores\website_unified_content_handoff_v2.py
+LINE: 796
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\jobs\universal_knowledge_orchestrator.py
+LINE: 199
+TERMS: payload_reference
+or payload.get("payload_reference")
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 67
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 68
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 193
+TERMS: content_ref
+content_ref: str,
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 197
+TERMS: content_ref
+content_ref
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 202
+TERMS: content_ref
+f"Persisted UUCD reference does not exist: {content_ref}"
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 232
+TERMS: body_ref, body_reference
+def _verify_body_reference(
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 234
+TERMS: body_ref
+body_ref: str,
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 239
+TERMS: body_ref
+body_ref
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 244
+TERMS: body_ref
+f"Body reference does not exist: {body_ref}"
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 369
+TERMS: content_ref
+content_ref = _require_text(
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 371
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 373
+TERMS: content_ref
+field_name="payload.content_ref",
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 376
+TERMS: body_ref
+body_ref = _require_text(
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 378
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 380
+TERMS: body_ref
+field_name="payload.body_ref",
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 405
+TERMS: content_ref
+content_ref=content_ref
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 433
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 434
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 436
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 437
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 552
+TERMS: body_ref, body_reference
+body_verification = _verify_body_reference(
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 553
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 579
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 580
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 582
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\runtime\lifecycle_eligibility_runtime_handler_v1.py
+LINE: 583
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\runtime\udare_runtime_contract.py
+LINE: 650
+TERMS: payload_reference
+"payload_reference":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 89
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 90
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 239
+TERMS: content_ref
+content_ref = _require_non_empty_string(
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 241
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 243
+TERMS: content_ref
+field_name="content_ref",
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 246
+TERMS: body_ref
+body_ref = _require_non_empty_string(
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 248
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 250
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 367
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 368
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 370
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 371
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 453
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 455
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 458
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 460
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 826
+TERMS: payload_reference
+payload_reference=validated[
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 827
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 866
+TERMS: payload_reference
+"payload_reference"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 869
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 873
+TERMS: payload_reference
+"Universal Job payload_reference drifted "
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 874
+TERMS: content_ref
+"from canonical UUCD content_ref."
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 907
+TERMS: payload_reference
+"payload_reference":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 909
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 986
+TERMS: payload_reference
+"payload_reference":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 988
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 991
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 993
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 1108
+TERMS: payload_reference
+"payload_reference_rule":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 1109
+TERMS: content_ref
+"persisted_uucd.content_ref",
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 1111
+TERMS: body_ref, body_reference
+"body_reference_rule":
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+LINE: 1112
+TERMS: body_ref
+"payload.body_ref only; body bytes excluded",
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+LINE: 55
+TERMS: payload_reference
+"payload_reference",
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+LINE: 708
+TERMS: payload_reference
+payload_reference: Optional[str] = None
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+LINE: 797
+TERMS: payload_reference
+set_(self, "payload_reference", _normalize_optional_text(
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+LINE: 798
+TERMS: payload_reference
+self.payload_reference, name="payload_reference", violations=violations))
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+LINE: 964
+TERMS: payload_reference
+"payload_reference": self.payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 434
+TERMS: payload_reference
+payload_reference: Optional[str] = None
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 583
+TERMS: payload_reference
+payload_reference = _first_text(
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 584
+TERMS: payload_reference
+request.payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 585
+TERMS: payload_reference
+payload.get("payload_reference"),
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 641
+TERMS: payload_reference
+payload_reference=payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 668
+TERMS: payload_reference
+payload_reference: Optional[str] = None,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 694
+TERMS: payload_reference
+payload_reference=payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+LINE: 740
+TERMS: payload_reference
+payload_reference=normalized.payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 464
+TERMS: payload_reference
+payload_reference: Optional[str] = None
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 604
+TERMS: payload_reference
+payload_reference = _first_text(
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 605
+TERMS: payload_reference
+request.payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 606
+TERMS: payload_reference
+payload.get("payload_reference"),
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 647
+TERMS: payload_reference
+payload_reference=payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 674
+TERMS: payload_reference
+payload_reference: Optional[str] = None,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 700
+TERMS: payload_reference
+payload_reference=payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+LINE: 746
+TERMS: payload_reference
+payload_reference=normalized.payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 428
+TERMS: payload_reference
+payload_reference: Optional[str] = None
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 571
+TERMS: payload_reference
+payload_reference = _first_text(
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 572
+TERMS: payload_reference
+request.payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 573
+TERMS: payload_reference
+payload.get("payload_reference"),
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 629
+TERMS: payload_reference
+payload_reference=payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 656
+TERMS: payload_reference
+payload_reference: Optional[str] = None,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 682
+TERMS: payload_reference
+payload_reference=payload_reference,
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+LINE: 728
+TERMS: payload_reference
+payload_reference=normalized.payload_reference,
+
+FILE: backend\server\stores\site_pages_content_linker.py
+LINE: 33
+TERMS: content_ref
+page['unified_content_ref'] = {'content_id': page['content_id'], 'source_type': 'website_crawl'}
+
+FILE: backend\server\stores\uucd_body_store_certification.py
+LINE: 119
+TERMS: body_ref
+ref = Path(str(body.get("body_ref") or ""))
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_contract_v1.py
+LINE: 46
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE",
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.pre_rebuild_backup.py
+LINE: 110
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.pre_rebuild_backup.py
+LINE: 1813
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.pre_rebuild_backup.py
+LINE: 3539
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py
+LINE: 2563
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py
+LINE: 2592
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_engine_v1.py
+LINE: 2640
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_verifier_v1.py
+LINE: 836
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_executor_verifier_v1.py
+LINE: 1886
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_planner_contract_v1.py
+LINE: 58
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE",
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_planner_engine_v1.py
+LINE: 42
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE",
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_repair_planner_engine_v1.py
+LINE: 73
+TERMS: content_ref, content_reference
+"REMOVE_TOMBSTONE_CONTENT_REFERENCE":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 275
+TERMS: body_ref
+body_ref: str,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 290
+TERMS: body_ref
+normalized_body_ref = _require_string(
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 291
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 292
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 303
+TERMS: body_ref
+normalized_body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 459
+TERMS: body_ref
+body_ref = _require_string(
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 461
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 463
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 483
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 703
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 704
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 752
+TERMS: body_ref
+body_ref: str,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 773
+TERMS: body_ref
+normalized_body_ref = _require_string(
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 774
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 775
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 808
+TERMS: body_ref
+body_ref=normalized_body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 842
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_lifecycle_state_manager_v1.py
+LINE: 843
+TERMS: body_ref
+normalized_body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 190
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 200
+TERMS: body_ref
+body_ref
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 217
+TERMS: body_ref
+"body_ref escapes the canonical workspace Body Store."
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 222
+TERMS: body_ref
+"body_ref must point directly inside the workspace bodies directory."
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 236
+TERMS: body_ref
+def _body_ref_from_path(
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 305
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 324
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 358
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 366
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 384
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 391
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 409
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 420
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 570
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 571
+TERMS: body_ref
+_body_ref_from_path(
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 608
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 615
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 636
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 638
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 766
+TERMS: body_ref
+body_ref = _body_ref_from_path(
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 775
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 776
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_manager_v1.py
+LINE: 795
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 69
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 76
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 84
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 95
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 107
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 114
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 122
+TERMS: body_ref
+body_ref: str | Path,
+
+FILE: backend\server\universal_article_body_store\body_store_repository_v1.py
+LINE: 129
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_registration_v1.py
+LINE: 419
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_registration_v1.py
+LINE: 438
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_registration_v1.py
+LINE: 457
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_v1.py
+LINE: 364
+TERMS: body_ref
+body_ref = _require_string(
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_v1.py
+LINE: 366
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_v1.py
+LINE: 368
+TERMS: body_ref
+field_name="payload.body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_v1.py
+LINE: 375
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_v1.py
+LINE: 387
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_runtime_v1.py
+LINE: 436
+TERMS: body_ref
+body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 149
+TERMS: body_ref
+def _canonical_body_ref(
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 153
+TERMS: body_ref
+supplied_body_ref: str,
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 171
+TERMS: body_ref
+supplied_body_ref
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 190
+TERMS: body_ref
+"body_ref escapes the canonical workspace Body Store."
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 198
+TERMS: body_ref
+"body_ref must point directly inside the workspace bodies directory."
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 393
+TERMS: body_ref
+body_ref = _require_non_empty_string(
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 395
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 397
+TERMS: body_ref
+field_name="body_payload.body_ref",
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 403
+TERMS: body_ref
+) = _canonical_body_ref(
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 406
+TERMS: body_ref
+supplied_body_ref=body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 488
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 489
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 629
+TERMS: body_ref
+"A different body already exists at body_ref."
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 820
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_article_body_store\body_store_writer_v1.py
+LINE: 822
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 91
+TERMS: content_ref
+"content_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 92
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 112
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 123
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 135
+TERMS: body_ref
+"body_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 270
+TERMS: content_ref
+def _stable_content_ref(
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 285
+TERMS: body_ref
+def _stable_body_ref(
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 628
+TERMS: content_ref
+content_ref = _stable_content_ref(
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 633
+TERMS: body_ref
+body_ref = _stable_body_ref(
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 739
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 740
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 742
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 743
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 866
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 867
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 869
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 870
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 904
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_engine_v1.py
+LINE: 905
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 112
+TERMS: content_ref
+"""Raised when different content already occupies content_ref."""
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 287
+TERMS: content_ref
+def canonical_uucd_content_ref_v1(
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 292
+TERMS: content_ref
+"""Return canonical project-relative per-document UUCD content_ref."""
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 315
+TERMS: content_ref
+supplied_content_ref: Any,
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 318
+TERMS: content_ref
+content_ref = _require_non_empty_string(
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 319
+TERMS: content_ref
+supplied_content_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 320
+TERMS: content_ref
+field_name="content_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 324
+TERMS: content_ref
+content_ref.replace(
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 331
+TERMS: content_ref
+canonical_uucd_content_ref_v1(
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 339
+TERMS: content_ref
+"content_ref does not match the canonical per-document UUCD path."
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 348
+TERMS: content_ref
+"content_ref must be project-relative."
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 380
+TERMS: content_ref
+"content_ref escapes the canonical workspace UUCD directory."
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 507
+TERMS: body_ref
+body_ref = _require_non_empty_string(
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 509
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 511
+TERMS: body_ref
+field_name="body_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 514
+TERMS: content_ref
+content_ref = _require_non_empty_string(
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 516
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 518
+TERMS: content_ref
+field_name="content_ref",
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 604
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 605
+TERMS: content_ref
+content_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 607
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 608
+TERMS: body_ref
+body_ref,
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 635
+TERMS: body_ref
+body_ref=validated[
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 636
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 979
+TERMS: content_ref
+supplied_content_ref=validated[
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 980
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 1120
+TERMS: content_ref
+"content_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 1122
+TERMS: content_ref
+"content_ref"
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 1125
+TERMS: body_ref
+"body_ref":
+
+FILE: backend\server\universal_unified_content_document\uucd_persistence_v1.py
+LINE: 1127
+TERMS: body_ref
+"body_ref"
+
+FILE: backend\server\universal_unified_content_document\__init__.py
+LINE: 23
+TERMS: content_ref
+canonical_uucd_content_ref_v1,
+
+FILE: backend\server\universal_unified_content_document\__init__.py
+LINE: 47
+TERMS: content_ref
+"canonical_uucd_content_ref_v1",
+
+FILE: backend\server\website_unified_content\certified_wuc_input.py
+LINE: 465
+TERMS: content_ref
+"content_ref",
+
+SECTION 5 ? ACTIVE create_universal_job CALL SITES
+========================================================================================
+
+TOTAL ACTIVE CALLS FOUND: 0
+
+SECTION 6 ? TERM COUNTS
+========================================================================================
+
+payload_reference: 38
+content_ref: 81
+content_reference: 10
+body_ref: 195
+body_reference: 3
+
+========================================================================================
+SCAN RESULT: COMPLETE
+END OF PHASE 2.1.5 SCAN

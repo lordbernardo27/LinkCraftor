@@ -1,0 +1,4246 @@
+﻿PHASE 2.1.6 ? JOB PRIORITY DISCOVERY SCAN
+================================================================================================
+
+PURPOSE
+-------
+Discover the current priority model before defining the canonical Phase 2.1.6 Job Priority authority.
+
+SECTION 1 ? CORE UNIVERSAL JOB PRIORITY DEFINITIONS
+------------------------------------------------------------------------------------------------
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+  LINE 47 [ASSIGNMENT]
+    REQUIRED_UNIVERSAL_JOB_FIELDS: Final[Tuple[str, ...]] = (
+        "job_id",
+        "workspace_id",
+        "user_id",
+        "product_id",
+        "pipeline",
+        "stage",
+        "job_type",
+        "payload_reference",
+        "priority",
+        "status",
+        "attempts",
+        "maximum_attempts",
+        "lease_owner",
+        "lease_id",
+        "lease_started_at",
+        "lease_expires_at",
+        "parent_job_id",
+        "dependency_job_ids",
+        "batch_id",
+        "pipeline_run_id",
+        "progress",
+        "checkpoint_reference",
+        "result_reference",
+        "artifact_references",
+        "idempotency_key",
+        "AU_reserved",
+        "AU_consumed",
+        "cost_record",
+        "created_at",
+        "scheduled_at",
+        "started_at",
+        "completed_at",
+        "failed_at",
+        "cancelled_at",
+        "error_code",
+        "error_message",
+        "error_details",
+        "contract_version",
+    )
+
+  LINE 172 [CLASS]
+    class UniversalJobPriority(enum.IntEnum):
+        """Canonical priority classes.
+    
+        Backed by integers so ordering is well defined without implying any
+        scheduling behaviour; lower numeric value denotes higher urgency.
+        """
+    
+        CRITICAL = 10
+        HIGH = 20
+        NORMAL = 30
+        LOW = 40
+        BACKGROUND = 50
+    
+        def __str__(self) -> str:
+            return self.name.lower()
+    
+        @classmethod
+        def coerce(cls, value: Any) -> "UniversalJobPriority":
+            if isinstance(value, cls):
+                return value
+            if isinstance(value, bool):
+                raise UniversalJobContractError("priority must not be a boolean")
+            if isinstance(value, int):
+                for member in cls:
+                    if int(member) == value:
+                        return member
+            if isinstance(value, str):
+                text = value.strip().lower()
+                for member in cls:
+                    if member.name.lower() == text:
+                        return member
+                if text.isdigit():
+                    return cls.coerce(int(text))
+            raise UniversalJobContractError(
+                "invalid job priority: " + repr(value),
+                violations=(
+                    "priority must be one of " + ", ".join(m.name.lower() for m in cls),
+                ),
+            )
+
+  LINE 193 [CALL]
+    UniversalJobContractError("priority must not be a boolean")
+
+  LINE 205 [CALL]
+    UniversalJobContractError(
+                "invalid job priority: " + repr(value),
+                violations=(
+                    "priority must be one of " + ", ".join(m.name.lower() for m in cls),
+                ),
+            )
+
+  LINE 711 [ASSIGNMENT]
+    priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+
+  LINE 801 [CALL]
+    set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+
+  LINE 801 [CALL]
+    UniversalJobPriority.coerce(self.priority)
+
+  LINE 804 [CALL]
+    set_(self, "priority", UniversalJobPriority.NORMAL)
+
+  LINE 965 [CALL]
+    str(self.priority)
+
+  LINE 1087 [ASSIGNMENT]
+    kwargs["priority"] = (
+                    UniversalJobPriority.coerce(
+                        kwargs["priority"]
+                    )
+                )
+
+  LINE 1088 [CALL]
+    UniversalJobPriority.coerce(
+                        kwargs["priority"]
+                    )
+
+  LINE 1291 [ASSIGNMENT]
+    __all__ = [
+        "UNIVERSAL_JOB_CONTRACT_ID",
+        "UNIVERSAL_JOB_CONTRACT_VERSION",
+        "REQUIRED_UNIVERSAL_JOB_FIELDS",
+        "UniversalJob",
+        "UniversalJobValidationReport",
+        "UniversalJobContractError",
+        "UniversalJobStatus",
+        "UniversalJobPriority",
+        "UniversalJobProgress",
+        "UniversalJobCostRecord",
+        "validate_universal_job",
+    ]
+
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+  LINE 207 [FUNCTION]
+    def _resolve_priority(value: Any) -> UniversalJobPriority:
+        try:
+            return UniversalJobPriority.coerce(value)
+        except UniversalJobContractError as exc:
+            raise UniversalJobCreationError(
+                "Invalid canonical job priority.",
+                code="invalid_priority",
+                violations=exc.violations or (str(exc),),
+            ) from exc
+
+  LINE 209 [CALL]
+    UniversalJobPriority.coerce(value)
+
+  LINE 211 [CALL]
+    UniversalJobCreationError(
+                "Invalid canonical job priority.",
+                code="invalid_priority",
+                violations=exc.violations or (str(exc),),
+            )
+
+  LINE 439 [ASSIGNMENT]
+    priority: Any = UniversalJobPriority.NORMAL
+
+  LINE 590 [ASSIGNMENT]
+    priority = _resolve_priority(request.priority)
+
+  LINE 590 [CALL]
+    _resolve_priority(request.priority)
+
+  LINE 631 [ASSIGNMENT]
+    normalized = UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+  LINE 631 [CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+  LINE 684 [ASSIGNMENT]
+    request = UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+  LINE 684 [CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+  LINE 731 [ASSIGNMENT]
+    job = UniversalJob(
+                job_id=normalized.job_id or "",
+                workspace_id=normalized.workspace_id,
+                user_id=normalized.user_id,
+                product_id=normalized.product_id,
+                pipeline=normalized.pipeline,
+                stage=normalized.stage,
+                job_type=normalized.job_type,
+                payload_reference=normalized.payload_reference,
+                priority=normalized.priority,
+                status=status,
+                attempts=0,
+                maximum_attempts=normalized.maximum_attempts or 3,
+                lease_owner=None,
+                lease_id=None,
+                lease_started_at=None,
+                lease_expires_at=None,
+                parent_job_id=normalized.parent_job_id,
+                dependency_job_ids=normalized.dependency_job_ids,
+                batch_id=normalized.batch_id,
+                pipeline_run_id=normalized.pipeline_run_id,
+                progress=UniversalJobProgress(
+                    percent=0,
+                    step=normalized.stage,
+                    message=message,
+                    updated_at=normalized.created_at,
+                ),
+                checkpoint_reference=None,
+                result_reference=None,
+                artifact_references=(),
+                idempotency_key=normalized.idempotency_key,
+                AU_reserved=0,
+                AU_consumed=0,
+                cost_record=UniversalJobCostRecord(),
+                created_at=normalized.created_at,
+                scheduled_at=None,
+                started_at=None,
+                completed_at=None,
+                failed_at=None,
+                cancelled_at=None,
+                error_code=None,
+                error_message=None,
+                error_details={},
+            )
+
+  LINE 731 [CALL]
+    UniversalJob(
+                job_id=normalized.job_id or "",
+                workspace_id=normalized.workspace_id,
+                user_id=normalized.user_id,
+                product_id=normalized.product_id,
+                pipeline=normalized.pipeline,
+                stage=normalized.stage,
+                job_type=normalized.job_type,
+                payload_reference=normalized.payload_reference,
+                priority=normalized.priority,
+                status=status,
+                attempts=0,
+                maximum_attempts=normalized.maximum_attempts or 3,
+                lease_owner=None,
+                lease_id=None,
+                lease_started_at=None,
+                lease_expires_at=None,
+                parent_job_id=normalized.parent_job_id,
+                dependency_job_ids=normalized.dependency_job_ids,
+                batch_id=normalized.batch_id,
+                pipeline_run_id=normalized.pipeline_run_id,
+                progress=UniversalJobProgress(
+                    percent=0,
+                    step=normalized.stage,
+                    message=message,
+                    updated_at=normalized.created_at,
+                ),
+                checkpoint_reference=None,
+                result_reference=None,
+                artifact_references=(),
+                idempotency_key=normalized.idempotency_key,
+                AU_reserved=0,
+                AU_consumed=0,
+                cost_record=UniversalJobCostRecord(),
+                created_at=normalized.created_at,
+                scheduled_at=None,
+                started_at=None,
+                completed_at=None,
+                failed_at=None,
+                cancelled_at=None,
+                error_code=None,
+                error_message=None,
+                error_details={},
+            )
+
+
+
+SECTION 2 ? ACTIVE PYTHON PRIORITY REFERENCES
+------------------------------------------------------------------------------------------------
+
+FILE: backend\server\_quarantine\semantic_reasoning_duplicate_step2\semantic_reasoning_input_contract.py
+  LINE 213 [ASSIGNMENT] primary_topic = {
+        "topic_id": _stable_id("target_topic", match["canonical_concept"], "primary"),
+        "canonical_concept": match["canonical_concept"],
+        "relationship": "primary",
+        "source_phrase": normalized_text,
+        "confidence": match["identity_confidence"],
+        "target_search_strategy": {
+            "priority": 1,
+            "match_mode": "canonical",
+            "allow_alias_expansion": True,
+            "allow_parent_concepts": True,
+            "allow_child_concepts": True,
+            "allow_related_concepts": True,
+        },
+        "target_search_plan": [
+            {
+                "provider": {
+                    "provider_id": "provider_active_target_set",
+                    "provider_type": "internal_index",
+                    "provider_name": "Active Target Set",
+                },
+                "priority": 1,
+                "match_mode": "canonical",
+                "required": True,
+            },
+            {
+                "provider": {
+                    "provider_id": "provider_topic_clusters",
+                    "provider_type": "semantic_cluster_index",
+                    "provider_name": "Topic Clusters",
+                },
+                "priority": 2,
+                "match_mode": "canonical",
+                "required": False,
+            },
+            {
+                "provider": {
+                    "provider_id": "provider_section_clusters",
+                    "provider_type": "structural_cluster_index",
+                    "provider_name": "Section Clusters",
+                },
+                "priority": 3,
+                "match_mode": "semantic",
+                "required": False,
+            },
+        ],
+        "search_intent": {
+            "goal": "discover_best_target_url",
+            "expected_output": "candidate_urls",
+            "minimum_candidates": 1,
+            "maximum_candidates": 25,
+        },
+    }
+  LINE 269 [ASSIGNMENT] alias_topic = {
+            "topic_id": _stable_id("target_topic", normalized_text, "alias"),
+            "canonical_concept": normalized_text,
+            "relationship": "alias",
+            "source_phrase": normalized_text,
+            "confidence": bridge.get("confidence", match["identity_confidence"]),
+            "target_search_strategy": {
+                "priority": 2,
+                "match_mode": "alias",
+                "allow_alias_expansion": False,
+                "allow_parent_concepts": False,
+                "allow_child_concepts": False,
+                "allow_related_concepts": False,
+            },
+            "target_search_plan": [
+                {
+                    "provider": {
+                        "provider_id": "provider_active_target_set",
+                        "provider_type": "internal_index",
+                        "provider_name": "Active Target Set",
+                    },
+                    "priority": 1,
+                    "match_mode": "alias",
+                    "required": True,
+                },
+                {
+                    "provider": {
+                        "provider_id": "provider_topic_clusters",
+                        "provider_type": "semantic_cluster_index",
+                        "provider_name": "Topic Clusters",
+                    },
+                    "priority": 2,
+                    "match_mode": "alias",
+                    "required": False,
+                },
+            ],
+            "search_intent": {
+                "goal": "discover_best_target_url",
+                "expected_output": "candidate_urls",
+                "minimum_candidates": 1,
+                "maximum_candidates": 15,
+            },
+        }
+
+FILE: backend\server\backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py
+  LINE 34 [ASSIGNMENT] DEFAULT_PRIORITY = 1000
+  LINE 284 [ASSIGNMENT] output = run_universal_knowledge_queue_v1(
+        workspace_id=args.workspace_id,
+        max_jobs=args.max_jobs,
+        job_type=args.job_type,
+        order_by_priority=not args.no_priority,
+    )
+
+FILE: backend\server\backups\connect_domain_pipeline1_namespace_recovery_20260727_013745\coordinator.py
+  LINE 145 [ASSIGNMENT] high_priority_urls = []
+  LINE 146 [ASSIGNMENT] normal_priority_urls = []
+  LINE 147 [ASSIGNMENT] low_priority_urls = []
+  LINE 344 [ASSIGNMENT] seed_urls = high_priority_urls + normal_priority_urls + low_priority_urls
+  LINE 376 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\backups\connect_domain_pipeline1_namespace_refinement_20260727_013623\linking_target_pipeline.py
+  LINE 145 [ASSIGNMENT] high_priority_urls = []
+  LINE 146 [ASSIGNMENT] normal_priority_urls = []
+  LINE 147 [ASSIGNMENT] low_priority_urls = []
+  LINE 344 [ASSIGNMENT] seed_urls = high_priority_urls + normal_priority_urls + low_priority_urls
+  LINE 376 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\backups\connect_domain_pipeline_separation_step1_20260727_012658\site_reader.py
+  LINE 899 [ASSIGNMENT] high_priority_urls = []
+  LINE 900 [ASSIGNMENT] normal_priority_urls = []
+  LINE 901 [ASSIGNMENT] low_priority_urls = []
+  LINE 1098 [ASSIGNMENT] seed_urls = high_priority_urls + normal_priority_urls + low_priority_urls
+  LINE 1130 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\backups\connect_domain_pipeline_separation_step1_retry_20260727_012838\site_reader.py
+  LINE 899 [ASSIGNMENT] high_priority_urls = []
+  LINE 900 [ASSIGNMENT] normal_priority_urls = []
+  LINE 901 [ASSIGNMENT] low_priority_urls = []
+  LINE 1098 [ASSIGNMENT] seed_urls = high_priority_urls + normal_priority_urls + low_priority_urls
+  LINE 1130 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\backups\connect_domain_pipeline_separation_step2_20260727_013143\site_reader.py
+  LINE 900 [ASSIGNMENT] high_priority_urls = []
+  LINE 901 [ASSIGNMENT] normal_priority_urls = []
+  LINE 902 [ASSIGNMENT] low_priority_urls = []
+  LINE 1099 [ASSIGNMENT] seed_urls = high_priority_urls + normal_priority_urls + low_priority_urls
+  LINE 1131 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\backups\final_legacy_uucd_dependency_cleanup_20260727_000029\backend\server\orchestration\routes.py
+  LINE 41 [ASSIGNMENT] job = create_orchestration_job(
+        workspace_id=payload.workspace_id,
+        job_type=payload.job_type,
+        payload=payload.payload,
+        metadata=payload.metadata,
+        priority=payload.priority,
+    )
+  LINE 41 [PRIORITY KWARG] create_orchestration_job(priority=payload.priority)
+  LINE 46 [ATTRIBUTE] payload.priority
+
+FILE: backend\server\backups\final_legacy_uucd_dependency_cleanup_20260727_000029\backend\server\routes\site_reader.py
+  LINE 902 [ASSIGNMENT] high_priority_urls = []
+  LINE 903 [ASSIGNMENT] normal_priority_urls = []
+  LINE 904 [ASSIGNMENT] low_priority_urls = []
+  LINE 1101 [ASSIGNMENT] seed_urls = high_priority_urls + normal_priority_urls + low_priority_urls
+  LINE 1133 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py
+  LINE 118 [ASSIGNMENT] processing_job = create_orchestration_job(
+            workspace_id=normalized_workspace_id,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": normalized_workspace_id,
+                "doc_id": document_id,
+                "stored_path": stored_path,
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "original_name": str(
+                    metadata.get("filename") or ""
+                ),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(
+                    metadata.get("filename") or ""
+                ),
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+  LINE 118 [PRIORITY KWARG] create_orchestration_job(priority=5)
+
+FILE: backend\server\backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py
+  LINE 118 [ASSIGNMENT] processing_job = create_orchestration_job(
+            workspace_id=normalized_workspace_id,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": normalized_workspace_id,
+                "doc_id": document_id,
+                "stored_path": stored_path,
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "original_name": str(
+                    metadata.get("filename") or ""
+                ),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(
+                    metadata.get("filename") or ""
+                ),
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+  LINE 118 [PRIORITY KWARG] create_orchestration_job(priority=5)
+
+FILE: backend\server\backups\universal_runtime_registration_20260719_032352\universal_knowledge_orchestrator.py
+  LINE 204 [ASSIGNMENT] job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+FILE: backend\server\backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py
+  LINE 118 [ASSIGNMENT] processing_job = create_orchestration_job(
+            workspace_id=normalized_workspace_id,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": normalized_workspace_id,
+                "doc_id": document_id,
+                "stored_path": stored_path,
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "original_name": str(
+                    metadata.get("filename") or ""
+                ),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(
+                    metadata.get("filename") or ""
+                ),
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+  LINE 118 [PRIORITY KWARG] create_orchestration_job(priority=5)
+
+FILE: backend\server\backups\upload_document_pipeline2_intake_20260730_133651\files.py
+  LINE 752 [ASSIGNMENT] processing_job = create_orchestration_job(
+            workspace_id=ws_norm,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": ws_norm,
+                "doc_id": doc_id,
+                "stored_path": stored_path,
+                "stored_name": str(meta.get("stored_name") or ""),
+                "original_name": str(meta.get("filename") or ""),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(meta.get("filename") or ""),
+                "stored_name": str(meta.get("stored_name") or ""),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+  LINE 752 [PRIORITY KWARG] create_orchestration_job(priority=5)
+
+FILE: backend\server\backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py
+  LINE 34 [ASSIGNMENT] DEFAULT_PRIORITY = 1000
+  LINE 155 [ASSIGNMENT] pending, remaining = _partition_queue(
+        queued,
+        job_type=job_type,
+        max_jobs=int(max_jobs),
+        order_by_priority=order_by_priority,
+    )
+  LINE 209 [ASSIGNMENT] output = run_universal_knowledge_queue_v1(
+        workspace_id=args.workspace_id,
+        max_jobs=args.max_jobs,
+        job_type=args.job_type,
+        order_by_priority=not args.no_priority,
+    )
+
+FILE: backend\server\backups\wuc_full_reset_20260724_215019\scan_wuc_intermediate_storage_exact.py
+  LINE 729 [ASSIGNMENT] priority_paths = {
+    (
+        SERVER_ROOT
+        / "stores"
+        / "website_unified_content_store.py"
+    ),
+
+    (
+        SERVER_ROOT
+        / "stores"
+        / "website_unified_content_builder_v2.py"
+    ),
+
+    (
+        SERVER_ROOT
+        / "workers"
+        / "website_unified_content_batch_worker.py"
+    ),
+
+    (
+        SERVER_ROOT
+        / "workers"
+        / "website_unified_content_batch_worker_v2.py"
+    ),
+
+    (
+        SERVER_ROOT
+        / "workers"
+        / "website_unified_content_orchestrator.py"
+    ),
+
+    (
+        SERVER_ROOT
+        / "stores"
+        / "website_source_pipeline_orchestrator.py"
+    ),
+
+    (
+        SERVER_ROOT
+        / "stores"
+        / "website_uucd_rebuild_engine.py"
+    ),
+}
+
+FILE: backend\server\crawler\__init__.py
+  LINE 97 [IMPORT] from seed_controls import update_priority
+  LINE 142 [ASSIGNMENT] __all__ = [
+    "ALLOWED_CRAWLER_SESSION_TRANSITIONS",
+    "CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION",
+    "CRAWLER_SESSION_REPOSITORY_SCHEMA_VERSION",
+    "CRAWLER_SESSION_SCHEMA_VERSION",
+    "CRAWLER_SESSION_STORE_ROOT",
+    "CrawlSession",
+    "CrawlSessionLimits",
+    "CrawlSessionStatistics",
+    "CrawlSessionStatus",
+    "TERMINAL_CRAWL_SESSION_STATUSES",
+    "cancel_crawler_session",
+    "complete_crawler_session",
+    "count_crawler_sessions",
+    "crawler_session_exists",
+    "crawler_session_store_path",
+    "create_crawler_session",
+    "create_crawler_session_request",
+    "delete_crawler_session",
+    "empty_crawler_session_store",
+    "explain_crawler_session_coordinator_v1",
+    "explain_crawler_session_models_v1",
+    "explain_crawler_session_repository_v1",
+    "fail_crawler_session",
+    "generate_crawler_session_id",
+    "get_crawler_session",
+    "get_crawler_session_status",
+    "list_crawler_sessions",
+    "load_crawler_session_store",
+    "pause_crawler_session",
+    "request_stop_crawler_session",
+    "require_crawler_session",
+    "resume_crawler_session",
+    "save_crawler_session_store",
+    "start_crawler_session",
+    "transition_crawler_session",
+    "update_crawler_session",
+    "validate_crawler_session_store",
+    "validate_transition",
+
+    "UNIVERSAL_WEB_SEED_SCHEMA_VERSION",
+    "UniversalWebSeed",
+    "UniversalWebSeedStatus",
+    "UniversalWebSeedType",
+    "explain_universal_web_seed_models_v1",
+    "UNIVERSAL_WEB_SEED_REPOSITORY_SCHEMA_VERSION",
+    "UNIVERSAL_WEB_SEED_STORE_ROOT",
+    "count_universal_web_seeds",
+    "create_universal_web_seed",
+    "delete_universal_web_seed",
+    "empty_universal_web_seed_store",
+    "explain_universal_web_seed_repository_v1",
+    "get_universal_web_seed",
+    "list_universal_web_seeds",
+    "load_universal_web_seed_store",
+    "require_universal_web_seed",
+    "save_universal_web_seed_store",
+    "universal_web_seed_exists",
+    "universal_web_seed_store_path",
+    "update_universal_web_seed",
+    "validate_universal_web_seed_store",
+    "UNIVERSAL_WEB_SEED_REGISTRATION_SCHEMA_VERSION",
+    "build_universal_web_seed_registration_record",
+    "build_universal_web_seed_registration_result",
+    "explain_universal_web_seed_registration_engine_v1",
+    "generate_universal_web_seed_id",
+    "normalize_optional_crawler_session_id",
+    "normalize_optional_seed_id",
+    "normalize_registration_metadata",
+    "register_universal_web_seed",
+    "ALLOWED_UNIVERSAL_WEB_SEED_TRANSITIONS",
+    "PROTECTED_SEED_METADATA_KEYS",
+    "UNIVERSAL_WEB_SEED_CONTROLS_SCHEMA_VERSION",
+    "append_seed_control_event",
+    "archive_seed",
+    "build_seed_control_result",
+    "disable_seed",
+    "enable_seed",
+    "explain_universal_web_seed_controls_v1",
+    "normalize_control_actor",
+    "normalize_control_reason",
+    "restore_seed",
+    "update_metadata",
+    "update_priority",
+    "validate_seed_transition",
+    "BLOCKING_DUPLICATE_CLASSIFICATIONS",
+    "COMPARISON_FAMILY_BY_SEED_TYPE",
+    "SeedComparisonFamily",
+    "SeedProtectionClassification",
+    "SeedProtectionDecision",
+    "UNIVERSAL_WEB_SEED_PROTECTION_SCHEMA_VERSION",
+    "build_seed_comparison_target",
+    "build_seed_match_record",
+    "build_seed_protection_metadata",
+    "classify_seed_match",
+    "comparison_family_for_seed_type",
+    "decide_seed_protection",
+    "explain_universal_web_seed_protection_v1",
+    "generate_seed_target_fingerprint",
+    "hostname_from_comparison_target",
+    "hosts_are_related",
+    "inspect_seed_protection",
+    "normalize_domain_target",
+    "normalize_hostname",
+    "normalize_url_path",
+    "normalize_url_query",
+    "normalize_url_resource_target",
+    "protect_universal_web_seed",]
+
+FILE: backend\server\crawler\seed_controls.py
+  LINE 72 [ASSIGNMENT] PROTECTED_SEED_METADATA_KEYS = {
+    "seed_id",
+    "workspace_id",
+    "crawler_session_id",
+    "seed_type",
+    "original_value",
+    "normalized_value",
+    "domain",
+    "root_domain",
+    "priority",
+    "enabled",
+    "status",
+    "registered_by",
+    "registered_source",
+    "registered_at",
+    "created_at",
+    "updated_at",
+    "enabled_at",
+    "disabled_at",
+    "archived_at",
+    "schema_version",
+}
+  LINE 760 [ASSIGNMENT] __all__ = [
+    "ALLOWED_UNIVERSAL_WEB_SEED_TRANSITIONS",
+    "PROTECTED_SEED_METADATA_KEYS",
+    "UNIVERSAL_WEB_SEED_CONTROLS_SCHEMA_VERSION",
+    "append_seed_control_event",
+    "archive_seed",
+    "build_seed_control_result",
+    "disable_seed",
+    "enable_seed",
+    "explain_universal_web_seed_controls_v1",
+    "normalize_control_actor",
+    "normalize_control_reason",
+    "restore_seed",
+    "update_metadata",
+    "update_priority",
+    "validate_seed_transition",
+]
+  LINE 260 [ASSIGNMENT] result = {
+        "ok": True,
+        "component": "universal_web_seed_controls",
+        "schema_version": (
+            UNIVERSAL_WEB_SEED_CONTROLS_SCHEMA_VERSION
+        ),
+        "operation": required_string(
+            operation,
+            field_name="operation",
+        ),
+        "changed": changed,
+        "seed_id": seed.seed_id,
+        "workspace_id": seed.workspace_id,
+        "previous_status": previous_status.value,
+        "current_status": seed.status.value,
+        "enabled": seed.enabled,
+        "priority": seed.priority,
+        "updated_at": seed.updated_at,
+        "message": required_string(
+            message,
+            field_name="message",
+        ),
+        "seed": seed.to_dict(),
+        "next_pipeline_stage": (
+            "Seed Eligibility Validation"
+        ),
+    }
+  LINE 536 [ASSIGNMENT] normalized_priority = non_negative_integer(
+        priority,
+        field_name="priority",
+    )
+  LINE 550 [ASSIGNMENT] previous_priority = seed.priority
+  LINE 559 [ASSIGNMENT] seed.priority = normalized_priority
+  LINE 565 [ASSIGNMENT] event_metadata["previous_priority"] = (
+        previous_priority
+    )
+  LINE 568 [ASSIGNMENT] event_metadata["current_priority"] = (
+        normalized_priority
+    )
+  LINE 289 [ASSIGNMENT] result["previous_priority"] = previous_priority
+  LINE 290 [ASSIGNMENT] result["current_priority"] = seed.priority
+  LINE 550 [ATTRIBUTE] seed.priority
+  LINE 559 [ATTRIBUTE] seed.priority
+  LINE 276 [ATTRIBUTE] seed.priority
+  LINE 290 [ATTRIBUTE] seed.priority
+
+FILE: backend\server\crawler\seed_models.py
+  LINE 174 [ASSIGNMENT] priority: int = 0
+  LINE 249 [ASSIGNMENT] self.priority = non_negative_integer(
+            self.priority,
+            field_name="priority",
+        )
+  LINE 249 [ATTRIBUTE] self.priority
+  LINE 434 [PRIORITY KWARG] cls(priority=source.get(
+                "priority",
+                0,
+            ))
+  LINE 250 [ATTRIBUTE] self.priority
+  LINE 401 [ATTRIBUTE] self.priority
+
+FILE: backend\server\crawler\seed_registration_engine.py
+  LINE 191 [ASSIGNMENT] normalized_priority = non_negative_integer(
+        priority,
+        field_name="priority",
+    )
+  LINE 327 [ASSIGNMENT] seed = (
+        build_universal_web_seed_registration_record(
+            workspace_id=workspace_id,
+            seed_type=seed_type,
+            original_value=original_value,
+            crawler_session_id=crawler_session_id,
+            priority=priority,
+            registered_by=registered_by,
+            registered_source=registered_source,
+            metadata=metadata,
+            seed_id=seed_id,
+        )
+    )
+  LINE 227 [PRIORITY KWARG] UniversalWebSeed(priority=normalized_priority)
+  LINE 328 [PRIORITY KWARG] build_universal_web_seed_registration_record(priority=priority)
+  LINE 284 [ATTRIBUTE] seed.priority
+
+FILE: backend\server\crawler\seed_repository.py
+  LINE 653 [ATTRIBUTE] seed.priority
+
+FILE: backend\server\engine\intelligence_target_resolver.py
+  LINE 1040 [ASSIGNMENT] intent_score = _intent_match_score(
+                anchor_phrase,
+                target_text_for_concepts,
+                target.get("page_type_hint") or target.get("priority_bucket") or "",
+            )
+  LINE 1046 [ASSIGNMENT] intent_intelligence = analyze_intent_v1(
+                phrase=anchor_phrase,
+                title=title,
+                url=url,
+                path=str(target.get("path") or intelligence.get("path") or ""),
+                metadata={
+                    "page_type_hint": target.get("page_type_hint") or intelligence.get("page_type_hint"),
+                    "priority_bucket": target.get("priority_bucket") or intelligence.get("priority_bucket"),
+                    "source_type": source_type,
+                },
+            )
+
+FILE: backend\server\engine\profiles.py
+  LINE 7 [ASSIGNMENT] GENERAL_PROFILE: Dict[str, Any] = {
+    "id": "general",
+    "display_name": "General",
+    "entity_importance": {
+        "TOPIC": 1.0,
+        "ENTITY": 1.2,
+        "PRODUCT": 1.3,
+        "FEATURE": 1.2,
+        "API": 1.2,
+        "USE_CASE": 1.1,
+    },
+    "context_rules": {
+        "GUIDE": ["TOPIC", "FEATURE", "USE_CASE"],
+        "COMPARISON": ["TOPIC", "PRODUCT", "FEATURE"],
+        "BENEFIT": ["FEATURE", "USE_CASE"],
+        "WARNING": ["TOPIC"],
+    },
+    "external_trust": {},
+    "internal_priority": {
+        "sitemap": 1.0,
+        "backup": 0.9,
+        "uploaded": 0.8,
+        "draft": 0.6,
+        "docs": 1.0,
+        "blog": 0.8,
+    },
+    "thresholds": {
+        "internal_min": 0.35,
+        "semantic_min": 0.12,
+        "external_min": 0.55,
+    },
+}
+  LINE 41 [ASSIGNMENT] MEDICAL_PROFILE: Dict[str, Any] = {
+    "id": "medical",
+    "display_name": "Medical / Health",
+    "entity_importance": {
+        "DRUG": 3.0,
+        "DISEASE": 2.5,
+        "CONDITION": 2.5,
+        "SYMPTOM": 2.0,
+        "MECHANISM": 1.8,
+        "TOPIC": 1.0,
+    },
+    "context_rules": {
+        "SIDE_EFFECTS": ["SYMPTOM", "MECHANISM"],
+        "WARNING": ["RISK", "CONDITION"],
+        "TREATMENT": ["DRUG", "THERAPY"],
+        "GUIDE": ["TOPIC", "CONDITION", "DRUG"],
+    },
+    "external_trust": {
+        "nhs.uk": 1.0,
+        "nih.gov": 1.0,
+        "who.int": 1.0,
+        "mayoclinic.org": 0.95,
+        "healthline.com": 0.85,
+    },
+    "internal_priority": {
+        "sitemap": 1.0,
+        "backup": 0.9,
+        "uploaded": 0.8,
+        "draft": 0.6,
+    },
+    "thresholds": {
+        "internal_min": 0.35,
+        "semantic_min": 0.12,
+        "external_min": 0.55,
+    },
+}
+  LINE 79 [ASSIGNMENT] SAAS_PROFILE: Dict[str, Any] = {
+    "id": "saas",
+    "display_name": "SaaS / Tech",
+    "entity_importance": {
+        "PRODUCT": 3.0,
+        "FEATURE": 2.8,
+        "API": 2.5,
+        "INTEGRATION": 2.2,
+        "USE_CASE": 2.0,
+        "SYSTEM": 1.8,
+        "TOPIC": 1.0,
+    },
+    "context_rules": {
+        "USE_CASE": ["FEATURE", "INTEGRATION"],
+        "PRICING": ["PLAN", "FEATURE"],
+        "LIMITATION": ["API", "SYSTEM"],
+        "GUIDE": ["FEATURE", "USE_CASE", "API"],
+    },
+    "external_trust": {
+        "docs.aws.amazon.com": 1.0,
+        "developer.mozilla.org": 1.0,
+        "cloud.google.com": 0.95,
+        "stripe.com": 0.95,
+        "github.com": 0.90,
+    },
+    "internal_priority": {
+        "docs": 1.0,
+        "sitemap": 0.95,
+        "blog": 0.8,
+        "uploaded": 0.75,
+        "draft": 0.6,
+    },
+    "thresholds": {
+        "internal_min": 0.30,
+        "semantic_min": 0.15,
+        "external_min": 0.50,
+    },
+}
+  LINE 118 [ASSIGNMENT] FINANCE_PROFILE: Dict[str, Any] = {
+    "id": "finance",
+    "display_name": "Finance / Investing",
+    "entity_importance": {
+        "ASSET": 3.0,
+        "METRIC": 2.8,
+        "STRATEGY": 2.5,
+        "RISK": 2.3,
+        "MARKET": 2.0,
+        "COMPANY": 1.8,
+        "TOPIC": 1.0,
+    },
+    "context_rules": {
+        "GUIDE": ["STRATEGY", "TOPIC", "METRIC"],
+        "COMPARISON": ["ASSET", "STRATEGY", "MARKET"],
+        "RISK": ["RISK", "ASSET", "MARKET"],
+        "ANALYSIS": ["METRIC", "MARKET", "COMPANY"],
+        "ACTIONABLE": ["STRATEGY", "ASSET"],
+    },
+    "external_trust": {
+        "investopedia.com": 1.0,
+        "morningstar.com": 0.95,
+        "sec.gov": 1.0,
+        "federalreserve.gov": 1.0,
+        "finance.yahoo.com": 0.85,
+    },
+    "internal_priority": {
+        "sitemap": 1.0,
+        "backup": 0.9,
+        "uploaded": 0.8,
+        "draft": 0.6,
+        "research": 0.95,
+        "blog": 0.8,
+    },
+    "thresholds": {
+        "internal_min": 0.32,
+        "semantic_min": 0.14,
+        "external_min": 0.55,
+    },
+}
+  LINE 159 [ASSIGNMENT] ECOMMERCE_PROFILE: Dict[str, Any] = {
+    "id": "ecommerce",
+    "display_name": "Ecommerce / Product Content",
+    "entity_importance": {
+        "PRODUCT": 3.0,
+        "CATEGORY": 2.6,
+        "FEATURE": 2.5,
+        "BRAND": 2.2,
+        "USE_CASE": 2.0,
+        "SPEC": 1.8,
+        "TOPIC": 1.0,
+    },
+    "context_rules": {
+        "GUIDE": ["PRODUCT", "CATEGORY", "USE_CASE"],
+        "COMPARISON": ["PRODUCT", "FEATURE", "BRAND"],
+        "BUYING_GUIDE": ["PRODUCT", "CATEGORY", "FEATURE"],
+        "REVIEW": ["PRODUCT", "FEATURE", "SPEC"],
+        "ACTIONABLE": ["PRODUCT", "USE_CASE"],
+    },
+    "external_trust": {
+        "amazon.com": 0.9,
+        "bestbuy.com": 0.9,
+        "walmart.com": 0.85,
+        "target.com": 0.85,
+        "shopify.com": 0.8,
+    },
+    "internal_priority": {
+        "sitemap": 1.0,
+        "backup": 0.9,
+        "uploaded": 0.8,
+        "draft": 0.6,
+        "catalog": 0.95,
+        "blog": 0.8,
+    },
+    "thresholds": {
+        "internal_min": 0.30,
+        "semantic_min": 0.14,
+        "external_min": 0.55,
+    },
+}
+
+FILE: backend\server\engine\resolver_topic_authority.py
+  LINE 47 [ASSIGNMENT] priority_bucket = str(
+        target.get("priority_bucket")
+        or metadata.get("priority_bucket")
+        or ""
+    ).lower()
+  LINE 59 [ASSIGNMENT] pillar_like = (
+        _boolish(target.get("pillar"))
+        or _boolish(metadata.get("pillar"))
+        or priority_bucket in {"pillar", "hub", "primary", "core", "high"}
+        or page_type_hint in {"pillar", "hub", "guide", "overview", "category"}
+    )
+
+FILE: backend\server\engine\scoring.py
+  LINE 441 [ASSIGNMENT] internal_priority = profile.get("internal_priority") or INTERNAL_SOURCE_BASE
+  LINE 446 [ASSIGNMENT] base = float(internal_priority.get(st, 0.6))
+  LINE 465 [ASSIGNMENT] priority_bucket = str(candidate.get("priority_bucket") or metadata.get("priority_bucket") or "").lower()
+  LINE 470 [ASSIGNMENT] priority_boosts = {
+        "core": 0.12,
+        "high": 0.09,
+        "standard": 0.04,
+        "supporting": 0.02,
+    }
+  LINE 492 [ASSIGNMENT] priority_boost = priority_boosts.get(priority_bucket, 0.0)
+  LINE 501 [ASSIGNMENT] score = (
+        base
+        + canonical_boost
+        + priority_boost
+        + page_type_boost
+        + import_source_boost
+        + path_boost
+    )
+  LINE 1062 [ASSIGNMENT] imported_diag = {
+            "source_type": cand.get("source_type") or cand.get("sourceType"),
+            "priority_bucket": (
+                cand.get("priority_bucket")
+                or imported_meta.get("priority_bucket")
+            ),
+            "page_type_hint": (
+                cand.get("page_type_hint")
+                or imported_meta.get("page_type_hint")
+            ),
+            "import_source": (
+                cand.get("import_source")
+                or imported_meta.get("import_source")
+            ),
+            "path": (
+                cand.get("path")
+                or imported_meta.get("path")
+            ),
+        }
+  LINE 1082 [ASSIGNMENT] live_domain_diag = {
+            "source_type": cand.get("source_type") or cand.get("sourceType"),
+            "source_origin": (
+                cand.get("source_origin")
+                or imported_meta.get("source_origin")
+            ),
+            "priority_bucket": (
+                cand.get("priority_bucket")
+                or imported_meta.get("priority_bucket")
+            ),
+            "seed_priority_bucket": (
+                cand.get("seed_priority_bucket")
+                or imported_meta.get("seed_priority_bucket")
+            ),
+            "seed_path_match": (
+                cand.get("seed_path_match")
+                or imported_meta.get("seed_path_match")
+            ),
+            "page_type_hint": (
+                cand.get("page_type_hint")
+                or imported_meta.get("page_type_hint")
+            ),
+            "path": (
+                cand.get("path")
+                or imported_meta.get("path")
+            ),
+        }
+
+FILE: backend\server\jobs\universal_knowledge_orchestrator.py
+  LINE 217 [ASSIGNMENT] job = {
+        "schema_version": JOB_SCHEMA_VERSION,
+        "job_id": job_id,
+        "workspace_id": ws,
+        "user_id": canonical_user_id,
+        "product_id": canonical_product_id,
+        "pipeline": canonical_pipeline,
+        "stage": canonical_stage,
+        "job_type": job_type,
+        "payload_ref": canonical_payload_ref,
+        "priority": int(priority),
+        "status": initial_status,
+        "payload": payload,
+        "parent_job_id": parent_job_id,
+        "batch_id": batch_id,
+        "attempts": 0,
+        "attempt_count": 0,
+        "max_attempts": int(payload.get("max_attempts") or 3),
+        "lease_owner": None,
+        "progress": initial_progress,
+        "au_usage": 0,
+        "cost_usage": 0.0,
+        "created_at": now_iso(),
+        "started_at": None,
+        "completed_at": None,
+        "updated_at": now_iso(),
+        "error": None,
+        "error_info": None,
+    }
+
+FILE: backend\server\orchestration\job_store.py
+  LINE 159 [ASSIGNMENT] job = OrchestrationJob(
+        job_id=canonical_job_id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+  LINE 64 [PRIORITY KWARG] OrchestrationJob(priority=int(data.get("priority", 5)))
+  LINE 159 [PRIORITY KWARG] OrchestrationJob(priority=priority)
+
+FILE: backend\server\orchestration\job_store_before_package_import_hardening.py
+  LINE 159 [ASSIGNMENT] job = OrchestrationJob(
+        job_id=canonical_job_id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+  LINE 64 [PRIORITY KWARG] OrchestrationJob(priority=int(data.get("priority", 5)))
+  LINE 159 [PRIORITY KWARG] OrchestrationJob(priority=priority)
+
+FILE: backend\server\orchestration\models.py
+  LINE 35 [ASSIGNMENT] priority: int = 5
+
+FILE: backend\server\orchestration\queue.py
+  LINE 94 [ATTRIBUTE] job.priority
+  LINE 172 [ATTRIBUTE] job.priority
+
+FILE: backend\server\orchestration\queue_before_package_import_hardening.py
+  LINE 94 [ATTRIBUTE] job.priority
+  LINE 172 [ATTRIBUTE] job.priority
+
+FILE: backend\server\orchestration\routes.py
+  LINE 37 [ASSIGNMENT] job = create_orchestration_job(
+        workspace_id=payload.workspace_id,
+        job_type=payload.job_type,
+        payload=payload.payload,
+        metadata=payload.metadata,
+        priority=payload.priority,
+    )
+  LINE 37 [PRIORITY KWARG] create_orchestration_job(priority=payload.priority)
+  LINE 42 [ATTRIBUTE] payload.priority
+
+FILE: backend\server\orchestration\schemas.py
+  LINE 13 [ASSIGNMENT] priority: int = Field(default=5, ge=1, le=10)
+
+FILE: backend\server\orchestration\service.py
+  LINE 47 [ASSIGNMENT] job = create_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+        job_id=job_id,
+    )
+  LINE 47 [PRIORITY KWARG] create_job(priority=priority)
+
+FILE: backend\server\orchestration\service_before_canonical_job_identity_ingress.py
+  LINE 40 [ASSIGNMENT] job = create_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+  LINE 40 [PRIORITY KWARG] create_job(priority=priority)
+
+FILE: backend\server\orchestration\service_before_package_import_hardening.py
+  LINE 47 [ASSIGNMENT] job = create_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+        job_id=job_id,
+    )
+  LINE 47 [PRIORITY KWARG] create_job(priority=priority)
+
+FILE: backend\server\orchestration\workspace_profile.py
+  LINE 9 [ASSIGNMENT] DEFAULT_PROFILES = {
+    "starter": {
+        "processing_priority": "normal",
+        "linking_mode": "balanced",
+        "batch_enabled": False,
+    },
+    "pro": {
+        "processing_priority": "high",
+        "linking_mode": "balanced",
+        "batch_enabled": True,
+    },
+    "business": {
+        "processing_priority": "high",
+        "linking_mode": "aggressive",
+        "batch_enabled": True,
+    },
+    "enterprise": {
+        "processing_priority": "critical",
+        "linking_mode": "custom",
+        "batch_enabled": True,
+    },
+}
+
+FILE: backend\server\owner\audit_registry.py
+  LINE 80 [ASSIGNMENT] severity = str(
+        raw.get("severity")
+        or raw.get("level")
+        or raw.get("priority")
+        or fallback_severity
+    ).lower()
+
+FILE: backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py
+  LINE 189 [ASSIGNMENT] pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+FILE: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py
+  LINE 118 [ASSIGNMENT] processing_job = create_orchestration_job(
+            workspace_id=normalized_workspace_id,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": normalized_workspace_id,
+                "doc_id": document_id,
+                "stored_path": stored_path,
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "original_name": str(
+                    metadata.get("filename") or ""
+                ),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(
+                    metadata.get("filename") or ""
+                ),
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+  LINE 118 [PRIORITY KWARG] create_orchestration_job(priority=5)
+
+FILE: backend\server\pools\target_pools\document_registry_pool.py
+  LINE 472 [ASSIGNMENT] priority_bucket_counts: Dict[str, int] = {}
+  LINE 480 [ASSIGNMENT] out: Dict[str, Any] = {
+        "workspace_id": ws,
+        "type": "document_registry",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "counts": {
+            "documents_seen": documents_seen,
+            "documents_written": documents_written,
+            "missing_title": missing_title,
+            "duplicate_titles_collapsed": duplicate_titles_collapsed,
+            "test_titles_removed": test_titles_removed,
+            "page_type_counts": page_type_counts,
+            "priority_bucket_counts": priority_bucket_counts,
+            "invalid_records_rejected": invalid_records_rejected,
+            "rejection_reasons": rejection_reasons,
+            "rejected_examples": rejected_examples,
+            "duplicate_suppression_audit_count": len(duplicate_suppression_audit),
+        },
+        "audit": {
+            "rejection_reasons": rejection_reasons,
+            "rejected_examples": rejected_examples,
+            "duplicate_suppression_audit": duplicate_suppression_audit[:25],
+            "counts_diagnostics": {
+                "documents_seen": documents_seen,
+                "documents_written": documents_written,
+                "invalid_records_rejected": invalid_records_rejected,
+                "duplicate_titles_collapsed": duplicate_titles_collapsed,
+            },
+            "rebuild_diagnostics": {
+                "workspace_id": ws,
+                "source_index": str(idx_fp),
+                "output_path": str(_pool_path(ws)),
+            },
+        },
+        "source": f"docs/{ws}/index.json",
+        "items": items,
+    }
+  LINE 353 [ASSIGNMENT] priority_bucket = _registry_priority_bucket(title, title_source, is_placeholder_url)
+  LINE 354 [ASSIGNMENT] registry_priority_signals = _registry_priority_signals(
+            title,
+            title_source,
+            page_type_hint,
+            is_placeholder_url,
+        )
+  LINE 362 [ASSIGNMENT] candidate = {
+            "document_id": document_id,
+            "workspace_id": ws,
+            "url": final_url,
+            "path": target_path,
+            "published_url": published_url,
+            "placeholder_url": target_path,
+            "is_placeholder_url": is_placeholder_url,
+            "label": title,
+            "h1": title,
+            "title": title,
+            "title_source": title_source,
+            "link_target": final_url,
+            "source_type": "document_registry",
+            "source_origin": "uploaded_editor_documents",
+            "priority_bucket": priority_bucket,
+            "page_type_hint": page_type_hint,
+            "cross_document_linking": True,
+            "uses_h1_heading_targets": True,
+            "registry_priority_signals": registry_priority_signals,
+            "semantic_intent_signals": semantic_intent_signals,
+            "metadata": {
+                "builder_version": "document_registry_pool_v2",
+                "document_id": document_id,
+                "workspace_id": ws,
+                "document_title": title,
+                "title_source": title_source,
+                "upload_source": "document_registry",
+                "content_type": str(rec.get("content_type") or rec.get("contentType") or ""),
+                "document_status": str(rec.get("status") or rec.get("document_status") or "uploaded"),
+                "publish_readiness": str(rec.get("publish_readiness") or rec.get("publishReadiness") or "editor_document"),
+                "planned_content": False,
+                "future_content": False,
+                "uploaded_at": _uploaded_at_key(rec),
+                "created_at": str(rec.get("created_at") or rec.get("createdAt") or ""),
+                "updated_at": str(rec.get("updated_at") or rec.get("updatedAt") or ""),
+                "registry_timestamps_available": bool(
+                    rec.get("uploaded_at")
+                    or rec.get("created_at")
+                    or rec.get("createdAt")
+                    or rec.get("updated_at")
+                    or rec.get("updatedAt")
+                ),
+                "metadata_diagnostics": {
+                    "has_document_id": bool(document_id),
+                    "has_title": bool(title),
+                    "has_published_url": bool(published_url),
+                    "title_source": title_source,
+                    "is_placeholder_url": is_placeholder_url,
+                },
+                "published_url": published_url,
+                "placeholder_url": target_path,
+                "is_placeholder_url": is_placeholder_url,
+                "cross_document_linking": True,
+                "uses_h1_heading_targets": True,
+            },
+            "generated_by": "document_registry_pool",
+            "_uploaded_at": _uploaded_at_key(rec),
+        }
+  LINE 476 [ASSIGNMENT] pb = str(item.get("priority_bucket") or "unknown")
+  LINE 478 [ASSIGNMENT] priority_bucket_counts[pb] = priority_bucket_counts.get(pb, 0) + 1
+
+FILE: backend\server\pools\target_pools\document_registry_target_intelligence.py
+  LINE 153 [ASSIGNMENT] bucket = str(target.get("priority_bucket") or "")
+
+FILE: backend\server\pools\target_pools\draft_target_intelligence.py
+  LINE 75 [ASSIGNMENT] priority_bucket = target.get("priority_bucket") or "supporting"
+  LINE 81 [ASSIGNMENT] priority_weights = {
+        "critical": 0.5,
+        "strong": 0.35,
+        "supporting": 0.2,
+        "long_tail": 0.05,
+    }
+  LINE 201 [ASSIGNMENT] priority_bucket = target.get("priority_bucket") or "supporting"
+  LINE 210 [ASSIGNMENT] priority_weights = {
+        "critical": 0.34,
+        "strong": 0.24,
+        "supporting": 0.12,
+        "long_tail": 0.04,
+    }
+  LINE 281 [ASSIGNMENT] signals = target.get("draft_priority_signals") or {}
+  LINE 314 [ASSIGNMENT] priority_bucket = target.get("priority_bucket") or "supporting"
+  LINE 324 [ASSIGNMENT] priority_weights = {
+        "critical": 1.0,
+        "strong": 0.8,
+        "supporting": 0.5,
+        "long_tail": 0.2,
+    }
+  LINE 330 [ASSIGNMENT] priority = priority_weights.get(priority_bucket, 0.3)
+  LINE 365 [ASSIGNMENT] base_score = (
+        route * 0.42
+        + intent * 0.20
+        + priority * 0.08
+        + authority * 0.08
+        + graph * 0.06
+        + rb2 * 0.06
+        + fresh * 0.05
+        + transition * 0.03
+        + page_type * 0.02
+    )
+  LINE 382 [ASSIGNMENT] explanation = {
+        "best_signal": max(
+            {
+                "semantic_route": route,
+                "semantic_intent": intent,
+                "priority": priority,
+                "authority": authority,
+                "topic_graph": graph,
+                "rb2_weight": rb2,
+                "freshness": fresh,
+                "publish_transition": transition,
+                "page_type": page_type,
+            }.items(),
+            key=lambda kv: kv[1],
+        )[0],
+        "reason": "Draft target scored using universal route, intent, authority, graph, RB2, freshness, and publish-transition signals.",
+    }
+
+FILE: backend\server\pools\target_pools\draft_target_pool.py
+  LINE 417 [ASSIGNMENT] priority_bucket_counts: Dict[str, int] = {}
+  LINE 476 [ASSIGNMENT] out: Dict[str, Any] = {
+        "workspace_id": ws,
+        "type": "draft",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "source": source_used,
+        "drafts_path": dp,
+        "domain": domain,
+        "counts": {
+            "topics_read": len(topics),
+            "topics_deduped": len(uniq),
+            "topics_seen": topics_seen,
+            "items_written": len(items),
+            "rejected_total": sum(rejection_audit.values()),
+            "page_type_counts": page_type_counts,
+            "priority_bucket_counts": priority_bucket_counts,
+            "future_content_count": future_content_count,
+            "planned_content_count": planned_content_count,
+        },
+        "rejection_audit": rejection_audit,
+        "rejected_examples": rejected_examples,
+        "items": items,
+    }
+  LINE 428 [ASSIGNMENT] priority_bucket = _classify_priority_bucket(clean_topic, page_type_hint)
+  LINE 429 [ASSIGNMENT] draft_priority_signals = _build_draft_priority_signals(
+            clean_topic,
+            page_type_hint,
+        )
+  LINE 436 [ASSIGNMENT] priority_bucket_counts[priority_bucket] = priority_bucket_counts.get(priority_bucket, 0) + 1
+
+FILE: backend\server\pools\target_pools\imported_target_intelligence.py
+  LINE 101 [ASSIGNMENT] priority_bucket = target.get("priority_bucket") or "supporting"
+  LINE 115 [ASSIGNMENT] authority_score = (
+        _priority_bucket_weight(priority_bucket)
+        + _import_source_weight(import_source)
+    )
+
+FILE: backend\server\pools\target_pools\imported_target_pool.py
+  LINE 434 [ASSIGNMENT] priority_order = [
+        "pricing_page",
+        "documentation",
+        "comparison",
+        "calculator",
+        "how_to",
+        "tool",
+        "service",
+        "product",
+        "condition_page",
+        "symptom_page",
+        "treatment_page",
+        "course",
+        "template",
+        "download",
+        "case_study",
+        "research",
+        "pillar",
+        "guide",
+        "faq",
+        "glossary",
+        "landing_page",
+        "category",
+        "review",
+        "news",
+        "resource",
+        "blog",
+        "article",
+        "local_page",
+        "generic_content",
+    ]
+  LINE 725 [ASSIGNMENT] bucket = _priority_bucket(raw_url, label, page_type)
+  LINE 727 [ASSIGNMENT] item = {
+                "url": raw_url,
+                "label": label,
+
+                # RB2/scoring compatibility fields
+                "title": title_value,
+                "h1": title_value,
+                "title_source": (
+                    f"{import_source}_title"
+                    if raw_title
+                    else "slug_fallback"
+                ),
+
+                # Imported Target Pool v2 intelligence fields
+                "source_type": "imported",
+            "source_origin": "manual_import",
+                "import_source": import_source,
+                "page_type_hint": page_type,
+                "priority_bucket": bucket,
+                "path": path,
+                "metadata": {
+                    "builder_version": "imported_target_pool_v2",
+                    "title_fallback_used": not bool(raw_title),
+                    "placeholder_generated": placeholder_generated,
+                    "source_file": source_name,
+                },
+            }
+
+FILE: backend\server\pools\target_pools\live_domain_target_intelligence.py
+  LINE 82 [ASSIGNMENT] priority_bucket = target.get("priority_bucket") or ""
+
+FILE: backend\server\routes\draft_topics.py
+  LINE 161 [ASSIGNMENT] priority_raw = get("priority")
+  LINE 189 [ASSIGNMENT] topic_id, working_title, planned_slug, planned_url, aliases_str, priority_str, canonical_str = parts[:7]
+  LINE 168 [ASSIGNMENT] priority = int(priority_raw or "0")
+  LINE 198 [ASSIGNMENT] priority = int(priority_str or "0")
+  LINE 170 [ASSIGNMENT] priority = 0
+  LINE 200 [ASSIGNMENT] priority = 0
+
+FILE: backend\server\routes\engine_run.py
+  LINE 67 [ASSIGNMENT] path = _priority_phrase_set_path(workspace_id)
+  LINE 107 [ASSIGNMENT] obj = {
+        "workspace_id": workspace_id,
+        "doc_id": doc_id,
+        "type": "priority_phrase_set",
+        "source": "rb2_final_highlights",
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "priority_phrase_count": len(phrases),
+        "selection_stats": selection_stats or {},
+        "density_stats": density_stats or {},
+        "phrases": phrases,
+    }
+  LINE 804 [ASSIGNMENT] priority_phrase_set_result = _save_priority_phrase_set(
+            workspace_id=ws,
+            doc_id=doc_id,
+            final_highlights=final_highlights,
+            selection_stats=selection_result.get("stats", {}),
+            density_stats=density_result.get("stats", {}),
+        )
+  LINE 812 [ASSIGNMENT] priority_phrase_set_result = {
+            "saved": False,
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+        }
+
+FILE: backend\server\routes\rb2_run.py
+  LINE 732 [ASSIGNMENT] intelligence = score_live_domain_target(
+                    phrase_context,
+                    {
+                        "url": url,
+                        "title": title,
+                        "h1": lc_meta.get("h1") or title,
+                        "page_type_hint": lc_meta.get("page_type_hint"),
+                        "priority_bucket": lc_meta.get("priority_bucket"),
+                        "seed_path_match": lc_meta.get("seed_path_match"),
+                    },
+                )
+  LINE 766 [ASSIGNMENT] intelligence = score_imported_target(
+                    phrase_context,
+                    {
+                        "url": url,
+                        "title": title,
+                        "h1": lc_meta.get("h1") or title,
+                        "page_type_hint": lc_meta.get("page_type_hint"),
+                        "priority_bucket": lc_meta.get("priority_bucket"),
+                        "import_source": lc_meta.get("import_source"),
+                        "path": lc_meta.get("path"),
+                    },
+                )
+
+FILE: backend\server\runtime\udare_runtime_contract.py
+  LINE 66 [ASSIGNMENT] DEFAULT_PRIORITY = "normal"
+  LINE 67 [ASSIGNMENT] DEFAULT_PRIORITY_VALUE = 5
+  LINE 625 [ASSIGNMENT] values: Dict[str, Any] = {
+        # Canonical names
+        "workspace_id":
+            workspace_id,
+
+        "user_id":
+            user_id,
+
+        "product_id":
+            product_id,
+
+        "pipeline":
+            WEBSITE_RECONSTRUCTION_PIPELINE,
+
+        "stage":
+            UDARE_RECONSTRUCTION_STAGE,
+
+        "payload":
+            dict(
+                payload
+            ),
+
+        "payload_ref":
+            source_record_id,
+
+        "payload_reference":
+            source_record_id,
+
+        "priority":
+            _priority_value_v1(
+                priority
+            ),
+
+        "status":
+            "registered",
+
+        "attempts":
+            0,
+
+        "attempt_count":
+            0,
+
+        "max_attempts":
+            DEFAULT_MAX_ATTEMPTS,
+
+        "metadata":
+            metadata,
+
+        # Execution suppression
+        "enqueue":
+            False,
+
+        "run_immediately":
+            False,
+
+        "execute":
+            False,
+
+        "dispatch":
+            False,
+
+        "auto_run":
+            False,
+
+        # Common aliases
+        "job_type":
+            UDARE_RECONSTRUCTION_STAGE,
+
+        "task_type":
+            UDARE_RECONSTRUCTION_STAGE,
+
+        "operation":
+            UDARE_RECONSTRUCTION_STAGE,
+
+        "operation_name":
+            UDARE_RECONSTRUCTION_STAGE,
+
+        "pipeline_name":
+            WEBSITE_RECONSTRUCTION_PIPELINE,
+
+        "stage_name":
+            UDARE_RECONSTRUCTION_STAGE,
+
+        "input_payload":
+            dict(
+                payload
+            ),
+
+        "job_payload":
+            dict(
+                payload
+            ),
+
+        "source_id":
+            source_record_id,
+
+        "source_ref":
+            source_record_id,
+
+        "source_reference":
+            source_record_id,
+
+        "source_type":
+            "website_raw_html",
+
+        "queue_name":
+            "universal_knowledge",
+
+        "queue":
+            "universal_knowledge",
+
+        "owner_id":
+            user_id,
+
+        "tenant_id":
+            workspace_id,
+    }
+  LINE 776 [ASSIGNMENT] values = _creator_values_v1(
+        payload=
+            payload,
+
+        user_id=
+            str(
+                user_id
+                or "system"
+            ),
+
+        product_id=
+            str(
+                product_id
+                or DEFAULT_PRODUCT_ID
+            ),
+
+        priority=
+            str(
+                priority
+                or DEFAULT_PRIORITY
+            ),
+    )
+  LINE 776 [PRIORITY KWARG] _creator_values_v1(priority=str(
+                priority
+                or DEFAULT_PRIORITY
+            ))
+
+FILE: backend\server\runtime\universal_job_submission.py
+  LINE 256 [ASSIGNMENT] creation_result = (
+        create_universal_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=(
+                payload_reference
+            ),
+            priority=priority,
+            parent_job_id=(
+                parent_job_id
+            ),
+            dependency_job_ids=(
+                dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=(
+                pipeline_run_id
+            ),
+            idempotency_key=(
+                idempotency_key
+            ),
+            maximum_attempts=(
+                maximum_attempts
+            ),
+            enqueue=True,
+            job_id=job_id,
+            created_at=created_at,
+            supported_job_types=(
+                supported_job_types
+            ),
+            runtime_registration=(
+                effective_registration
+            ),
+        )
+    )
+  LINE 341 [ASSIGNMENT] orchestration_priority = (
+        _canonical_orchestration_priority(
+            canonical_job.get(
+                "priority",
+                priority,
+            )
+        )
+    )
+  LINE 358 [ASSIGNMENT] orchestration_job = (
+        create_orchestration_job(
+            workspace_id=(
+                canonical_workspace_id
+            ),
+            job_type=(
+                canonical_job_type
+            ),
+            payload=dict(
+                creation_document.get(
+                    "payload"
+                )
+                or {}
+            ),
+            metadata=(
+                orchestration_metadata
+            ),
+            priority=(
+                orchestration_priority
+            ),
+            job_id=(
+                canonical_job_id
+            ),
+        )
+    )
+  LINE 257 [PRIORITY KWARG] create_universal_job(priority=priority)
+  LINE 359 [PRIORITY KWARG] create_orchestration_job(priority=orchestration_priority)
+
+FILE: backend\server\runtime\universal_jobs\contract.py
+  LINE 47 [ASSIGNMENT] REQUIRED_UNIVERSAL_JOB_FIELDS: Final[Tuple[str, ...]] = (
+    "job_id",
+    "workspace_id",
+    "user_id",
+    "product_id",
+    "pipeline",
+    "stage",
+    "job_type",
+    "payload_reference",
+    "priority",
+    "status",
+    "attempts",
+    "maximum_attempts",
+    "lease_owner",
+    "lease_id",
+    "lease_started_at",
+    "lease_expires_at",
+    "parent_job_id",
+    "dependency_job_ids",
+    "batch_id",
+    "pipeline_run_id",
+    "progress",
+    "checkpoint_reference",
+    "result_reference",
+    "artifact_references",
+    "idempotency_key",
+    "AU_reserved",
+    "AU_consumed",
+    "cost_record",
+    "created_at",
+    "scheduled_at",
+    "started_at",
+    "completed_at",
+    "failed_at",
+    "cancelled_at",
+    "error_code",
+    "error_message",
+    "error_details",
+    "contract_version",
+)
+  LINE 1291 [ASSIGNMENT] __all__ = [
+    "UNIVERSAL_JOB_CONTRACT_ID",
+    "UNIVERSAL_JOB_CONTRACT_VERSION",
+    "REQUIRED_UNIVERSAL_JOB_FIELDS",
+    "UniversalJob",
+    "UniversalJobValidationReport",
+    "UniversalJobContractError",
+    "UniversalJobStatus",
+    "UniversalJobPriority",
+    "UniversalJobProgress",
+    "UniversalJobCostRecord",
+    "validate_universal_job",
+]
+  LINE 711 [ASSIGNMENT] priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+  LINE 1087 [ASSIGNMENT] kwargs["priority"] = (
+                UniversalJobPriority.coerce(
+                    kwargs["priority"]
+                )
+            )
+  LINE 965 [ATTRIBUTE] self.priority
+  LINE 801 [ATTRIBUTE] self.priority
+
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+  LINE 16 [IMPORT] from backend.server.runtime.universal_jobs.contract import UniversalJobPriority
+  LINE 439 [ASSIGNMENT] priority: Any = UniversalJobPriority.NORMAL
+  LINE 590 [ASSIGNMENT] priority = _resolve_priority(request.priority)
+  LINE 631 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 684 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 631 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 684 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 731 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 590 [ATTRIBUTE] request.priority
+  LINE 731 [PRIORITY KWARG] UniversalJob(priority=normalized.priority)
+  LINE 740 [ATTRIBUTE] normalized.priority
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_before_payload_reference_integration.py
+  LINE 16 [IMPORT] from backend.server.runtime.universal_jobs.contract import UniversalJobPriority
+  LINE 435 [ASSIGNMENT] priority: Any = UniversalJobPriority.NORMAL
+  LINE 591 [ASSIGNMENT] priority = _resolve_priority(request.priority)
+  LINE 632 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 685 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 632 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 685 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 732 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 591 [ATTRIBUTE] request.priority
+  LINE 732 [PRIORITY KWARG] UniversalJob(priority=normalized.priority)
+  LINE 741 [ATTRIBUTE] normalized.priority
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py
+  LINE 18 [IMPORT] from backend.server.runtime.universal_jobs.contract import UniversalJobPriority
+  LINE 465 [ASSIGNMENT] priority: Any = UniversalJobPriority.NORMAL
+  LINE 612 [ASSIGNMENT] priority = _resolve_priority(request.priority)
+  LINE 638 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+        created_at=created_at,
+    )
+  LINE 691 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 638 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 691 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 738 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 612 [ATTRIBUTE] request.priority
+  LINE 738 [PRIORITY KWARG] UniversalJob(priority=normalized.priority)
+  LINE 747 [ATTRIBUTE] normalized.priority
+
+FILE: backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py
+  LINE 16 [IMPORT] from backend.server.runtime.universal_jobs.contract import UniversalJobPriority
+  LINE 429 [ASSIGNMENT] priority: Any = UniversalJobPriority.NORMAL
+  LINE 579 [ASSIGNMENT] priority = _resolve_priority(request.priority)
+  LINE 620 [ASSIGNMENT] normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+  LINE 673 [ASSIGNMENT] request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+  LINE 620 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 673 [PRIORITY KWARG] UniversalJobCreationRequest(priority=priority)
+  LINE 720 [ASSIGNMENT] job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=0,
+            maximum_attempts=normalized.maximum_attempts or 3,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+  LINE 579 [ATTRIBUTE] request.priority
+  LINE 720 [PRIORITY KWARG] UniversalJob(priority=normalized.priority)
+  LINE 729 [ATTRIBUTE] normalized.priority
+
+FILE: backend\server\runtime\universal_runtime_infrastructure.py
+  LINE 167 [ASSIGNMENT] retry = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job.get("job_type"),
+        payload=payload,
+        priority=job.get("priority", 5),
+        parent_job_id=job.get("job_id", ""),
+        batch_id=job.get("batch_id", ""),
+    )
+  LINE 167 [PRIORITY KWARG] create_universal_knowledge_job(priority=job.get("priority", 5))
+
+FILE: backend\server\runtime\universal_runtime_worker_v1.py
+  LINE 197 [ATTRIBUTE] job.priority
+
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+  LINE 889 [ASSIGNMENT] orchestration_job = (
+            create_orchestration_job(
+                workspace_id=validated[
+                    "workspace_id"
+                ],
+                job_type=UUCD_RUNTIME_JOB_TYPE,
+                payload=deepcopy(
+                    payload
+                ),
+                metadata={
+                    "canonical_universal_job":
+                        canonical_job,
+
+                    "universal_job_contract_version":
+                        canonical_job.get(
+                            "contract_version"
+                        ),
+
+                    "payload_reference":
+                        validated[
+                            "content_ref"
+                        ],
+
+                    "idempotency_key":
+                        idempotency_key,
+
+                    "persistence_fingerprint":
+                        validated[
+                            "persistence_fingerprint"
+                        ],
+
+                    "handoff_adapter":
+                        UUCD_RUNTIME_HANDOFF_VERSION,
+
+                    "body_content_in_job":
+                        False,
+                },
+                priority=priority,
+                job_id=canonical_job_id,
+            )
+        )
+  LINE 890 [PRIORITY KWARG] create_orchestration_job(priority=priority)
+  LINE 1073 [ATTRIBUTE] orchestration_job.priority
+  LINE 749 [ATTRIBUTE] existing_orchestration_job.priority
+
+FILE: backend\server\runtime\website_article_integrity_automation.py
+  LINE 556 [ASSIGNMENT] job = create_universal_knowledge_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=job_payload,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=PIPELINE,
+        stage=stage,
+        payload_ref=str(
+            job_payload.get(
+                "payload_ref"
+            )
+            or job_payload.get(
+                "udare_manifest_path"
+            )
+            or integrity_run_id
+        ),
+        priority=priority,
+        parent_job_id=parent_job_id,
+        batch_id=(
+            batch_id
+            or integrity_run_id
+        ),
+        enqueue=True,
+    )
+  LINE 1620 [ASSIGNMENT] created = _create_pipeline_job_once(
+        workspace_id=workspace_id,
+        integrity_run_id=(
+            integrity_run_id
+        ),
+        job_type=successor_job_type,
+        stage=successor_stage,
+        payload=successor_payload,
+        parent_job_id=str(
+            job.get("job_id")
+            or ""
+        ),
+        batch_id=str(
+            job.get("batch_id")
+            or integrity_run_id
+        ),
+        user_id=str(
+            job.get("user_id")
+            or "system"
+        ),
+        product_id=str(
+            job.get("product_id")
+            or "linkcraftor"
+        ),
+        priority=int(
+            job.get("priority")
+            or 4
+        ),
+    )
+  LINE 556 [PRIORITY KWARG] create_universal_knowledge_job(priority=priority)
+  LINE 1133 [ASSIGNMENT] created = (
+            _create_pipeline_job_once(
+                workspace_id=workspace_id,
+                integrity_run_id=(
+                    integrity_run_id
+                ),
+                job_type=(
+                    JOB_TYPE_STRUCTURE
+                ),
+                stage=STAGE_STRUCTURE,
+                payload=payload,
+                parent_job_id=str(
+                    final_udare_job.get(
+                        "job_id"
+                    )
+                    or ""
+                ),
+                batch_id=(
+                    population_batch_id
+                    or integrity_run_id
+                ),
+                user_id=user_id,
+                product_id=product_id,
+                priority=4,
+            )
+        )
+  LINE 1620 [PRIORITY KWARG] _create_pipeline_job_once(priority=int(
+            job.get("priority")
+            or 4
+        ))
+  LINE 1134 [PRIORITY KWARG] _create_pipeline_job_once(priority=4)
+
+FILE: backend\server\stores\active_phrase_pool_builder.py
+  LINE 386 [ASSIGNMENT] source_score = _source_priority(source_name, enriched)
+  LINE 396 [ASSIGNMENT] confidence_stack = _multi_layer_confidence(
+        quality_gate_score=quality_gate_score,
+        strength_score=strength_score,
+        source_priority=source_score,
+    )
+  LINE 422 [ASSIGNMENT] enriched["active_pool_intelligence"] = {
+        "active_score": active_score,
+        "source_priority": round(source_score, 4),
+        "base_phrase_score": round(base_score, 4),
+        "adaptive_threshold": adaptive_threshold,
+        "confidence_stack": confidence_stack,
+        "decision": "ACCEPT",
+        "reason": "upload_only_active_pool_accept",
+        "highlight_authority": "upload_phrase_pool_only",
+        "supporting_pools_allowed_to_highlight": False,
+        "layers": ACTIVE_POOL_INTELLIGENCE_LAYERS,
+    }
+
+FILE: backend\server\stores\advanced_topic_reasoning_layer.py
+  LINE 290 [ASSIGNMENT] priority = _safe_text(item.get("priority", "medium"))
+  LINE 296 [ASSIGNMENT] phase = "phase_1" if priority == "high" else "phase_2" if priority == "medium" else "phase_3"
+  LINE 151 [ASSIGNMENT] priority = "high"
+  LINE 154 [ASSIGNMENT] priority = "medium"
+  LINE 157 [ASSIGNMENT] priority = "low"
+
+FILE: backend\server\stores\canonical_url_selector_v2.py
+  LINE 365 [ASSIGNMENT] CANONICAL_SOURCE_PRIORITY = {
+    "live_domain": 100,
+    "imported": 80,
+    "document_registry": 60,
+    "draft": 40,
+    "active": 20,
+    "unknown": 5,
+}
+  LINE 416 [ASSIGNMENT] priority_score = (
+            _canonical_source_priority(
+                source_type
+            )
+        )
+  LINE 436 [ASSIGNMENT] base_canonical_score = (
+            (
+                runtime_score * 0.45
+            )
+            +
+            (
+                resolver_confidence * 0.25
+            )
+            +
+            (
+                priority_score / 100 * 0.30
+            )
+        )
+
+FILE: backend\server\stores\phrase_vertical_policy.py
+  LINE 29 [ASSIGNMENT] VERTICAL_PRIORITY: Dict[str, int] = {
+    "medical_healthcare": 100,
+    "pharmacy": 99,
+    "mental_health": 98,
+    "legal": 96,
+    "finance": 94,
+    "real_estate": 92,
+    "ecommerce": 90,
+    "saas": 88,
+    "marketing": 86,
+    "small_business": 84,
+    "hr_recruiting": 82,
+    "it_cybersecurity": 80,
+    "programming_development": 79,
+    "ai_machine_learning": 78,
+    "education": 76,
+    "careers": 74,
+    "professional_training": 73,
+    "fitness": 72,
+    "nutrition": 71,
+    "beauty_skincare": 70,
+    "home_improvement": 68,
+    "interior_design": 67,
+    "gardening": 66,
+    "parenting_family": 65,
+    "pets": 64,
+    "food_recipes": 63,
+    "travel": 62,
+    "automotive": 61,
+    "consumer_tech": 60,
+    "gaming": 58,
+    "sports": 57,
+    "entertainment": 56,
+    "music": 55,
+    "manufacturing": 54,
+    "construction": 53,
+    "logistics": 52,
+    "agriculture": 51,
+    "energy": 50,
+    "telecom": 49,
+    "government": 48,
+    "nonprofit": 47,
+    "religion_faith": 46,
+    "local_services": 45,
+    "blogging": 44,
+    "youtube_video_creators": 43,
+    "influencers_personal_brands": 42,
+    "courses_info_products": 41,
+    "web3_crypto": 40,
+    "sustainability": 39,
+    "remote_work": 38,
+    "multi_niche_publishers": 37,
+    "generic": 0,
+}
+  LINE 512 [ASSIGNMENT] best_priority = -1
+  LINE 543 [ASSIGNMENT] priority = VERTICAL_PRIORITY.get(vertical, 0)
+  LINE 560 [ASSIGNMENT] best_priority = priority
+
+FILE: backend\server\stores\upload_intel_store_old.py
+  LINE 84 [ASSIGNMENT] STRUCTURED_SOURCE_PRIORITY = {
+    "title": 1.00,
+    "heading_h1": 1.00,
+    "heading_h2": 0.95,
+    "heading_h3": 0.90,
+    "list_item": 0.85,
+    "sentence": 0.70,
+    "alias": 0.60,
+}
+  LINE 1001 [ASSIGNMENT] base = STRUCTURED_SOURCE_PRIORITY.get(source_type, 0.50)
+
+FILE: backend\server\stores\upload_phrase_pool_builder.py
+  LINE 452 [ASSIGNMENT] source_score = _source_priority(str(rec.get("source_type") or ""))
+  LINE 660 [ASSIGNMENT] first["ranking_priority"] = first["builder_intelligence"]["ranking_priority"]
+  LINE 922 [ASSIGNMENT] priority_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+  LINE 931 [ASSIGNMENT] obj = {
+        "workspace_id": ws,
+        "updated_at": _now_iso(),
+        "source_phrase_count": len(raw_phrases),
+        "quality_filtered_source_count": len(phrases),
+        "phrase_count": len(filtered),
+        "active_phrase_set_used": active_phrase_set_used,
+        "active_filter_reason": active_filter_reason,
+        "active_document_ids_count": len(active_doc_set),
+        "usable_active_document_ids_count": len(usable_active_ids),
+        "indexed_document_ids_count": len(indexed_doc_ids),
+        "builder_intelligence_summary": {
+            "enabled": True,
+            "mode": "exact_anchor_preserving_membership_safe_universal_builder",
+            "ranking_priority_counts": priority_counts,
+            "layers": [
+                "temporal_reasoning",
+                "entity_map",
+                "topic_coherence",
+                "cross_document_reasoning",
+                "long_context_compression",
+                "semantic_completeness_intelligence",
+                "cross_knowledge_fusion",
+                "ontology_alignment",
+                "intelligent_data_compression",
+                "workspace_isolation",
+                "stale_active_membership_recovery",
+                "explainability",
+                "qa_regression_readiness",
+            ],
+        },
+        "phrases": filtered,
+    }
+  LINE 879 [ASSIGNMENT] clean_rec["ranking_priority"] = clean_rec["builder_intelligence"]["ranking_priority"]
+  LINE 926 [ASSIGNMENT] priority = str(rec.get("ranking_priority") or "LOW")
+  LINE 972 [ASSIGNMENT] doc_priority_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+  LINE 990 [ASSIGNMENT] doc_obj["builder_intelligence_summary"]["ranking_priority_counts"] = doc_priority_counts
+  LINE 928 [ASSIGNMENT] priority = "LOW"
+  LINE 976 [ASSIGNMENT] priority = str(rec.get("ranking_priority") or "LOW")
+  LINE 978 [ASSIGNMENT] priority = "LOW"
+
+FILE: backend\server\stores\upload_phrase_pool_builder_backup_before_v2.py
+  LINE 452 [ASSIGNMENT] source_score = _source_priority(str(rec.get("source_type") or ""))
+  LINE 660 [ASSIGNMENT] first["ranking_priority"] = first["builder_intelligence"]["ranking_priority"]
+  LINE 922 [ASSIGNMENT] priority_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+  LINE 931 [ASSIGNMENT] obj = {
+        "workspace_id": ws,
+        "updated_at": _now_iso(),
+        "source_phrase_count": len(raw_phrases),
+        "quality_filtered_source_count": len(phrases),
+        "phrase_count": len(filtered),
+        "active_phrase_set_used": active_phrase_set_used,
+        "active_filter_reason": active_filter_reason,
+        "active_document_ids_count": len(active_doc_set),
+        "usable_active_document_ids_count": len(usable_active_ids),
+        "indexed_document_ids_count": len(indexed_doc_ids),
+        "builder_intelligence_summary": {
+            "enabled": True,
+            "mode": "exact_anchor_preserving_membership_safe_universal_builder",
+            "ranking_priority_counts": priority_counts,
+            "layers": [
+                "temporal_reasoning",
+                "entity_map",
+                "topic_coherence",
+                "cross_document_reasoning",
+                "long_context_compression",
+                "semantic_completeness_intelligence",
+                "cross_knowledge_fusion",
+                "ontology_alignment",
+                "intelligent_data_compression",
+                "workspace_isolation",
+                "stale_active_membership_recovery",
+                "explainability",
+                "qa_regression_readiness",
+            ],
+        },
+        "phrases": filtered,
+    }
+  LINE 879 [ASSIGNMENT] clean_rec["ranking_priority"] = clean_rec["builder_intelligence"]["ranking_priority"]
+  LINE 926 [ASSIGNMENT] priority = str(rec.get("ranking_priority") or "LOW")
+  LINE 972 [ASSIGNMENT] doc_priority_counts = {"HIGH": 0, "MEDIUM": 0, "LOW": 0}
+  LINE 990 [ASSIGNMENT] doc_obj["builder_intelligence_summary"]["ranking_priority_counts"] = doc_priority_counts
+  LINE 928 [ASSIGNMENT] priority = "LOW"
+  LINE 976 [ASSIGNMENT] priority = str(rec.get("ranking_priority") or "LOW")
+  LINE 978 [ASSIGNMENT] priority = "LOW"
+
+FILE: backend\server\tms\ai_support_assistant.py
+  LINE 103 [ASSIGNMENT] tone_prefix = {
+        "professional": "",
+        "friendly": "Hi there! ",
+        "empathetic": "We understand your concern. ",
+        "urgent": "This issue is receiving priority attention. ",
+    }
+
+FILE: backend\server\tms\ai_triage.py
+  LINE 124 [ASSIGNMENT] priority = predict_ticket_priority(ticket).get("priority")
+  LINE 127 [ASSIGNMENT] should_escalate = priority in {"urgent", "high"} or severity in {"critical", "major"}
+  LINE 192 [ASSIGNMENT] package = {
+        "category": auto_categorize_ticket(ticket),
+        "priority": predict_ticket_priority(ticket),
+        "severity": predict_ticket_severity(ticket),
+        "escalation": predict_escalation_need(ticket),
+        "duplicates": detect_duplicate_ticket(
+            ticket=ticket,
+            existing_tickets=existing_tickets or [],
+        ),
+    }
+  LINE 79 [ASSIGNMENT] priority = "urgent"
+  LINE 81 [ASSIGNMENT] priority = "high"
+  LINE 83 [ASSIGNMENT] priority = "normal"
+  LINE 85 [ASSIGNMENT] priority = "normal"
+
+FILE: backend\server\tms\billing_subscription_integration.py
+  LINE 205 [ASSIGNMENT] target_queue = "priority_support"
+
+FILE: backend\server\tms\customer_notifications.py
+  LINE 21 [ASSIGNMENT] notification = create_ticket_notification(
+        notification_type=notification_type,
+        ticket_id=ticket_id or "general",
+        title=title,
+        message=message,
+        workspace_id=workspace_id,
+        recipient_id=customer_email,
+        priority=priority,
+        channels=["email"],
+        payload=payload or {},
+    )
+  LINE 21 [PRIORITY KWARG] create_ticket_notification(priority=priority)
+  LINE 56 [PRIORITY KWARG] notify_customer_email(priority="normal")
+  LINE 79 [PRIORITY KWARG] notify_customer_email(priority="normal")
+  LINE 105 [PRIORITY KWARG] notify_customer_email(priority="normal")
+  LINE 129 [PRIORITY KWARG] notify_customer_email(priority="normal")
+  LINE 153 [PRIORITY KWARG] notify_customer_email(priority="low")
+
+FILE: backend\server\tms\escalation_engine.py
+  LINE 33 [ASSIGNMENT] priority = str(ticket.get("priority") or "Medium")
+  LINE 64 [ASSIGNMENT] should_escalate = bool(
+        sla_state.get("escalation_due")
+        or sla_state.get("resolution_breached")
+        or severity == "Critical"
+        or str(ticket.get("priority")) == "Urgent"
+    )
+  LINE 80 [ASSIGNMENT] reason = "Urgent priority requires escalation."
+
+FILE: backend\server\tms\incident_communications.py
+  LINE 151 [ASSIGNMENT] delivery = notify_staff(
+        staff_id=staff_id,
+        title=title,
+        message=message,
+        workspace_id=workspace_id,
+        ticket_id=incident_id,
+        notification_type="system_alert",
+        priority=priority,
+        payload={
+            "incident_id": incident_id,
+            **(metadata or {}),
+        },
+    )
+  LINE 201 [ASSIGNMENT] delivery = notify_customer_email(
+        customer_email=customer_email,
+        title=title,
+        message=message,
+        workspace_id=workspace_id,
+        ticket_id=incident_id,
+        notification_type="system_alert",
+        priority="high",
+        payload={
+            "incident_id": incident_id,
+            **(metadata or {}),
+        },
+    )
+  LINE 151 [PRIORITY KWARG] notify_staff(priority=priority)
+  LINE 201 [PRIORITY KWARG] notify_customer_email(priority="high")
+
+FILE: backend\server\tms\internal_notifications.py
+  LINE 21 [ASSIGNMENT] notification = create_ticket_notification(
+        notification_type=notification_type,
+        ticket_id=ticket_id or "general",
+        title=title,
+        message=message,
+        workspace_id=workspace_id,
+        recipient_id=staff_id,
+        priority=priority,
+        channels=["in_app"],
+        payload=payload or {},
+    )
+  LINE 21 [PRIORITY KWARG] create_ticket_notification(priority=priority)
+  LINE 59 [PRIORITY KWARG] notify_staff(priority=priority)
+  LINE 79 [PRIORITY KWARG] notify_staff(priority="normal")
+  LINE 103 [PRIORITY KWARG] notify_staff(priority="high")
+  LINE 128 [PRIORITY KWARG] notify_staff(priority="urgent")
+  LINE 153 [PRIORITY KWARG] notify_staff(priority="normal")
+
+FILE: backend\server\tms\models.py
+  LINE 19 [ASSIGNMENT] priority: str = "normal"
+
+FILE: backend\server\tms\notification_engine.py
+  LINE 17 [ASSIGNMENT] NOTIFICATION_TYPES = {
+    "ticket_created": {
+        "label": "Ticket Created",
+        "description": "A new support ticket was created.",
+        "default_priority": "normal",
+        "category": "ticket",
+    },
+    "ticket_updated": {
+        "label": "Ticket Updated",
+        "description": "A support ticket was updated.",
+        "default_priority": "normal",
+        "category": "ticket",
+    },
+    "ticket_assigned": {
+        "label": "Ticket Assigned",
+        "description": "A ticket was assigned to a staff member.",
+        "default_priority": "normal",
+        "category": "ticket",
+    },
+    "ticket_escalated": {
+        "label": "Ticket Escalated",
+        "description": "A support ticket was escalated.",
+        "default_priority": "high",
+        "category": "escalation",
+    },
+    "sla_warning": {
+        "label": "SLA Warning",
+        "description": "A ticket is approaching its SLA deadline.",
+        "default_priority": "high",
+        "category": "sla",
+    },
+    "sla_breached": {
+        "label": "SLA Breached",
+        "description": "A ticket has breached its SLA deadline.",
+        "default_priority": "urgent",
+        "category": "sla",
+    },
+    "customer_reply": {
+        "label": "Customer Reply",
+        "description": "A customer replied to a support ticket.",
+        "default_priority": "normal",
+        "category": "message",
+    },
+    "staff_mention": {
+        "label": "Staff Mention",
+        "description": "A staff member was mentioned.",
+        "default_priority": "normal",
+        "category": "collaboration",
+    },
+    "system_alert": {
+        "label": "System Alert",
+        "description": "A system-level support notification.",
+        "default_priority": "high",
+        "category": "system",
+    },
+}
+  LINE 147 [ASSIGNMENT] priority: str = "normal"
+  LINE 254 [ASSIGNMENT] default_priority = str(type_config.get("default_priority") or "normal")
+  LINE 285 [ASSIGNMENT] clean_priority = validate_notification_priority(priority, notification_type)
+  LINE 289 [ASSIGNMENT] notification = Notification(
+        notification_id=_notification_id(notification_type, ticket_id),
+        notification_type=notification_type,
+        title=title,
+        message=message,
+        recipient_id=recipient_id,
+        recipient_type=recipient_type,
+        workspace_id=workspace_id,
+        ticket_id=ticket_id,
+        priority=clean_priority,
+        status=clean_status,
+        channels=channels or ["in_app"],
+        payload=payload or {},
+    )
+  LINE 289 [PRIORITY KWARG] Notification(priority=clean_priority)
+  LINE 339 [PRIORITY KWARG] create_notification(priority=priority)
+
+FILE: backend\server\tms\outage_broadcast.py
+  LINE 145 [PRIORITY KWARG] send_internal_incident_update(priority="urgent")
+
+FILE: backend\server\tms\routes.py
+  LINE 8 [IMPORT] from schemas import TicketPrioritySeverityUpdateRequest, TicketPrioritySeverityUpdateResponse
+  LINE 59 [ASSIGNMENT] normalized_priority = priority.strip().lower()
+  LINE 60 [ASSIGNMENT] tickets = [
+            ticket for ticket in tickets
+            if ticket.priority.lower() == normalized_priority
+        ]
+  LINE 62 [ATTRIBUTE] ticket.priority
+
+FILE: backend\server\tms\schemas.py
+  LINE 27 [ASSIGNMENT] priority: str
+  LINE 87 [ASSIGNMENT] priority: Optional[str] = None
+  LINE 96 [ASSIGNMENT] priority: str
+
+FILE: backend\server\tms\service.py
+  LINE 8 [IMPORT] from schemas import TicketPrioritySeverityUpdateRequest, TicketPrioritySeverityUpdateResponse
+  LINE 127 [PRIORITY KWARG] TicketCreateResponse(priority=ticket.priority)
+  LINE 267 [ASSIGNMENT] new_priority = payload.priority.strip().lower()
+  LINE 270 [ASSIGNMENT] ticket.priority = new_priority
+  LINE 281 [PRIORITY KWARG] TicketPrioritySeverityUpdateResponse(priority=ticket.priority)
+  LINE 266 [ATTRIBUTE] payload.priority
+  LINE 270 [ATTRIBUTE] ticket.priority
+  LINE 131 [ATTRIBUTE] ticket.priority
+  LINE 283 [ATTRIBUTE] ticket.priority
+  LINE 267 [ATTRIBUTE] payload.priority
+
+FILE: backend\server\tms\sla_monitoring.py
+  LINE 20 [ASSIGNMENT] priority: str | None = None
+  LINE 82 [ASSIGNMENT] by_priority: Dict[str, int] = {}
+  LINE 86 [ASSIGNMENT] priority = str(event.get("priority") or "unknown")
+  LINE 89 [ASSIGNMENT] by_priority[priority] = by_priority.get(priority, 0) + 1
+  LINE 56 [PRIORITY KWARG] SLAEvent(priority=priority)
+
+FILE: backend\server\tms\sla_policy.py
+  LINE 19 [ASSIGNMENT] DEFAULT_PRIORITY_SLA_POLICIES: Dict[str, SLAPolicy] = {
+    "Low": SLAPolicy(
+        key="default_low",
+        label="Default Low Priority SLA",
+        first_response_minutes=1440,
+        resolution_minutes=10080,
+        escalation_minutes=2880,
+        applies_to_priority="Low",
+    ),
+    "Medium": SLAPolicy(
+        key="default_medium",
+        label="Default Medium Priority SLA",
+        first_response_minutes=720,
+        resolution_minutes=4320,
+        escalation_minutes=1440,
+        applies_to_priority="Medium",
+    ),
+    "High": SLAPolicy(
+        key="default_high",
+        label="Default High Priority SLA",
+        first_response_minutes=240,
+        resolution_minutes=1440,
+        escalation_minutes=480,
+        applies_to_priority="High",
+    ),
+    "Urgent": SLAPolicy(
+        key="default_urgent",
+        label="Default Urgent Priority SLA",
+        first_response_minutes=60,
+        resolution_minutes=480,
+        escalation_minutes=120,
+        applies_to_priority="Urgent",
+    ),
+}
+  LINE 55 [ASSIGNMENT] ENTERPRISE_PRIORITY_SLA_POLICIES: Dict[str, SLAPolicy] = {
+    "Low": SLAPolicy(
+        key="enterprise_low",
+        label="Enterprise Low Priority SLA",
+        first_response_minutes=720,
+        resolution_minutes=4320,
+        escalation_minutes=1440,
+        applies_to_priority="Low",
+        workspace_tier="enterprise",
+    ),
+    "Medium": SLAPolicy(
+        key="enterprise_medium",
+        label="Enterprise Medium Priority SLA",
+        first_response_minutes=240,
+        resolution_minutes=1440,
+        escalation_minutes=480,
+        applies_to_priority="Medium",
+        workspace_tier="enterprise",
+    ),
+    "High": SLAPolicy(
+        key="enterprise_high",
+        label="Enterprise High Priority SLA",
+        first_response_minutes=120,
+        resolution_minutes=720,
+        escalation_minutes=240,
+        applies_to_priority="High",
+        workspace_tier="enterprise",
+    ),
+    "Urgent": SLAPolicy(
+        key="enterprise_urgent",
+        label="Enterprise Urgent Priority SLA",
+        first_response_minutes=30,
+        resolution_minutes=240,
+        escalation_minutes=60,
+        applies_to_priority="Urgent",
+        workspace_tier="enterprise",
+    ),
+}
+  LINE 15 [ASSIGNMENT] applies_to_priority: str
+  LINE 156 [ASSIGNMENT] WORKSPACE_SLA_OVERRIDES[workspace_id][priority] = policy
+  LINE 160 [ASSIGNMENT] policies = (
+        ENTERPRISE_PRIORITY_SLA_POLICIES
+        if workspace_tier == "enterprise"
+        else DEFAULT_PRIORITY_SLA_POLICIES
+    )
+  LINE 129 [ASSIGNMENT] override = WORKSPACE_SLA_OVERRIDES[workspace_id].get(priority)
+  LINE 135 [ASSIGNMENT] policy = ENTERPRISE_PRIORITY_SLA_POLICIES.get(priority)
+  LINE 137 [ASSIGNMENT] policy = DEFAULT_PRIORITY_SLA_POLICIES.get(priority)
+
+FILE: backend\server\tms\sla_timers.py
+  LINE 21 [ASSIGNMENT] priority: str
+  LINE 73 [ASSIGNMENT] priority = str(ticket.get("priority") or "Medium")
+  LINE 80 [ASSIGNMENT] policy: SLAPolicy = get_sla_policy_for_ticket(
+        priority=priority,
+        workspace_tier=workspace_tier,
+        workspace_id=workspace_id,
+    )
+  LINE 108 [ASSIGNMENT] state = SLATimerState(
+        ticket_id=ticket_id,
+        priority=priority,
+        status=status,
+        created_at=_iso(created_at),
+        first_response_due_at=_iso(first_response_due_at),
+        resolution_due_at=_iso(resolution_due_at),
+        escalation_due_at=_iso(escalation_due_at),
+        first_response_breached=first_response_breached,
+        resolution_breached=resolution_breached,
+        escalation_due=escalation_due,
+        paused=paused or waiting_customer_excluded,
+        remaining_first_response_minutes=max(
+            0, _minutes_between(current_time, first_response_due_at)
+        ),
+        remaining_resolution_minutes=max(
+            0, _minutes_between(current_time, resolution_due_at)
+        ),
+        remaining_escalation_minutes=max(
+            0, _minutes_between(current_time, escalation_due_at)
+        ),
+    )
+  LINE 80 [PRIORITY KWARG] get_sla_policy_for_ticket(priority=priority)
+  LINE 108 [PRIORITY KWARG] SLATimerState(priority=priority)
+
+FILE: backend\server\tms\staff_rbac.py
+  LINE 34 [ASSIGNMENT] ROLE_PERMISSION_REGISTRY: Dict[StaffRole, Set[Permission]] = {
+    StaffRole.SUPPORT_AGENT: {
+        Permission.VIEW_TICKETS,
+        Permission.REPLY_TO_TICKET,
+        Permission.ADD_INTERNAL_NOTE,
+        Permission.UPDATE_STATUS,
+    },
+    StaffRole.SENIOR_AGENT: {
+        Permission.VIEW_TICKETS,
+        Permission.REPLY_TO_TICKET,
+        Permission.ADD_INTERNAL_NOTE,
+        Permission.ASSIGN_TICKET,
+        Permission.UPDATE_PRIORITY,
+        Permission.UPDATE_SEVERITY,
+        Permission.UPDATE_STATUS,
+        Permission.RESOLVE_TICKET,
+        Permission.CLOSE_TICKET,
+    },
+    StaffRole.BILLING_AGENT: {
+        Permission.VIEW_TICKETS,
+        Permission.REPLY_TO_TICKET,
+        Permission.ADD_INTERNAL_NOTE,
+        Permission.UPDATE_STATUS,
+        Permission.RESOLVE_TICKET,
+        Permission.VIEW_BILLING_CONTEXT,
+    },
+    StaffRole.ENGINEERING: {
+        Permission.VIEW_TICKETS,
+        Permission.ADD_INTERNAL_NOTE,
+        Permission.UPDATE_SEVERITY,
+        Permission.UPDATE_STATUS,
+        Permission.VIEW_ENGINEERING_CONTEXT,
+    },
+    StaffRole.MANAGER_ADMIN: set(Permission),
+    StaffRole.OWNER: set(Permission),
+}
+  LINE 23 [ASSIGNMENT] UPDATE_PRIORITY = "update_priority"
+
+FILE: backend\server\tms\staff_roles.py
+  LINE 19 [ASSIGNMENT] STAFF_ROLE_DEFINITIONS: Dict[str, StaffRoleDefinition] = {
+    "support_agent": StaffRoleDefinition(
+        key="support_agent",
+        label="Support Agent",
+        description="Handles normal customer tickets, replies, and basic status updates.",
+        level=1,
+        department="support",
+        can_manage_staff=False,
+        can_view_sensitive_context=False,
+    ),
+    "senior_agent": StaffRoleDefinition(
+        key="senior_agent",
+        label="Senior Agent",
+        description="Handles advanced support cases, assignment, priority, severity, resolve, and close flows.",
+        level=2,
+        department="support",
+        can_manage_staff=False,
+        can_view_sensitive_context=True,
+    ),
+    "billing_agent": StaffRoleDefinition(
+        key="billing_agent",
+        label="Billing Agent",
+        description="Handles billing-related support, payment issues, invoices, and subscription context.",
+        level=2,
+        department="billing",
+        can_manage_staff=False,
+        can_view_sensitive_context=True,
+    ),
+    "engineering": StaffRoleDefinition(
+        key="engineering",
+        label="Engineering",
+        description="Handles technical escalations, engine failures, worker issues, and system investigations.",
+        level=3,
+        department="engineering",
+        can_manage_staff=False,
+        can_view_sensitive_context=True,
+    ),
+    "manager_admin": StaffRoleDefinition(
+        key="manager_admin",
+        label="Manager/Admin",
+        description="Manages support operations, staff oversight, escalation governance, and administrative workflows.",
+        level=4,
+        department="management",
+        can_manage_staff=True,
+        can_view_sensitive_context=True,
+    ),
+    "owner": StaffRoleDefinition(
+        key="owner",
+        label="Owner",
+        description="Founder-level role with full access to support operations, audit, intelligence, and governance.",
+        level=5,
+        department="owner",
+        can_manage_staff=True,
+        can_view_sensitive_context=True,
+    ),
+}
+
+FILE: backend\server\tms\support_intelligence.py
+  LINE 18 [ASSIGNMENT] support_priority: str = "normal"
+  LINE 104 [ASSIGNMENT] priority = str(ticket.get("priority") or "Medium")
+  LINE 141 [ASSIGNMENT] priority = str(ticket.get("priority") or "Medium")
+  LINE 198 [ASSIGNMENT] support_priority = calculate_support_priority(
+        ticket=ticket,
+        incident_detected=incident_detected,
+        repeated_issue=repeated_issue,
+        escalation_score=escalation_score,
+        churn_risk_signal=churn_risk_signal,
+    )
+  LINE 223 [ASSIGNMENT] result = SupportIntelligenceResult(
+        ticket_id=ticket_id,
+        workspace_id=workspace_id,
+        linked_product_context=linked_events,
+        incident_detected=incident_detected,
+        repeated_issue_detected=repeated_issue,
+        escalation_score=escalation_score,
+        churn_risk_signal=churn_risk_signal,
+        support_priority=support_priority,
+        reasons=reasons,
+    )
+
+FILE: backend\server\tms\ticket_store.py
+  LINE 65 [ASSIGNMENT] out[ticket_id] = Ticket(
+            ticket_id=obj["ticket_id"],
+            ticket_number=obj["ticket_number"],
+            subject=obj["subject"],
+            description=obj["description"],
+            status=obj.get("status", "new"),
+            priority=obj.get("priority", "normal"),
+            severity=obj.get("severity", "minor"),
+            category=obj.get("category", "general"),
+            source=obj.get("source", "app"),
+            channel=obj.get("channel", "web"),
+            requester_user_id=obj.get("requester_user_id"),
+            requester_email=obj.get("requester_email"),
+            requester_name=obj.get("requester_name"),
+            workspace_id=obj.get("workspace_id"),
+            plan_tier=obj.get("plan_tier"),
+            assigned_team=obj.get("assigned_team"),
+            assigned_staff_id=obj.get("assigned_staff_id"),
+            resolution_code=obj.get("resolution_code"),
+            created_at=_parse_dt(obj.get("created_at")) or datetime.now(),
+            updated_at=_parse_dt(obj.get("updated_at")) or datetime.now(),
+            closed_at=_parse_dt(obj.get("closed_at")),
+        )
+  LINE 65 [PRIORITY KWARG] Ticket(priority=obj.get("priority", "normal"))
+
+FILE: backend\server\universal_article_body_store\body_store_queue_v1.py
+  LINE 41 [ASSIGNMENT] BODY_STORE_QUEUE_PRIORITY_RANK = {
+    "CRITICAL": 0,
+    "HIGH": 1,
+    "NORMAL": 2,
+    "LOW": 3,
+}
+  LINE 459 [ASSIGNMENT] normalized_priority = _require_string(
+        priority,
+        field_name="priority",
+    ).upper()
+  LINE 537 [ASSIGNMENT] record = {
+        "queue_schema_version":
+            BODY_STORE_QUEUE_JOB_SCHEMA_VERSION,
+
+        "queue_version":
+            BODY_STORE_QUEUE_VERSION,
+
+        "queue_job_id":
+            normalized_job_id,
+
+        "workspace_id":
+            normalized_workspace,
+
+        "job_type":
+            normalized_job_type,
+
+        "operation":
+            operation.strip().casefold(),
+
+        "runtime_request":
+            dict(
+                runtime_mapping
+            ),
+
+        "priority":
+            normalized_priority,
+
+        "priority_rank":
+            BODY_STORE_QUEUE_PRIORITY_RANK[
+                normalized_priority
+            ],
+
+        "status":
+            "QUEUED",
+
+        "attempt":
+            0,
+
+        "max_attempts":
+            normalized_max_attempts,
+
+        "created_at":
+            _now_iso(),
+
+        "leased_at":
+            None,
+
+        "lease_expiration":
+            None,
+
+        "lease_id":
+            None,
+
+        "worker_id":
+            None,
+
+        "completed_at":
+            None,
+
+        "cancelled_at":
+            None,
+
+        "failure":
+            None,
+
+        "completion":
+            None,
+
+        "metadata":
+            metadata_mapping,
+    }
+
+
+SECTION 3 ? NUMERIC PRIORITY ARGUMENTS
+------------------------------------------------------------------------------------------------
+
+backend\server\backups\pipeline2_coordinator_wiring_20260730_153606\upload_intake.py:118 priority=5
+backend\server\backups\pipeline2_route_to_coordinator_20260730_153848\upload_intake.py:118 priority=5
+backend\server\backups\upload_document_canonical_rename_20260730_141816\ingestion_unified_content_pipeline\upload_intake.py:118 priority=5
+backend\server\backups\upload_document_pipeline2_intake_20260730_133651\files.py:752 priority=5
+backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py:118 priority=5
+backend\server\runtime\website_article_integrity_automation.py:1134 priority=4
+backend\server\tms\customer_notifications.py:56 priority='normal'
+backend\server\tms\customer_notifications.py:79 priority='normal'
+backend\server\tms\customer_notifications.py:105 priority='normal'
+backend\server\tms\customer_notifications.py:129 priority='normal'
+backend\server\tms\customer_notifications.py:153 priority='low'
+backend\server\tms\incident_communications.py:201 priority='high'
+backend\server\tms\internal_notifications.py:79 priority='normal'
+backend\server\tms\internal_notifications.py:103 priority='high'
+backend\server\tms\internal_notifications.py:128 priority='urgent'
+backend\server\tms\internal_notifications.py:153 priority='normal'
+backend\server\tms\outage_broadcast.py:145 priority='urgent'
+
+
+SECTION 4 ? PRIORITY COMPARISONS / SORTING / QUEUE ORDERING
+------------------------------------------------------------------------------------------------
+
+backend\server\_quarantine\semantic_reasoning_duplicate_step2\verify_semantic_reasoning_input_contract_step_2.py:74 [COMPARE]
+    "priority" in topic["target_search_strategy"]
+
+backend\server\_quarantine\semantic_reasoning_duplicate_step2\verify_semantic_reasoning_input_contract_step_2.py:88 [COMPARE]
+    "priority" in plan_item
+
+backend\server\backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py:51 [ORDERING CALL]
+    sorted(queue, key=_queue_priority)
+
+backend\server\backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py:276 [ORDERING CALL]
+    parser.add_argument(
+            "--no-priority",
+            action="store_true",
+            help="Preserve raw FIFO queue order instead of priority ordering.",
+        )
+
+backend\server\backups\complete_legacy_uucd_worker_retirement_20260726_234558\backend\server\workers\universal_knowledge_queue_runner.py:284 [ORDERING CALL]
+    run_universal_knowledge_queue_v1(
+            workspace_id=args.workspace_id,
+            max_jobs=args.max_jobs,
+            job_type=args.job_type,
+            order_by_priority=not args.no_priority,
+        )
+
+backend\server\backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:51 [ORDERING CALL]
+    sorted(queue, key=_queue_priority)
+
+backend\server\backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:155 [ORDERING CALL]
+    _partition_queue(
+            queued,
+            job_type=job_type,
+            max_jobs=int(max_jobs),
+            order_by_priority=order_by_priority,
+        )
+
+backend\server\backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:201 [ORDERING CALL]
+    parser.add_argument(
+            "--no-priority",
+            action="store_true",
+            help="Preserve raw FIFO queue order instead of priority ordering.",
+        )
+
+backend\server\backups\website_article_integrity_automatic_pipeline_20260719_035252\universal_knowledge_queue_runner.py:209 [ORDERING CALL]
+    run_universal_knowledge_queue_v1(
+            workspace_id=args.workspace_id,
+            max_jobs=args.max_jobs,
+            job_type=args.job_type,
+            order_by_priority=not args.no_priority,
+        )
+
+backend\server\crawler\seed_controls.py:288 [COMPARE]
+    previous_priority is not None
+
+backend\server\crawler\seed_controls.py:552 [COMPARE]
+    previous_priority == normalized_priority
+
+backend\server\crawler\seed_repository.py:650 [ORDERING CALL]
+    sorted(
+            filtered,
+            key=lambda seed: (
+                -seed.priority,
+                seed.registered_at,
+                seed.seed_id,
+            ),
+        )
+
+backend\server\engine\intelligence_target_resolver.py:1454 [ORDERING CALL]
+    resolved.append(
+                    {
+                        "phrase": anchor_phrase,
+                        "url": url,
+                        "title": title,
+                        "target_score": target_score,
+                        "score_calibration": calibrate_resolver_score_v1(
+                            target_score=target_score,
+                            resolver_confidence=(
+                                min(1.0, float(target_score or 0) / 300.0)
+                                if source_type != "document_registry"
+                                else float(target_score or 0)
+                            ),
+                        ),
+                        "semantic_route_score": semantic_route_score,
+                        "authority_score": authority_score,
+                        "topic_graph_score": topic_graph_score,
+                        "rb2_weight_score": rb2_weight_score,
+                        "path_score": intelligence.get("path_score"),
+                        "matched_title_tokens": intelligence.get("matched_title_tokens"),
+                        "matched_url_tokens": intelligence.get("matched_url_tokens"),
+                        "runtime_normalized_score": runtime_normalized_score,
+                        "topic_authority_intelligence": topic_authority_intelligence,
+                      "entity_intelligence": entity_intelligence,
+                        "intent_intelligence": intent_intelligence,
+                        "phrase_alias_intelligence": phrase_alias_intelligence,
+                        "alias_match_intelligence": alias_match_intelligence,
+                        "canonical_phrase": phrase_alias_intelligence.get("canonical_phrase"),
+                        "alias_match_score": alias_match_score,
+                        "alias_boost": alias_boost,
+                        "strong_alias_evidence": strong_alias_evidence,
+                        "topic_intent_graph": topic_intent_graph,
+                        "journey_boost": journey_boost,
+                        "context_concept_dominance": context_concept_dominance,
+                        "context_concept_boost": context_concept_boost,
+                        "context_concept_penalty": context_concept_penalty,
+                        "strong_context_concept_evidence": strong_context_concept_evidence,
+                        "weak_context_concept_evidence": weak_context_concept_evidence,
+                        "performance_intelligence": performance_intelligence,
+                      "cross_site_intelligence": cross_site_intelligence,
+                        "resolver_confidence": (
+                            min(1.0, float(target_score or 0) / 300.0)
+                            if source_type != "document_registry"
+                            else float(target_score or 0)
+                        ),
+                        "resolver_reason": resolver_reason,
+                        "auto_link_allowed": auto_link_allowed,
+                        "suggest_only": suggest_only,
+                        "clear_intent_mismatch": clear_intent_mismatch,
+                        "false_positive_gate": fp_gate,
+                        "false_positive_blocked": fp_gate.get("false_positive_blocked"),
+                        "false_positive_reasons": fp_gate.get("false_positive_reasons"),
+                        "topic_overlap_count": fp_gate.get("topic_overlap_count"),
+                        "topic_overlap_terms": fp_gate.get("topic_overlap_terms"),
+                        "topic_match_percent": fp_gate.get("topic_match_percent"),
+                        "intent_match_percent": fp_gate.get("intent_match_percent"),
+                        "intent_overlap_terms": fp_gate.get("intent_overlap_terms"),
+                        "confidence_floor": confidence_floor,
+                        "source_type": source_type,
+                        "page_type_hint": intelligence.get("page_type_hint"),
+                        "priority_bucket": intelligence.get("priority_bucket"),
+                        "import_source": intelligence.get("import_source"),
+    
+                        # Draft intelligence diagnostics
+                        "draft_id": intelligence.get("draft_id"),
+                        "planned_url": intelligence.get("planned_url"),
+                        "placeholder_url": intelligence.get("placeholder_url"),
+                        "published_url": intelligence.get("published_url"),
+                        "semantic_intent_score": intelligence.get("semantic_intent_score"),
+                        "freshness_score": intelligence.get("freshness_score"),
+                        "publish_transition_score": intelligence.get("publish_transition_score"),
+                        "semantic_gate_multiplier": intelligence.get("semantic_gate_multiplier"),
+    
+                        "path": intelligence.get("path"),
+    
+                        # Phrase-aware target-pool diagnostics
+                        "target_pool_matched_phrases": phrase_aware_matches,
+                        "target_pool_aliases": phrase_aware_aliases,
+                        "target_pool_active_phrase_matches": phrase_aware_count,
+                        "target_pool_phrase_exact_match": phrase_pool_exact,
+                        "target_pool_phrase_contains_match": phrase_pool_contains,
+    
+                        # Concept Intelligence diagnostics
+                        "concept_score": concept_score,
+                        "concept_matched_terms": concept_signal.get("matched_terms", []),
+                        "concepts": concept_signal.get("concepts", []),
+                        "concept_expansions": concept_signal.get("expansions", []),
+    
+                        # Universal Resolver Intelligence diagnostics
+                        "phrase_evidence": phrase_evidence,
+                        "phrase_evidence_score": phrase_evidence_value,
+                        "intent_score": intent_score,
+                        "phrase_intent": _detect_intent(anchor_phrase),
+                        "target_intent": _detect_intent(target_text_for_concepts),
+                        "concept_alignment": concept_alignment,
+                        "concept_alignment_score": concept_alignment_value,
+    
+                        # Topic Cluster Intelligence diagnostics
+                        "cluster_score": cluster_score,
+                        "cluster_name": cluster_name,
+                        "cluster_matched_terms": cluster_matched_terms,
+                        "cluster_matches": cluster_matches,
+                        "cluster_purity_score": cluster_purity_score,
+                        "cluster_runtime_trusted": cluster_runtime_trusted,
+                        "cluster_boost_applied": bool(cluster_runtime_trusted),
+                        "cluster_feedback_total": cluster_feedback_total,
+                        "cluster_acceptance_rate": cluster_acceptance_rate,
+                        "cluster_rejection_rate": cluster_rejection_rate,
+    
+                        "weak_match_suppressed": False,
+                    }
+                )
+
+backend\server\engine\resolver_topic_authority.py:62 [COMPARE]
+    priority_bucket in {"pillar", "hub", "primary", "core", "high"}
+
+backend\server\orchestration\job_store.py:64 [ORDERING CALL]
+    OrchestrationJob(
+            job_id=str(data.get("job_id", "")),
+            workspace_id=str(data.get("workspace_id", "")),
+            job_type=str(data.get("job_type", "")),
+            status=str(data.get("status", "queued")),
+            priority=int(data.get("priority", 5)),
+            created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+            updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+            payload=data.get("payload") or {},
+            metadata=data.get("metadata") or {},
+            assigned_worker_id=data.get("assigned_worker_id"),
+            progress_percent=float(data.get("progress_percent", 0.0)),
+            current_step=str(data.get("current_step", "")),
+            total_steps=int(data.get("total_steps", 0)),
+            processed_count=int(data.get("processed_count", 0)),
+            failed_count=int(data.get("failed_count", 0)),
+            warning_count=int(data.get("warning_count", 0)),
+    
+            total_documents=int(data.get("total_documents", 0)),
+            processed_documents=int(data.get("processed_documents", 0)),
+            failed_documents=int(data.get("failed_documents", 0)),
+            skipped_documents=int(data.get("skipped_documents", 0)),
+    
+            current_document_id=str(data.get("current_document_id", "")),
+            current_document_name=str(data.get("current_document_name", "")),
+    
+            progress_message=str(data.get("progress_message", "")),
+            started_at=_parse_datetime(data.get("started_at")),
+            completed_at=_parse_datetime(data.get("completed_at")),
+            error_message=data.get("error_message"),
+        )
+
+backend\server\orchestration\job_store_before_package_import_hardening.py:64 [ORDERING CALL]
+    OrchestrationJob(
+            job_id=str(data.get("job_id", "")),
+            workspace_id=str(data.get("workspace_id", "")),
+            job_type=str(data.get("job_type", "")),
+            status=str(data.get("status", "queued")),
+            priority=int(data.get("priority", 5)),
+            created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+            updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+            payload=data.get("payload") or {},
+            metadata=data.get("metadata") or {},
+            assigned_worker_id=data.get("assigned_worker_id"),
+            progress_percent=float(data.get("progress_percent", 0.0)),
+            current_step=str(data.get("current_step", "")),
+            total_steps=int(data.get("total_steps", 0)),
+            processed_count=int(data.get("processed_count", 0)),
+            failed_count=int(data.get("failed_count", 0)),
+            warning_count=int(data.get("warning_count", 0)),
+    
+            total_documents=int(data.get("total_documents", 0)),
+            processed_documents=int(data.get("processed_documents", 0)),
+            failed_documents=int(data.get("failed_documents", 0)),
+            skipped_documents=int(data.get("skipped_documents", 0)),
+    
+            current_document_id=str(data.get("current_document_id", "")),
+            current_document_name=str(data.get("current_document_name", "")),
+    
+            progress_message=str(data.get("progress_message", "")),
+            started_at=_parse_datetime(data.get("started_at")),
+            completed_at=_parse_datetime(data.get("completed_at")),
+            error_message=data.get("error_message"),
+        )
+
+backend\server\pools\target_pools\draft_target_intelligence.py:383 [ORDERING CALL]
+    max(
+                {
+                    "semantic_route": route,
+                    "semantic_intent": intent,
+                    "priority": priority,
+                    "authority": authority,
+                    "topic_graph": graph,
+                    "rb2_weight": rb2,
+                    "freshness": fresh,
+                    "publish_transition": transition,
+                    "page_type": page_type,
+                }.items(),
+                key=lambda kv: kv[1],
+            )
+
+backend\server\pools\target_pools\live_domain_target_intelligence.py:99 [COMPARE]
+    priority_bucket == "seed_match"
+
+backend\server\runtime\universal_job_submission.py:257 [ORDERING CALL]
+    create_universal_job(
+                workspace_id=workspace_id,
+                job_type=job_type,
+                payload=payload,
+                metadata=metadata,
+                user_id=user_id,
+                product_id=product_id,
+                pipeline=pipeline,
+                stage=stage,
+                payload_reference=(
+                    payload_reference
+                ),
+                priority=priority,
+                parent_job_id=(
+                    parent_job_id
+                ),
+                dependency_job_ids=(
+                    dependency_job_ids
+                ),
+                batch_id=batch_id,
+                pipeline_run_id=(
+                    pipeline_run_id
+                ),
+                idempotency_key=(
+                    idempotency_key
+                ),
+                maximum_attempts=(
+                    maximum_attempts
+                ),
+                enqueue=True,
+                job_id=job_id,
+                created_at=created_at,
+                supported_job_types=(
+                    supported_job_types
+                ),
+                runtime_registration=(
+                    effective_registration
+                ),
+            )
+
+backend\server\runtime\universal_jobs\contract.py:1086 [COMPARE]
+    "priority" in kwargs
+
+backend\server\runtime\universal_jobs\creation_engine.py:631 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine.py:684 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine_before_payload_reference_integration.py:632 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine_before_payload_reference_integration.py:685 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py:638 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=_clean_text(request.job_id_prefix) or "uj",
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine_phase_2_1_2_before_identity_integration.py:691 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py:620 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=_clean_text(request.parent_job_id) or None,
+            dependency_job_ids=dependencies,
+            batch_id=_clean_text(request.batch_id) or None,
+            pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+            idempotency_key=_clean_text(request.idempotency_key) or None,
+            maximum_attempts=maximum_attempts,
+            enqueue=request.enqueue,
+            job_id=job_id,
+            job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+            created_at=created_at,
+        )
+
+backend\server\runtime\universal_jobs\creation_engine_phase_2_1_3_before_metadata_integration.py:673 [ORDERING CALL]
+    UniversalJobCreationRequest(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload={} if payload is None else payload,
+            metadata={} if metadata is None else metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=payload_reference,
+            priority=priority,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=(
+                ()
+                if dependency_job_ids is None
+                else dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+            idempotency_key=idempotency_key,
+            maximum_attempts=maximum_attempts,
+            enqueue=enqueue,
+            job_id=job_id,
+            job_id_prefix=job_id_prefix,
+            created_at=created_at,
+        )
+
+backend\server\runtime\website_article_integrity_automation.py:556 [ORDERING CALL]
+    create_universal_knowledge_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=job_payload,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=PIPELINE,
+            stage=stage,
+            payload_ref=str(
+                job_payload.get(
+                    "payload_ref"
+                )
+                or job_payload.get(
+                    "udare_manifest_path"
+                )
+                or integrity_run_id
+            ),
+            priority=priority,
+            parent_job_id=parent_job_id,
+            batch_id=(
+                batch_id
+                or integrity_run_id
+            ),
+            enqueue=True,
+        )
+
+backend\server\stores\advanced_topic_reasoning_layer.py:243 [COMPARE]
+    item.get("priority") in {"high", "medium"}
+
+backend\server\stores\advanced_topic_reasoning_layer.py:296 [COMPARE]
+    priority == "high"
+
+backend\server\stores\advanced_topic_reasoning_layer.py:296 [COMPARE]
+    priority == "medium"
+
+backend\server\stores\canonical_url_selector_v2.py:544 [ORDERING CALL]
+    canonical_candidates.sort(
+            key=lambda x: (
+                x["canonical_score"],
+                x["priority_score"],
+                x["runtime_normalized_score"],
+            ),
+            reverse=True,
+        )
+
+backend\server\stores\canonical_url_selector_v2.py:736 [COMPARE]
+    alt["priority_score"]
+                < winner["priority_score"]
+
+backend\server\stores\phrase_vertical_policy.py:553 [COMPARE]
+    priority > best_priority
+
+backend\server\stores\upload_phrase_pool_builder.py:927 [COMPARE]
+    priority not in priority_counts
+
+backend\server\stores\upload_phrase_pool_builder.py:977 [COMPARE]
+    priority not in doc_priority_counts
+
+backend\server\stores\upload_phrase_pool_builder_backup_before_v2.py:927 [COMPARE]
+    priority not in priority_counts
+
+backend\server\stores\upload_phrase_pool_builder_backup_before_v2.py:977 [COMPARE]
+    priority not in doc_priority_counts
+
+backend\server\tms\ai_triage.py:127 [COMPARE]
+    priority in {"urgent", "high"}
+
+backend\server\tms\escalation_engine.py:35 [COMPARE]
+    priority == "Urgent"
+
+backend\server\tms\escalation_engine.py:44 [COMPARE]
+    priority == "High"
+
+backend\server\tms\escalation_engine.py:68 [COMPARE]
+    str(ticket.get("priority")) == "Urgent"
+
+backend\server\tms\escalation_engine.py:79 [COMPARE]
+    str(ticket.get("priority")) == "Urgent"
+
+backend\server\tms\notification_engine.py:256 [COMPARE]
+    default_priority in NOTIFICATION_PRIORITIES
+
+backend\server\tms\notification_engine.py:250 [COMPARE]
+    priority in NOTIFICATION_PRIORITIES
+
+backend\server\tms\notification_engine.py:424 [COMPARE]
+    item.get("priority") != priority
+
+backend\server\tms\notification_preferences.py:491 [COMPARE]
+    priority in {"urgent", "high"}
+
+backend\server\tms\routes.py:62 [COMPARE]
+    ticket.priority.lower() == normalized_priority
+
+backend\server\tms\service.py:266 [COMPARE]
+    payload.priority is not None
+
+backend\server\tms\service.py:268 [COMPARE]
+    new_priority not in ALLOWED_TICKET_PRIORITIES
+
+backend\server\tms\sla_timers.py:108 [ORDERING CALL]
+    SLATimerState(
+            ticket_id=ticket_id,
+            priority=priority,
+            status=status,
+            created_at=_iso(created_at),
+            first_response_due_at=_iso(first_response_due_at),
+            resolution_due_at=_iso(resolution_due_at),
+            escalation_due_at=_iso(escalation_due_at),
+            first_response_breached=first_response_breached,
+            resolution_breached=resolution_breached,
+            escalation_due=escalation_due,
+            paused=paused or waiting_customer_excluded,
+            remaining_first_response_minutes=max(
+                0, _minutes_between(current_time, first_response_due_at)
+            ),
+            remaining_resolution_minutes=max(
+                0, _minutes_between(current_time, resolution_due_at)
+            ),
+            remaining_escalation_minutes=max(
+                0, _minutes_between(current_time, escalation_due_at)
+            ),
+        )
+
+backend\server\tms\support_intelligence.py:108 [COMPARE]
+    priority == "Urgent"
+
+backend\server\tms\support_intelligence.py:110 [COMPARE]
+    priority == "High"
+
+backend\server\tms\support_intelligence.py:112 [COMPARE]
+    priority == "Medium"
+
+backend\server\tms\support_intelligence.py:144 [COMPARE]
+    priority in {"High", "Urgent"}
+
+backend\server\universal_article_body_store\body_store_queue_v1.py:465 [COMPARE]
+    normalized_priority
+            not in BODY_STORE_QUEUE_PRIORITIES
+
+backend\server\universal_article_body_store\body_store_queue_v1.py:702 [ORDERING CALL]
+    records.sort(
+            key=lambda item: (
+                int(
+                    item.get(
+                        "priority_rank",
+                        999,
+                    )
+                ),
+                str(
+                    item.get(
+                        "created_at",
+                        "",
+                    )
+                ),
+                str(
+                    item.get(
+                        "queue_job_id",
+                        "",
+                    )
+                ),
+            )
+        )
+
+backend\server\universal_article_body_store\body_store_queue_v1.py:468 [ORDERING CALL]
+    BodyStoreQueueContractError(
+                "Unsupported queue priority: "
+                + normalized_priority
+            )
+
+
+
+SECTION 5 ? DISCOVERY SUMMARY
+------------------------------------------------------------------------------------------------
+
+ACTIVE PYTHON FILES SCANNED: 571
+FILES WITH PRIORITY REFERENCES: 89
+PRIORITY REFERENCE RECORDS: 363
+LITERAL PRIORITY ARGUMENTS: 17
+ORDERING / COMPARISON FINDINGS: 59
+PARSE ERRORS: 0
+
+STATUS: DISCOVERY ONLY ? NO CODE MODIFIED
+
+NEXT: determine the canonical 2.1.6 Job Priority authority from these findings.

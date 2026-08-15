@@ -1,0 +1,313 @@
+﻿PHASE 2.1.8 ? RUNTIME REGISTRATION ATTEMPTS DIAGNOSTIC
+================================================================================================
+
+CASE: canonical
+INPUT REGISTRATION: {'retry_policy': {'maximum_attempts': 6}}
+JOB ATTEMPTS: 0
+JOB MAXIMUM ATTEMPTS: 3
+RESULT KEYS: ['content_fingerprint', 'contract_fingerprint', 'contract_version', 'creation_engine_version', 'enqueue_requested', 'identity_fingerprint', 'job', 'job_type_source', 'metadata', 'ok', 'payload', 'registration', 'schema_version']
+
+CASE: legacy
+INPUT REGISTRATION: {'retry_policy': {'max_attempts': 7}}
+JOB ATTEMPTS: 0
+JOB MAXIMUM ATTEMPTS: 3
+RESULT KEYS: ['content_fingerprint', 'contract_fingerprint', 'contract_version', 'creation_engine_version', 'enqueue_requested', 'identity_fingerprint', 'job', 'job_type_source', 'metadata', 'ok', 'payload', 'registration', 'schema_version']
+
+CASE: both
+INPUT REGISTRATION: {'retry_policy': {'maximum_attempts': 8, 'max_attempts': 9}}
+JOB ATTEMPTS: 0
+JOB MAXIMUM ATTEMPTS: 3
+RESULT KEYS: ['content_fingerprint', 'contract_fingerprint', 'contract_version', 'creation_engine_version', 'enqueue_requested', 'identity_fingerprint', 'job', 'job_type_source', 'metadata', 'ok', 'payload', 'registration', 'schema_version']
+
+================================================================================================
+
+FUNCTION: _resolve_maximum_attempts
+------------------------------------------------------------------------------------------------
+def _resolve_maximum_attempts(
+    explicit_value: Optional[int],
+    payload: Mapping[str, Any],
+    registration: Optional[Mapping[str, Any]],
+) -> int:
+    candidate: Any = explicit_value
+
+    if candidate is None:
+        candidate = payload.get("maximum_attempts")
+
+    if candidate is None:
+        candidate = payload.get("max_attempts")
+
+    if candidate is None and registration:
+        retry_policy = registration.get("retry_policy")
+        if isinstance(retry_policy, Mapping):
+            candidate = (
+                retry_policy.get("maximum_attempts")
+                if retry_policy.get("maximum_attempts") is not None
+                else retry_policy.get("max_attempts")
+            )
+
+    try:
+        return normalize_universal_job_maximum_attempts(
+            candidate
+        )
+
+    except UniversalJobAttemptsError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code="invalid_maximum_attempts",
+            violations=(str(exc),),
+        ) from exc
+
+
+================================================================================================
+FUNCTION/OBJECT: _resolve_registration
+------------------------------------------------------------------------------------------------
+def _resolve_registration(
+    *,
+    job_type: str,
+    supported_job_types: frozenset[str],
+    runtime_registration: Optional[Mapping[str, Any]],
+) -> tuple[str, Optional[Mapping[str, Any]]]:
+    """Resolve job-type support without loading any persistent registry."""
+
+    if job_type in supported_job_types:
+        return "static", None
+
+    if runtime_registration is None:
+        raise UniversalJobCreationError(
+            f"Unsupported Universal Job type: {job_type}",
+            code="unsupported_job_type",
+            violations=(
+                "job_type must be statically supported or supplied through "
+                "Runtime Registration metadata",
+            ),
+        )
+
+    registration = _normalize_mapping(
+        runtime_registration,
+        field_name="runtime_registration",
+    )
+
+    raw_registered_job_type = registration.get("job_type")
+
+    try:
+        registered_job_type = validate_universal_job_type(
+            raw_registered_job_type
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            "Runtime Registration metadata contains an invalid job_type.",
+            code="invalid_runtime_registration",
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    if registered_job_type != job_type:
+        raise UniversalJobCreationError(
+            "Runtime Registration metadata does not match the requested job type.",
+            code="runtime_registration_job_type_mismatch",
+            violations=(
+                "runtime_registration.job_type must match job_type",
+            ),
+        )
+
+    for field_name in ("pipeline", "stage"):
+        field_value = registration.get(field_name)
+
+        if field_value is not None and not isinstance(field_value, str):
+            raise UniversalJobCreationError(
+                f"Runtime Registration {field_name} must be a string.",
+                code="invalid_runtime_registration",
+                violations=(
+                    f"runtime_registration.{field_name} must be a string when supplied",
+                ),
+            )
+
+    retry_policy = registration.get("retry_policy")
+
+    if retry_policy is not None and not isinstance(retry_policy, Mapping):
+        raise UniversalJobCreationError(
+            "Runtime Registration retry_policy must be a mapping.",
+            code="invalid_runtime_registration",
+            violations=(
+                "runtime_registration.retry_policy must be a mapping when supplied",
+            ),
+        )
+
+    return "runtime_registration", registration
+
+
+================================================================================================
+FUNCTION/OBJECT: normalize_universal_job_creation_request
+------------------------------------------------------------------------------------------------
+def normalize_universal_job_creation_request(
+    request: UniversalJobCreationRequest,
+    *,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> tuple[
+    UniversalJobCreationRequest,
+    str,
+    Optional[Mapping[str, Any]],
+]:
+    if not isinstance(request, UniversalJobCreationRequest):
+        raise UniversalJobCreationError(
+            "request must be UniversalJobCreationRequest.",
+            code="invalid_creation_request",
+            violations=("request must be UniversalJobCreationRequest",),
+        )
+
+    workspace_id = _clean_text(request.workspace_id)
+
+    if not workspace_id:
+        raise UniversalJobCreationError(
+            "workspace_id is required.",
+            code="missing_workspace_id",
+            violations=("workspace_id is required",),
+        )
+
+    try:
+        job_type = validate_universal_job_type(
+            request.job_type
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    payload = _normalize_mapping(
+        request.payload,
+        field_name="payload",
+    )
+    try:
+        metadata = normalize_universal_job_metadata(
+            request.metadata
+        )
+    except UniversalJobMetadataError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+    dependencies = _normalize_string_tuple(
+        request.dependency_job_ids,
+        field_name="dependency_job_ids",
+    )
+    static_job_types = _normalize_supported_job_types(
+        supported_job_types,
+    )
+    source, registration = _resolve_registration(
+        job_type=job_type,
+        supported_job_types=static_job_types,
+        runtime_registration=runtime_registration,
+    )
+    _validate_registered_payload(
+        registration=registration,
+        payload=payload,
+    )
+
+    registration_pipeline = (
+        registration.get("pipeline")
+        if registration is not None
+        else ""
+    )
+    registration_stage = (
+        registration.get("stage")
+        if registration is not None
+        else ""
+    )
+
+    pipeline = _first_text(
+        request.pipeline,
+        payload.get("pipeline"),
+        payload.get("pipeline_name"),
+        registration_pipeline,
+        fallback="universal_knowledge",
+    )
+    stage = _first_text(
+        request.stage,
+        payload.get("stage"),
+        payload.get("stage_name"),
+        registration_stage,
+        fallback=job_type,
+    )
+    user_id = _first_text(
+        request.user_id,
+        payload.get("user_id"),
+        fallback="system",
+    )
+    product_id = _first_text(
+        request.product_id,
+        payload.get("product_id"),
+        fallback="linkcraftor",
+    )
+    payload_reference = normalize_universal_job_payload_reference(
+        request.payload_reference
+    )
+    priority = _resolve_priority(request.priority)
+    maximum_attempts = _resolve_maximum_attempts(
+        request.maximum_attempts,
+        payload,
+        registration,
+    )
+
+    if not isinstance(request.enqueue, bool):
+        raise UniversalJobCreationError(
+            "enqueue must be a boolean.",
+            code="invalid_enqueue",
+            violations=(
+                "enqueue must be either True or False",
+            ),
+        )
+
+    if (
+        not isinstance(request.job_id_prefix, str)
+        or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+    ):
+        raise UniversalJobCreationError(
+            "job_id_prefix is fixed by the Universal Job identity namespace.",
+            code="invalid_job_id_prefix",
+            violations=(
+                f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+            ),
+        )
+
+    created_at = _clean_text(request.created_at) or _utc_now()
+
+    try:
+        job_id = resolve_universal_job_id(
+            request.job_id
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=_clean_text(request.parent_job_id) or None,
+        dependency_job_ids=dependencies,
+        batch_id=_clean_text(request.batch_id) or None,
+        pipeline_run_id=_clean_text(request.pipeline_run_id) or None,
+        idempotency_key=_clean_text(request.idempotency_key) or None,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+
+    return normalized, source, registration
+
+
