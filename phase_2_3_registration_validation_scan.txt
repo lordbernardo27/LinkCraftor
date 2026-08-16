@@ -1,0 +1,2682 @@
+﻿================================================================================
+LINKCRAFTOR UNIVERSAL COORDINATION FRAMEWORK
+PHASE 2.3 - REGISTRATION VALIDATION DISCOVERY SCAN
+Generated: 2026-08-15 23:35:48
+================================================================================
+
+PURPOSE
+-------
+Determine the exact cross-registry validation rules between:
+
+1. Workflow Registry - Phase 2.1
+2. Coordinator Registry - Phase 2.2
+3. Universal Workflow Contract - Phase 1.1
+4. Pipeline Coordinator Contract - Phase 1.2
+
+This scan does NOT modify production code.
+
+================================================================================
+SECTION 1 - WORKFLOW REGISTRY
+================================================================================
+"""
+LinkCraftor Universal Coordination Framework
+Phase 2.1 - Workflow Registry
+============================================
+
+Canonical in-memory registry of known workflow definitions.
+
+Registry identity
+-----------------
+A workflow is uniquely identified by:
+
+    workflow_type + workflow_version
+
+Authority boundaries
+--------------------
+The Workflow Registry owns:
+- declaration that a workflow type/version exists;
+- exact workflow-version lookup;
+- duplicate identity rejection;
+- immutable workflow registry entries;
+- registry inspection/snapshot operations.
+
+The Workflow Registry does NOT own:
+- coordinator registration;
+- coordinator resolution;
+- stage ordering;
+- dependency graphs;
+- runnable-stage selection;
+- execution planning;
+- Runtime Registration;
+- runtime handlers;
+- runtime job creation;
+- workflow lifecycle state;
+- workflow execution state;
+- persistence;
+- version preference / latest-version selection;
+- workflow migration.
+
+Those responsibilities belong to later Universal Coordination
+Framework phases.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+
+from dataclasses import (
+    dataclass,
+    field,
+)
+
+from threading import RLock
+
+from types import MappingProxyType
+
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Optional,
+    Tuple,
+)
+
+from backend.server.coordination.universal_workflows.contract import (
+    UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+)
+
+
+# ============================================================================
+# 1. Registry identity
+# ============================================================================
+
+WORKFLOW_REGISTRY_VERSION: Final[str] = (
+    "workflow_registry_v2.1.0"
+)
+
+WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION: Final[str] = (
+    "workflow_registry_entry_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Validation
+# ============================================================================
+
+_NAME_PATTERN: Final[
+    re.Pattern[str]
+] = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+)
+
+
+class WorkflowRegistryError(
+    ValueError
+):
+    """Base error for Workflow Registry failures."""
+
+
+class WorkflowAlreadyRegisteredError(
+    WorkflowRegistryError
+):
+    """Raised when an exact workflow identity already exists."""
+
+
+class WorkflowNotRegisteredError(
+    WorkflowRegistryError
+):
+    """Raised when an exact workflow identity cannot be resolved."""
+
+
+def _normalize_name(
+    value: Any,
+    *,
+    field_name: str,
+) -> str:
+
+    if not isinstance(
+        value,
+        str,
+    ):
+        raise WorkflowRegistryError(
+            f"{field_name} must be a string"
+        )
+
+    normalized = (
+        value.strip()
+    )
+
+    if not normalized:
+        raise WorkflowRegistryError(
+            f"{field_name} must be non-empty"
+        )
+
+    if not _NAME_PATTERN.fullmatch(
+        normalized
+    ):
+        raise WorkflowRegistryError(
+            f"{field_name} contains unsupported characters"
+        )
+
+    return normalized
+
+
+def _normalize_description(
+    value: Any,
+) -> str:
+
+    if not isinstance(
+        value,
+        str,
+    ):
+        raise WorkflowRegistryError(
+            "description must be a string"
+        )
+
+    return (
+        value.strip()
+    )
+
+
+# ============================================================================
+# 3. Immutable metadata
+# ============================================================================
+
+_EMPTY_MAPPING: Final[
+    Mapping[str, Any]
+] = MappingProxyType({})
+
+
+def _freeze(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+
+        return MappingProxyType(
+            {
+                str(key): _freeze(
+                    item
+                )
+                for key, item
+                in value.items()
+            }
+        )
+
+    if isinstance(
+        value,
+        list,
+    ):
+
+        return tuple(
+            _freeze(item)
+            for item in value
+        )
+
+    if isinstance(
+        value,
+        tuple,
+    ):
+
+        return tuple(
+            _freeze(item)
+            for item in value
+        )
+
+    if isinstance(
+        value,
+        (set, frozenset),
+    ):
+
+        return tuple(
+            sorted(
+                (
+                    _freeze(item)
+                    for item in value
+                ),
+                key=repr,
+            )
+        )
+
+    return value
+
+
+def _thaw(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+
+        return {
+            str(key): _thaw(
+                item
+            )
+            for key, item
+            in value.items()
+        }
+
+    if isinstance(
+        value,
+        tuple,
+    ):
+
+        return [
+            _thaw(item)
+            for item in value
+        ]
+
+    return value
+
+
+def _normalize_metadata(
+    value: Any,
+) -> Mapping[str, Any]:
+
+    if value is None:
+        return _EMPTY_MAPPING
+
+    if not isinstance(
+        value,
+        Mapping,
+    ):
+        raise WorkflowRegistryError(
+            "metadata must be a mapping"
+        )
+
+    return _freeze(
+        value
+    )
+
+
+# ============================================================================
+# 4. Canonical registry key
+# ============================================================================
+
+WorkflowRegistryKey = Tuple[
+    str,
+    str,
+]
+
+
+def workflow_registry_key(
+    *,
+    workflow_type: str,
+    workflow_version: str,
+) -> WorkflowRegistryKey:
+    """
+    Build the canonical exact-version registry key.
+    """
+
+    return (
+        _normalize_name(
+            workflow_type,
+            field_name="workflow_type",
+        ),
+        _normalize_name(
+            workflow_version,
+            field_name="workflow_version",
+        ),
+    )
+
+
+# ============================================================================
+# 5. Registry entry
+# ============================================================================
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class WorkflowRegistryEntry:
+    """
+    Immutable declaration that one workflow type/version exists.
+
+    This entry intentionally contains no coordinator identity and
+    no stage/dependency definition. Those authorities belong to
+    later UCF phases.
+    """
+
+    workflow_type: str
+    workflow_version: str
+
+    workflow_contract_version: str
+
+    description: str = ""
+
+    metadata: Mapping[
+        str,
+        Any,
+    ] = field(
+        default_factory=dict
+    )
+
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        workflow_type = _normalize_name(
+            self.workflow_type,
+            field_name="workflow_type",
+        )
+
+        workflow_version = _normalize_name(
+            self.workflow_version,
+            field_name="workflow_version",
+        )
+
+        workflow_contract_version = (
+            _normalize_name(
+                self.workflow_contract_version,
+                field_name="workflow_contract_version",
+            )
+        )
+
+        if (
+            workflow_contract_version
+            != UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+        ):
+
+            raise WorkflowRegistryError(
+                "workflow_contract_version must be "
+                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+            )
+
+        description = (
+            _normalize_description(
+                self.description
+            )
+        )
+
+        metadata = (
+            _normalize_metadata(
+                self.metadata
+            )
+        )
+
+        object.__setattr__(
+            self,
+            "workflow_type",
+            workflow_type,
+        )
+
+        object.__setattr__(
+            self,
+            "workflow_version",
+            workflow_version,
+        )
+
+        object.__setattr__(
+            self,
+            "workflow_contract_version",
+            workflow_contract_version,
+        )
+
+        object.__setattr__(
+            self,
+            "description",
+            description,
+        )
+
+        object.__setattr__(
+            self,
+            "metadata",
+            metadata,
+        )
+
+
+    @property
+    def key(
+        self,
+    ) -> WorkflowRegistryKey:
+
+        return (
+            self.workflow_type,
+            self.workflow_version,
+        )
+
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "workflow_type":
+                self.workflow_type,
+
+            "workflow_version":
+                self.workflow_version,
+
+            "workflow_contract_version":
+                self.workflow_contract_version,
+
+            "description":
+                self.description,
+
+            "metadata":
+                _thaw(
+                    self.metadata
+                ),
+        }
+
+
+    def canonical_json(
+        self,
+    ) -> str:
+
+        return json.dumps(
+            self.to_dict(),
+            sort_keys=True,
+            separators=(
+                ",",
+                ":",
+            ),
+            ensure_ascii=False,
+        )
+
+
+    def identity_fingerprint(
+        self,
+    ) -> str:
+
+        material = json.dumps(
+            {
+                "workflow_type":
+                    self.workflow_type,
+
+                "workflow_version":
+                    self.workflow_version,
+            },
+            sort_keys=True,
+            separators=(
+                ",",
+                ":",
+            ),
+        )
+
+        return hashlib.sha256(
+            material.encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
+
+    def content_fingerprint(
+        self,
+    ) -> str:
+
+        return hashlib.sha256(
+            self.canonical_json().encode(
+                "utf-8"
+            )
+        ).hexdigest()
+
+
+# ============================================================================
+# 6. Registry state
+# ============================================================================
+
+_REGISTRY_LOCK: Final[
+    RLock
+] = RLock()
+
+_WORKFLOW_REGISTRY: dict[
+    WorkflowRegistryKey,
+    WorkflowRegistryEntry,
+] = {}
+
+
+# ============================================================================
+# 7. Registration
+# ============================================================================
+
+def register_workflow(
+    entry: WorkflowRegistryEntry,
+) -> WorkflowRegistryEntry:
+    """
+    Register one exact workflow identity.
+
+    Duplicate workflow_type + workflow_version identities are rejected.
+
+    There is intentionally no ``replace`` option in Phase 2.1.
+    Replacement and version-governance rules belong to Phase 2.4.
+    """
+
+    if not isinstance(
+        entry,
+        WorkflowRegistryEntry,
+    ):
+        raise WorkflowRegistryError(
+            "entry must be a WorkflowRegistryEntry"
+        )
+
+    key = entry.key
+
+    with _REGISTRY_LOCK:
+
+        if key in _WORKFLOW_REGISTRY:
+
+            raise WorkflowAlreadyRegisteredError(
+                "workflow is already registered: "
+                f"{entry.workflow_type}@"
+                f"{entry.workflow_version}"
+            )
+
+        _WORKFLOW_REGISTRY[
+            key
+        ] = entry
+
+    return entry
+
+
+def register_workflow_definition(
+    *,
+    workflow_type: str,
+    workflow_version: str,
+    workflow_contract_version: str = (
+        UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+    ),
+    description: str = "",
+    metadata: Optional[
+        Mapping[str, Any]
+    ] = None,
+) -> WorkflowRegistryEntry:
+    """
+    Convenience constructor + registration operation.
+    """
+
+    entry = WorkflowRegistryEntry(
+        workflow_type=workflow_type,
+        workflow_version=workflow_version,
+        workflow_contract_version=(
+            workflow_contract_version
+        ),
+        description=description,
+        metadata=(
+            metadata
+            if metadata is not None
+            else {}
+        ),
+    )
+
+    return register_workflow(
+        entry
+    )
+
+
+# ============================================================================
+# 8. Exact lookup
+# ============================================================================
+
+def get_registered_workflow(
+    *,
+    workflow_type: str,
+    workflow_version: str,
+) -> Optional[
+    WorkflowRegistryEntry
+]:
+    """
+    Return an exact workflow version, or None.
+
+    Phase 2.1 performs no latest/default-version resolution.
+    """
+
+    key = workflow_registry_key(
+        workflow_type=workflow_type,
+        workflow_version=workflow_version,
+    )
+
+    with _REGISTRY_LOCK:
+
+        return _WORKFLOW_REGISTRY.get(
+            key
+        )
+
+
+def require_registered_workflow(
+    *,
+    workflow_type: str,
+    workflow_version: str,
+) -> WorkflowRegistryEntry:
+    """
+    Resolve an exact workflow version or raise.
+    """
+
+    entry = get_registered_workflow(
+        workflow_type=workflow_type,
+        workflow_version=workflow_version,
+    )
+
+    if entry is None:
+
+        raise WorkflowNotRegisteredError(
+            "workflow is not registered: "
+            f"{workflow_type}@"
+            f"{workflow_version}"
+        )
+
+    return entry
+
+
+def is_workflow_registered(
+    *,
+    workflow_type: str,
+    workflow_version: str,
+) -> bool:
+
+    return (
+        get_registered_workflow(
+            workflow_type=workflow_type,
+            workflow_version=workflow_version,
+        )
+        is not None
+    )
+
+
+# ============================================================================
+# 9. Inspection
+# ============================================================================
+
+def registered_workflow_count(
+) -> int:
+
+    with _REGISTRY_LOCK:
+
+        return len(
+            _WORKFLOW_REGISTRY
+        )
+
+
+def list_registered_workflows(
+) -> Tuple[
+    WorkflowRegistryEntry,
+    ...
+]:
+    """
+    Return all entries in deterministic identity order.
+    """
+
+    with _REGISTRY_LOCK:
+
+        entries = tuple(
+            _WORKFLOW_REGISTRY.values()
+        )
+
+    return tuple(
+        sorted(
+            entries,
+            key=lambda entry: (
+                entry.workflow_type,
+                entry.workflow_version,
+            ),
+        )
+    )
+
+
+def workflow_registry_snapshot(
+) -> Mapping[
+    str,
+    Any,
+]:
+    """
+    Return an immutable inspection snapshot.
+
+    The snapshot is evidence/inspection only and is not persistence.
+    """
+
+    entries = (
+        list_registered_workflows()
+    )
+
+    snapshot = {
+        "registry_version":
+            WORKFLOW_REGISTRY_VERSION,
+
+        "entry_schema_version":
+            WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION,
+
+        "workflow_contract_version":
+            UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+
+        "identity_fields": (
+            "workflow_type",
+            "workflow_version",
+        ),
+
+        "count":
+            len(entries),
+
+        "entries":
+            tuple(
+                _freeze(
+                    entry.to_dict()
+                )
+                for entry
+                in entries
+            ),
+
+        "persistence":
+            False,
+
+        "exact_version_lookup_only":
+            True,
+    }
+
+    return _freeze(
+        snapshot
+    )
+
+
+# ============================================================================
+# 10. Architecture explanation
+# ============================================================================
+
+def explain_workflow_registry_v2_1(
+) -> Mapping[str, Any]:
+
+    return _freeze(
+        {
+            "phase":
+                "2.1",
+
+            "component":
+                "Workflow Registry",
+
+            "version":
+                WORKFLOW_REGISTRY_VERSION,
+
+            "canonical_identity": (
+                "workflow_type",
+                "workflow_version",
+            ),
+
+            "owns": (
+                "workflow existence declaration",
+                "exact-version registration",
+                "exact-version lookup",
+                "duplicate identity rejection",
+                "immutable registry entries",
+                "registry inspection",
+            ),
+
+            "does_not_own": (
+                "coordinator registration",
+                "coordinator resolution",
+                "stage ordering",
+                "dependency graphs",
+                "runnable-stage selection",
+                "execution planning",
+                "Runtime Registration",
+                "runtime handlers",
+                "runtime job creation",
+                "workflow lifecycle state",
+                "workflow execution state",
+                "persistence",
+                "latest-version selection",
+                "workflow migration",
+            ),
+        }
+    )
+
+
+__all__ = [
+    "WORKFLOW_REGISTRY_VERSION",
+    "WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION",
+    "WorkflowRegistryKey",
+    "WorkflowRegistryEntry",
+    "WorkflowRegistryError",
+    "WorkflowAlreadyRegisteredError",
+    "WorkflowNotRegisteredError",
+    "workflow_registry_key",
+    "register_workflow",
+    "register_workflow_definition",
+    "get_registered_workflow",
+    "require_registered_workflow",
+    "is_workflow_registered",
+    "registered_workflow_count",
+    "list_registered_workflows",
+    "workflow_registry_snapshot",
+    "explain_workflow_registry_v2_1",
+]
+
+================================================================================
+SECTION 2 - COORDINATOR REGISTRY
+================================================================================
+"""
+LinkCraftor Universal Coordination Framework
+Phase 2.2 - Coordinator Registration
+============================================
+
+Canonical in-memory registry of Pipeline Coordinator Contracts.
+
+Coordinator registration identity
+---------------------------------
+A coordinator registration is uniquely identified by:
+
+    coordinator_id + coordinator_version
+
+Registered object
+-----------------
+The registered object is the frozen Phase 1.2
+PipelineCoordinatorContract itself.
+
+This registry intentionally does NOT copy the coordinator contract fields
+into another registration schema. The Phase 1.2 contract remains the
+single source of truth.
+
+Authority boundaries
+--------------------
+Coordinator Registration owns:
+- declaration that a coordinator identity/version exists;
+- exact coordinator-version registration;
+- exact coordinator-version lookup;
+- duplicate coordinator identity rejection;
+- immutable registry inspection;
+- deterministic listing;
+- inspection of coordinators declaring a workflow identity.
+
+Coordinator Registration does NOT own:
+- workflow existence validation;
+- workflow/coordinator cross-registration validation;
+- coordinator selection for execution;
+- latest/default coordinator selection;
+- coordinator activation/deactivation;
+- stage ordering;
+- dependency planning;
+- Runtime Registration;
+- runtime handler resolution;
+- runtime job creation;
+- coordinator invocation;
+- workflow execution;
+- lifecycle state;
+- persistence;
+- migration/version governance.
+
+Cross-registry validation belongs to Phase 2.3.
+Version selection/governance belongs to Phase 2.4.
+"""
+
+from __future__ import annotations
+
+from threading import RLock
+from types import MappingProxyType
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Optional,
+    Tuple,
+)
+
+from backend.server.coordination.pipeline_coordinators.contract import (
+    PIPELINE_COORDINATOR_CONTRACT_VERSION,
+    PipelineCoordinatorContract,
+)
+
+
+# ============================================================================
+# 1. Registry identity
+# ============================================================================
+
+COORDINATOR_REGISTRY_VERSION: Final[str] = (
+    "coordinator_registry_v2.2.0"
+)
+
+COORDINATOR_REGISTRY_SCHEMA_VERSION: Final[str] = (
+    "coordinator_registry_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Errors
+# ============================================================================
+
+class CoordinatorRegistryError(
+    ValueError
+):
+    """Base Coordinator Registry error."""
+
+
+class CoordinatorAlreadyRegisteredError(
+    CoordinatorRegistryError
+):
+    """Raised when an exact coordinator identity already exists."""
+
+
+class CoordinatorNotRegisteredError(
+    CoordinatorRegistryError
+):
+    """Raised when an exact coordinator identity cannot be resolved."""
+
+
+# ============================================================================
+# 3. Canonical identity
+# ============================================================================
+
+CoordinatorRegistryKey = Tuple[
+    str,
+    str,
+]
+
+
+def coordinator_registry_key(
+    *,
+    coordinator_id: str,
+    coordinator_version: str,
+) -> CoordinatorRegistryKey:
+    """
+    Construct the exact coordinator registry key.
+
+    Validation is intentionally delegated to the frozen
+    PipelineCoordinatorContract when contracts are registered.
+    Lookup keys still require non-empty strings.
+    """
+
+    if not isinstance(
+        coordinator_id,
+        str,
+    ):
+        raise CoordinatorRegistryError(
+            "coordinator_id must be a string"
+        )
+
+    if not isinstance(
+        coordinator_version,
+        str,
+    ):
+        raise CoordinatorRegistryError(
+            "coordinator_version must be a string"
+        )
+
+    normalized_id = (
+        coordinator_id.strip()
+    )
+
+    normalized_version = (
+        coordinator_version.strip()
+    )
+
+    if not normalized_id:
+        raise CoordinatorRegistryError(
+            "coordinator_id must be non-empty"
+        )
+
+    if not normalized_version:
+        raise CoordinatorRegistryError(
+            "coordinator_version must be non-empty"
+        )
+
+    return (
+        normalized_id,
+        normalized_version,
+    )
+
+
+# ============================================================================
+# 4. Immutable snapshot helpers
+# ============================================================================
+
+def _freeze(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+
+        return MappingProxyType(
+            {
+                str(key): _freeze(item)
+                for key, item
+                in value.items()
+            }
+        )
+
+    if isinstance(
+        value,
+        list,
+    ):
+
+        return tuple(
+            _freeze(item)
+            for item in value
+        )
+
+    if isinstance(
+        value,
+        tuple,
+    ):
+
+        return tuple(
+            _freeze(item)
+            for item in value
+        )
+
+    if isinstance(
+        value,
+        (set, frozenset),
+    ):
+
+        return tuple(
+            sorted(
+                (
+                    _freeze(item)
+                    for item in value
+                ),
+                key=repr,
+            )
+        )
+
+    return value
+
+
+# ============================================================================
+# 5. Registry state
+# ============================================================================
+
+_REGISTRY_LOCK: Final[
+    RLock
+] = RLock()
+
+_COORDINATOR_REGISTRY: dict[
+    CoordinatorRegistryKey,
+    PipelineCoordinatorContract,
+] = {}
+
+
+# ============================================================================
+# 6. Registration
+# ============================================================================
+
+def register_coordinator(
+    coordinator: PipelineCoordinatorContract,
+) -> PipelineCoordinatorContract:
+    """
+    Register one exact PipelineCoordinatorContract.
+
+    Duplicate coordinator_id + coordinator_version identities are rejected.
+
+    There is deliberately no ``replace`` option in Phase 2.2.
+    Replacement/version-governance belongs to Phase 2.4.
+    """
+
+    if not isinstance(
+        coordinator,
+        PipelineCoordinatorContract,
+    ):
+        raise CoordinatorRegistryError(
+            "coordinator must be a PipelineCoordinatorContract"
+        )
+
+    if (
+        coordinator.contract_version
+        != PIPELINE_COORDINATOR_CONTRACT_VERSION
+    ):
+        raise CoordinatorRegistryError(
+            "coordinator contract_version must be "
+            + PIPELINE_COORDINATOR_CONTRACT_VERSION
+        )
+
+    key = coordinator_registry_key(
+        coordinator_id=(
+            coordinator.coordinator_id
+        ),
+        coordinator_version=(
+            coordinator.coordinator_version
+        ),
+    )
+
+    with _REGISTRY_LOCK:
+
+        if key in _COORDINATOR_REGISTRY:
+
+            raise CoordinatorAlreadyRegisteredError(
+                "coordinator is already registered: "
+                f"{coordinator.coordinator_id}@"
+                f"{coordinator.coordinator_version}"
+            )
+
+        _COORDINATOR_REGISTRY[
+            key
+        ] = coordinator
+
+    return coordinator
+
+
+# ============================================================================
+# 7. Exact lookup
+# ============================================================================
+
+def get_registered_coordinator(
+    *,
+    coordinator_id: str,
+    coordinator_version: str,
+) -> Optional[
+    PipelineCoordinatorContract
+]:
+    """
+    Return one exact coordinator version or None.
+
+    No latest/default version resolution occurs in Phase 2.2.
+    """
+
+    key = coordinator_registry_key(
+        coordinator_id=coordinator_id,
+        coordinator_version=coordinator_version,
+    )
+
+    with _REGISTRY_LOCK:
+
+        return _COORDINATOR_REGISTRY.get(
+            key
+        )
+
+
+def require_registered_coordinator(
+    *,
+    coordinator_id: str,
+    coordinator_version: str,
+) -> PipelineCoordinatorContract:
+    """
+    Return one exact registered coordinator or raise.
+    """
+
+    coordinator = (
+        get_registered_coordinator(
+            coordinator_id=coordinator_id,
+            coordinator_version=coordinator_version,
+        )
+    )
+
+    if coordinator is None:
+
+        raise CoordinatorNotRegisteredError(
+            "coordinator is not registered: "
+            f"{coordinator_id}@"
+            f"{coordinator_version}"
+        )
+
+    return coordinator
+
+
+def is_coordinator_registered(
+    *,
+    coordinator_id: str,
+    coordinator_version: str,
+) -> bool:
+
+    return (
+        get_registered_coordinator(
+            coordinator_id=coordinator_id,
+            coordinator_version=coordinator_version,
+        )
+        is not None
+    )
+
+
+# ============================================================================
+# 8. Inspection
+# ============================================================================
+
+def registered_coordinator_count(
+) -> int:
+
+    with _REGISTRY_LOCK:
+
+        return len(
+            _COORDINATOR_REGISTRY
+        )
+
+
+def list_registered_coordinators(
+) -> Tuple[
+    PipelineCoordinatorContract,
+    ...
+]:
+    """
+    Return all coordinator contracts in deterministic identity order.
+    """
+
+    with _REGISTRY_LOCK:
+
+        coordinators = tuple(
+            _COORDINATOR_REGISTRY.values()
+        )
+
+    return tuple(
+        sorted(
+            coordinators,
+            key=lambda item: (
+                item.coordinator_id,
+                item.coordinator_version,
+            ),
+        )
+    )
+
+
+def list_coordinators_for_workflow(
+    *,
+    workflow_type: str,
+    workflow_version: str,
+) -> Tuple[
+    PipelineCoordinatorContract,
+    ...
+]:
+    """
+    Inspection query for coordinators declaring one exact workflow identity.
+
+    This does NOT choose, activate, validate, or resolve an execution
+    coordinator. Those authorities belong to later phases.
+    """
+
+    if not isinstance(
+        workflow_type,
+        str,
+    ):
+        raise CoordinatorRegistryError(
+            "workflow_type must be a string"
+        )
+
+    if not isinstance(
+        workflow_version,
+        str,
+    ):
+        raise CoordinatorRegistryError(
+            "workflow_version must be a string"
+        )
+
+    workflow_type = (
+        workflow_type.strip()
+    )
+
+    workflow_version = (
+        workflow_version.strip()
+    )
+
+    if not workflow_type:
+        raise CoordinatorRegistryError(
+            "workflow_type must be non-empty"
+        )
+
+    if not workflow_version:
+        raise CoordinatorRegistryError(
+            "workflow_version must be non-empty"
+        )
+
+    coordinators = (
+        list_registered_coordinators()
+    )
+
+    return tuple(
+        coordinator
+        for coordinator
+        in coordinators
+        if (
+            coordinator.workflow_type
+            == workflow_type
+            and coordinator.workflow_version
+            == workflow_version
+        )
+    )
+
+
+# ============================================================================
+# 9. Snapshot
+# ============================================================================
+
+def coordinator_registry_snapshot(
+) -> Mapping[
+    str,
+    Any,
+]:
+    """
+    Immutable inspection snapshot.
+
+    Snapshot generation is not persistence.
+    """
+
+    coordinators = (
+        list_registered_coordinators()
+    )
+
+    snapshot = {
+        "registry_version":
+            COORDINATOR_REGISTRY_VERSION,
+
+        "schema_version":
+            COORDINATOR_REGISTRY_SCHEMA_VERSION,
+
+        "pipeline_coordinator_contract_version":
+            PIPELINE_COORDINATOR_CONTRACT_VERSION,
+
+        "identity_fields": (
+            "coordinator_id",
+            "coordinator_version",
+        ),
+
+        "count":
+            len(coordinators),
+
+        "coordinators":
+            tuple(
+                _freeze(
+                    coordinator.to_dict()
+                )
+                for coordinator
+                in coordinators
+            ),
+
+        "persistence":
+            False,
+
+        "exact_version_lookup_only":
+            True,
+
+        "cross_registry_validation":
+            False,
+
+        "version_selection":
+            False,
+    }
+
+    return _freeze(
+        snapshot
+    )
+
+
+# ============================================================================
+# 10. Architecture declaration
+# ============================================================================
+
+def explain_coordinator_registry_v2_2(
+) -> Mapping[
+    str,
+    Any,
+]:
+
+    return _freeze(
+        {
+            "phase":
+                "2.2",
+
+            "component":
+                "Coordinator Registration",
+
+            "version":
+                COORDINATOR_REGISTRY_VERSION,
+
+            "registered_object":
+                "PipelineCoordinatorContract",
+
+            "canonical_identity": (
+                "coordinator_id",
+                "coordinator_version",
+            ),
+
+            "owns": (
+                "coordinator existence declaration",
+                "exact-version coordinator registration",
+                "exact-version coordinator lookup",
+                "duplicate coordinator identity rejection",
+                "deterministic coordinator inspection",
+                "workflow-identity inspection",
+            ),
+
+            "does_not_own": (
+                "workflow existence validation",
+                "workflow/coordinator cross-registration validation",
+                "coordinator selection for execution",
+                "latest coordinator selection",
+                "default coordinator selection",
+                "coordinator activation",
+                "coordinator deactivation",
+                "stage ordering",
+                "dependency planning",
+                "Runtime Registration",
+                "runtime handler resolution",
+                "runtime job creation",
+                "coordinator invocation",
+                "workflow execution",
+                "workflow lifecycle state",
+                "workflow execution state",
+                "persistence",
+                "migration",
+                "version governance",
+            ),
+
+            "future_authority": {
+                "2.3":
+                    "Registration Validation",
+
+                "2.4":
+                    "Version Management",
+            },
+        }
+    )
+
+
+__all__ = [
+    "COORDINATOR_REGISTRY_VERSION",
+    "COORDINATOR_REGISTRY_SCHEMA_VERSION",
+    "CoordinatorRegistryKey",
+    "CoordinatorRegistryError",
+    "CoordinatorAlreadyRegisteredError",
+    "CoordinatorNotRegisteredError",
+    "coordinator_registry_key",
+    "register_coordinator",
+    "get_registered_coordinator",
+    "require_registered_coordinator",
+    "is_coordinator_registered",
+    "registered_coordinator_count",
+    "list_registered_coordinators",
+    "list_coordinators_for_workflow",
+    "coordinator_registry_snapshot",
+    "explain_coordinator_registry_v2_2",
+]
+
+================================================================================
+SECTION 3 - UNIVERSAL WORKFLOW CONTRACT IDENTITY
+================================================================================
+
+  backend\server\coordination\universal_workflows\contract.py:39:)
+  backend\server\coordination\universal_workflows\contract.py:40:
+> backend\server\coordination\universal_workflows\contract.py:41:UNIVERSAL_WORKFLOW_CONTRACT_VERSION: Final[str] = (
+  backend\server\coordination\universal_workflows\contract.py:42:    "universal_workflow_contract_v1.1.0"
+  backend\server\coordination\universal_workflows\contract.py:43:)
+  backend\server\coordination\universal_workflows\contract.py:44:
+  backend\server\coordination\universal_workflows\contract.py:45:UNIVERSAL_WORKFLOW_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\universal_workflows\contract.py:55:    # Identity
+  backend\server\coordination\universal_workflows\contract.py:56:    "workflow_id",
+> backend\server\coordination\universal_workflows\contract.py:57:    "workflow_type",
+> backend\server\coordination\universal_workflows\contract.py:58:    "workflow_version",
+  backend\server\coordination\universal_workflows\contract.py:59:    "workspace_id",
+  backend\server\coordination\universal_workflows\contract.py:60:
+  backend\server\coordination\universal_workflows\contract.py:61:    # Ownership / coordination
+> backend\server\coordination\universal_workflows\contract.py:62:    "coordinator_id",
+> backend\server\coordination\universal_workflows\contract.py:63:    "coordinator_version",
+  backend\server\coordination\universal_workflows\contract.py:64:
+  backend\server\coordination\universal_workflows\contract.py:65:    # Correlation
+  backend\server\coordination\universal_workflows\contract.py:66:    "correlation_id",
+  backend\server\coordination\universal_workflows\contract.py:67:    "parent_workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:104:
+  backend\server\coordination\universal_workflows\contract.py:105:    # Contract identity
+> backend\server\coordination\universal_workflows\contract.py:106:    "contract_version",
+  backend\server\coordination\universal_workflows\contract.py:107:)
+  backend\server\coordination\universal_workflows\contract.py:108:
+  backend\server\coordination\universal_workflows\contract.py:109:
+  backend\server\coordination\universal_workflows\contract.py:110:# ============================================================================
+  backend\server\coordination\universal_workflows\contract.py:382:    is_valid: bool
+  backend\server\coordination\universal_workflows\contract.py:383:    violations: Tuple[str, ...] = ()
+> backend\server\coordination\universal_workflows\contract.py:384:    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\universal_workflows\contract.py:385:    checked_field_count: int = 0
+  backend\server\coordination\universal_workflows\contract.py:386:
+  backend\server\coordination\universal_workflows\contract.py:387:    def to_dict(self) -> dict[str, Any]:
+  backend\server\coordination\universal_workflows\contract.py:388:        return {
+  backend\server\coordination\universal_workflows\contract.py:389:            "is_valid": self.is_valid,
+  backend\server\coordination\universal_workflows\contract.py:390:            "violations": list(self.violations),
+> backend\server\coordination\universal_workflows\contract.py:391:            "contract_version": self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:392:            "checked_field_count": self.checked_field_count,
+  backend\server\coordination\universal_workflows\contract.py:393:        }
+  backend\server\coordination\universal_workflows\contract.py:394:
+  backend\server\coordination\universal_workflows\contract.py:395:
+  backend\server\coordination\universal_workflows\contract.py:409:    # Identity
+  backend\server\coordination\universal_workflows\contract.py:410:    workflow_id: str
+> backend\server\coordination\universal_workflows\contract.py:411:    workflow_type: str
+> backend\server\coordination\universal_workflows\contract.py:412:    workflow_version: str
+  backend\server\coordination\universal_workflows\contract.py:413:    workspace_id: str
+  backend\server\coordination\universal_workflows\contract.py:414:
+  backend\server\coordination\universal_workflows\contract.py:415:    # Coordinator identity
+> backend\server\coordination\universal_workflows\contract.py:416:    coordinator_id: str
+> backend\server\coordination\universal_workflows\contract.py:417:    coordinator_version: str
+  backend\server\coordination\universal_workflows\contract.py:418:
+  backend\server\coordination\universal_workflows\contract.py:419:    # Correlation
+  backend\server\coordination\universal_workflows\contract.py:420:    correlation_id: str
+  backend\server\coordination\universal_workflows\contract.py:421:    parent_workflow_id: Optional[str]
+  backend\server\coordination\universal_workflows\contract.py:458:
+  backend\server\coordination\universal_workflows\contract.py:459:    # Contract
+> backend\server\coordination\universal_workflows\contract.py:460:    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\universal_workflows\contract.py:461:
+  backend\server\coordination\universal_workflows\contract.py:462:    def __post_init__(self) -> None:
+  backend\server\coordination\universal_workflows\contract.py:463:        violations: list[str] = []
+  backend\server\coordination\universal_workflows\contract.py:464:
+  backend\server\coordination\universal_workflows\contract.py:469:        )
+  backend\server\coordination\universal_workflows\contract.py:470:
+> backend\server\coordination\universal_workflows\contract.py:471:        workflow_type = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:472:            self.workflow_type,
+> backend\server\coordination\universal_workflows\contract.py:473:            name="workflow_type",
+  backend\server\coordination\universal_workflows\contract.py:474:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:475:        )
+  backend\server\coordination\universal_workflows\contract.py:476:
+> backend\server\coordination\universal_workflows\contract.py:477:        workflow_version = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:478:            self.workflow_version,
+> backend\server\coordination\universal_workflows\contract.py:479:            name="workflow_version",
+  backend\server\coordination\universal_workflows\contract.py:480:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:481:        )
+  backend\server\coordination\universal_workflows\contract.py:482:
+  backend\server\coordination\universal_workflows\contract.py:483:        workspace_id = _require_nonempty_string(
+  backend\server\coordination\universal_workflows\contract.py:487:        )
+  backend\server\coordination\universal_workflows\contract.py:488:
+> backend\server\coordination\universal_workflows\contract.py:489:        coordinator_id = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:490:            self.coordinator_id,
+> backend\server\coordination\universal_workflows\contract.py:491:            name="coordinator_id",
+  backend\server\coordination\universal_workflows\contract.py:492:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:493:        )
+  backend\server\coordination\universal_workflows\contract.py:494:
+> backend\server\coordination\universal_workflows\contract.py:495:        coordinator_version = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:496:            self.coordinator_version,
+> backend\server\coordination\universal_workflows\contract.py:497:            name="coordinator_version",
+  backend\server\coordination\universal_workflows\contract.py:498:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:499:        )
+  backend\server\coordination\universal_workflows\contract.py:500:
+  backend\server\coordination\universal_workflows\contract.py:501:        correlation_id = _require_nonempty_string(
+  backend\server\coordination\universal_workflows\contract.py:653:        )
+  backend\server\coordination\universal_workflows\contract.py:654:
+> backend\server\coordination\universal_workflows\contract.py:655:        contract_version = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:656:            self.contract_version,
+> backend\server\coordination\universal_workflows\contract.py:657:            name="contract_version",
+  backend\server\coordination\universal_workflows\contract.py:658:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:659:        )
+  backend\server\coordination\universal_workflows\contract.py:660:
+> backend\server\coordination\universal_workflows\contract.py:661:        if contract_version != UNIVERSAL_WORKFLOW_CONTRACT_VERSION:
+  backend\server\coordination\universal_workflows\contract.py:662:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:663:                "contract_version must be "
+> backend\server\coordination\universal_workflows\contract.py:664:                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\universal_workflows\contract.py:665:            )
+  backend\server\coordination\universal_workflows\contract.py:666:
+  backend\server\coordination\universal_workflows\contract.py:667:        # ------------------------------------------------------------------
+  backend\server\coordination\universal_workflows\contract.py:668:        # Cross-field invariants
+  backend\server\coordination\universal_workflows\contract.py:781:
+  backend\server\coordination\universal_workflows\contract.py:782:        object.__setattr__(self, "workflow_id", workflow_id)
+> backend\server\coordination\universal_workflows\contract.py:783:        object.__setattr__(self, "workflow_type", workflow_type)
+> backend\server\coordination\universal_workflows\contract.py:784:        object.__setattr__(self, "workflow_version", workflow_version)
+  backend\server\coordination\universal_workflows\contract.py:785:        object.__setattr__(self, "workspace_id", workspace_id)
+> backend\server\coordination\universal_workflows\contract.py:786:        object.__setattr__(self, "coordinator_id", coordinator_id)
+> backend\server\coordination\universal_workflows\contract.py:787:        object.__setattr__(self, "coordinator_version", coordinator_version)
+  backend\server\coordination\universal_workflows\contract.py:788:        object.__setattr__(self, "correlation_id", correlation_id)
+  backend\server\coordination\universal_workflows\contract.py:789:        object.__setattr__(self, "parent_workflow_id", parent_workflow_id)
+  backend\server\coordination\universal_workflows\contract.py:790:        object.__setattr__(self, "root_workflow_id", root_workflow_id)
+  backend\server\coordination\universal_workflows\contract.py:791:        object.__setattr__(self, "status", status)
+  backend\server\coordination\universal_workflows\contract.py:810:        object.__setattr__(self, "failure_message", failure_message)
+  backend\server\coordination\universal_workflows\contract.py:811:        object.__setattr__(self, "failure_details", failure_details)
+> backend\server\coordination\universal_workflows\contract.py:812:        object.__setattr__(self, "contract_version", contract_version)
+  backend\server\coordination\universal_workflows\contract.py:813:
+  backend\server\coordination\universal_workflows\contract.py:814:    # ======================================================================
+  backend\server\coordination\universal_workflows\contract.py:815:    # Serialization
+  backend\server\coordination\universal_workflows\contract.py:816:    # ======================================================================
+  backend\server\coordination\universal_workflows\contract.py:819:        return {
+  backend\server\coordination\universal_workflows\contract.py:820:            "workflow_id": self.workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:821:            "workflow_type": self.workflow_type,
+> backend\server\coordination\universal_workflows\contract.py:822:            "workflow_version": self.workflow_version,
+  backend\server\coordination\universal_workflows\contract.py:823:            "workspace_id": self.workspace_id,
+> backend\server\coordination\universal_workflows\contract.py:824:            "coordinator_id": self.coordinator_id,
+> backend\server\coordination\universal_workflows\contract.py:825:            "coordinator_version": self.coordinator_version,
+  backend\server\coordination\universal_workflows\contract.py:826:            "correlation_id": self.correlation_id,
+  backend\server\coordination\universal_workflows\contract.py:827:            "parent_workflow_id": self.parent_workflow_id,
+  backend\server\coordination\universal_workflows\contract.py:828:            "root_workflow_id": self.root_workflow_id,
+  backend\server\coordination\universal_workflows\contract.py:829:            "status": self.status.value,
+  backend\server\coordination\universal_workflows\contract.py:848:            "failure_message": self.failure_message,
+  backend\server\coordination\universal_workflows\contract.py:849:            "failure_details": _thaw(self.failure_details),
+> backend\server\coordination\universal_workflows\contract.py:850:            "contract_version": self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:851:        }
+  backend\server\coordination\universal_workflows\contract.py:852:
+  backend\server\coordination\universal_workflows\contract.py:853:    def to_dict(self) -> dict[str, Any]:
+  backend\server\coordination\universal_workflows\contract.py:854:        return self.to_canonical_dict()
+  backend\server\coordination\universal_workflows\contract.py:872:            {
+  backend\server\coordination\universal_workflows\contract.py:873:                "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+> backend\server\coordination\universal_workflows\contract.py:874:                "contract_version": UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+  backend\server\coordination\universal_workflows\contract.py:875:                "schema_version": UNIVERSAL_WORKFLOW_SCHEMA_VERSION,
+  backend\server\coordination\universal_workflows\contract.py:876:                "required_fields": REQUIRED_UNIVERSAL_WORKFLOW_FIELDS,
+  backend\server\coordination\universal_workflows\contract.py:877:            }
+  backend\server\coordination\universal_workflows\contract.py:878:        )
+  backend\server\coordination\universal_workflows\contract.py:959:        material = {
+  backend\server\coordination\universal_workflows\contract.py:960:            "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+> backend\server\coordination\universal_workflows\contract.py:961:            "contract_version": self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:962:            "workflow_id": self.workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:963:            "workflow_type": self.workflow_type,
+> backend\server\coordination\universal_workflows\contract.py:964:            "workflow_version": self.workflow_version,
+  backend\server\coordination\universal_workflows\contract.py:965:            "workspace_id": self.workspace_id,
+  backend\server\coordination\universal_workflows\contract.py:966:            "root_workflow_id": self.root_workflow_id,
+  backend\server\coordination\universal_workflows\contract.py:967:            "correlation_id": self.correlation_id,
+  backend\server\coordination\universal_workflows\contract.py:968:        }
+  backend\server\coordination\universal_workflows\contract.py:999:            is_valid=True,
+  backend\server\coordination\universal_workflows\contract.py:1000:            violations=_EMPTY_TUPLE,
+> backend\server\coordination\universal_workflows\contract.py:1001:            contract_version=candidate.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:1002:            checked_field_count=len(
+  backend\server\coordination\universal_workflows\contract.py:1003:                REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+  backend\server\coordination\universal_workflows\contract.py:1004:            ),
+  backend\server\coordination\universal_workflows\contract.py:1005:        )
+  backend\server\coordination\universal_workflows\contract.py:1031:        is_valid=True,
+  backend\server\coordination\universal_workflows\contract.py:1032:        violations=_EMPTY_TUPLE,
+> backend\server\coordination\universal_workflows\contract.py:1033:        contract_version=reconstructed.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:1034:        checked_field_count=len(
+  backend\server\coordination\universal_workflows\contract.py:1035:            REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+  backend\server\coordination\universal_workflows\contract.py:1036:        ),
+  backend\server\coordination\universal_workflows\contract.py:1037:    )
+  backend\server\coordination\universal_workflows\contract.py:1040:__all__ = [
+  backend\server\coordination\universal_workflows\contract.py:1041:    "UNIVERSAL_WORKFLOW_CONTRACT_ID",
+> backend\server\coordination\universal_workflows\contract.py:1042:    "UNIVERSAL_WORKFLOW_CONTRACT_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1043:    "UNIVERSAL_WORKFLOW_SCHEMA_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1044:    "REQUIRED_UNIVERSAL_WORKFLOW_FIELDS",
+  backend\server\coordination\universal_workflows\contract.py:1045:    "TERMINAL_WORKFLOW_STATUSES",
+  backend\server\coordination\universal_workflows\contract.py:1046:    "UniversalWorkflow",
+
+
+
+
+================================================================================
+SECTION 4 - PIPELINE COORDINATOR CONTRACT IDENTITY
+================================================================================
+
+  backend\server\coordination\pipeline_coordinators\contract.py:6:
+  backend\server\coordination\pipeline_coordinators\contract.py:7:The contract describes coordinator identity, workflow ownership,
+> backend\server\coordination\pipeline_coordinators\contract.py:8:capabilities, entrypoint, and Universal Runtime integration policy.
+  backend\server\coordination\pipeline_coordinators\contract.py:9:
+  backend\server\coordination\pipeline_coordinators\contract.py:10:It does not execute pipeline stages.
+  backend\server\coordination\pipeline_coordinators\contract.py:11:"""
+  backend\server\coordination\pipeline_coordinators\contract.py:12:
+  backend\server\coordination\pipeline_coordinators\contract.py:21:
+  backend\server\coordination\pipeline_coordinators\contract.py:22:from backend.server.coordination.universal_workflows.contract import (
+> backend\server\coordination\pipeline_coordinators\contract.py:23:    UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+  backend\server\coordination\pipeline_coordinators\contract.py:24:)
+  backend\server\coordination\pipeline_coordinators\contract.py:25:
+  backend\server\coordination\pipeline_coordinators\contract.py:26:
+  backend\server\coordination\pipeline_coordinators\contract.py:27:PIPELINE_COORDINATOR_CONTRACT_ID: Final[str] = (
+  backend\server\coordination\pipeline_coordinators\contract.py:29:)
+  backend\server\coordination\pipeline_coordinators\contract.py:30:
+> backend\server\coordination\pipeline_coordinators\contract.py:31:PIPELINE_COORDINATOR_CONTRACT_VERSION: Final[str] = (
+  backend\server\coordination\pipeline_coordinators\contract.py:32:    "pipeline_coordinator_contract_v1.2.0"
+  backend\server\coordination\pipeline_coordinators\contract.py:33:)
+  backend\server\coordination\pipeline_coordinators\contract.py:34:
+  backend\server\coordination\pipeline_coordinators\contract.py:35:PIPELINE_COORDINATOR_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\pipeline_coordinators\contract.py:85:        if not isinstance(value, str):
+  backend\server\coordination\pipeline_coordinators\contract.py:86:            raise PipelineCoordinatorContractError(
+> backend\server\coordination\pipeline_coordinators\contract.py:87:                "runtime_policy must be a string"
+  backend\server\coordination\pipeline_coordinators\contract.py:88:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:89:
+  backend\server\coordination\pipeline_coordinators\contract.py:90:        try:
+  backend\server\coordination\pipeline_coordinators\contract.py:91:            return cls(value.strip().lower())
+  backend\server\coordination\pipeline_coordinators\contract.py:92:        except ValueError as exc:
+  backend\server\coordination\pipeline_coordinators\contract.py:93:            raise PipelineCoordinatorContractError(
+> backend\server\coordination\pipeline_coordinators\contract.py:94:                f"unsupported runtime_policy: {value!r}"
+  backend\server\coordination\pipeline_coordinators\contract.py:95:            ) from exc
+  backend\server\coordination\pipeline_coordinators\contract.py:96:
+  backend\server\coordination\pipeline_coordinators\contract.py:97:
+  backend\server\coordination\pipeline_coordinators\contract.py:98:CANONICAL_COORDINATOR_CAPABILITIES: Final[frozenset[str]] = frozenset(
+  backend\server\coordination\pipeline_coordinators\contract.py:118:
+  backend\server\coordination\pipeline_coordinators\contract.py:119:REQUIRED_PIPELINE_COORDINATOR_FIELDS: Final[Tuple[str, ...]] = (
+> backend\server\coordination\pipeline_coordinators\contract.py:120:    "coordinator_id",
+> backend\server\coordination\pipeline_coordinators\contract.py:121:    "coordinator_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:122:    "workflow_type",
+> backend\server\coordination\pipeline_coordinators\contract.py:123:    "workflow_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:124:    "workflow_contract_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:125:    "entrypoint",
+  backend\server\coordination\pipeline_coordinators\contract.py:126:    "execution_model",
+> backend\server\coordination\pipeline_coordinators\contract.py:127:    "runtime_policy",
+  backend\server\coordination\pipeline_coordinators\contract.py:128:    "capabilities",
+> backend\server\coordination\pipeline_coordinators\contract.py:129:    "stage_job_types",
+  backend\server\coordination\pipeline_coordinators\contract.py:130:    "responsibilities",
+  backend\server\coordination\pipeline_coordinators\contract.py:131:    "excluded_responsibilities",
+  backend\server\coordination\pipeline_coordinators\contract.py:132:    "metadata",
+> backend\server\coordination\pipeline_coordinators\contract.py:133:    "contract_version",
+  backend\server\coordination\pipeline_coordinators\contract.py:134:)
+  backend\server\coordination\pipeline_coordinators\contract.py:135:
+  backend\server\coordination\pipeline_coordinators\contract.py:136:
+  backend\server\coordination\pipeline_coordinators\contract.py:137:_EMPTY_MAPPING: Final[Mapping[str, Any]] = MappingProxyType({})
+  backend\server\coordination\pipeline_coordinators\contract.py:286:    is_valid: bool
+  backend\server\coordination\pipeline_coordinators\contract.py:287:    violations: Tuple[str, ...] = ()
+> backend\server\coordination\pipeline_coordinators\contract.py:288:    contract_version: str = PIPELINE_COORDINATOR_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:289:    checked_field_count: int = 0
+  backend\server\coordination\pipeline_coordinators\contract.py:290:
+  backend\server\coordination\pipeline_coordinators\contract.py:291:    def to_dict(self) -> dict[str, Any]:
+  backend\server\coordination\pipeline_coordinators\contract.py:292:        return {
+  backend\server\coordination\pipeline_coordinators\contract.py:293:            "is_valid": self.is_valid,
+  backend\server\coordination\pipeline_coordinators\contract.py:294:            "violations": list(self.violations),
+> backend\server\coordination\pipeline_coordinators\contract.py:295:            "contract_version": self.contract_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:296:            "checked_field_count": self.checked_field_count,
+  backend\server\coordination\pipeline_coordinators\contract.py:297:        }
+  backend\server\coordination\pipeline_coordinators\contract.py:298:
+  backend\server\coordination\pipeline_coordinators\contract.py:299:
+  backend\server\coordination\pipeline_coordinators\contract.py:301:class PipelineCoordinatorContract:
+  backend\server\coordination\pipeline_coordinators\contract.py:302:
+> backend\server\coordination\pipeline_coordinators\contract.py:303:    coordinator_id: str
+> backend\server\coordination\pipeline_coordinators\contract.py:304:    coordinator_version: str
+  backend\server\coordination\pipeline_coordinators\contract.py:305:
+> backend\server\coordination\pipeline_coordinators\contract.py:306:    workflow_type: str
+> backend\server\coordination\pipeline_coordinators\contract.py:307:    workflow_version: str
+> backend\server\coordination\pipeline_coordinators\contract.py:308:    workflow_contract_version: str
+  backend\server\coordination\pipeline_coordinators\contract.py:309:
+> backend\server\coordination\pipeline_coordinators\contract.py:310:    entrypoint: str
+  backend\server\coordination\pipeline_coordinators\contract.py:311:
+  backend\server\coordination\pipeline_coordinators\contract.py:312:    execution_model: CoordinatorExecutionModel
+> backend\server\coordination\pipeline_coordinators\contract.py:313:    runtime_policy: CoordinatorRuntimePolicy
+  backend\server\coordination\pipeline_coordinators\contract.py:314:
+  backend\server\coordination\pipeline_coordinators\contract.py:315:    capabilities: Tuple[str, ...]
+> backend\server\coordination\pipeline_coordinators\contract.py:316:    stage_job_types: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:317:
+  backend\server\coordination\pipeline_coordinators\contract.py:318:    responsibilities: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:319:    excluded_responsibilities: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:320:
+  backend\server\coordination\pipeline_coordinators\contract.py:321:    metadata: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\pipeline_coordinators\contract.py:322:
+> backend\server\coordination\pipeline_coordinators\contract.py:323:    contract_version: str = PIPELINE_COORDINATOR_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:324:
+  backend\server\coordination\pipeline_coordinators\contract.py:325:    def __post_init__(self) -> None:
+  backend\server\coordination\pipeline_coordinators\contract.py:326:        violations: list[str] = []
+  backend\server\coordination\pipeline_coordinators\contract.py:327:
+> backend\server\coordination\pipeline_coordinators\contract.py:328:        coordinator_id = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:329:            self.coordinator_id,
+> backend\server\coordination\pipeline_coordinators\contract.py:330:            name="coordinator_id",
+  backend\server\coordination\pipeline_coordinators\contract.py:331:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:332:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:333:
+> backend\server\coordination\pipeline_coordinators\contract.py:334:        coordinator_version = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:335:            self.coordinator_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:336:            name="coordinator_version",
+  backend\server\coordination\pipeline_coordinators\contract.py:337:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:338:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:339:
+> backend\server\coordination\pipeline_coordinators\contract.py:340:        workflow_type = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:341:            self.workflow_type,
+> backend\server\coordination\pipeline_coordinators\contract.py:342:            name="workflow_type",
+  backend\server\coordination\pipeline_coordinators\contract.py:343:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:344:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:345:
+> backend\server\coordination\pipeline_coordinators\contract.py:346:        workflow_version = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:347:            self.workflow_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:348:            name="workflow_version",
+  backend\server\coordination\pipeline_coordinators\contract.py:349:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:350:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:351:
+> backend\server\coordination\pipeline_coordinators\contract.py:352:        workflow_contract_version = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:353:            self.workflow_contract_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:354:            name="workflow_contract_version",
+  backend\server\coordination\pipeline_coordinators\contract.py:355:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:356:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:357:
+> backend\server\coordination\pipeline_coordinators\contract.py:358:        entrypoint = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:359:            self.entrypoint,
+> backend\server\coordination\pipeline_coordinators\contract.py:360:            name="entrypoint",
+  backend\server\coordination\pipeline_coordinators\contract.py:361:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:362:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:363:
+  backend\server\coordination\pipeline_coordinators\contract.py:364:        try:
+  backend\server\coordination\pipeline_coordinators\contract.py:373:
+  backend\server\coordination\pipeline_coordinators\contract.py:374:        try:
+> backend\server\coordination\pipeline_coordinators\contract.py:375:            runtime_policy = CoordinatorRuntimePolicy.coerce(
+> backend\server\coordination\pipeline_coordinators\contract.py:376:                self.runtime_policy
+  backend\server\coordination\pipeline_coordinators\contract.py:377:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:378:        except PipelineCoordinatorContractError as exc:
+  backend\server\coordination\pipeline_coordinators\contract.py:379:            violations.extend(
+  backend\server\coordination\pipeline_coordinators\contract.py:380:                exc.violations or (str(exc),)
+  backend\server\coordination\pipeline_coordinators\contract.py:381:            )
+> backend\server\coordination\pipeline_coordinators\contract.py:382:            runtime_policy = (
+  backend\server\coordination\pipeline_coordinators\contract.py:383:                CoordinatorRuntimePolicy.UNIVERSAL_RUNTIME_REQUIRED
+  backend\server\coordination\pipeline_coordinators\contract.py:384:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:385:
+  backend\server\coordination\pipeline_coordinators\contract.py:386:        capabilities = _string_tuple(
+  backend\server\coordination\pipeline_coordinators\contract.py:391:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:392:
+> backend\server\coordination\pipeline_coordinators\contract.py:393:        stage_job_types = _string_tuple(
+> backend\server\coordination\pipeline_coordinators\contract.py:394:            self.stage_job_types,
+> backend\server\coordination\pipeline_coordinators\contract.py:395:            name="stage_job_types",
+  backend\server\coordination\pipeline_coordinators\contract.py:396:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:397:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:398:
+  backend\server\coordination\pipeline_coordinators\contract.py:399:        responsibilities = _string_tuple(
+  backend\server\coordination\pipeline_coordinators\contract.py:416:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:417:
+> backend\server\coordination\pipeline_coordinators\contract.py:418:        contract_version = _require_string(
+> backend\server\coordination\pipeline_coordinators\contract.py:419:            self.contract_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:420:            name="contract_version",
+  backend\server\coordination\pipeline_coordinators\contract.py:421:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:422:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:423:
+  backend\server\coordination\pipeline_coordinators\contract.py:424:        if (
+> backend\server\coordination\pipeline_coordinators\contract.py:425:            workflow_contract_version
+> backend\server\coordination\pipeline_coordinators\contract.py:426:            != UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:427:        ):
+  backend\server\coordination\pipeline_coordinators\contract.py:428:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:429:                "workflow_contract_version must be "
+> backend\server\coordination\pipeline_coordinators\contract.py:430:                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:431:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:432:
+  backend\server\coordination\pipeline_coordinators\contract.py:433:        if (
+> backend\server\coordination\pipeline_coordinators\contract.py:434:            contract_version
+> backend\server\coordination\pipeline_coordinators\contract.py:435:            != PIPELINE_COORDINATOR_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:436:        ):
+  backend\server\coordination\pipeline_coordinators\contract.py:437:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:438:                "contract_version must be "
+> backend\server\coordination\pipeline_coordinators\contract.py:439:                + PIPELINE_COORDINATOR_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:440:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:441:
+  backend\server\coordination\pipeline_coordinators\contract.py:442:        unsupported = sorted(
+  backend\server\coordination\pipeline_coordinators\contract.py:443:            set(capabilities)
+  backend\server\coordination\pipeline_coordinators\contract.py:462:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:463:
+> backend\server\coordination\pipeline_coordinators\contract.py:464:        if ":" not in entrypoint:
+  backend\server\coordination\pipeline_coordinators\contract.py:465:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:466:                "entrypoint must use module.path:function_name format"
+  backend\server\coordination\pipeline_coordinators\contract.py:467:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:468:        else:
+> backend\server\coordination\pipeline_coordinators\contract.py:469:            module_name, function_name = entrypoint.rsplit(":", 1)
+  backend\server\coordination\pipeline_coordinators\contract.py:470:
+  backend\server\coordination\pipeline_coordinators\contract.py:471:            if not module_name.strip():
+  backend\server\coordination\pipeline_coordinators\contract.py:472:                violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:473:                    "entrypoint module path must be non-empty"
+  backend\server\coordination\pipeline_coordinators\contract.py:474:                )
+  backend\server\coordination\pipeline_coordinators\contract.py:475:
+  backend\server\coordination\pipeline_coordinators\contract.py:476:            if not function_name.strip():
+  backend\server\coordination\pipeline_coordinators\contract.py:477:                violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:478:                    "entrypoint function name must be non-empty"
+  backend\server\coordination\pipeline_coordinators\contract.py:479:                )
+  backend\server\coordination\pipeline_coordinators\contract.py:480:
+  backend\server\coordination\pipeline_coordinators\contract.py:481:        if (
+> backend\server\coordination\pipeline_coordinators\contract.py:482:            runtime_policy
+  backend\server\coordination\pipeline_coordinators\contract.py:483:            == CoordinatorRuntimePolicy.UNIVERSAL_RUNTIME_REQUIRED
+> backend\server\coordination\pipeline_coordinators\contract.py:484:            and not stage_job_types
+  backend\server\coordination\pipeline_coordinators\contract.py:485:        ):
+  backend\server\coordination\pipeline_coordinators\contract.py:486:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:487:                "stage_job_types must not be empty when "
+> backend\server\coordination\pipeline_coordinators\contract.py:488:                "runtime_policy is universal_runtime_required"
+  backend\server\coordination\pipeline_coordinators\contract.py:489:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:490:
+  backend\server\coordination\pipeline_coordinators\contract.py:491:        if (
+> backend\server\coordination\pipeline_coordinators\contract.py:492:            runtime_policy
+  backend\server\coordination\pipeline_coordinators\contract.py:493:            == CoordinatorRuntimePolicy.NO_RUNTIME_EXECUTION
+> backend\server\coordination\pipeline_coordinators\contract.py:494:            and stage_job_types
+  backend\server\coordination\pipeline_coordinators\contract.py:495:        ):
+  backend\server\coordination\pipeline_coordinators\contract.py:496:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:497:                "stage_job_types must be empty when "
+> backend\server\coordination\pipeline_coordinators\contract.py:498:                "runtime_policy is no_runtime_execution"
+  backend\server\coordination\pipeline_coordinators\contract.py:499:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:500:
+  backend\server\coordination\pipeline_coordinators\contract.py:501:        overlap = (
+  backend\server\coordination\pipeline_coordinators\contract.py:502:            set(responsibilities)
+  backend\server\coordination\pipeline_coordinators\contract.py:519:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:520:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:521:            "coordinator_id",
+> backend\server\coordination\pipeline_coordinators\contract.py:522:            coordinator_id,
+  backend\server\coordination\pipeline_coordinators\contract.py:523:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:524:
+  backend\server\coordination\pipeline_coordinators\contract.py:525:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:526:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:527:            "coordinator_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:528:            coordinator_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:529:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:530:
+  backend\server\coordination\pipeline_coordinators\contract.py:531:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:532:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:533:            "workflow_type",
+> backend\server\coordination\pipeline_coordinators\contract.py:534:            workflow_type,
+  backend\server\coordination\pipeline_coordinators\contract.py:535:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:536:
+  backend\server\coordination\pipeline_coordinators\contract.py:537:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:538:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:539:            "workflow_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:540:            workflow_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:541:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:542:
+  backend\server\coordination\pipeline_coordinators\contract.py:543:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:544:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:545:            "workflow_contract_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:546:            workflow_contract_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:547:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:548:
+  backend\server\coordination\pipeline_coordinators\contract.py:549:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:550:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:551:            "entrypoint",
+> backend\server\coordination\pipeline_coordinators\contract.py:552:            entrypoint,
+  backend\server\coordination\pipeline_coordinators\contract.py:553:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:554:
+  backend\server\coordination\pipeline_coordinators\contract.py:555:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:556:            self,
+  backend\server\coordination\pipeline_coordinators\contract.py:561:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:562:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:563:            "runtime_policy",
+> backend\server\coordination\pipeline_coordinators\contract.py:564:            runtime_policy,
+  backend\server\coordination\pipeline_coordinators\contract.py:565:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:566:
+  backend\server\coordination\pipeline_coordinators\contract.py:567:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:568:            self,
+  backend\server\coordination\pipeline_coordinators\contract.py:573:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:574:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:575:            "stage_job_types",
+> backend\server\coordination\pipeline_coordinators\contract.py:576:            stage_job_types,
+  backend\server\coordination\pipeline_coordinators\contract.py:577:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:578:
+  backend\server\coordination\pipeline_coordinators\contract.py:579:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:580:            self,
+  backend\server\coordination\pipeline_coordinators\contract.py:597:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:598:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:599:            "contract_version",
+> backend\server\coordination\pipeline_coordinators\contract.py:600:            contract_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:601:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:602:
+  backend\server\coordination\pipeline_coordinators\contract.py:603:    def supports(self, capability: str) -> bool:
+  backend\server\coordination\pipeline_coordinators\contract.py:604:        return (
+  backend\server\coordination\pipeline_coordinators\contract.py:610:    def uses_universal_runtime(self) -> bool:
+  backend\server\coordination\pipeline_coordinators\contract.py:611:        return (
+> backend\server\coordination\pipeline_coordinators\contract.py:612:            self.runtime_policy
+  backend\server\coordination\pipeline_coordinators\contract.py:613:            == CoordinatorRuntimePolicy.UNIVERSAL_RUNTIME_REQUIRED
+  backend\server\coordination\pipeline_coordinators\contract.py:614:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:615:
+  backend\server\coordination\pipeline_coordinators\contract.py:616:    @property
+  backend\server\coordination\pipeline_coordinators\contract.py:617:    def is_transitional(self) -> bool:
+  backend\server\coordination\pipeline_coordinators\contract.py:618:        return (
+> backend\server\coordination\pipeline_coordinators\contract.py:619:            self.runtime_policy
+  backend\server\coordination\pipeline_coordinators\contract.py:620:            == CoordinatorRuntimePolicy.TRANSITIONAL_DIRECT_EXECUTION
+  backend\server\coordination\pipeline_coordinators\contract.py:621:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:622:
+  backend\server\coordination\pipeline_coordinators\contract.py:623:    def to_canonical_dict(self) -> dict[str, Any]:
+  backend\server\coordination\pipeline_coordinators\contract.py:624:        return {
+> backend\server\coordination\pipeline_coordinators\contract.py:625:            "coordinator_id": self.coordinator_id,
+> backend\server\coordination\pipeline_coordinators\contract.py:626:            "coordinator_version": self.coordinator_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:627:            "workflow_type": self.workflow_type,
+> backend\server\coordination\pipeline_coordinators\contract.py:628:            "workflow_version": self.workflow_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:629:            "workflow_contract_version": self.workflow_contract_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:630:            "entrypoint": self.entrypoint,
+  backend\server\coordination\pipeline_coordinators\contract.py:631:            "execution_model": self.execution_model.value,
+> backend\server\coordination\pipeline_coordinators\contract.py:632:            "runtime_policy": self.runtime_policy.value,
+  backend\server\coordination\pipeline_coordinators\contract.py:633:            "capabilities": list(self.capabilities),
+> backend\server\coordination\pipeline_coordinators\contract.py:634:            "stage_job_types": list(self.stage_job_types),
+  backend\server\coordination\pipeline_coordinators\contract.py:635:            "responsibilities": list(self.responsibilities),
+  backend\server\coordination\pipeline_coordinators\contract.py:636:            "excluded_responsibilities": list(
+  backend\server\coordination\pipeline_coordinators\contract.py:637:                self.excluded_responsibilities
+  backend\server\coordination\pipeline_coordinators\contract.py:638:            ),
+  backend\server\coordination\pipeline_coordinators\contract.py:639:            "metadata": _thaw(self.metadata),
+> backend\server\coordination\pipeline_coordinators\contract.py:640:            "contract_version": self.contract_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:641:        }
+  backend\server\coordination\pipeline_coordinators\contract.py:642:
+  backend\server\coordination\pipeline_coordinators\contract.py:643:    def to_dict(self) -> dict[str, Any]:
+  backend\server\coordination\pipeline_coordinators\contract.py:644:        return self.to_canonical_dict()
+  backend\server\coordination\pipeline_coordinators\contract.py:658:            {
+  backend\server\coordination\pipeline_coordinators\contract.py:659:                "contract_id": PIPELINE_COORDINATOR_CONTRACT_ID,
+> backend\server\coordination\pipeline_coordinators\contract.py:660:                "contract_version": PIPELINE_COORDINATOR_CONTRACT_VERSION,
+  backend\server\coordination\pipeline_coordinators\contract.py:661:                "schema_version": PIPELINE_COORDINATOR_SCHEMA_VERSION,
+> backend\server\coordination\pipeline_coordinators\contract.py:662:                "workflow_contract_version": (
+> backend\server\coordination\pipeline_coordinators\contract.py:663:                    UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\pipeline_coordinators\contract.py:664:                ),
+  backend\server\coordination\pipeline_coordinators\contract.py:665:                "required_fields": (
+  backend\server\coordination\pipeline_coordinators\contract.py:666:                    REQUIRED_PIPELINE_COORDINATOR_FIELDS
+  backend\server\coordination\pipeline_coordinators\contract.py:667:                ),
+  backend\server\coordination\pipeline_coordinators\contract.py:724:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:725:
+> backend\server\coordination\pipeline_coordinators\contract.py:726:        kwargs["runtime_policy"] = (
+  backend\server\coordination\pipeline_coordinators\contract.py:727:            CoordinatorRuntimePolicy.coerce(
+> backend\server\coordination\pipeline_coordinators\contract.py:728:                kwargs["runtime_policy"]
+  backend\server\coordination\pipeline_coordinators\contract.py:729:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:730:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:731:
+  backend\server\coordination\pipeline_coordinators\contract.py:732:        return cls(**kwargs)
+  backend\server\coordination\pipeline_coordinators\contract.py:758:        material = {
+  backend\server\coordination\pipeline_coordinators\contract.py:759:            "contract_id": PIPELINE_COORDINATOR_CONTRACT_ID,
+> backend\server\coordination\pipeline_coordinators\contract.py:760:            "contract_version": self.contract_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:761:            "coordinator_id": self.coordinator_id,
+> backend\server\coordination\pipeline_coordinators\contract.py:762:            "coordinator_version": self.coordinator_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:763:            "workflow_type": self.workflow_type,
+> backend\server\coordination\pipeline_coordinators\contract.py:764:            "workflow_version": self.workflow_version,
+> backend\server\coordination\pipeline_coordinators\contract.py:765:            "entrypoint": self.entrypoint,
+  backend\server\coordination\pipeline_coordinators\contract.py:766:        }
+  backend\server\coordination\pipeline_coordinators\contract.py:767:
+  backend\server\coordination\pipeline_coordinators\contract.py:768:        return _fingerprint(
+  backend\server\coordination\pipeline_coordinators\contract.py:769:            _canonical_json(material)
+  backend\server\coordination\pipeline_coordinators\contract.py:802:            is_valid=True,
+  backend\server\coordination\pipeline_coordinators\contract.py:803:            violations=_EMPTY_TUPLE,
+> backend\server\coordination\pipeline_coordinators\contract.py:804:            contract_version=candidate.contract_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:805:            checked_field_count=len(
+  backend\server\coordination\pipeline_coordinators\contract.py:806:                REQUIRED_PIPELINE_COORDINATOR_FIELDS
+  backend\server\coordination\pipeline_coordinators\contract.py:807:            ),
+  backend\server\coordination\pipeline_coordinators\contract.py:808:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:834:        is_valid=True,
+  backend\server\coordination\pipeline_coordinators\contract.py:835:        violations=_EMPTY_TUPLE,
+> backend\server\coordination\pipeline_coordinators\contract.py:836:        contract_version=reconstructed.contract_version,
+  backend\server\coordination\pipeline_coordinators\contract.py:837:        checked_field_count=len(
+  backend\server\coordination\pipeline_coordinators\contract.py:838:            REQUIRED_PIPELINE_COORDINATOR_FIELDS
+  backend\server\coordination\pipeline_coordinators\contract.py:839:        ),
+  backend\server\coordination\pipeline_coordinators\contract.py:840:    )
+  backend\server\coordination\pipeline_coordinators\contract.py:843:__all__ = [
+  backend\server\coordination\pipeline_coordinators\contract.py:844:    "PIPELINE_COORDINATOR_CONTRACT_ID",
+> backend\server\coordination\pipeline_coordinators\contract.py:845:    "PIPELINE_COORDINATOR_CONTRACT_VERSION",
+  backend\server\coordination\pipeline_coordinators\contract.py:846:    "PIPELINE_COORDINATOR_SCHEMA_VERSION",
+  backend\server\coordination\pipeline_coordinators\contract.py:847:    "REQUIRED_PIPELINE_COORDINATOR_FIELDS",
+  backend\server\coordination\pipeline_coordinators\contract.py:848:    "CANONICAL_COORDINATOR_CAPABILITIES",
+  backend\server\coordination\pipeline_coordinators\contract.py:849:    "REQUIRED_COORDINATOR_CAPABILITIES",
+
+
+
+
+================================================================================
+SECTION 5 - EXISTING VALIDATION / CERTIFICATION PATTERNS
+================================================================================
+
+Path                                                                                              LineNumber Line                                                                   
+----                                                                                              ---------- ----                                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py            35 - workflow existence validation;                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py            36 - workflow/coordinator cross-registration validation;                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py            51 Cross-registry validation belongs to Phase 2.3.                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           126     Validation is intentionally delegated to the frozen                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           532         "cross_registry_validation":                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           583                 "workflow existence validation",                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           584                 "workflow/coordinator cross-registration validation",  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           606                     "Registration Validation",                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py           47         violations: Tuple[str, ...] = (),                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py           50         self.violations = tuple(violations)                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          187     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          190         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          198         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          209     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          217         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          226             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          234             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          243         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          254     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          261         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          285 class PipelineCoordinatorValidationReport:                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          286     is_valid: bool                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          287     violations: Tuple[str, ...] = ()                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          293             "is_valid": self.is_valid,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          294             "violations": list(self.violations),                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          326         violations: list[str] = []                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          331             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          337             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          343             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          349             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          355             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          361             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          369             violations.extend(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          370                 exc.violations or (str(exc),)                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          379             violations.extend(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          380                 exc.violations or (str(exc),)                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          389             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          396             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          402             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          409             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          415             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          421             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          428             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          437             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          448             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          459             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          465             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          472                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          477                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          486             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          496             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          507             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          513         if violations:                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          515                 "Pipeline Coordinator Contract validation failed",     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          516                 violations=tuple(violations),                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          696                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          712                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          779     ) -> "PipelineCoordinatorValidationReport":                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          780         return validate_pipeline_coordinator_contract(                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          793 def validate_pipeline_coordinator_contract(                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          795 ) -> PipelineCoordinatorValidationReport:                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          801         return PipelineCoordinatorValidationReport(                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          802             is_valid=True,                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          803             violations=_EMPTY_TUPLE,                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          811         return PipelineCoordinatorValidationReport(                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          812             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          813             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          825         return PipelineCoordinatorValidationReport(                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          826             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          827             violations=tuple(exc.violations) or (str(exc),),           
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          833     return PipelineCoordinatorValidationReport(                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          834         is_valid=True,                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          835         violations=_EMPTY_TUPLE,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          853     "PipelineCoordinatorValidationReport",                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          855     "validate_pipeline_coordinator_contract",                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               160         violations: Tuple[str, ...] = (),                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               163         self.violations = tuple(violations)                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               231     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               236         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               246             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               255         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               266     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               273         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               285             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               301     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               308         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               338 # 7. Validation report                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               342 class UniversalStageReferenceValidationReport:                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               344     is_valid: bool                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               345     violations: Tuple[str, ...] = ()                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               358             "is_valid": self.is_valid,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               359             "violations": list(                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               360                 self.violations                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               415         violations: list[str] = []                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               420             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               426             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               432             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               438             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               445                 violations=violations,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               457             violations.extend(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               458                 exc.violations                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               469             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               476             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               484                 violations=violations,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               491             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               497             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               501         # Contract compatibility                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               508             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               517             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               532                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               538                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               549                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               555                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               561                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               566         if violations:                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               568                 "Universal Stage Reference validation failed",         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               569                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               570                     violations                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               800                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               819                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               924     ) -> "UniversalStageReferenceValidationReport":                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               926         return validate_universal_stage_reference(                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               942 # 9. Standalone validation                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               945 def validate_universal_stage_reference(                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               947 ) -> UniversalStageReferenceValidationReport:                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               954         return UniversalStageReferenceValidationReport(                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               955             is_valid=True,                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               956             violations=_EMPTY_TUPLE,                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               970         return UniversalStageReferenceValidationReport(                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               971             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               972             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               988         return UniversalStageReferenceValidationReport(                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               989             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               990             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               992                     exc.violations                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py              1003     return UniversalStageReferenceValidationReport(                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py              1004         is_valid=True,                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py              1005         violations=_EMPTY_TUPLE,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py              1022     "UniversalStageReferenceValidationReport",                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py              1024     "validate_universal_stage_reference",                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        191 # 4. Validation rules                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        214         violations: Tuple[str, ...] = (),                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        221         self.violations = tuple(                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        222             violations                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        324     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        332         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        344             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        353         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        364     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        372         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        385         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        396     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        406         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        420     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        435         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        450             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        460             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        479     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        486         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        496         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        510         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        516         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        562 # 7. Validation report                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        569 class UniversalStageResultValidationReport:                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        571     is_valid: bool                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        573     violations: Tuple[                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        589             "is_valid":                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        590                 self.is_valid,                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        592             "violations":                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        594                     self.violations                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        687         violations: list[str] = []                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        692             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        698             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        704             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        710             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        716             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        722             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        728             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        734             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        746             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        757             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        764             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        777             violations.extend(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        778                 exc.violations                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        791             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        797             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        805                 violations=violations,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        812             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        818             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        824             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        831             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        838             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        844             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        850             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        857                 violations=violations,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        864             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        869         # Contract compatibility                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        876             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        885             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        894             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        910                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        916                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        927                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        933                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        949                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        954                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        961                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        966                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        971                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1000                     violations.append(                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1008         if violations:                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1011                 "Universal Stage Result validation failed",            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1012                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1013                     violations                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1413                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1432                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1556     ) -> "UniversalStageResultValidationReport":                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1558         return validate_universal_stage_result(                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1575 # 9. Standalone validation                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1578 def validate_universal_stage_result(                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1580 ) -> UniversalStageResultValidationReport:                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1587         return UniversalStageResultValidationReport(                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1588             is_valid=True,                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1589             violations=_EMPTY_TUPLE,                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1603         return UniversalStageResultValidationReport(                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1604             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1605             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1622         return UniversalStageResultValidationReport(                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1623             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1624             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1626                     exc.violations                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1637     return UniversalStageResultValidationReport(                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1638         is_valid=True,                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1639         violations=_EMPTY_TUPLE,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1656     "UniversalStageResultValidationReport",                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1658     "validate_universal_stage_result",                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            121         violations: Tuple[str, ...] = (),                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            124         self.violations = tuple(violations)                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            223 # 6. Validation helpers                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            230     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            233         violations.append(f"{name} must be a string")                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            239         violations.append(f"{name} must be non-empty")                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            248     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            254         violations.append(f"{name} must be a string or None")          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            266     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            272         violations.append(f"{name} must be a list or tuple of strings")
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            279             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            287             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            302     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            308         violations.append(f"{name} must be a mapping")                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            319     violations: list[str],                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            323             violations.append(f"{name} is required")                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            327         violations.append(f"{name} must be an ISO-8601 string or None")
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            334             violations.append(f"{name} must be non-empty")             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            345         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            351         violations.append(                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            377 # 7. Validation report                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            381 class UniversalWorkflowValidationReport:                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            382     is_valid: bool                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            383     violations: Tuple[str, ...] = ()                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            389             "is_valid": self.is_valid,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            390             "violations": list(self.violations),                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            463         violations: list[str] = []                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            468             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            474             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            480             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            486             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            492             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            498             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            504             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            510             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            516             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            524             violations.extend(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            525                 exc.violations or (str(exc),)                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            532             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            538             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            544             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            550             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            556             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            562             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            568             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            574             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            580             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            586             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            592             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            598             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            604             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            610             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            617             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            624             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            631             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            638             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            645             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            652             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            658             violations=violations,                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            662             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            673                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            678                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            699                     violations.append(                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            708             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            716             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            724             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            732             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            740             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            748             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            756             violations.append(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            772                 violations.append(                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            776         if violations:                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            778                 "Universal Workflow Contract validation failed",       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            779                 violations=tuple(violations),                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            902                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            918                 violations=tuple(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            979     def validate(self) -> UniversalWorkflowValidationReport:           
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            980         return validate_universal_workflow(self)                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            990 # 9. Standalone validation                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            993 def validate_universal_workflow(                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            995 ) -> UniversalWorkflowValidationReport:                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            998         return UniversalWorkflowValidationReport(                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            999             is_valid=True,                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1000             violations=_EMPTY_TUPLE,                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1008         return UniversalWorkflowValidationReport(                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1009             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1010             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1019         return UniversalWorkflowValidationReport(                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1020             is_valid=False,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1021             violations=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1022                 tuple(exc.violations)                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1030     return UniversalWorkflowValidationReport(                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1031         is_valid=True,                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1032         violations=_EMPTY_TUPLE,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1048     "UniversalWorkflowValidationReport",                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1050     "validate_universal_workflow",                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py               85 # 2. Validation                                                        
+
+
+
+
+================================================================================
+SECTION 6 - EXISTING CROSS-REGISTRY / CROSS-CONTRACT CHECKS
+================================================================================
+
+Path                                                                                              LineNumber Line                                                                        
+----                                                                                              ---------- ----                                                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py            12     coordinator_id + coordinator_version                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           121     coordinator_version: str,                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           140         coordinator_version,                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           144             "coordinator_version must be a string"                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           152         coordinator_version.strip()                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           162             "coordinator_version must be non-empty"                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           254     Duplicate coordinator_id + coordinator_version identities are rejected. 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           281         coordinator_version=(                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           282             coordinator.coordinator_version                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           293                 f"{coordinator.coordinator_version}"                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           310     coordinator_version: str,                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           322         coordinator_version=coordinator_version,                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           332 def require_registered_coordinator(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           335     coordinator_version: str,                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           344             coordinator_version=coordinator_version,                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           353             f"{coordinator_version}"                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           359 def is_coordinator_registered(                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           362     coordinator_version: str,                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           368             coordinator_version=coordinator_version,                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           408                 item.coordinator_version,                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           414 def list_coordinators_for_workflow(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           511             "coordinator_version",                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           570                 "coordinator_version",                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           625     "require_registered_coordinator",                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           626     "is_coordinator_registered",                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\coordinator_registry\registry.py           629     "list_coordinators_for_workflow",                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py           23     UNIVERSAL_WORKFLOW_CONTRACT_VERSION,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          121     "coordinator_version",                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          124     "workflow_contract_version",                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          304     coordinator_version: str                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          308     workflow_contract_version: str                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          334         coordinator_version = _require_string(                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          335             self.coordinator_version,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          336             name="coordinator_version",                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          352         workflow_contract_version = _require_string(                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          353             self.workflow_contract_version,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          354             name="workflow_contract_version",                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          425             workflow_contract_version                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          426             != UNIVERSAL_WORKFLOW_CONTRACT_VERSION                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          429                 "workflow_contract_version must be "                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          430                 + UNIVERSAL_WORKFLOW_CONTRACT_VERSION                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          527             "coordinator_version",                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          528             coordinator_version,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          545             "workflow_contract_version",                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          546             workflow_contract_version,                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          626             "coordinator_version": self.coordinator_version,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          629             "workflow_contract_version": self.workflow_contract_version,    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          662                 "workflow_contract_version": (                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          663                     UNIVERSAL_WORKFLOW_CONTRACT_VERSION                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\pipeline_coordinators\contract.py          762             "coordinator_version": self.coordinator_version,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py                50     UNIVERSAL_WORKFLOW_CONTRACT_VERSION,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               139     "workflow_contract_version",                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               394     workflow_contract_version: str                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               441         workflow_contract_version = (                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               443                 self.workflow_contract_version,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               444                 name="workflow_contract_version",                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               505             workflow_contract_version                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               506             != UNIVERSAL_WORKFLOW_CONTRACT_VERSION                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               509                 "workflow_contract_version must be "                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               510                 + UNIVERSAL_WORKFLOW_CONTRACT_VERSION                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               600             "workflow_contract_version",                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               601             workflow_contract_version,                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               692             "workflow_contract_version": (                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               693                 self.workflow_contract_version                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               754                 "workflow_contract_version": (                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\contract.py               755                     UNIVERSAL_WORKFLOW_CONTRACT_VERSION                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py         65     UNIVERSAL_WORKFLOW_CONTRACT_VERSION,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        184     "workflow_contract_version",                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        671     workflow_contract_version: str = (                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        672         UNIVERSAL_WORKFLOW_CONTRACT_VERSION                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        847         workflow_contract_version = _require_name(                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        848             self.workflow_contract_version,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        849             name="workflow_contract_version",                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        873             workflow_contract_version                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        874             != UNIVERSAL_WORKFLOW_CONTRACT_VERSION                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        877                 "workflow_contract_version must be "                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py        878                 + UNIVERSAL_WORKFLOW_CONTRACT_VERSION                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1146             "workflow_contract_version",                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1147             workflow_contract_version,                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1302             "workflow_contract_version":                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1303                 self.workflow_contract_version,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1359                 "workflow_contract_version":                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py       1360                     UNIVERSAL_WORKFLOW_CONTRACT_VERSION,                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py             41 UNIVERSAL_WORKFLOW_CONTRACT_VERSION: Final[str] = (                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py             63     "coordinator_version",                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            384     contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            417     coordinator_version: str                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            460     contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            495         coordinator_version = _require_nonempty_string(                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            496             self.coordinator_version,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            497             name="coordinator_version",                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            661         if contract_version != UNIVERSAL_WORKFLOW_CONTRACT_VERSION:         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            664                 + UNIVERSAL_WORKFLOW_CONTRACT_VERSION                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            787         object.__setattr__(self, "coordinator_version", coordinator_version)
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            825             "coordinator_version": self.coordinator_version,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py            874                 "contract_version": UNIVERSAL_WORKFLOW_CONTRACT_VERSION,    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py           1042     "UNIVERSAL_WORKFLOW_CONTRACT_VERSION",                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py               67     UNIVERSAL_WORKFLOW_CONTRACT_VERSION,                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              330     workflow_contract_version: str                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              356         workflow_contract_version = (                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              358                 self.workflow_contract_version,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              359                 field_name="workflow_contract_version",                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              364             workflow_contract_version                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              365             != UNIVERSAL_WORKFLOW_CONTRACT_VERSION                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              369                 "workflow_contract_version must be "                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              370                 + UNIVERSAL_WORKFLOW_CONTRACT_VERSION                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              399             "workflow_contract_version",                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              400             workflow_contract_version,                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              438             "workflow_contract_version":                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              439                 self.workflow_contract_version,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              564     workflow_contract_version: str = (                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              565         UNIVERSAL_WORKFLOW_CONTRACT_VERSION                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              579         workflow_contract_version=(                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              580             workflow_contract_version                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              624 def require_registered_workflow(                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              649 def is_workflow_registered(                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              726         "workflow_contract_version":                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              727             UNIVERSAL_WORKFLOW_CONTRACT_VERSION,                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              822     "require_registered_workflow",                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_registry\registry.py              823     "is_workflow_registered",                                               
+
+
+
+
+================================================================================
+SECTION 7 - FROZEN HASH CHECK
+================================================================================
+
+2.1 Workflow Registry
+Path:     backend\server\coordination\workflow_registry\registry.py
+Expected: 34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Actual:   34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Match:    True
+
+2.2 Coordinator Registry
+Path:     backend\server\coordination\coordinator_registry\registry.py
+Expected: C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Actual:   C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Match:    True
+
+================================================================================
+SECTION 8 - PHASE 2.3 CANONICAL VALIDATION QUESTIONS
+================================================================================
+
+1. Does every registered coordinator reference an exact registered workflow?
+
+Expected:
+YES must be required by Phase 2.3.
+
+2. Must coordinator.workflow_type exactly match the registered workflow's
+   workflow_type?
+
+Expected:
+YES.
+
+3. Must coordinator.workflow_version exactly match the registered workflow's
+   workflow_version?
+
+Expected:
+YES.
+
+4. Must coordinator.workflow_contract_version exactly match the registered
+   Workflow Registry entry's workflow_contract_version?
+
+Expected:
+YES.
+
+5. Must the Workflow Registry entry itself use the currently frozen
+   Universal Workflow Contract version?
+
+Expected:
+YES, although Phase 2.1 already enforces this.
+
+6. Must a coordinator use the currently frozen Pipeline Coordinator Contract
+   version?
+
+Expected:
+YES, although Phase 2.2 already enforces this.
+
+7. Can multiple coordinator versions declare the same workflow?
+
+Expected:
+YES.
+Phase 2.3 validates consistency only.
+Phase 2.4 decides version/current/default policy.
+
+8. Should Phase 2.3 select which coordinator version to execute?
+
+Expected:
+NO.
+That belongs to Phase 2.4.
+
+9. Should Phase 2.3 validate Runtime Registration existence for stage_job_types?
+
+Expected:
+NO.
+That belongs to Runtime Integration / later registration validation scope,
+not this workflow/coordinator cross-registry layer.
+
+10. Should Phase 2.3 validate stage dependency ordering?
+
+Expected:
+NO.
+That belongs to Phase 4.
+
+11. Should Phase 2.3 import or invoke coordinator entrypoints?
+
+Expected:
+NO.
+
+12. Should Phase 2.3 create jobs or call Universal Runtime?
+
+Expected:
+NO.
+
+13. Should Phase 2.3 persist validation results?
+
+Expected:
+NO.
+Persistence is later framework scope.
+
+14. Should Phase 2.3 return deterministic validation evidence?
+
+Expected:
+YES.
+
+15. Should validation support:
+    - one coordinator against its workflow
+    - all registered coordinators
+    - registry-wide validation report
+
+Expected:
+YES.
+
+================================================================================
+SECTION 9 - PROPOSED PHASE 2.3 AUTHORITY BOUNDARY
+================================================================================
+
+Registration Validation OWNS:
+
+- Workflow Registry ↔ Coordinator Registry consistency checks
+- exact workflow existence validation
+- exact workflow identity agreement
+- Workflow Contract compatibility check
+- Pipeline Coordinator Contract compatibility check
+- deterministic validation result
+- deterministic registry-wide validation report
+- validation violations/evidence
+
+Registration Validation DOES NOT OWN:
+
+- workflow registration
+- coordinator registration
+- version selection
+- latest/default version
+- activation/deactivation
+- stage ordering
+- dependency graphs
+- Runtime Registration
+- runtime handler lookup
+- runtime job creation
+- coordinator invocation
+- workflow execution
+- lifecycle transitions
+- persistence
+- recovery
+
+================================================================================
+SCAN COMPLETE
+================================================================================
+
+No production files were modified.
+
+NEXT:
+Analyze findings and implement Phase 2.3 Registration Validation without
+modifying frozen Phase 2.1 or Phase 2.2 files.
+================================================================================

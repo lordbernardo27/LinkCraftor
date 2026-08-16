@@ -1,0 +1,1095 @@
+﻿================================================================================
+LINKCRAFTOR UNIVERSAL COORDINATION FRAMEWORK
+PHASE 2.5 - REGISTRATION CERTIFICATION DISCOVERY SCAN
+Generated: 2026-08-15 23:55:07
+================================================================================
+
+PURPOSE
+-------
+Prepare the integrated certification boundary for the complete Phase 2
+Workflow Registration subsystem:
+
+2.1 Workflow Registry
+2.2 Coordinator Registration
+2.3 Registration Validation
+2.4 Version Management
+
+Phase 2.5 should certify integration and authority boundaries.
+
+It should NOT introduce a fifth registration authority.
+
+This scan is READ-ONLY.
+No production files are modified.
+
+================================================================================
+SECTION 1 - PHASE 2 COMPONENT FILES
+================================================================================
+
+--------------------------------------------------------------------------------
+FILE: backend\server\coordination\workflow_registry\registry.py
+--------------------------------------------------------------------------------
+"""
+LinkCraftor Universal Coordination Framework
+Phase 2.1 - Workflow Registry
+============================================
+
+Canonical in-memory registry of known workflow definitions.
+
+Registry identity
+-----------------
+A workflow is uniquely identified by:
+
+    workflow_type + workflow_version
+
+Authority boundaries
+--------------------
+The Workflow Registry owns:
+- declaration that a workflow type/version exists;
+- exact workflow-version lookup;
+- duplicate identity rejection;
+- immutable workflow registry entries;
+- registry inspection/snapshot operations.
+
+The Workflow Registry does NOT own:
+- coordinator registration;
+- coordinator resolution;
+- stage ordering;
+- dependency graphs;
+- runnable-stage selection;
+- execution planning;
+- Runtime Registration;
+- runtime handlers;
+- runtime job creation;
+- workflow lifecycle state;
+- workflow execution state;
+- persistence;
+- version preference / latest-version selection;
+- workflow migration.
+
+Those responsibilities belong to later Universal Coordination
+Framework phases.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+
+from dataclasses import (
+    dataclass,
+    field,
+)
+
+from threading import RLock
+
+from types import MappingProxyType
+
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Optional,
+    Tuple,
+)
+
+from backend.server.coordination.universal_workflows.contract import (
+    UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+)
+
+
+# ============================================================================
+# 1. Registry identity
+# ============================================================================
+
+WORKFLOW_REGISTRY_VERSION: Final[str] = (
+    "workflow_registry_v2.1.0"
+)
+
+WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION: Final[str] = (
+    "workflow_registry_entry_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Validation
+# ============================================================================
+
+_NAME_PATTERN: Final[
+    re.Pattern[str]
+] = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:-]*$"
+)
+
+
+class WorkflowRegistryError(
+    ValueError
+):
+    """Base error for Workflow Registry failures."""
+
+
+class WorkflowAlreadyRegisteredError(
+    WorkflowRegistryError
+):
+    """Raised when an exact workflow identity already exists."""
+
+
+class WorkflowNotRegisteredError(
+    WorkflowRegistryError
+):
+    """Raised when an exact workflow identity cannot be resolved."""
+
+
+def _normalize_name(
+    value: Any,
+    *,
+    field_name: str,
+) -> str:
+
+    if not isinstance(
+        value,
+
+
+--------------------------------------------------------------------------------
+FILE: backend\server\coordination\coordinator_registry\registry.py
+--------------------------------------------------------------------------------
+"""
+LinkCraftor Universal Coordination Framework
+Phase 2.2 - Coordinator Registration
+============================================
+
+Canonical in-memory registry of Pipeline Coordinator Contracts.
+
+Coordinator registration identity
+---------------------------------
+A coordinator registration is uniquely identified by:
+
+    coordinator_id + coordinator_version
+
+Registered object
+-----------------
+The registered object is the frozen Phase 1.2
+PipelineCoordinatorContract itself.
+
+This registry intentionally does NOT copy the coordinator contract fields
+into another registration schema. The Phase 1.2 contract remains the
+single source of truth.
+
+Authority boundaries
+--------------------
+Coordinator Registration owns:
+- declaration that a coordinator identity/version exists;
+- exact coordinator-version registration;
+- exact coordinator-version lookup;
+- duplicate coordinator identity rejection;
+- immutable registry inspection;
+- deterministic listing;
+- inspection of coordinators declaring a workflow identity.
+
+Coordinator Registration does NOT own:
+- workflow existence validation;
+- workflow/coordinator cross-registration validation;
+- coordinator selection for execution;
+- latest/default coordinator selection;
+- coordinator activation/deactivation;
+- stage ordering;
+- dependency planning;
+- Runtime Registration;
+- runtime handler resolution;
+- runtime job creation;
+- coordinator invocation;
+- workflow execution;
+- lifecycle state;
+- persistence;
+- migration/version governance.
+
+Cross-registry validation belongs to Phase 2.3.
+Version selection/governance belongs to Phase 2.4.
+"""
+
+from __future__ import annotations
+
+from threading import RLock
+from types import MappingProxyType
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Optional,
+    Tuple,
+)
+
+from backend.server.coordination.pipeline_coordinators.contract import (
+    PIPELINE_COORDINATOR_CONTRACT_VERSION,
+    PipelineCoordinatorContract,
+)
+
+
+# ============================================================================
+# 1. Registry identity
+# ============================================================================
+
+COORDINATOR_REGISTRY_VERSION: Final[str] = (
+    "coordinator_registry_v2.2.0"
+)
+
+COORDINATOR_REGISTRY_SCHEMA_VERSION: Final[str] = (
+    "coordinator_registry_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Errors
+# ============================================================================
+
+class CoordinatorRegistryError(
+    ValueError
+):
+    """Base Coordinator Registry error."""
+
+
+class CoordinatorAlreadyRegisteredError(
+    CoordinatorRegistryError
+):
+    """Raised when an exact coordinator identity already exists."""
+
+
+class CoordinatorNotRegisteredError(
+    CoordinatorRegistryError
+):
+    """Raised when an exact coordinator identity cannot be resolved."""
+
+
+# ============================================================================
+# 3. Canonical identity
+# ============================================================================
+
+CoordinatorRegistryKey = Tuple[
+    str,
+    str,
+]
+
+
+def coordinator_registry_key(
+    *,
+    coordinator_id: str,
+
+
+--------------------------------------------------------------------------------
+FILE: backend\server\coordination\registration_validation\validator.py
+--------------------------------------------------------------------------------
+"""
+LinkCraftor Universal Coordination Framework
+Phase 2.3 - Registration Validation
+============================================
+
+Read-only validation layer across the frozen Workflow Registry and
+Coordinator Registry.
+
+Canonical validation direction
+------------------------------
+Every registered coordinator must reference an exact registered workflow.
+
+Validation checks:
+1. PipelineCoordinatorContract compatibility.
+2. Exact workflow existence.
+3. workflow_type agreement.
+4. workflow_version agreement.
+5. workflow_contract_version agreement.
+6. frozen Universal Workflow Contract compatibility.
+
+This phase validates consistency only.
+
+It does NOT:
+- register workflows;
+- register coordinators;
+- choose a coordinator version;
+- activate/deactivate coordinators;
+- inspect Runtime Registrations;
+- resolve runtime handlers;
+- execute coordinators;
+- create jobs;
+- order stages;
+- construct dependency graphs;
+- persist validation results.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from types import MappingProxyType
+
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Tuple,
+)
+
+from backend.server.coordination.universal_workflows.contract import (
+    UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+)
+
+from backend.server.coordination.pipeline_coordinators.contract import (
+    PIPELINE_COORDINATOR_CONTRACT_VERSION,
+    PipelineCoordinatorContract,
+)
+
+from backend.server.coordination.workflow_registry.registry import (
+    WORKFLOW_REGISTRY_VERSION,
+    WorkflowRegistryEntry,
+    get_registered_workflow,
+    list_registered_workflows,
+)
+
+from backend.server.coordination.coordinator_registry.registry import (
+    COORDINATOR_REGISTRY_VERSION,
+    get_registered_coordinator,
+    list_registered_coordinators,
+)
+
+
+# ============================================================================
+# 1. Component identity
+# ============================================================================
+
+REGISTRATION_VALIDATION_VERSION: Final[str] = (
+    "registration_validation_v2.3.0"
+)
+
+REGISTRATION_VALIDATION_SCHEMA_VERSION: Final[str] = (
+    "registration_validation_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Violation codes
+# ============================================================================
+
+VIOLATION_COORDINATOR_TYPE: Final[str] = (
+    "coordinator_type_invalid"
+)
+
+VIOLATION_COORDINATOR_CONTRACT_VERSION: Final[str] = (
+    "coordinator_contract_version_mismatch"
+)
+
+VIOLATION_WORKFLOW_NOT_REGISTERED: Final[str] = (
+    "workflow_not_registered"
+)
+
+VIOLATION_WORKFLOW_TYPE_MISMATCH: Final[str] = (
+    "workflow_type_mismatch"
+)
+
+VIOLATION_WORKFLOW_VERSION_MISMATCH: Final[str] = (
+    "workflow_version_mismatch"
+)
+
+VIOLATION_WORKFLOW_CONTRACT_MISMATCH: Final[str] = (
+    "workflow_contract_version_mismatch"
+)
+
+VIOLATION_UNIVERSAL_WORKFLOW_CONTRACT: Final[str] = (
+    "universal_workflow_contract_version_mismatch"
+)
+
+
+# ============================================================================
+# 3. Immutable helpers
+
+
+--------------------------------------------------------------------------------
+FILE: backend\server\coordination\version_management\manager.py
+--------------------------------------------------------------------------------
+"""
+LinkCraftor Universal Coordination Framework
+Phase 2.4 - Version Management
+============================================
+
+Explicit, in-memory version preference policy for registered workflows
+and registered coordinators.
+
+Canonical policy maps
+---------------------
+
+1. workflow_type
+       -> preferred workflow_version
+
+2. coordinator_id
+       -> preferred coordinator_version
+
+3. workflow_type + workflow_version
+       -> preferred coordinator_id + coordinator_version
+
+All selections are explicit.
+
+This component does NOT infer "latest", parse semantic versions, modify
+registries, execute coordinators, create Runtime jobs, persist preferences,
+or manage coordinator lifecycle/deprecation.
+"""
+
+from __future__ import annotations
+
+from threading import RLock
+from types import MappingProxyType
+
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Optional,
+    Tuple,
+)
+
+from backend.server.coordination.workflow_registry.registry import (
+    WORKFLOW_REGISTRY_VERSION,
+    WorkflowRegistryEntry,
+    get_registered_workflow,
+)
+
+from backend.server.coordination.coordinator_registry.registry import (
+    COORDINATOR_REGISTRY_VERSION,
+    get_registered_coordinator,
+)
+
+from backend.server.coordination.pipeline_coordinators.contract import (
+    PipelineCoordinatorContract,
+)
+
+from backend.server.coordination.registration_validation.validator import (
+    REGISTRATION_VALIDATION_VERSION,
+    validate_coordinator_registration,
+)
+
+
+# ============================================================================
+# 1. Component identity
+# ============================================================================
+
+VERSION_MANAGEMENT_VERSION: Final[str] = (
+    "version_management_v2.4.0"
+)
+
+VERSION_MANAGEMENT_SCHEMA_VERSION: Final[str] = (
+    "version_management_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Errors
+# ============================================================================
+
+class VersionManagementError(
+    ValueError
+):
+    """Base Version Management error."""
+
+
+class VersionPreferenceNotFoundError(
+    VersionManagementError
+):
+    """Raised when an explicit preference has not been declared."""
+
+
+class InvalidVersionPreferenceError(
+    VersionManagementError
+):
+    """Raised when a requested preference is not valid."""
+
+
+# ============================================================================
+# 3. Immutable helpers
+# ============================================================================
+
+def _freeze(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+
+        return MappingProxyType(
+            {
+                str(key): _freeze(item)
+                for key, item
+                in value.items()
+            }
+        )
+
+    if isinstance(
+        value,
+        list,
+
+
+================================================================================
+SECTION 2 - COMPONENT IDENTITIES
+================================================================================
+
+  backend\server\coordination\workflow_registry\registry.py:74:
+> backend\server\coordination\workflow_registry\registry.py:75:WORKFLOW_REGISTRY_VERSION: Final[str] = (
+  backend\server\coordination\workflow_registry\registry.py:76:    "workflow_registry_v2.1.0"
+  backend\server\coordination\workflow_registry\registry.py:77:)
+  backend\server\coordination\workflow_registry\registry.py:78:
+> backend\server\coordination\workflow_registry\registry.py:79:WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\workflow_registry\registry.py:80:    "workflow_registry_entry_schema_v1"
+  backend\server\coordination\workflow_registry\registry.py:81:)
+  backend\server\coordination\workflow_registry\registry.py:720:        "registry_version":
+> backend\server\coordination\workflow_registry\registry.py:721:            WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\workflow_registry\registry.py:722:
+> backend\server\coordination\workflow_registry\registry.py:723:        "entry_schema_version":
+> backend\server\coordination\workflow_registry\registry.py:724:            WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION,
+  backend\server\coordination\workflow_registry\registry.py:725:
+  backend\server\coordination\workflow_registry\registry.py:726:        "workflow_contract_version":
+  backend\server\coordination\workflow_registry\registry.py:773:            "version":
+> backend\server\coordination\workflow_registry\registry.py:774:                WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\workflow_registry\registry.py:775:
+  backend\server\coordination\workflow_registry\registry.py:776:            "canonical_identity": (
+  backend\server\coordination\workflow_registry\registry.py:810:__all__ = [
+> backend\server\coordination\workflow_registry\registry.py:811:    "WORKFLOW_REGISTRY_VERSION",
+> backend\server\coordination\workflow_registry\registry.py:812:    "WORKFLOW_REGISTRY_ENTRY_SCHEMA_VERSION",
+  backend\server\coordination\workflow_registry\registry.py:813:    "WorkflowRegistryKey",
+  backend\server\coordination\workflow_registry\registry.py:814:    "WorkflowRegistryEntry",
+  backend\server\coordination\coordinator_registry\registry.py:76:
+> backend\server\coordination\coordinator_registry\registry.py:77:COORDINATOR_REGISTRY_VERSION: Final[str] = (
+  backend\server\coordination\coordinator_registry\registry.py:78:    "coordinator_registry_v2.2.0"
+  backend\server\coordination\coordinator_registry\registry.py:79:)
+  backend\server\coordination\coordinator_registry\registry.py:80:
+> backend\server\coordination\coordinator_registry\registry.py:81:COORDINATOR_REGISTRY_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\coordinator_registry\registry.py:82:    "coordinator_registry_schema_v1"
+  backend\server\coordination\coordinator_registry\registry.py:83:)
+  backend\server\coordination\coordinator_registry\registry.py:500:        "registry_version":
+> backend\server\coordination\coordinator_registry\registry.py:501:            COORDINATOR_REGISTRY_VERSION,
+  backend\server\coordination\coordinator_registry\registry.py:502:
+> backend\server\coordination\coordinator_registry\registry.py:503:        "schema_version":
+> backend\server\coordination\coordinator_registry\registry.py:504:            COORDINATOR_REGISTRY_SCHEMA_VERSION,
+  backend\server\coordination\coordinator_registry\registry.py:505:
+  backend\server\coordination\coordinator_registry\registry.py:506:        "pipeline_coordinator_contract_version":
+  backend\server\coordination\coordinator_registry\registry.py:562:            "version":
+> backend\server\coordination\coordinator_registry\registry.py:563:                COORDINATOR_REGISTRY_VERSION,
+  backend\server\coordination\coordinator_registry\registry.py:564:
+  backend\server\coordination\coordinator_registry\registry.py:565:            "registered_object":
+  backend\server\coordination\coordinator_registry\registry.py:615:__all__ = [
+> backend\server\coordination\coordinator_registry\registry.py:616:    "COORDINATOR_REGISTRY_VERSION",
+> backend\server\coordination\coordinator_registry\registry.py:617:    "COORDINATOR_REGISTRY_SCHEMA_VERSION",
+  backend\server\coordination\coordinator_registry\registry.py:618:    "CoordinatorRegistryKey",
+  backend\server\coordination\coordinator_registry\registry.py:619:    "CoordinatorRegistryError",
+  backend\server\coordination\registration_validation\validator.py:59:from backend.server.coordination.workflow_registry.registry import (
+> backend\server\coordination\registration_validation\validator.py:60:    WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\registration_validation\validator.py:61:    WorkflowRegistryEntry,
+  backend\server\coordination\registration_validation\validator.py:62:    get_registered_workflow,
+  backend\server\coordination\registration_validation\validator.py:66:from backend.server.coordination.coordinator_registry.registry import (
+> backend\server\coordination\registration_validation\validator.py:67:    COORDINATOR_REGISTRY_VERSION,
+  backend\server\coordination\registration_validation\validator.py:68:    get_registered_coordinator,
+  backend\server\coordination\registration_validation\validator.py:69:    list_registered_coordinators,
+  backend\server\coordination\registration_validation\validator.py:76:
+> backend\server\coordination\registration_validation\validator.py:77:REGISTRATION_VALIDATION_VERSION: Final[str] = (
+  backend\server\coordination\registration_validation\validator.py:78:    "registration_validation_v2.3.0"
+  backend\server\coordination\registration_validation\validator.py:79:)
+  backend\server\coordination\registration_validation\validator.py:80:
+> backend\server\coordination\registration_validation\validator.py:81:REGISTRATION_VALIDATION_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\registration_validation\validator.py:82:    "registration_validation_schema_v1"
+  backend\server\coordination\registration_validation\validator.py:83:)
+  backend\server\coordination\registration_validation\validator.py:226:    validation_version: str = (
+> backend\server\coordination\registration_validation\validator.py:227:        REGISTRATION_VALIDATION_VERSION
+  backend\server\coordination\registration_validation\validator.py:228:    )
+  backend\server\coordination\registration_validation\validator.py:229:
+  backend\server\coordination\registration_validation\validator.py:702:        "validation_version":
+> backend\server\coordination\registration_validation\validator.py:703:            REGISTRATION_VALIDATION_VERSION,
+  backend\server\coordination\registration_validation\validator.py:704:
+> backend\server\coordination\registration_validation\validator.py:705:        "schema_version":
+> backend\server\coordination\registration_validation\validator.py:706:            REGISTRATION_VALIDATION_SCHEMA_VERSION,
+  backend\server\coordination\registration_validation\validator.py:707:
+> backend\server\coordination\registration_validation\validator.py:708:        "workflow_registry_version":
+> backend\server\coordination\registration_validation\validator.py:709:            WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\registration_validation\validator.py:710:
+> backend\server\coordination\registration_validation\validator.py:711:        "coordinator_registry_version":
+> backend\server\coordination\registration_validation\validator.py:712:            COORDINATOR_REGISTRY_VERSION,
+  backend\server\coordination\registration_validation\validator.py:713:
+  backend\server\coordination\registration_validation\validator.py:714:        "universal_workflow_contract_version":
+  backend\server\coordination\registration_validation\validator.py:810:            "version":
+> backend\server\coordination\registration_validation\validator.py:811:                REGISTRATION_VALIDATION_VERSION,
+  backend\server\coordination\registration_validation\validator.py:812:
+  backend\server\coordination\registration_validation\validator.py:813:            "validation_direction":
+  backend\server\coordination\registration_validation\validator.py:861:__all__ = [
+> backend\server\coordination\registration_validation\validator.py:862:    "REGISTRATION_VALIDATION_VERSION",
+> backend\server\coordination\registration_validation\validator.py:863:    "REGISTRATION_VALIDATION_SCHEMA_VERSION",
+  backend\server\coordination\registration_validation\validator.py:864:    "VIOLATION_COORDINATOR_TYPE",
+  backend\server\coordination\registration_validation\validator.py:865:    "VIOLATION_COORDINATOR_CONTRACT_VERSION",
+  backend\server\coordination\version_management\manager.py:41:from backend.server.coordination.workflow_registry.registry import (
+> backend\server\coordination\version_management\manager.py:42:    WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\version_management\manager.py:43:    WorkflowRegistryEntry,
+  backend\server\coordination\version_management\manager.py:44:    get_registered_workflow,
+  backend\server\coordination\version_management\manager.py:47:from backend.server.coordination.coordinator_registry.registry import (
+> backend\server\coordination\version_management\manager.py:48:    COORDINATOR_REGISTRY_VERSION,
+  backend\server\coordination\version_management\manager.py:49:    get_registered_coordinator,
+  backend\server\coordination\version_management\manager.py:50:)
+  backend\server\coordination\version_management\manager.py:56:from backend.server.coordination.registration_validation.validator import (
+> backend\server\coordination\version_management\manager.py:57:    REGISTRATION_VALIDATION_VERSION,
+  backend\server\coordination\version_management\manager.py:58:    validate_coordinator_registration,
+  backend\server\coordination\version_management\manager.py:59:)
+  backend\server\coordination\version_management\manager.py:65:
+> backend\server\coordination\version_management\manager.py:66:VERSION_MANAGEMENT_VERSION: Final[str] = (
+  backend\server\coordination\version_management\manager.py:67:    "version_management_v2.4.0"
+  backend\server\coordination\version_management\manager.py:68:)
+  backend\server\coordination\version_management\manager.py:69:
+> backend\server\coordination\version_management\manager.py:70:VERSION_MANAGEMENT_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\version_management\manager.py:71:    "version_management_schema_v1"
+  backend\server\coordination\version_management\manager.py:72:)
+  backend\server\coordination\version_management\manager.py:759:        {
+> backend\server\coordination\version_management\manager.py:760:            "version_management_version":
+> backend\server\coordination\version_management\manager.py:761:                VERSION_MANAGEMENT_VERSION,
+  backend\server\coordination\version_management\manager.py:762:
+> backend\server\coordination\version_management\manager.py:763:            "schema_version":
+> backend\server\coordination\version_management\manager.py:764:                VERSION_MANAGEMENT_SCHEMA_VERSION,
+  backend\server\coordination\version_management\manager.py:765:
+> backend\server\coordination\version_management\manager.py:766:            "workflow_registry_version":
+> backend\server\coordination\version_management\manager.py:767:                WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\version_management\manager.py:768:
+> backend\server\coordination\version_management\manager.py:769:            "coordinator_registry_version":
+> backend\server\coordination\version_management\manager.py:770:                COORDINATOR_REGISTRY_VERSION,
+  backend\server\coordination\version_management\manager.py:771:
+> backend\server\coordination\version_management\manager.py:772:            "registration_validation_version":
+> backend\server\coordination\version_management\manager.py:773:                REGISTRATION_VALIDATION_VERSION,
+  backend\server\coordination\version_management\manager.py:774:
+  backend\server\coordination\version_management\manager.py:775:            "workflow_preferences":
+  backend\server\coordination\version_management\manager.py:835:            "version":
+> backend\server\coordination\version_management\manager.py:836:                VERSION_MANAGEMENT_VERSION,
+  backend\server\coordination\version_management\manager.py:837:
+  backend\server\coordination\version_management\manager.py:838:            "selection_policy":
+  backend\server\coordination\version_management\manager.py:896:__all__ = [
+> backend\server\coordination\version_management\manager.py:897:    "VERSION_MANAGEMENT_VERSION",
+> backend\server\coordination\version_management\manager.py:898:    "VERSION_MANAGEMENT_SCHEMA_VERSION",
+  backend\server\coordination\version_management\manager.py:899:    "VersionManagementError",
+  backend\server\coordination\version_management\manager.py:900:    "VersionPreferenceNotFoundError",
+
+
+
+
+================================================================================
+SECTION 3 - CROSS-PHASE AUTHORITY REFERENCES
+================================================================================
+
+  backend\server\coordination\workflow_registry\registry.py:2:LinkCraftor Universal Coordination Framework
+> backend\server\coordination\workflow_registry\registry.py:3:Phase 2.1 - Workflow Registry
+  backend\server\coordination\workflow_registry\registry.py:4:============================================
+  backend\server\coordination\workflow_registry\registry.py:5:
+  backend\server\coordination\workflow_registry\registry.py:6:Canonical in-memory registry of known workflow definitions.
+  backend\server\coordination\workflow_registry\registry.py:15:--------------------
+> backend\server\coordination\workflow_registry\registry.py:16:The Workflow Registry owns:
+  backend\server\coordination\workflow_registry\registry.py:17:- declaration that a workflow type/version exists;
+  backend\server\coordination\workflow_registry\registry.py:18:- exact workflow-version lookup;
+  backend\server\coordination\workflow_registry\registry.py:19:- duplicate identity rejection;
+> backend\server\coordination\workflow_registry\registry.py:20:- immutable workflow registry entries;
+  backend\server\coordination\workflow_registry\registry.py:21:- registry inspection/snapshot operations.
+  backend\server\coordination\workflow_registry\registry.py:22:
+> backend\server\coordination\workflow_registry\registry.py:23:The Workflow Registry does NOT own:
+  backend\server\coordination\workflow_registry\registry.py:24:- coordinator registration;
+  backend\server\coordination\workflow_registry\registry.py:25:- coordinator resolution;
+  backend\server\coordination\workflow_registry\registry.py:26:- stage ordering;
+  backend\server\coordination\workflow_registry\registry.py:97:):
+> backend\server\coordination\workflow_registry\registry.py:98:    """Base error for Workflow Registry failures."""
+  backend\server\coordination\workflow_registry\registry.py:99:
+  backend\server\coordination\workflow_registry\registry.py:100:
+  backend\server\coordination\workflow_registry\registry.py:101:class WorkflowAlreadyRegisteredError(
+  backend\server\coordination\workflow_registry\registry.py:770:            "component":
+> backend\server\coordination\workflow_registry\registry.py:771:                "Workflow Registry",
+  backend\server\coordination\workflow_registry\registry.py:772:
+  backend\server\coordination\workflow_registry\registry.py:773:            "version":
+  backend\server\coordination\workflow_registry\registry.py:774:                WORKFLOW_REGISTRY_VERSION,
+  backend\server\coordination\workflow_registry\registry.py:780:
+> backend\server\coordination\workflow_registry\registry.py:781:            "owns": (
+  backend\server\coordination\workflow_registry\registry.py:782:                "workflow existence declaration",
+  backend\server\coordination\workflow_registry\registry.py:783:                "exact-version registration",
+  backend\server\coordination\workflow_registry\registry.py:784:                "exact-version lookup",
+  backend\server\coordination\workflow_registry\registry.py:789:
+> backend\server\coordination\workflow_registry\registry.py:790:            "does_not_own": (
+  backend\server\coordination\workflow_registry\registry.py:791:                "coordinator registration",
+  backend\server\coordination\workflow_registry\registry.py:792:                "coordinator resolution",
+  backend\server\coordination\workflow_registry\registry.py:793:                "stage ordering",
+  backend\server\coordination\coordinator_registry\registry.py:24:--------------------
+> backend\server\coordination\coordinator_registry\registry.py:25:Coordinator Registration owns:
+  backend\server\coordination\coordinator_registry\registry.py:26:- declaration that a coordinator identity/version exists;
+  backend\server\coordination\coordinator_registry\registry.py:27:- exact coordinator-version registration;
+  backend\server\coordination\coordinator_registry\registry.py:28:- exact coordinator-version lookup;
+  backend\server\coordination\coordinator_registry\registry.py:35:- workflow existence validation;
+> backend\server\coordination\coordinator_registry\registry.py:36:- workflow/coordinator cross-registration validation;
+  backend\server\coordination\coordinator_registry\registry.py:37:- coordinator selection for execution;
+  backend\server\coordination\coordinator_registry\registry.py:38:- latest/default coordinator selection;
+  backend\server\coordination\coordinator_registry\registry.py:39:- coordinator activation/deactivation;
+  backend\server\coordination\coordinator_registry\registry.py:92:):
+> backend\server\coordination\coordinator_registry\registry.py:93:    """Base Coordinator Registry error."""
+  backend\server\coordination\coordinator_registry\registry.py:94:
+  backend\server\coordination\coordinator_registry\registry.py:95:
+  backend\server\coordination\coordinator_registry\registry.py:96:class CoordinatorAlreadyRegisteredError(
+  backend\server\coordination\coordinator_registry\registry.py:123:    """
+> backend\server\coordination\coordinator_registry\registry.py:124:    Construct the exact coordinator registry key.
+  backend\server\coordination\coordinator_registry\registry.py:125:
+  backend\server\coordination\coordinator_registry\registry.py:126:    Validation is intentionally delegated to the frozen
+  backend\server\coordination\coordinator_registry\registry.py:127:    PipelineCoordinatorContract when contracts are registered.
+  backend\server\coordination\coordinator_registry\registry.py:572:
+> backend\server\coordination\coordinator_registry\registry.py:573:            "owns": (
+  backend\server\coordination\coordinator_registry\registry.py:574:                "coordinator existence declaration",
+  backend\server\coordination\coordinator_registry\registry.py:575:                "exact-version coordinator registration",
+  backend\server\coordination\coordinator_registry\registry.py:576:                "exact-version coordinator lookup",
+  backend\server\coordination\coordinator_registry\registry.py:581:
+> backend\server\coordination\coordinator_registry\registry.py:582:            "does_not_own": (
+  backend\server\coordination\coordinator_registry\registry.py:583:                "workflow existence validation",
+> backend\server\coordination\coordinator_registry\registry.py:584:                "workflow/coordinator cross-registration validation",
+  backend\server\coordination\coordinator_registry\registry.py:585:                "coordinator selection for execution",
+  backend\server\coordination\coordinator_registry\registry.py:586:                "latest coordinator selection",
+  backend\server\coordination\coordinator_registry\registry.py:587:                "default coordinator selection",
+  backend\server\coordination\coordinator_registry\registry.py:603:
+> backend\server\coordination\coordinator_registry\registry.py:604:            "future_authority": {
+  backend\server\coordination\coordinator_registry\registry.py:605:                "2.3":
+> backend\server\coordination\coordinator_registry\registry.py:606:                    "Registration Validation",
+  backend\server\coordination\coordinator_registry\registry.py:607:
+  backend\server\coordination\coordinator_registry\registry.py:608:                "2.4":
+> backend\server\coordination\coordinator_registry\registry.py:609:                    "Version Management",
+  backend\server\coordination\coordinator_registry\registry.py:610:            },
+  backend\server\coordination\coordinator_registry\registry.py:611:        }
+  backend\server\coordination\coordinator_registry\registry.py:612:    )
+  backend\server\coordination\registration_validation\validator.py:2:LinkCraftor Universal Coordination Framework
+> backend\server\coordination\registration_validation\validator.py:3:Phase 2.3 - Registration Validation
+  backend\server\coordination\registration_validation\validator.py:4:============================================
+  backend\server\coordination\registration_validation\validator.py:5:
+> backend\server\coordination\registration_validation\validator.py:6:Read-only validation layer across the frozen Workflow Registry and
+> backend\server\coordination\registration_validation\validator.py:7:Coordinator Registry.
+  backend\server\coordination\registration_validation\validator.py:8:
+  backend\server\coordination\registration_validation\validator.py:9:Canonical validation direction
+  backend\server\coordination\registration_validation\validator.py:10:------------------------------
+  backend\server\coordination\registration_validation\validator.py:288:    """
+> backend\server\coordination\registration_validation\validator.py:289:    Validate one coordinator declaration against the Workflow Registry.
+  backend\server\coordination\registration_validation\validator.py:290:
+  backend\server\coordination\registration_validation\validator.py:291:    This function performs no registration and no execution.
+  backend\server\coordination\registration_validation\validator.py:292:    """
+  backend\server\coordination\registration_validation\validator.py:453:                    "coordinator workflow_type does "
+> backend\server\coordination\registration_validation\validator.py:454:                    "not match Workflow Registry entry"
+  backend\server\coordination\registration_validation\validator.py:455:                ),
+  backend\server\coordination\registration_validation\validator.py:456:                field="workflow_type",
+  backend\server\coordination\registration_validation\validator.py:457:                expected=(
+  backend\server\coordination\registration_validation\validator.py:484:                    "coordinator workflow_version does "
+> backend\server\coordination\registration_validation\validator.py:485:                    "not match Workflow Registry entry"
+  backend\server\coordination\registration_validation\validator.py:486:                ),
+  backend\server\coordination\registration_validation\validator.py:487:                field="workflow_version",
+  backend\server\coordination\registration_validation\validator.py:488:                expected=(
+  backend\server\coordination\registration_validation\validator.py:515:                    "coordinator workflow_contract_version "
+> backend\server\coordination\registration_validation\validator.py:516:                    "does not match Workflow Registry entry"
+  backend\server\coordination\registration_validation\validator.py:517:                ),
+  backend\server\coordination\registration_validation\validator.py:518:                field="workflow_contract_version",
+  backend\server\coordination\registration_validation\validator.py:519:                expected=(
+  backend\server\coordination\registration_validation\validator.py:545:                message=(
+> backend\server\coordination\registration_validation\validator.py:546:                    "Workflow Registry entry does not use "
+  backend\server\coordination\registration_validation\validator.py:547:                    "the frozen Universal Workflow Contract"
+  backend\server\coordination\registration_validation\validator.py:548:                ),
+  backend\server\coordination\registration_validation\validator.py:549:                field="workflow_contract_version",
+  backend\server\coordination\registration_validation\validator.py:807:            "component":
+> backend\server\coordination\registration_validation\validator.py:808:                "Registration Validation",
+  backend\server\coordination\registration_validation\validator.py:809:
+  backend\server\coordination\registration_validation\validator.py:810:            "version":
+  backend\server\coordination\registration_validation\validator.py:811:                REGISTRATION_VALIDATION_VERSION,
+  backend\server\coordination\registration_validation\validator.py:815:
+> backend\server\coordination\registration_validation\validator.py:816:            "owns": (
+> backend\server\coordination\registration_validation\validator.py:817:                "Workflow Registry to Coordinator Registry consistency",
+  backend\server\coordination\registration_validation\validator.py:818:                "exact workflow existence validation",
+  backend\server\coordination\registration_validation\validator.py:819:                "exact workflow identity agreement",
+  backend\server\coordination\registration_validation\validator.py:820:                "Workflow Contract compatibility",
+  backend\server\coordination\registration_validation\validator.py:826:
+> backend\server\coordination\registration_validation\validator.py:827:            "does_not_own": (
+  backend\server\coordination\registration_validation\validator.py:828:                "workflow registration",
+  backend\server\coordination\registration_validation\validator.py:829:                "coordinator registration",
+  backend\server\coordination\registration_validation\validator.py:830:                "version selection",
+  backend\server\coordination\registration_validation\validator.py:846:
+> backend\server\coordination\registration_validation\validator.py:847:            "future_authority": {
+  backend\server\coordination\registration_validation\validator.py:848:                "2.4":
+> backend\server\coordination\registration_validation\validator.py:849:                    "Version Management",
+  backend\server\coordination\registration_validation\validator.py:850:
+  backend\server\coordination\registration_validation\validator.py:851:                "4.0":
+  backend\server\coordination\registration_validation\validator.py:852:                    "Dependency & Planning",
+  backend\server\coordination\version_management\manager.py:2:LinkCraftor Universal Coordination Framework
+> backend\server\coordination\version_management\manager.py:3:Phase 2.4 - Version Management
+  backend\server\coordination\version_management\manager.py:4:============================================
+  backend\server\coordination\version_management\manager.py:5:
+  backend\server\coordination\version_management\manager.py:6:Explicit, in-memory version preference policy for registered workflows
+  backend\server\coordination\version_management\manager.py:81:):
+> backend\server\coordination\version_management\manager.py:82:    """Base Version Management error."""
+  backend\server\coordination\version_management\manager.py:83:
+  backend\server\coordination\version_management\manager.py:84:
+  backend\server\coordination\version_management\manager.py:85:class VersionPreferenceNotFoundError(
+  backend\server\coordination\version_management\manager.py:305:            "preferred workflow version no longer "
+> backend\server\coordination\version_management\manager.py:306:            "resolves in Workflow Registry"
+  backend\server\coordination\version_management\manager.py:307:        )
+  backend\server\coordination\version_management\manager.py:308:
+  backend\server\coordination\version_management\manager.py:309:    return workflow
+  backend\server\coordination\version_management\manager.py:342:
+> backend\server\coordination\version_management\manager.py:343:    The selected coordinator must also pass Phase 2.3 Registration Validation.
+  backend\server\coordination\version_management\manager.py:344:    """
+  backend\server\coordination\version_management\manager.py:345:
+  backend\server\coordination\version_management\manager.py:346:    coordinator_id = _required_string(
+  backend\server\coordination\version_management\manager.py:439:            "preferred coordinator version no longer "
+> backend\server\coordination\version_management\manager.py:440:            "resolves in Coordinator Registry"
+  backend\server\coordination\version_management\manager.py:441:        )
+  backend\server\coordination\version_management\manager.py:442:
+  backend\server\coordination\version_management\manager.py:443:    validation = (
+  backend\server\coordination\version_management\manager.py:452:            "preferred coordinator no longer passes "
+> backend\server\coordination\version_management\manager.py:453:            "Phase 2.3 Registration Validation"
+  backend\server\coordination\version_management\manager.py:454:        )
+  backend\server\coordination\version_management\manager.py:455:
+  backend\server\coordination\version_management\manager.py:456:    return coordinator
+  backend\server\coordination\version_management\manager.py:565:            "workflow-bound preferred coordinator "
+> backend\server\coordination\version_management\manager.py:566:            "failed Phase 2.3 Registration Validation"
+  backend\server\coordination\version_management\manager.py:567:        )
+  backend\server\coordination\version_management\manager.py:568:
+  backend\server\coordination\version_management\manager.py:569:    key = (
+  backend\server\coordination\version_management\manager.py:650:            "preferred workflow coordinator no longer "
+> backend\server\coordination\version_management\manager.py:651:            "resolves in Coordinator Registry"
+  backend\server\coordination\version_management\manager.py:652:        )
+  backend\server\coordination\version_management\manager.py:653:
+  backend\server\coordination\version_management\manager.py:654:    if (
+  backend\server\coordination\version_management\manager.py:675:            "preferred workflow coordinator no longer "
+> backend\server\coordination\version_management\manager.py:676:            "passes Phase 2.3 Registration Validation"
+  backend\server\coordination\version_management\manager.py:677:        )
+  backend\server\coordination\version_management\manager.py:678:
+  backend\server\coordination\version_management\manager.py:679:    return coordinator
+  backend\server\coordination\version_management\manager.py:832:            "component":
+> backend\server\coordination\version_management\manager.py:833:                "Version Management",
+  backend\server\coordination\version_management\manager.py:834:
+  backend\server\coordination\version_management\manager.py:835:            "version":
+  backend\server\coordination\version_management\manager.py:836:                VERSION_MANAGEMENT_VERSION,
+  backend\server\coordination\version_management\manager.py:852:
+> backend\server\coordination\version_management\manager.py:853:            "owns": (
+  backend\server\coordination\version_management\manager.py:854:                "explicit workflow version preference",
+  backend\server\coordination\version_management\manager.py:855:                "explicit coordinator version preference",
+  backend\server\coordination\version_management\manager.py:856:                "explicit workflow-bound coordinator preference",
+  backend\server\coordination\version_management\manager.py:863:
+> backend\server\coordination\version_management\manager.py:864:            "does_not_own": (
+  backend\server\coordination\version_management\manager.py:865:                "workflow registration",
+  backend\server\coordination\version_management\manager.py:866:                "coordinator registration",
+> backend\server\coordination\version_management\manager.py:867:                "registration validation rules",
+  backend\server\coordination\version_management\manager.py:868:                "automatic latest inference",
+  backend\server\coordination\version_management\manager.py:869:                "semantic version parsing",
+  backend\server\coordination\version_management\manager.py:870:                "registry replacement",
+  backend\server\coordination\version_management\manager.py:884:
+> backend\server\coordination\version_management\manager.py:885:            "future_authority": {
+  backend\server\coordination\version_management\manager.py:886:                "8.0":
+  backend\server\coordination\version_management\manager.py:887:                    "Workflow State Persistence",
+  backend\server\coordination\version_management\manager.py:888:
+
+
+
+
+================================================================================
+SECTION 4 - FROZEN HASH INTEGRITY
+================================================================================
+
+2.1 Workflow Registry
+Path:     backend\server\coordination\workflow_registry\registry.py
+Expected: 34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Actual:   34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Match:    True
+
+2.2 Coordinator Registry
+Path:     backend\server\coordination\coordinator_registry\registry.py
+Expected: C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Actual:   C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Match:    True
+
+2.3 Registration Validation
+Path:     backend\server\coordination\registration_validation\validator.py
+Expected: 30853E34C6F09B89A2C67D50D91C06EB4B2436A12918DC4E26197EB6159E8453
+Actual:   30853E34C6F09B89A2C67D50D91C06EB4B2436A12918DC4E26197EB6159E8453
+Match:    True
+
+2.4 Version Management
+Path:     backend\server\coordination\version_management\manager.py
+Expected: 118B628ABFCA7CF74B218520D6CF6E0AD4AF2CD6FFE9FB7FE711927A68412E25
+Actual:   118B628ABFCA7CF74B218520D6CF6E0AD4AF2CD6FFE9FB7FE711927A68412E25
+Match:    True
+
+================================================================================
+SECTION 5 - PHASE 2.5 CANONICAL CERTIFICATION QUESTIONS
+================================================================================
+
+1. Does Phase 2.5 create another registry?
+
+Expected:
+NO.
+
+2. Does Phase 2.5 create another validator?
+
+Expected:
+NO.
+
+3. Does Phase 2.5 create another version-selection component?
+
+Expected:
+NO.
+
+4. Should Phase 2.5 execute workflows or coordinators?
+
+Expected:
+NO.
+
+5. Should Phase 2.5 create Universal Runtime jobs?
+
+Expected:
+NO.
+
+6. Should Phase 2.5 modify Runtime Registrations?
+
+Expected:
+NO.
+
+7. Should Phase 2.5 certify all four Phase-2 components together?
+
+Expected:
+YES.
+
+8. Should certification verify frozen component hashes?
+
+Expected:
+YES.
+
+9. Should certification verify imports and syntax?
+
+Expected:
+YES.
+
+10. Should certification verify exact Workflow Registry behavior?
+
+Expected:
+YES.
+
+11. Should certification verify exact Coordinator Registry behavior?
+
+Expected:
+YES.
+
+12. Should certification verify cross-registry validation?
+
+Expected:
+YES.
+
+13. Should certification verify version preference behavior?
+
+Expected:
+YES.
+
+14. Should certification verify that orphan coordinators are invalid?
+
+Expected:
+YES.
+
+15. Should certification verify that an invalid coordinator cannot become
+    preferred?
+
+Expected:
+YES.
+
+16. Should certification verify that multiple workflow/coordinator versions
+    can coexist?
+
+Expected:
+YES.
+
+17. Should certification verify no automatic latest inference?
+
+Expected:
+YES.
+
+18. Should certification verify that unbound workflows are not Phase-2
+    registration violations?
+
+Expected:
+YES.
+
+19. Should certification verify deterministic immutable snapshots/evidence?
+
+Expected:
+YES.
+
+20. Should certification verify Phase 2 contains no Runtime execution path?
+
+Expected:
+YES.
+
+21. Should certification modify any frozen component if all checks pass?
+
+Expected:
+NO.
+
+22. Should Phase 2.5 output a canonical integrated certification report?
+
+Expected:
+YES.
+
+================================================================================
+SECTION 6 - PROPOSED PHASE 2.5 AUTHORITY BOUNDARY
+================================================================================
+
+Registration Certification OWNS:
+
+- integrated verification of Phase 2.1 through Phase 2.4
+- frozen hash verification
+- component identity verification
+- syntax/import verification
+- registry behavior verification
+- cross-registry consistency verification
+- Version Management behavior verification
+- authority-boundary verification
+- integrated certification evidence/report
+- final Phase-2 certification verdict
+
+Registration Certification DOES NOT OWN:
+
+- workflow registration
+- coordinator registration
+- registration-validation rules
+- version preference mutation
+- version selection policy
+- Runtime Registration
+- handler lookup
+- runtime job creation
+- coordinator execution
+- workflow execution
+- stage ordering
+- dependency planning
+- workflow lifecycle
+- persistence
+- recovery
+- coordinator lifecycle
+
+================================================================================
+SECTION 7 - EXPECTED END STATE
+================================================================================
+
+If Phase 2.5 passes:
+
+PHASE 2.0 WORKFLOW REGISTRATION
+    STATUS: CERTIFIED + FROZEN
+
+Components:
+
+2.1 Workflow Registry
+2.2 Coordinator Registration
+2.3 Registration Validation
+2.4 Version Management
+2.5 Registration Certification
+
+Then proceed to:
+
+3.0 Workflow Lifecycle
+    3.1 Workflow State Machine
+
+================================================================================
+SCAN COMPLETE
+================================================================================
+
+No production files were modified.
+
+NEXT:
+Analyze this scan and build the integrated Phase 2.5 certification verifier.
+================================================================================
