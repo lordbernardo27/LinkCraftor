@@ -1,0 +1,1560 @@
+﻿================================================================================
+LINKCRAFTOR UNIVERSAL COORDINATION FRAMEWORK
+PHASE 3.1 - WORKFLOW STATE MACHINE DISCOVERY SCAN
+Generated: 2026-08-17 18:05:04
+================================================================================
+
+PURPOSE
+-------
+Determine the exact canonical authority and lifecycle model for:
+
+    3.1 Workflow State Machine
+
+using the already-frozen:
+
+1. Universal Workflow Contract - Phase 1.1
+2. Pipeline Coordinator Contract - Phase 1.2
+3. Workflow Registration subsystem - Phase 2.0
+
+This scan is READ-ONLY.
+
+No production files are modified.
+
+IMPORTANT PHASE BOUNDARY
+------------------------
+
+3.1 defines the state-machine MODEL.
+
+3.1 must NOT prematurely implement:
+
+- requested-transition validation          -> 3.2
+- lifecycle transition history            -> 3.3
+- terminal-state enforcement/protection   -> 3.4
+- persistence/checkpoint storage           -> Phase 8
+- failure/recovery policy                  -> Phase 9
+- Runtime execution                        -> Phase 5
+
+================================================================================
+SECTION 1 - FROZEN UNIVERSAL WORKFLOW STATUS MODEL
+================================================================================
+
+  backend\server\coordination\universal_workflows\contract.py:68:    "root_workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:69:
+  backend\server\coordination\universal_workflows\contract.py:70:    # Lifecycle
+> backend\server\coordination\universal_workflows\contract.py:71:    "status",
+  backend\server\coordination\universal_workflows\contract.py:72:
+  backend\server\coordination\universal_workflows\contract.py:73:    # Workflow data
+  backend\server\coordination\universal_workflows\contract.py:74:    "input_reference",
+  backend\server\coordination\universal_workflows\contract.py:75:    "context",
+  backend\server\coordination\universal_workflows\contract.py:76:    "metadata",
+  backend\server\coordination\universal_workflows\contract.py:77:
+  backend\server\coordination\universal_workflows\contract.py:78:    # Stage-state summaries
+  backend\server\coordination\universal_workflows\contract.py:79:    "current_stage",
+> backend\server\coordination\universal_workflows\contract.py:80:    "completed_stages",
+  backend\server\coordination\universal_workflows\contract.py:81:    "pending_stages",
+> backend\server\coordination\universal_workflows\contract.py:82:    "failed_stages",
+  backend\server\coordination\universal_workflows\contract.py:83:    "skipped_stages",
+  backend\server\coordination\universal_workflows\contract.py:84:
+  backend\server\coordination\universal_workflows\contract.py:85:    # Results / evidence
+  backend\server\coordination\universal_workflows\contract.py:86:    "result_reference",
+  backend\server\coordination\universal_workflows\contract.py:87:    "artifact_references",
+  backend\server\coordination\universal_workflows\contract.py:88:
+  backend\server\coordination\universal_workflows\contract.py:90:    "idempotency_key",
+  backend\server\coordination\universal_workflows\contract.py:91:
+  backend\server\coordination\universal_workflows\contract.py:92:    # Timestamps
+> backend\server\coordination\universal_workflows\contract.py:93:    "created_at",
+  backend\server\coordination\universal_workflows\contract.py:94:    "started_at",
+  backend\server\coordination\universal_workflows\contract.py:95:    "updated_at",
+> backend\server\coordination\universal_workflows\contract.py:96:    "completed_at",
+> backend\server\coordination\universal_workflows\contract.py:97:    "failed_at",
+> backend\server\coordination\universal_workflows\contract.py:98:    "cancelled_at",
+  backend\server\coordination\universal_workflows\contract.py:99:
+  backend\server\coordination\universal_workflows\contract.py:100:    # Failure
+  backend\server\coordination\universal_workflows\contract.py:101:    "failure_code",
+  backend\server\coordination\universal_workflows\contract.py:102:    "failure_message",
+  backend\server\coordination\universal_workflows\contract.py:103:    "failure_details",
+  backend\server\coordination\universal_workflows\contract.py:104:
+  backend\server\coordination\universal_workflows\contract.py:125:
+  backend\server\coordination\universal_workflows\contract.py:126:
+  backend\server\coordination\universal_workflows\contract.py:127:# ============================================================================
+> backend\server\coordination\universal_workflows\contract.py:128:# 4. Workflow lifecycle status
+  backend\server\coordination\universal_workflows\contract.py:129:# ============================================================================
+  backend\server\coordination\universal_workflows\contract.py:130:
+> backend\server\coordination\universal_workflows\contract.py:131:class UniversalWorkflowStatus(str, enum.Enum):
+> backend\server\coordination\universal_workflows\contract.py:132:    CREATED = "CREATED"
+> backend\server\coordination\universal_workflows\contract.py:133:    READY = "READY"
+> backend\server\coordination\universal_workflows\contract.py:134:    RUNNING = "RUNNING"
+> backend\server\coordination\universal_workflows\contract.py:135:    WAITING = "WAITING"
+> backend\server\coordination\universal_workflows\contract.py:136:    PAUSED = "PAUSED"
+> backend\server\coordination\universal_workflows\contract.py:137:    RECOVERING = "RECOVERING"
+> backend\server\coordination\universal_workflows\contract.py:138:    COMPLETED = "COMPLETED"
+> backend\server\coordination\universal_workflows\contract.py:139:    FAILED = "FAILED"
+> backend\server\coordination\universal_workflows\contract.py:140:    CANCELLED = "CANCELLED"
+> backend\server\coordination\universal_workflows\contract.py:141:    ABORTED = "ABORTED"
+  backend\server\coordination\universal_workflows\contract.py:142:
+  backend\server\coordination\universal_workflows\contract.py:143:    @classmethod
+> backend\server\coordination\universal_workflows\contract.py:144:    def coerce(cls, value: Any) -> "UniversalWorkflowStatus":
+  backend\server\coordination\universal_workflows\contract.py:145:        if isinstance(value, cls):
+  backend\server\coordination\universal_workflows\contract.py:146:            return value
+  backend\server\coordination\universal_workflows\contract.py:147:
+  backend\server\coordination\universal_workflows\contract.py:148:        if not isinstance(value, str):
+  backend\server\coordination\universal_workflows\contract.py:149:            raise UniversalWorkflowContractError(
+> backend\server\coordination\universal_workflows\contract.py:150:                "workflow status must be a string or UniversalWorkflowStatus"
+  backend\server\coordination\universal_workflows\contract.py:151:            )
+  backend\server\coordination\universal_workflows\contract.py:152:
+  backend\server\coordination\universal_workflows\contract.py:153:        normalized = value.strip().upper()
+  backend\server\coordination\universal_workflows\contract.py:154:
+  backend\server\coordination\universal_workflows\contract.py:155:        try:
+  backend\server\coordination\universal_workflows\contract.py:156:            return cls(normalized)
+  backend\server\coordination\universal_workflows\contract.py:157:        except ValueError as exc:
+  backend\server\coordination\universal_workflows\contract.py:158:            raise UniversalWorkflowContractError(
+> backend\server\coordination\universal_workflows\contract.py:159:                f"unknown workflow status: {value!r}"
+  backend\server\coordination\universal_workflows\contract.py:160:            ) from exc
+  backend\server\coordination\universal_workflows\contract.py:161:
+  backend\server\coordination\universal_workflows\contract.py:162:
+> backend\server\coordination\universal_workflows\contract.py:163:TERMINAL_WORKFLOW_STATUSES: Final[frozenset[UniversalWorkflowStatus]] = (
+  backend\server\coordination\universal_workflows\contract.py:164:    frozenset(
+  backend\server\coordination\universal_workflows\contract.py:165:        {
+> backend\server\coordination\universal_workflows\contract.py:166:            UniversalWorkflowStatus.COMPLETED,
+> backend\server\coordination\universal_workflows\contract.py:167:            UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\universal_workflows\contract.py:168:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\universal_workflows\contract.py:169:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\universal_workflows\contract.py:170:        }
+  backend\server\coordination\universal_workflows\contract.py:171:    )
+  backend\server\coordination\universal_workflows\contract.py:172:)
+  backend\server\coordination\universal_workflows\contract.py:173:
+  backend\server\coordination\universal_workflows\contract.py:174:
+  backend\server\coordination\universal_workflows\contract.py:175:# ============================================================================
+  backend\server\coordination\universal_workflows\contract.py:422:    root_workflow_id: str
+  backend\server\coordination\universal_workflows\contract.py:423:
+  backend\server\coordination\universal_workflows\contract.py:424:    # Lifecycle
+> backend\server\coordination\universal_workflows\contract.py:425:    status: UniversalWorkflowStatus
+  backend\server\coordination\universal_workflows\contract.py:426:
+  backend\server\coordination\universal_workflows\contract.py:427:    # Workflow input/context
+  backend\server\coordination\universal_workflows\contract.py:428:    input_reference: Optional[str]
+  backend\server\coordination\universal_workflows\contract.py:429:    context: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:430:    metadata: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:431:
+  backend\server\coordination\universal_workflows\contract.py:432:    # Stage summaries
+  backend\server\coordination\universal_workflows\contract.py:433:    current_stage: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:434:    completed_stages: Tuple[str, ...] = ()
+  backend\server\coordination\universal_workflows\contract.py:435:    pending_stages: Tuple[str, ...] = ()
+> backend\server\coordination\universal_workflows\contract.py:436:    failed_stages: Tuple[str, ...] = ()
+  backend\server\coordination\universal_workflows\contract.py:437:    skipped_stages: Tuple[str, ...] = ()
+  backend\server\coordination\universal_workflows\contract.py:438:
+  backend\server\coordination\universal_workflows\contract.py:439:    # Result/evidence
+  backend\server\coordination\universal_workflows\contract.py:440:    result_reference: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:441:    artifact_references: Tuple[str, ...] = ()
+  backend\server\coordination\universal_workflows\contract.py:442:
+  backend\server\coordination\universal_workflows\contract.py:444:    idempotency_key: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:445:
+  backend\server\coordination\universal_workflows\contract.py:446:    # Timestamps
+> backend\server\coordination\universal_workflows\contract.py:447:    created_at: str = ""
+  backend\server\coordination\universal_workflows\contract.py:448:    started_at: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:449:    updated_at: str = ""
+> backend\server\coordination\universal_workflows\contract.py:450:    completed_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:451:    failed_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:452:    cancelled_at: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:453:
+  backend\server\coordination\universal_workflows\contract.py:454:    # Failure
+  backend\server\coordination\universal_workflows\contract.py:455:    failure_code: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:456:    failure_message: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:457:    failure_details: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:458:
+  backend\server\coordination\universal_workflows\contract.py:517:        )
+  backend\server\coordination\universal_workflows\contract.py:518:
+  backend\server\coordination\universal_workflows\contract.py:519:        try:
+> backend\server\coordination\universal_workflows\contract.py:520:            status = UniversalWorkflowStatus.coerce(
+> backend\server\coordination\universal_workflows\contract.py:521:                self.status
+  backend\server\coordination\universal_workflows\contract.py:522:            )
+  backend\server\coordination\universal_workflows\contract.py:523:        except UniversalWorkflowContractError as exc:
+  backend\server\coordination\universal_workflows\contract.py:524:            violations.extend(
+  backend\server\coordination\universal_workflows\contract.py:525:                exc.violations or (str(exc),)
+  backend\server\coordination\universal_workflows\contract.py:526:            )
+> backend\server\coordination\universal_workflows\contract.py:527:            status = UniversalWorkflowStatus.CREATED
+  backend\server\coordination\universal_workflows\contract.py:528:
+  backend\server\coordination\universal_workflows\contract.py:529:        input_reference = _optional_string(
+  backend\server\coordination\universal_workflows\contract.py:530:            self.input_reference,
+  backend\server\coordination\universal_workflows\contract.py:531:            name="input_reference",
+  backend\server\coordination\universal_workflows\contract.py:532:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:533:        )
+  backend\server\coordination\universal_workflows\contract.py:580:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:581:        )
+  backend\server\coordination\universal_workflows\contract.py:582:
+> backend\server\coordination\universal_workflows\contract.py:583:        completed_stages = _normalize_string_tuple(
+> backend\server\coordination\universal_workflows\contract.py:584:            self.completed_stages,
+> backend\server\coordination\universal_workflows\contract.py:585:            name="completed_stages",
+  backend\server\coordination\universal_workflows\contract.py:586:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:587:        )
+  backend\server\coordination\universal_workflows\contract.py:588:
+  backend\server\coordination\universal_workflows\contract.py:589:        pending_stages = _normalize_string_tuple(
+  backend\server\coordination\universal_workflows\contract.py:590:            self.pending_stages,
+  backend\server\coordination\universal_workflows\contract.py:591:            name="pending_stages",
+  backend\server\coordination\universal_workflows\contract.py:592:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:593:        )
+  backend\server\coordination\universal_workflows\contract.py:594:
+> backend\server\coordination\universal_workflows\contract.py:595:        failed_stages = _normalize_string_tuple(
+> backend\server\coordination\universal_workflows\contract.py:596:            self.failed_stages,
+> backend\server\coordination\universal_workflows\contract.py:597:            name="failed_stages",
+  backend\server\coordination\universal_workflows\contract.py:598:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:599:        )
+  backend\server\coordination\universal_workflows\contract.py:600:
+  backend\server\coordination\universal_workflows\contract.py:601:        skipped_stages = _normalize_string_tuple(
+  backend\server\coordination\universal_workflows\contract.py:602:            self.skipped_stages,
+  backend\server\coordination\universal_workflows\contract.py:603:            name="skipped_stages",
+  backend\server\coordination\universal_workflows\contract.py:610:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:611:        )
+  backend\server\coordination\universal_workflows\contract.py:612:
+> backend\server\coordination\universal_workflows\contract.py:613:        created_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:614:            self.created_at,
+> backend\server\coordination\universal_workflows\contract.py:615:            name="created_at",
+  backend\server\coordination\universal_workflows\contract.py:616:            required=True,
+  backend\server\coordination\universal_workflows\contract.py:617:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:618:        )
+  backend\server\coordination\universal_workflows\contract.py:619:
+  backend\server\coordination\universal_workflows\contract.py:620:        updated_at = _normalize_timestamp(
+  backend\server\coordination\universal_workflows\contract.py:621:            self.updated_at,
+  backend\server\coordination\universal_workflows\contract.py:631:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:632:        )
+  backend\server\coordination\universal_workflows\contract.py:633:
+> backend\server\coordination\universal_workflows\contract.py:634:        completed_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:635:            self.completed_at,
+> backend\server\coordination\universal_workflows\contract.py:636:            name="completed_at",
+  backend\server\coordination\universal_workflows\contract.py:637:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:638:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:639:        )
+  backend\server\coordination\universal_workflows\contract.py:640:
+> backend\server\coordination\universal_workflows\contract.py:641:        failed_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:642:            self.failed_at,
+> backend\server\coordination\universal_workflows\contract.py:643:            name="failed_at",
+  backend\server\coordination\universal_workflows\contract.py:644:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:645:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:646:        )
+  backend\server\coordination\universal_workflows\contract.py:647:
+> backend\server\coordination\universal_workflows\contract.py:648:        cancelled_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:649:            self.cancelled_at,
+> backend\server\coordination\universal_workflows\contract.py:650:            name="cancelled_at",
+  backend\server\coordination\universal_workflows\contract.py:651:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:652:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:653:        )
+  backend\server\coordination\universal_workflows\contract.py:654:
+  backend\server\coordination\universal_workflows\contract.py:655:        contract_version = _require_nonempty_string(
+  backend\server\coordination\universal_workflows\contract.py:656:            self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:680:                )
+  backend\server\coordination\universal_workflows\contract.py:681:
+  backend\server\coordination\universal_workflows\contract.py:682:        stage_sets = {
+> backend\server\coordination\universal_workflows\contract.py:683:            "completed": set(completed_stages),
+  backend\server\coordination\universal_workflows\contract.py:684:            "pending": set(pending_stages),
+> backend\server\coordination\universal_workflows\contract.py:685:            "failed": set(failed_stages),
+  backend\server\coordination\universal_workflows\contract.py:686:            "skipped": set(skipped_stages),
+  backend\server\coordination\universal_workflows\contract.py:687:        }
+  backend\server\coordination\universal_workflows\contract.py:688:
+  backend\server\coordination\universal_workflows\contract.py:689:        names = tuple(stage_sets)
+  backend\server\coordination\universal_workflows\contract.py:690:
+  backend\server\coordination\universal_workflows\contract.py:691:        for index, left_name in enumerate(names):
+  backend\server\coordination\universal_workflows\contract.py:703:
+  backend\server\coordination\universal_workflows\contract.py:704:        if (
+  backend\server\coordination\universal_workflows\contract.py:705:            current_stage is not None
+> backend\server\coordination\universal_workflows\contract.py:706:            and current_stage in set(completed_stages)
+  backend\server\coordination\universal_workflows\contract.py:707:        ):
+  backend\server\coordination\universal_workflows\contract.py:708:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:709:                "current_stage cannot already be completed"
+  backend\server\coordination\universal_workflows\contract.py:710:            )
+  backend\server\coordination\universal_workflows\contract.py:711:
+  backend\server\coordination\universal_workflows\contract.py:712:        if (
+  backend\server\coordination\universal_workflows\contract.py:713:            current_stage is not None
+> backend\server\coordination\universal_workflows\contract.py:714:            and current_stage in set(failed_stages)
+  backend\server\coordination\universal_workflows\contract.py:715:        ):
+  backend\server\coordination\universal_workflows\contract.py:716:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:717:                "current_stage cannot already be failed"
+  backend\server\coordination\universal_workflows\contract.py:718:            )
+  backend\server\coordination\universal_workflows\contract.py:719:
+  backend\server\coordination\universal_workflows\contract.py:720:        if (
+> backend\server\coordination\universal_workflows\contract.py:721:            status == UniversalWorkflowStatus.COMPLETED
+> backend\server\coordination\universal_workflows\contract.py:722:            and completed_at is None
+  backend\server\coordination\universal_workflows\contract.py:723:        ):
+  backend\server\coordination\universal_workflows\contract.py:724:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:725:                "completed_at is required when status is COMPLETED"
+  backend\server\coordination\universal_workflows\contract.py:726:            )
+  backend\server\coordination\universal_workflows\contract.py:727:
+  backend\server\coordination\universal_workflows\contract.py:728:        if (
+> backend\server\coordination\universal_workflows\contract.py:729:            status == UniversalWorkflowStatus.FAILED
+> backend\server\coordination\universal_workflows\contract.py:730:            and failed_at is None
+  backend\server\coordination\universal_workflows\contract.py:731:        ):
+  backend\server\coordination\universal_workflows\contract.py:732:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:733:                "failed_at is required when status is FAILED"
+  backend\server\coordination\universal_workflows\contract.py:734:            )
+  backend\server\coordination\universal_workflows\contract.py:735:
+  backend\server\coordination\universal_workflows\contract.py:736:        if (
+> backend\server\coordination\universal_workflows\contract.py:737:            status == UniversalWorkflowStatus.CANCELLED
+> backend\server\coordination\universal_workflows\contract.py:738:            and cancelled_at is None
+  backend\server\coordination\universal_workflows\contract.py:739:        ):
+  backend\server\coordination\universal_workflows\contract.py:740:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:741:                "cancelled_at is required when status is CANCELLED"
+  backend\server\coordination\universal_workflows\contract.py:742:            )
+  backend\server\coordination\universal_workflows\contract.py:743:
+  backend\server\coordination\universal_workflows\contract.py:744:        if (
+> backend\server\coordination\universal_workflows\contract.py:745:            status == UniversalWorkflowStatus.FAILED
+  backend\server\coordination\universal_workflows\contract.py:746:            and failure_code is None
+  backend\server\coordination\universal_workflows\contract.py:747:        ):
+  backend\server\coordination\universal_workflows\contract.py:748:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:749:                "failure_code is required when status is FAILED"
+  backend\server\coordination\universal_workflows\contract.py:750:            )
+  backend\server\coordination\universal_workflows\contract.py:751:
+  backend\server\coordination\universal_workflows\contract.py:752:        if (
+> backend\server\coordination\universal_workflows\contract.py:753:            status == UniversalWorkflowStatus.COMPLETED
+> backend\server\coordination\universal_workflows\contract.py:754:            and failed_stages
+  backend\server\coordination\universal_workflows\contract.py:755:        ):
+  backend\server\coordination\universal_workflows\contract.py:756:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:757:                "COMPLETED workflow cannot contain failed_stages"
+  backend\server\coordination\universal_workflows\contract.py:758:            )
+  backend\server\coordination\universal_workflows\contract.py:759:
+  backend\server\coordination\universal_workflows\contract.py:760:        if (
+> backend\server\coordination\universal_workflows\contract.py:761:            created_at is not None
+  backend\server\coordination\universal_workflows\contract.py:762:            and updated_at is not None
+  backend\server\coordination\universal_workflows\contract.py:763:        ):
+> backend\server\coordination\universal_workflows\contract.py:764:            created_dt = datetime.fromisoformat(
+> backend\server\coordination\universal_workflows\contract.py:765:                created_at.replace("Z", "+00:00")
+  backend\server\coordination\universal_workflows\contract.py:766:            )
+  backend\server\coordination\universal_workflows\contract.py:767:            updated_dt = datetime.fromisoformat(
+  backend\server\coordination\universal_workflows\contract.py:768:                updated_at.replace("Z", "+00:00")
+  backend\server\coordination\universal_workflows\contract.py:769:            )
+  backend\server\coordination\universal_workflows\contract.py:770:
+> backend\server\coordination\universal_workflows\contract.py:771:            if updated_dt < created_dt:
+  backend\server\coordination\universal_workflows\contract.py:772:                violations.append(
+> backend\server\coordination\universal_workflows\contract.py:773:                    "updated_at cannot be earlier than created_at"
+  backend\server\coordination\universal_workflows\contract.py:774:                )
+  backend\server\coordination\universal_workflows\contract.py:775:
+  backend\server\coordination\universal_workflows\contract.py:776:        if violations:
+  backend\server\coordination\universal_workflows\contract.py:777:            raise UniversalWorkflowContractError(
+> backend\server\coordination\universal_workflows\contract.py:778:                "Universal Workflow Contract validation failed",
+  backend\server\coordination\universal_workflows\contract.py:779:                violations=tuple(violations),
+  backend\server\coordination\universal_workflows\contract.py:780:            )
+  backend\server\coordination\universal_workflows\contract.py:781:
+  backend\server\coordination\universal_workflows\contract.py:782:        object.__setattr__(self, "workflow_id", workflow_id)
+  backend\server\coordination\universal_workflows\contract.py:783:        object.__setattr__(self, "workflow_type", workflow_type)
+  backend\server\coordination\universal_workflows\contract.py:784:        object.__setattr__(self, "workflow_version", workflow_version)
+  backend\server\coordination\universal_workflows\contract.py:788:        object.__setattr__(self, "correlation_id", correlation_id)
+  backend\server\coordination\universal_workflows\contract.py:789:        object.__setattr__(self, "parent_workflow_id", parent_workflow_id)
+  backend\server\coordination\universal_workflows\contract.py:790:        object.__setattr__(self, "root_workflow_id", root_workflow_id)
+> backend\server\coordination\universal_workflows\contract.py:791:        object.__setattr__(self, "status", status)
+  backend\server\coordination\universal_workflows\contract.py:792:        object.__setattr__(self, "input_reference", input_reference)
+  backend\server\coordination\universal_workflows\contract.py:793:        object.__setattr__(self, "context", context)
+  backend\server\coordination\universal_workflows\contract.py:794:        object.__setattr__(self, "metadata", metadata)
+  backend\server\coordination\universal_workflows\contract.py:795:        object.__setattr__(self, "current_stage", current_stage)
+> backend\server\coordination\universal_workflows\contract.py:796:        object.__setattr__(self, "completed_stages", completed_stages)
+  backend\server\coordination\universal_workflows\contract.py:797:        object.__setattr__(self, "pending_stages", pending_stages)
+> backend\server\coordination\universal_workflows\contract.py:798:        object.__setattr__(self, "failed_stages", failed_stages)
+  backend\server\coordination\universal_workflows\contract.py:799:        object.__setattr__(self, "skipped_stages", skipped_stages)
+  backend\server\coordination\universal_workflows\contract.py:800:        object.__setattr__(self, "result_reference", result_reference)
+  backend\server\coordination\universal_workflows\contract.py:801:        object.__setattr__(self, "artifact_references", artifact_references)
+  backend\server\coordination\universal_workflows\contract.py:802:        object.__setattr__(self, "idempotency_key", idempotency_key)
+> backend\server\coordination\universal_workflows\contract.py:803:        object.__setattr__(self, "created_at", created_at)
+  backend\server\coordination\universal_workflows\contract.py:804:        object.__setattr__(self, "started_at", started_at)
+  backend\server\coordination\universal_workflows\contract.py:805:        object.__setattr__(self, "updated_at", updated_at)
+> backend\server\coordination\universal_workflows\contract.py:806:        object.__setattr__(self, "completed_at", completed_at)
+> backend\server\coordination\universal_workflows\contract.py:807:        object.__setattr__(self, "failed_at", failed_at)
+> backend\server\coordination\universal_workflows\contract.py:808:        object.__setattr__(self, "cancelled_at", cancelled_at)
+  backend\server\coordination\universal_workflows\contract.py:809:        object.__setattr__(self, "failure_code", failure_code)
+  backend\server\coordination\universal_workflows\contract.py:810:        object.__setattr__(self, "failure_message", failure_message)
+  backend\server\coordination\universal_workflows\contract.py:811:        object.__setattr__(self, "failure_details", failure_details)
+  backend\server\coordination\universal_workflows\contract.py:812:        object.__setattr__(self, "contract_version", contract_version)
+  backend\server\coordination\universal_workflows\contract.py:813:
+  backend\server\coordination\universal_workflows\contract.py:814:    # ======================================================================
+  backend\server\coordination\universal_workflows\contract.py:826:            "correlation_id": self.correlation_id,
+  backend\server\coordination\universal_workflows\contract.py:827:            "parent_workflow_id": self.parent_workflow_id,
+  backend\server\coordination\universal_workflows\contract.py:828:            "root_workflow_id": self.root_workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:829:            "status": self.status.value,
+  backend\server\coordination\universal_workflows\contract.py:830:            "input_reference": self.input_reference,
+  backend\server\coordination\universal_workflows\contract.py:831:            "context": _thaw(self.context),
+  backend\server\coordination\universal_workflows\contract.py:832:            "metadata": _thaw(self.metadata),
+  backend\server\coordination\universal_workflows\contract.py:833:            "current_stage": self.current_stage,
+> backend\server\coordination\universal_workflows\contract.py:834:            "completed_stages": list(self.completed_stages),
+  backend\server\coordination\universal_workflows\contract.py:835:            "pending_stages": list(self.pending_stages),
+> backend\server\coordination\universal_workflows\contract.py:836:            "failed_stages": list(self.failed_stages),
+  backend\server\coordination\universal_workflows\contract.py:837:            "skipped_stages": list(self.skipped_stages),
+  backend\server\coordination\universal_workflows\contract.py:838:            "result_reference": self.result_reference,
+  backend\server\coordination\universal_workflows\contract.py:839:            "artifact_references": list(self.artifact_references),
+  backend\server\coordination\universal_workflows\contract.py:840:            "idempotency_key": self.idempotency_key,
+> backend\server\coordination\universal_workflows\contract.py:841:            "created_at": self.created_at,
+  backend\server\coordination\universal_workflows\contract.py:842:            "started_at": self.started_at,
+  backend\server\coordination\universal_workflows\contract.py:843:            "updated_at": self.updated_at,
+> backend\server\coordination\universal_workflows\contract.py:844:            "completed_at": self.completed_at,
+> backend\server\coordination\universal_workflows\contract.py:845:            "failed_at": self.failed_at,
+> backend\server\coordination\universal_workflows\contract.py:846:            "cancelled_at": self.cancelled_at,
+  backend\server\coordination\universal_workflows\contract.py:847:            "failure_code": self.failure_code,
+  backend\server\coordination\universal_workflows\contract.py:848:            "failure_message": self.failure_message,
+  backend\server\coordination\universal_workflows\contract.py:849:            "failure_details": _thaw(self.failure_details),
+  backend\server\coordination\universal_workflows\contract.py:850:            "contract_version": self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:851:        }
+  backend\server\coordination\universal_workflows\contract.py:852:
+  backend\server\coordination\universal_workflows\contract.py:923:
+  backend\server\coordination\universal_workflows\contract.py:924:        kwargs = dict(data)
+  backend\server\coordination\universal_workflows\contract.py:925:
+> backend\server\coordination\universal_workflows\contract.py:926:        kwargs["status"] = UniversalWorkflowStatus.coerce(
+> backend\server\coordination\universal_workflows\contract.py:927:            kwargs["status"]
+  backend\server\coordination\universal_workflows\contract.py:928:        )
+  backend\server\coordination\universal_workflows\contract.py:929:
+  backend\server\coordination\universal_workflows\contract.py:930:        return cls(**kwargs)
+  backend\server\coordination\universal_workflows\contract.py:931:
+  backend\server\coordination\universal_workflows\contract.py:932:    @classmethod
+  backend\server\coordination\universal_workflows\contract.py:933:    def from_json(
+  backend\server\coordination\universal_workflows\contract.py:1042:    "UNIVERSAL_WORKFLOW_CONTRACT_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1043:    "UNIVERSAL_WORKFLOW_SCHEMA_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1044:    "REQUIRED_UNIVERSAL_WORKFLOW_FIELDS",
+> backend\server\coordination\universal_workflows\contract.py:1045:    "TERMINAL_WORKFLOW_STATUSES",
+  backend\server\coordination\universal_workflows\contract.py:1046:    "UniversalWorkflow",
+> backend\server\coordination\universal_workflows\contract.py:1047:    "UniversalWorkflowStatus",
+  backend\server\coordination\universal_workflows\contract.py:1048:    "UniversalWorkflowValidationReport",
+  backend\server\coordination\universal_workflows\contract.py:1049:    "UniversalWorkflowContractError",
+  backend\server\coordination\universal_workflows\contract.py:1050:    "validate_universal_workflow",
+  backend\server\coordination\universal_workflows\contract.py:1051:]
+
+
+
+
+================================================================================
+SECTION 2 - UNIVERSAL WORKFLOW CONTRACT STATUS VALIDATION
+================================================================================
+
+  backend\server\coordination\universal_workflows\contract.py:90:    "idempotency_key",
+  backend\server\coordination\universal_workflows\contract.py:91:
+  backend\server\coordination\universal_workflows\contract.py:92:    # Timestamps
+> backend\server\coordination\universal_workflows\contract.py:93:    "created_at",
+> backend\server\coordination\universal_workflows\contract.py:94:    "started_at",
+> backend\server\coordination\universal_workflows\contract.py:95:    "updated_at",
+> backend\server\coordination\universal_workflows\contract.py:96:    "completed_at",
+> backend\server\coordination\universal_workflows\contract.py:97:    "failed_at",
+> backend\server\coordination\universal_workflows\contract.py:98:    "cancelled_at",
+  backend\server\coordination\universal_workflows\contract.py:99:
+  backend\server\coordination\universal_workflows\contract.py:100:    # Failure
+> backend\server\coordination\universal_workflows\contract.py:101:    "failure_code",
+> backend\server\coordination\universal_workflows\contract.py:102:    "failure_message",
+  backend\server\coordination\universal_workflows\contract.py:103:    "failure_details",
+  backend\server\coordination\universal_workflows\contract.py:104:
+  backend\server\coordination\universal_workflows\contract.py:105:    # Contract identity
+  backend\server\coordination\universal_workflows\contract.py:106:    "contract_version",
+  backend\server\coordination\universal_workflows\contract.py:107:)
+  backend\server\coordination\universal_workflows\contract.py:108:
+  backend\server\coordination\universal_workflows\contract.py:109:
+  backend\server\coordination\universal_workflows\contract.py:147:
+  backend\server\coordination\universal_workflows\contract.py:148:        if not isinstance(value, str):
+  backend\server\coordination\universal_workflows\contract.py:149:            raise UniversalWorkflowContractError(
+> backend\server\coordination\universal_workflows\contract.py:150:                "workflow status must be a string or UniversalWorkflowStatus"
+  backend\server\coordination\universal_workflows\contract.py:151:            )
+  backend\server\coordination\universal_workflows\contract.py:152:
+  backend\server\coordination\universal_workflows\contract.py:153:        normalized = value.strip().upper()
+  backend\server\coordination\universal_workflows\contract.py:154:
+  backend\server\coordination\universal_workflows\contract.py:155:        try:
+  backend\server\coordination\universal_workflows\contract.py:156:            return cls(normalized)
+  backend\server\coordination\universal_workflows\contract.py:157:        except ValueError as exc:
+  backend\server\coordination\universal_workflows\contract.py:160:            ) from exc
+  backend\server\coordination\universal_workflows\contract.py:161:
+  backend\server\coordination\universal_workflows\contract.py:162:
+> backend\server\coordination\universal_workflows\contract.py:163:TERMINAL_WORKFLOW_STATUSES: Final[frozenset[UniversalWorkflowStatus]] = (
+  backend\server\coordination\universal_workflows\contract.py:164:    frozenset(
+  backend\server\coordination\universal_workflows\contract.py:165:        {
+  backend\server\coordination\universal_workflows\contract.py:166:            UniversalWorkflowStatus.COMPLETED,
+  backend\server\coordination\universal_workflows\contract.py:167:            UniversalWorkflowStatus.FAILED,
+  backend\server\coordination\universal_workflows\contract.py:168:            UniversalWorkflowStatus.CANCELLED,
+  backend\server\coordination\universal_workflows\contract.py:169:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\universal_workflows\contract.py:170:        }
+  backend\server\coordination\universal_workflows\contract.py:444:    idempotency_key: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:445:
+  backend\server\coordination\universal_workflows\contract.py:446:    # Timestamps
+> backend\server\coordination\universal_workflows\contract.py:447:    created_at: str = ""
+> backend\server\coordination\universal_workflows\contract.py:448:    started_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:449:    updated_at: str = ""
+> backend\server\coordination\universal_workflows\contract.py:450:    completed_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:451:    failed_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:452:    cancelled_at: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:453:
+  backend\server\coordination\universal_workflows\contract.py:454:    # Failure
+> backend\server\coordination\universal_workflows\contract.py:455:    failure_code: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:456:    failure_message: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:457:    failure_details: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:458:
+  backend\server\coordination\universal_workflows\contract.py:459:    # Contract
+  backend\server\coordination\universal_workflows\contract.py:460:    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+  backend\server\coordination\universal_workflows\contract.py:461:
+  backend\server\coordination\universal_workflows\contract.py:462:    def __post_init__(self) -> None:
+  backend\server\coordination\universal_workflows\contract.py:463:        violations: list[str] = []
+  backend\server\coordination\universal_workflows\contract.py:550:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:551:        )
+  backend\server\coordination\universal_workflows\contract.py:552:
+> backend\server\coordination\universal_workflows\contract.py:553:        failure_code = _optional_string(
+> backend\server\coordination\universal_workflows\contract.py:554:            self.failure_code,
+> backend\server\coordination\universal_workflows\contract.py:555:            name="failure_code",
+  backend\server\coordination\universal_workflows\contract.py:556:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:557:        )
+  backend\server\coordination\universal_workflows\contract.py:558:
+> backend\server\coordination\universal_workflows\contract.py:559:        failure_message = _optional_string(
+> backend\server\coordination\universal_workflows\contract.py:560:            self.failure_message,
+> backend\server\coordination\universal_workflows\contract.py:561:            name="failure_message",
+  backend\server\coordination\universal_workflows\contract.py:562:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:563:        )
+  backend\server\coordination\universal_workflows\contract.py:564:
+  backend\server\coordination\universal_workflows\contract.py:565:        context = _normalize_mapping(
+  backend\server\coordination\universal_workflows\contract.py:566:            self.context,
+  backend\server\coordination\universal_workflows\contract.py:567:            name="context",
+  backend\server\coordination\universal_workflows\contract.py:568:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:610:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:611:        )
+  backend\server\coordination\universal_workflows\contract.py:612:
+> backend\server\coordination\universal_workflows\contract.py:613:        created_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:614:            self.created_at,
+> backend\server\coordination\universal_workflows\contract.py:615:            name="created_at",
+  backend\server\coordination\universal_workflows\contract.py:616:            required=True,
+  backend\server\coordination\universal_workflows\contract.py:617:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:618:        )
+  backend\server\coordination\universal_workflows\contract.py:619:
+> backend\server\coordination\universal_workflows\contract.py:620:        updated_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:621:            self.updated_at,
+> backend\server\coordination\universal_workflows\contract.py:622:            name="updated_at",
+  backend\server\coordination\universal_workflows\contract.py:623:            required=True,
+  backend\server\coordination\universal_workflows\contract.py:624:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:625:        )
+  backend\server\coordination\universal_workflows\contract.py:626:
+> backend\server\coordination\universal_workflows\contract.py:627:        started_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:628:            self.started_at,
+> backend\server\coordination\universal_workflows\contract.py:629:            name="started_at",
+  backend\server\coordination\universal_workflows\contract.py:630:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:631:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:632:        )
+  backend\server\coordination\universal_workflows\contract.py:633:
+> backend\server\coordination\universal_workflows\contract.py:634:        completed_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:635:            self.completed_at,
+> backend\server\coordination\universal_workflows\contract.py:636:            name="completed_at",
+  backend\server\coordination\universal_workflows\contract.py:637:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:638:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:639:        )
+  backend\server\coordination\universal_workflows\contract.py:640:
+> backend\server\coordination\universal_workflows\contract.py:641:        failed_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:642:            self.failed_at,
+> backend\server\coordination\universal_workflows\contract.py:643:            name="failed_at",
+  backend\server\coordination\universal_workflows\contract.py:644:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:645:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:646:        )
+  backend\server\coordination\universal_workflows\contract.py:647:
+> backend\server\coordination\universal_workflows\contract.py:648:        cancelled_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:649:            self.cancelled_at,
+> backend\server\coordination\universal_workflows\contract.py:650:            name="cancelled_at",
+  backend\server\coordination\universal_workflows\contract.py:651:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:652:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:653:        )
+  backend\server\coordination\universal_workflows\contract.py:654:
+  backend\server\coordination\universal_workflows\contract.py:655:        contract_version = _require_nonempty_string(
+  backend\server\coordination\universal_workflows\contract.py:656:            self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:657:            name="contract_version",
+  backend\server\coordination\universal_workflows\contract.py:719:
+  backend\server\coordination\universal_workflows\contract.py:720:        if (
+  backend\server\coordination\universal_workflows\contract.py:721:            status == UniversalWorkflowStatus.COMPLETED
+> backend\server\coordination\universal_workflows\contract.py:722:            and completed_at is None
+  backend\server\coordination\universal_workflows\contract.py:723:        ):
+  backend\server\coordination\universal_workflows\contract.py:724:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:725:                "completed_at is required when status is COMPLETED"
+  backend\server\coordination\universal_workflows\contract.py:726:            )
+  backend\server\coordination\universal_workflows\contract.py:727:
+  backend\server\coordination\universal_workflows\contract.py:728:        if (
+  backend\server\coordination\universal_workflows\contract.py:729:            status == UniversalWorkflowStatus.FAILED
+> backend\server\coordination\universal_workflows\contract.py:730:            and failed_at is None
+  backend\server\coordination\universal_workflows\contract.py:731:        ):
+  backend\server\coordination\universal_workflows\contract.py:732:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:733:                "failed_at is required when status is FAILED"
+  backend\server\coordination\universal_workflows\contract.py:734:            )
+  backend\server\coordination\universal_workflows\contract.py:735:
+  backend\server\coordination\universal_workflows\contract.py:736:        if (
+  backend\server\coordination\universal_workflows\contract.py:737:            status == UniversalWorkflowStatus.CANCELLED
+> backend\server\coordination\universal_workflows\contract.py:738:            and cancelled_at is None
+  backend\server\coordination\universal_workflows\contract.py:739:        ):
+  backend\server\coordination\universal_workflows\contract.py:740:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:741:                "cancelled_at is required when status is CANCELLED"
+  backend\server\coordination\universal_workflows\contract.py:742:            )
+  backend\server\coordination\universal_workflows\contract.py:743:
+  backend\server\coordination\universal_workflows\contract.py:744:        if (
+  backend\server\coordination\universal_workflows\contract.py:745:            status == UniversalWorkflowStatus.FAILED
+> backend\server\coordination\universal_workflows\contract.py:746:            and failure_code is None
+  backend\server\coordination\universal_workflows\contract.py:747:        ):
+  backend\server\coordination\universal_workflows\contract.py:748:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:749:                "failure_code is required when status is FAILED"
+  backend\server\coordination\universal_workflows\contract.py:750:            )
+  backend\server\coordination\universal_workflows\contract.py:751:
+  backend\server\coordination\universal_workflows\contract.py:752:        if (
+  backend\server\coordination\universal_workflows\contract.py:753:            status == UniversalWorkflowStatus.COMPLETED
+  backend\server\coordination\universal_workflows\contract.py:754:            and failed_stages
+  backend\server\coordination\universal_workflows\contract.py:755:        ):
+  backend\server\coordination\universal_workflows\contract.py:756:            violations.append(
+  backend\server\coordination\universal_workflows\contract.py:758:            )
+  backend\server\coordination\universal_workflows\contract.py:759:
+  backend\server\coordination\universal_workflows\contract.py:760:        if (
+> backend\server\coordination\universal_workflows\contract.py:761:            created_at is not None
+> backend\server\coordination\universal_workflows\contract.py:762:            and updated_at is not None
+  backend\server\coordination\universal_workflows\contract.py:763:        ):
+  backend\server\coordination\universal_workflows\contract.py:764:            created_dt = datetime.fromisoformat(
+> backend\server\coordination\universal_workflows\contract.py:765:                created_at.replace("Z", "+00:00")
+  backend\server\coordination\universal_workflows\contract.py:766:            )
+  backend\server\coordination\universal_workflows\contract.py:767:            updated_dt = datetime.fromisoformat(
+> backend\server\coordination\universal_workflows\contract.py:768:                updated_at.replace("Z", "+00:00")
+  backend\server\coordination\universal_workflows\contract.py:769:            )
+  backend\server\coordination\universal_workflows\contract.py:770:
+  backend\server\coordination\universal_workflows\contract.py:771:            if updated_dt < created_dt:
+  backend\server\coordination\universal_workflows\contract.py:772:                violations.append(
+> backend\server\coordination\universal_workflows\contract.py:773:                    "updated_at cannot be earlier than created_at"
+  backend\server\coordination\universal_workflows\contract.py:774:                )
+  backend\server\coordination\universal_workflows\contract.py:775:
+  backend\server\coordination\universal_workflows\contract.py:776:        if violations:
+  backend\server\coordination\universal_workflows\contract.py:777:            raise UniversalWorkflowContractError(
+  backend\server\coordination\universal_workflows\contract.py:778:                "Universal Workflow Contract validation failed",
+  backend\server\coordination\universal_workflows\contract.py:779:                violations=tuple(violations),
+  backend\server\coordination\universal_workflows\contract.py:780:            )
+  backend\server\coordination\universal_workflows\contract.py:800:        object.__setattr__(self, "result_reference", result_reference)
+  backend\server\coordination\universal_workflows\contract.py:801:        object.__setattr__(self, "artifact_references", artifact_references)
+  backend\server\coordination\universal_workflows\contract.py:802:        object.__setattr__(self, "idempotency_key", idempotency_key)
+> backend\server\coordination\universal_workflows\contract.py:803:        object.__setattr__(self, "created_at", created_at)
+> backend\server\coordination\universal_workflows\contract.py:804:        object.__setattr__(self, "started_at", started_at)
+> backend\server\coordination\universal_workflows\contract.py:805:        object.__setattr__(self, "updated_at", updated_at)
+> backend\server\coordination\universal_workflows\contract.py:806:        object.__setattr__(self, "completed_at", completed_at)
+> backend\server\coordination\universal_workflows\contract.py:807:        object.__setattr__(self, "failed_at", failed_at)
+> backend\server\coordination\universal_workflows\contract.py:808:        object.__setattr__(self, "cancelled_at", cancelled_at)
+> backend\server\coordination\universal_workflows\contract.py:809:        object.__setattr__(self, "failure_code", failure_code)
+> backend\server\coordination\universal_workflows\contract.py:810:        object.__setattr__(self, "failure_message", failure_message)
+  backend\server\coordination\universal_workflows\contract.py:811:        object.__setattr__(self, "failure_details", failure_details)
+  backend\server\coordination\universal_workflows\contract.py:812:        object.__setattr__(self, "contract_version", contract_version)
+  backend\server\coordination\universal_workflows\contract.py:813:
+  backend\server\coordination\universal_workflows\contract.py:814:    # ======================================================================
+  backend\server\coordination\universal_workflows\contract.py:815:    # Serialization
+  backend\server\coordination\universal_workflows\contract.py:816:    # ======================================================================
+  backend\server\coordination\universal_workflows\contract.py:817:
+  backend\server\coordination\universal_workflows\contract.py:838:            "result_reference": self.result_reference,
+  backend\server\coordination\universal_workflows\contract.py:839:            "artifact_references": list(self.artifact_references),
+  backend\server\coordination\universal_workflows\contract.py:840:            "idempotency_key": self.idempotency_key,
+> backend\server\coordination\universal_workflows\contract.py:841:            "created_at": self.created_at,
+> backend\server\coordination\universal_workflows\contract.py:842:            "started_at": self.started_at,
+> backend\server\coordination\universal_workflows\contract.py:843:            "updated_at": self.updated_at,
+> backend\server\coordination\universal_workflows\contract.py:844:            "completed_at": self.completed_at,
+> backend\server\coordination\universal_workflows\contract.py:845:            "failed_at": self.failed_at,
+> backend\server\coordination\universal_workflows\contract.py:846:            "cancelled_at": self.cancelled_at,
+> backend\server\coordination\universal_workflows\contract.py:847:            "failure_code": self.failure_code,
+> backend\server\coordination\universal_workflows\contract.py:848:            "failure_message": self.failure_message,
+  backend\server\coordination\universal_workflows\contract.py:849:            "failure_details": _thaw(self.failure_details),
+  backend\server\coordination\universal_workflows\contract.py:850:            "contract_version": self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:851:        }
+  backend\server\coordination\universal_workflows\contract.py:852:
+  backend\server\coordination\universal_workflows\contract.py:853:    def to_dict(self) -> dict[str, Any]:
+  backend\server\coordination\universal_workflows\contract.py:854:        return self.to_canonical_dict()
+  backend\server\coordination\universal_workflows\contract.py:855:
+  backend\server\coordination\universal_workflows\contract.py:1042:    "UNIVERSAL_WORKFLOW_CONTRACT_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1043:    "UNIVERSAL_WORKFLOW_SCHEMA_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1044:    "REQUIRED_UNIVERSAL_WORKFLOW_FIELDS",
+> backend\server\coordination\universal_workflows\contract.py:1045:    "TERMINAL_WORKFLOW_STATUSES",
+  backend\server\coordination\universal_workflows\contract.py:1046:    "UniversalWorkflow",
+  backend\server\coordination\universal_workflows\contract.py:1047:    "UniversalWorkflowStatus",
+  backend\server\coordination\universal_workflows\contract.py:1048:    "UniversalWorkflowValidationReport",
+  backend\server\coordination\universal_workflows\contract.py:1049:    "UniversalWorkflowContractError",
+  backend\server\coordination\universal_workflows\contract.py:1050:    "validate_universal_workflow",
+  backend\server\coordination\universal_workflows\contract.py:1051:]
+
+
+
+
+================================================================================
+SECTION 3 - EXISTING WORKFLOW LIFECYCLE / STATE-MACHINE PATTERNS
+================================================================================
+
+Path                                                                                          LineNumber Line                                                                         
+----                                                                                          ---------- ----                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        131 class UniversalWorkflowStatus(str, enum.Enum):                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        135     WAITING = "WAITING"                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        136     PAUSED = "PAUSED"                                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        137     RECOVERING = "RECOVERING"                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        144     def coerce(cls, value: Any) -> "UniversalWorkflowStatus":                
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        150                 "workflow status must be a string or UniversalWorkflowStatus"
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        163 TERMINAL_WORKFLOW_STATUSES: Final[frozenset[UniversalWorkflowStatus]] = (    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        166             UniversalWorkflowStatus.COMPLETED,                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        167             UniversalWorkflowStatus.FAILED,                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        168             UniversalWorkflowStatus.CANCELLED,                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        169             UniversalWorkflowStatus.ABORTED,                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        425     status: UniversalWorkflowStatus                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        520             status = UniversalWorkflowStatus.coerce(                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        527             status = UniversalWorkflowStatus.CREATED                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        721             status == UniversalWorkflowStatus.COMPLETED                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        729             status == UniversalWorkflowStatus.FAILED                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        737             status == UniversalWorkflowStatus.CANCELLED                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        745             status == UniversalWorkflowStatus.FAILED                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        753             status == UniversalWorkflowStatus.COMPLETED                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py        926         kwargs["status"] = UniversalWorkflowStatus.coerce(                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py       1045     "TERMINAL_WORKFLOW_STATUSES",                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py       1047     "UniversalWorkflowStatus",                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                       69             CrawlSessionStatus.PAUSED,                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                       76     CrawlSessionStatus.PAUSED: frozenset(                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      350         session.paused_at = None                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      353     elif target_status == CrawlSessionStatus.PAUSED:                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      354         session.paused_at = now                                              
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      435         target_status=CrawlSessionStatus.PAUSED,                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      436         current_phase="session_paused",                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      448     """Resume a paused crawler session."""                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      575         "paused_at": session.paused_at,                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\crawler\session_coordinator.py                      626         "allowed_transitions": {                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        378         "readiness_waiting",                                                 
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        565 # CREATED + WAITING                                                          
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        568 _, _, _, _, waiting_stage, waiting_decision = make_context(                  
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        569     run_id="waiting-run",                                                    
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        578     "created_waiting_stage_waiting",                                         
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        579     waiting_stage.is_waiting,                                                
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        583     "created_waiting_deferred",                                              
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        584     waiting_decision.is_deferred,                                            
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        588     "created_waiting_reason",                                                
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        589     waiting_decision.reason_code                                             
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi        590     == "readiness_waiting",                                                  
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi       1228         "reason_readiness_waiting",                                          
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi       1243         "created_waiting_deferred",                                          
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_fi       1453         "CREATED + WAITING: DEFERRED",                                       
+nal_certification_runner.py                                                                                                                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        443         "readiness_waiting",                                                 
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        590 # CREATED + WAITING                                                          
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        593 _, _, _, _, waiting_stage, waiting_handoff = make_context(                   
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        598     run_id="waiting-created",                                                
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        603     "created_waiting_is_deferred",                                           
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        604     waiting_handoff.classification                                           
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        609     "created_waiting_reason",                                                
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        610     waiting_handoff.reason_code                                              
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        611     == "readiness_waiting",                                                  
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        768 _, _, _, _, running_waiting_stage, running_waiting = make_context(           
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        773     run_id="running-waiting",                                                
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        778     "running_waiting_readiness_is_waiting",                                  
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        779     running_waiting_stage.is_waiting,                                        
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        783     "running_waiting_handoff_is_lifecycle_ineligible",                       
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        785         running_waiting.is_ineligible                                        
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        787         running_waiting.reason_code                                          
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        793 _, _, _, _, terminal_waiting_stage, terminal_waiting = make_context(         
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        798     run_id="terminal-waiting",                                               
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        803     "terminal_waiting_readiness_is_waiting",                                 
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        804     terminal_waiting_stage.is_waiting,                                       
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        808     "terminal_waiting_handoff_terminal_precedence",                          
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        810         terminal_waiting.is_ineligible                                       
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in        812         terminal_waiting.reason_code                                         
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_in       1404         "CREATED + WAITING: DEFERRED",                                       
+itial_runner.py                                                                                                                                                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        532         "readiness_waiting",                                                 
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        709 # 4 — CREATED + WAITING FROM EVERY UNRESOLVED STATUS                         
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        723             "created-waiting-"                                               
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        735         "created_waiting_readiness_"                                         
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        737         stage.is_waiting,                                                    
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        741         "created_waiting_deferred_"                                          
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        747         "created_waiting_reason_"                                            
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        750         == "readiness_waiting",                                              
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        768     "created_missing_stage_waiting",                                         
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        769     missing_stage.is_waiting,                                                
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        780     == "readiness_waiting",                                                  
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re        892         "waiting",                                                           
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re       1635     "explanation_waiting_rule",                                              
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re       1637         "WAITING"                                                            
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re       1639             "waiting_rule",                                                  
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re       1645             "waiting_rule",                                                  
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_re       2509         "CREATED + WAITING: DEFERRED",                                       
+gression_runner.py                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_sc        387     "waiting": re.compile(                                                   
+an.py                                                                                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_sc        389         r"waiting|is_waiting"                                                
+an.py                                                                                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_sc       1276         "11. Should WAITING readiness produce NOT_ELIGIBLE rather than       
+an.py                                                                                                    error?",                                                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_sc       1278         "13. Should WAITING and BLOCKED have distinct handoff reasons?",     
+an.py                                                                                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_7_runtime_handoff_sc       1309         "44. Should readiness WAITING map to a HOLD-style reason?",          
+an.py                                                                                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_8_fan_out_coordinati        405         r"ready|waiting|blocked|readiness"                                   
+on_scan.py                                                                                                                                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_8_fan_out_coordinati       1361         "30. Should fan-out coordination expose direct dependent IDs even if 
+on_scan.py                                                                                               those dependents are WAITING/BLOCKED?",                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_9_fan_in_join_coordi        335         r"ready|waiting|blocked|readiness"                                   
+nation_scan.py                                                                                                                                                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_1_9_fan_in_join_coordi       1249         "29. Should 5.1.9 avoid introducing READY/WAITING/BLOCKED            
+nation_scan.py                                                                                           classifications?",                                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_runtime_orchestration_        289     "state_machine": re.compile(                                             
+discovery.py                                                                                                                                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\data\reports\_phase_5_runtime_orchestration_        291         r"state_machine|state machine|transition"                            
+discovery.py                                                                                                                                                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\coordinator.py             228                 "execution_status": "QUEUED_AWAITING_WORKER",                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\website_knowledge_p        185         "execution_status": "QUEUED_AWAITING_WORKER",                        
+ipeline\coordinator.py                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_kernel.py                  97 _ALLOWED_TRANSITIONS: Mapping[                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_kernel.py                 534             allowed = _ALLOWED_TRANSITIONS[                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_kernel.py                 584                 not in _ALLOWED_TRANSITIONS[self._state]                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\website_article_integrity_automation        752             "status": "WAITING_FOR_UDARE",                                   
+.py                                                                                                                                                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\execution_pl        825                 "READY/BLOCKED/WAITING evaluation belongs to "               
+anning.py                                                                                                                                                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\execution_pl        852                 "does not determine WAITING",                                
+anning.py                                                                                                                                                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\fan_in_coord        497                 "5.1.9 does not classify READY, WAITING, or "                
+ination.py                                                                                                                                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\runtime_hand         71     READINESS_WAITING = (                                                    
+off.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\runtime_hand         72         "readiness_waiting"                                                  
+off.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\runtime_hand        226         is UniversalOrchestrationStageReadinessClassification.WAITING        
+off.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\runtime_hand        233             .READINESS_WAITING,                                              
+off.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\runtime_hand        454             "waiting_rule": (                                                
+off.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\runtime_hand        455                 "A CREATED target with 5.1.6 WAITING readiness "             
+off.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin         56     WAITING = "waiting"                                                      
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        232             .WAITING                                                         
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        276         is UniversalOrchestrationStageReadinessClassification.WAITING        
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        420     def is_waiting(                                                          
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        426             is UniversalOrchestrationStageReadinessClassification.WAITING    
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        486     def waiting_dependency_ids(                                              
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        557                 "waiting",                                                   
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        562                 "BLOCKED outranks WAITING; WAITING outranks READY."          
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        570             "waiting_rule": (                                                
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\stage_readin        573                 "target as WAITING."                                         
+ess.py                                                                                                                                                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.         54     WAITING = "waiting"                                                      
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.         58     RECOVERING = "recovering"                                                
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.         99                     UniversalOrchestrationState.WAITING,                     
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        110                     UniversalOrchestrationState.WAITING,                     
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        112                     UniversalOrchestrationState.RECOVERING,                  
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        119         UniversalOrchestrationState.WAITING:                                 
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        124                     UniversalOrchestrationState.RECOVERING,                  
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        135                     UniversalOrchestrationState.WAITING,                     
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        136                     UniversalOrchestrationState.RECOVERING,                  
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        143         UniversalOrchestrationState.RECOVERING:                              
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        147                     UniversalOrchestrationState.WAITING,                     
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        499     def allowed_transitions(                                                 
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        639             "waiting_rule": (                                                
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        640                 "WAITING is generic orchestration lifecycle evidence "       
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        650                 "RECOVERING represents orchestration lifecycle state; "      
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        677                 "UniversalWorkflowStatus remains a higher-layer "            
+py                                                                                                                                                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.        689                 "does not reuse UniversalWorkflowStatus as orchestration     
+py                                                                                                       state",                                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\rate_limiting.py            899                 "waiting, throttling or API behavior is downstream"          
+
+
+
+
+================================================================================
+SECTION 4 - EXISTING COORDINATOR LIFECYCLE SEMANTICS
+================================================================================
+
+  backend\server\coordination\pipeline_coordinators\contract.py:6:
+  backend\server\coordination\pipeline_coordinators\contract.py:7:The contract describes coordinator identity, workflow ownership,
+> backend\server\coordination\pipeline_coordinators\contract.py:8:capabilities, entrypoint, and Universal Runtime integration policy.
+  backend\server\coordination\pipeline_coordinators\contract.py:9:
+  backend\server\coordination\pipeline_coordinators\contract.py:10:It does not execute pipeline stages.
+  backend\server\coordination\pipeline_coordinators\contract.py:11:"""
+  backend\server\coordination\pipeline_coordinators\contract.py:12:
+  backend\server\coordination\pipeline_coordinators\contract.py:13:from __future__ import annotations
+  backend\server\coordination\pipeline_coordinators\contract.py:96:
+  backend\server\coordination\pipeline_coordinators\contract.py:97:
+> backend\server\coordination\pipeline_coordinators\contract.py:98:CANONICAL_COORDINATOR_CAPABILITIES: Final[frozenset[str]] = frozenset(
+  backend\server\coordination\pipeline_coordinators\contract.py:99:    {
+> backend\server\coordination\pipeline_coordinators\contract.py:100:        "start",
+> backend\server\coordination\pipeline_coordinators\contract.py:101:        "advance",
+> backend\server\coordination\pipeline_coordinators\contract.py:102:        "stage_completed",
+> backend\server\coordination\pipeline_coordinators\contract.py:103:        "stage_failed",
+> backend\server\coordination\pipeline_coordinators\contract.py:104:        "pause",
+> backend\server\coordination\pipeline_coordinators\contract.py:105:        "resume",
+> backend\server\coordination\pipeline_coordinators\contract.py:106:        "cancel",
+> backend\server\coordination\pipeline_coordinators\contract.py:107:        "recover",
+> backend\server\coordination\pipeline_coordinators\contract.py:108:        "inspect",
+  backend\server\coordination\pipeline_coordinators\contract.py:109:    }
+  backend\server\coordination\pipeline_coordinators\contract.py:110:)
+  backend\server\coordination\pipeline_coordinators\contract.py:111:
+> backend\server\coordination\pipeline_coordinators\contract.py:112:REQUIRED_COORDINATOR_CAPABILITIES: Final[frozenset[str]] = frozenset(
+  backend\server\coordination\pipeline_coordinators\contract.py:113:    {
+> backend\server\coordination\pipeline_coordinators\contract.py:114:        "start",
+  backend\server\coordination\pipeline_coordinators\contract.py:115:    }
+  backend\server\coordination\pipeline_coordinators\contract.py:116:)
+  backend\server\coordination\pipeline_coordinators\contract.py:117:
+  backend\server\coordination\pipeline_coordinators\contract.py:118:
+  backend\server\coordination\pipeline_coordinators\contract.py:119:REQUIRED_PIPELINE_COORDINATOR_FIELDS: Final[Tuple[str, ...]] = (
+  backend\server\coordination\pipeline_coordinators\contract.py:126:    "execution_model",
+  backend\server\coordination\pipeline_coordinators\contract.py:127:    "runtime_policy",
+> backend\server\coordination\pipeline_coordinators\contract.py:128:    "capabilities",
+  backend\server\coordination\pipeline_coordinators\contract.py:129:    "stage_job_types",
+  backend\server\coordination\pipeline_coordinators\contract.py:130:    "responsibilities",
+  backend\server\coordination\pipeline_coordinators\contract.py:131:    "excluded_responsibilities",
+  backend\server\coordination\pipeline_coordinators\contract.py:132:    "metadata",
+  backend\server\coordination\pipeline_coordinators\contract.py:133:    "contract_version",
+  backend\server\coordination\pipeline_coordinators\contract.py:313:    runtime_policy: CoordinatorRuntimePolicy
+  backend\server\coordination\pipeline_coordinators\contract.py:314:
+> backend\server\coordination\pipeline_coordinators\contract.py:315:    capabilities: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:316:    stage_job_types: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:317:
+  backend\server\coordination\pipeline_coordinators\contract.py:318:    responsibilities: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:319:    excluded_responsibilities: Tuple[str, ...]
+  backend\server\coordination\pipeline_coordinators\contract.py:320:
+  backend\server\coordination\pipeline_coordinators\contract.py:384:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:385:
+> backend\server\coordination\pipeline_coordinators\contract.py:386:        capabilities = _string_tuple(
+> backend\server\coordination\pipeline_coordinators\contract.py:387:            self.capabilities,
+> backend\server\coordination\pipeline_coordinators\contract.py:388:            name="capabilities",
+  backend\server\coordination\pipeline_coordinators\contract.py:389:            violations=violations,
+  backend\server\coordination\pipeline_coordinators\contract.py:390:            allow_empty=False,
+  backend\server\coordination\pipeline_coordinators\contract.py:391:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:392:
+  backend\server\coordination\pipeline_coordinators\contract.py:393:        stage_job_types = _string_tuple(
+  backend\server\coordination\pipeline_coordinators\contract.py:441:
+  backend\server\coordination\pipeline_coordinators\contract.py:442:        unsupported = sorted(
+> backend\server\coordination\pipeline_coordinators\contract.py:443:            set(capabilities)
+> backend\server\coordination\pipeline_coordinators\contract.py:444:            - CANONICAL_COORDINATOR_CAPABILITIES
+  backend\server\coordination\pipeline_coordinators\contract.py:445:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:446:
+  backend\server\coordination\pipeline_coordinators\contract.py:447:        if unsupported:
+  backend\server\coordination\pipeline_coordinators\contract.py:448:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:449:                "unsupported coordinator capabilities: "
+  backend\server\coordination\pipeline_coordinators\contract.py:450:                + ", ".join(unsupported)
+  backend\server\coordination\pipeline_coordinators\contract.py:451:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:452:
+  backend\server\coordination\pipeline_coordinators\contract.py:453:        missing = sorted(
+> backend\server\coordination\pipeline_coordinators\contract.py:454:            REQUIRED_COORDINATOR_CAPABILITIES
+> backend\server\coordination\pipeline_coordinators\contract.py:455:            - set(capabilities)
+  backend\server\coordination\pipeline_coordinators\contract.py:456:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:457:
+  backend\server\coordination\pipeline_coordinators\contract.py:458:        if missing:
+  backend\server\coordination\pipeline_coordinators\contract.py:459:            violations.append(
+> backend\server\coordination\pipeline_coordinators\contract.py:460:                "missing required coordinator capabilities: "
+  backend\server\coordination\pipeline_coordinators\contract.py:461:                + ", ".join(missing)
+  backend\server\coordination\pipeline_coordinators\contract.py:462:            )
+  backend\server\coordination\pipeline_coordinators\contract.py:463:
+  backend\server\coordination\pipeline_coordinators\contract.py:464:        if ":" not in entrypoint:
+  backend\server\coordination\pipeline_coordinators\contract.py:465:            violations.append(
+  backend\server\coordination\pipeline_coordinators\contract.py:567:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:568:            self,
+> backend\server\coordination\pipeline_coordinators\contract.py:569:            "capabilities",
+> backend\server\coordination\pipeline_coordinators\contract.py:570:            capabilities,
+  backend\server\coordination\pipeline_coordinators\contract.py:571:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:572:
+  backend\server\coordination\pipeline_coordinators\contract.py:573:        object.__setattr__(
+  backend\server\coordination\pipeline_coordinators\contract.py:574:            self,
+  backend\server\coordination\pipeline_coordinators\contract.py:575:            "stage_job_types",
+  backend\server\coordination\pipeline_coordinators\contract.py:604:        return (
+  backend\server\coordination\pipeline_coordinators\contract.py:605:            str(capability or "").strip()
+> backend\server\coordination\pipeline_coordinators\contract.py:606:            in self.capabilities
+  backend\server\coordination\pipeline_coordinators\contract.py:607:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:608:
+  backend\server\coordination\pipeline_coordinators\contract.py:609:    @property
+  backend\server\coordination\pipeline_coordinators\contract.py:610:    def uses_universal_runtime(self) -> bool:
+  backend\server\coordination\pipeline_coordinators\contract.py:611:        return (
+  backend\server\coordination\pipeline_coordinators\contract.py:631:            "execution_model": self.execution_model.value,
+  backend\server\coordination\pipeline_coordinators\contract.py:632:            "runtime_policy": self.runtime_policy.value,
+> backend\server\coordination\pipeline_coordinators\contract.py:633:            "capabilities": list(self.capabilities),
+  backend\server\coordination\pipeline_coordinators\contract.py:634:            "stage_job_types": list(self.stage_job_types),
+  backend\server\coordination\pipeline_coordinators\contract.py:635:            "responsibilities": list(self.responsibilities),
+  backend\server\coordination\pipeline_coordinators\contract.py:636:            "excluded_responsibilities": list(
+  backend\server\coordination\pipeline_coordinators\contract.py:637:                self.excluded_responsibilities
+  backend\server\coordination\pipeline_coordinators\contract.py:638:            ),
+  backend\server\coordination\pipeline_coordinators\contract.py:666:                    REQUIRED_PIPELINE_COORDINATOR_FIELDS
+  backend\server\coordination\pipeline_coordinators\contract.py:667:                ),
+> backend\server\coordination\pipeline_coordinators\contract.py:668:                "canonical_capabilities": tuple(
+  backend\server\coordination\pipeline_coordinators\contract.py:669:                    sorted(
+> backend\server\coordination\pipeline_coordinators\contract.py:670:                        CANONICAL_COORDINATOR_CAPABILITIES
+  backend\server\coordination\pipeline_coordinators\contract.py:671:                    )
+  backend\server\coordination\pipeline_coordinators\contract.py:672:                ),
+  backend\server\coordination\pipeline_coordinators\contract.py:673:            }
+  backend\server\coordination\pipeline_coordinators\contract.py:674:        )
+  backend\server\coordination\pipeline_coordinators\contract.py:675:
+  backend\server\coordination\pipeline_coordinators\contract.py:846:    "PIPELINE_COORDINATOR_SCHEMA_VERSION",
+  backend\server\coordination\pipeline_coordinators\contract.py:847:    "REQUIRED_PIPELINE_COORDINATOR_FIELDS",
+> backend\server\coordination\pipeline_coordinators\contract.py:848:    "CANONICAL_COORDINATOR_CAPABILITIES",
+> backend\server\coordination\pipeline_coordinators\contract.py:849:    "REQUIRED_COORDINATOR_CAPABILITIES",
+  backend\server\coordination\pipeline_coordinators\contract.py:850:    "CoordinatorExecutionModel",
+  backend\server\coordination\pipeline_coordinators\contract.py:851:    "CoordinatorRuntimePolicy",
+  backend\server\coordination\pipeline_coordinators\contract.py:852:    "PipelineCoordinatorContract",
+  backend\server\coordination\pipeline_coordinators\contract.py:853:    "PipelineCoordinatorValidationReport",
+  backend\server\coordination\pipeline_coordinators\contract.py:854:    "PipelineCoordinatorContractError",
+
+
+
+
+================================================================================
+SECTION 5 - CURRENT COORDINATOR / PIPELINE STATUS USAGE
+================================================================================
+
+Path                                                                                                             LineNumber Line                                           
+----                                                                                                             ---------- ----                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py                       115     COMPLETED = "completed"                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py                       116     FAILED = "failed"                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_stages\result_contract.py                       118     CANCELLED = "cancelled"                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           132     CREATED = "CREATED"                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           133     READY = "READY"                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           134     RUNNING = "RUNNING"                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           135     WAITING = "WAITING"                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           136     PAUSED = "PAUSED"                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           137     RECOVERING = "RECOVERING"                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           138     COMPLETED = "COMPLETED"                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           139     FAILED = "FAILED"                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           140     CANCELLED = "CANCELLED"                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           141     ABORTED = "ABORTED"                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           683             "completed": set(completed_stages),
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\universal_workflows\contract.py                           685             "failed": set(failed_stages),      
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        139             "created": created,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        286             "created": created,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        343             "created": created,                
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py        355         "created": created,                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\live_domain_ta         33 SITE_PAGE_STATUS_READY = "ready"               
+rget_pool\stage.py                                                                                                                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\site_pages\sta         28 SITE_PAGE_STATUS_READY = "ready"               
+ge.py                                                                                                                                                                      
+
+
+
+
+================================================================================
+SECTION 6 - PHASE 2 FROZEN HASH INTEGRITY
+================================================================================
+
+2.1 Workflow Registry
+Path:     backend\server\coordination\workflow_registry\registry.py
+Expected: 34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Actual:   34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Match:    True
+
+2.2 Coordinator Registration
+Path:     backend\server\coordination\coordinator_registry\registry.py
+Expected: C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Actual:   C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Match:    True
+
+2.3 Registration Validation
+Path:     backend\server\coordination\registration_validation\validator.py
+Expected: 30853E34C6F09B89A2C67D50D91C06EB4B2436A12918DC4E26197EB6159E8453
+Actual:   30853E34C6F09B89A2C67D50D91C06EB4B2436A12918DC4E26197EB6159E8453
+Match:    True
+
+2.4 Version Management
+Path:     backend\server\coordination\version_management\manager.py
+Expected: 118B628ABFCA7CF74B218520D6CF6E0AD4AF2CD6FFE9FB7FE711927A68412E25
+Actual:   118B628ABFCA7CF74B218520D6CF6E0AD4AF2CD6FFE9FB7FE711927A68412E25
+Match:    True
+
+================================================================================
+SECTION 7 - PHASE 3.1 CANONICAL DESIGN QUESTIONS
+================================================================================
+
+1. What is the canonical workflow-state vocabulary?
+
+Expected frozen states:
+
+    CREATED
+    READY
+    RUNNING
+    WAITING
+    PAUSED
+    RECOVERING
+    COMPLETED
+    FAILED
+    CANCELLED
+    ABORTED
+
+
+2. Which states are terminal?
+
+Frozen from Phase 1.1:
+
+    COMPLETED
+    FAILED
+    CANCELLED
+    ABORTED
+
+
+3. Should Phase 3.1 create a new status enum?
+
+Expected:
+NO if the frozen Universal Workflow Contract already owns the canonical enum.
+
+3.1 should reuse the existing WorkflowStatus vocabulary and define lifecycle
+relationships around it.
+
+
+4. Should Phase 3.1 validate an attempted transition at runtime?
+
+Expected:
+NO.
+
+That belongs to:
+
+    3.2 Transition Validation
+
+
+5. Should Phase 3.1 record transition history?
+
+Expected:
+NO.
+
+That belongs to:
+
+    3.3 Lifecycle History
+
+
+6. Should Phase 3.1 prevent transitions out of terminal states?
+
+Expected:
+The MODEL may identify terminal states and expose them as terminal.
+
+Actual terminal-state PROTECTION / enforcement belongs to:
+
+    3.4 Terminal-State Protection
+
+
+7. Should Phase 3.1 persist workflow state?
+
+Expected:
+NO.
+
+Persistence belongs to:
+
+    8.0 Workflow State Persistence
+
+
+8. Should Phase 3.1 execute coordinators or Runtime jobs?
+
+Expected:
+NO.
+
+
+9. Should Phase 3.1 define the canonical legal transition graph?
+
+Expected:
+YES.
+
+This is the core state-machine MODEL.
+
+
+10. Should legal-transition definitions be immutable?
+
+Expected:
+YES.
+
+
+11. Should legal-transition inspection be deterministic?
+
+Expected:
+YES.
+
+
+12. Should every canonical workflow state appear in the model?
+
+Expected:
+YES.
+
+
+13. Should the state machine invent new workflow statuses?
+
+Expected:
+NO.
+
+
+14. Should FAILED automatically imply recovery?
+
+Expected:
+NO.
+
+FAILED is currently terminal in the frozen Phase 1.1 contract.
+
+Recovery policy belongs to Phase 9.
+
+Therefore do not silently redefine FAILED as non-terminal.
+
+
+15. What is RECOVERING for if FAILED is terminal?
+
+Expected architectural distinction:
+
+    RECOVERING is a non-terminal operational lifecycle state entered
+    before a terminal FAILED outcome where recovery handling is active.
+
+It should not mean "leave FAILED and become RECOVERING" unless a future
+canonical contract explicitly changes terminal semantics.
+
+
+16. Should WAITING be distinct from PAUSED?
+
+Expected:
+YES.
+
+WAITING:
+    workflow cannot currently advance because it is awaiting a dependency,
+    external completion, branch/join condition, or required coordination event.
+
+PAUSED:
+    workflow has been deliberately suspended.
+
+The exact event semantics may be refined in later phases.
+
+
+17. Should READY be distinct from CREATED?
+
+Expected:
+YES.
+
+CREATED:
+    workflow instance exists.
+
+READY:
+    workflow has passed prerequisites needed to begin execution.
+
+
+18. Should RUNNING be the only state from which stage execution occurs?
+
+Architecture expectation:
+Generally YES, but Phase 3.1 does not execute anything.
+
+Phase 3.1 only expresses lifecycle state semantics.
+
+
+19. Should CANCELLED and ABORTED remain distinct?
+
+Expected:
+YES.
+
+CANCELLED:
+    controlled cancellation.
+
+ABORTED:
+    workflow termination outside normal controlled completion/cancellation
+    progression.
+
+Do not collapse them.
+
+
+20. Should Version Management or Registration modify lifecycle state?
+
+Expected:
+NO.
+
+Phase 2 remains frozen and separate.
+
+
+================================================================================
+SECTION 8 - PROPOSED CANONICAL TRANSITION MODEL FOR REVIEW
+================================================================================
+
+IMPORTANT:
+This section is a PROPOSED state graph to be validated against scan findings
+before implementation.
+
+Proposed normal transitions:
+
+    CREATED
+        -> READY
+        -> CANCELLED
+        -> ABORTED
+
+    READY
+        -> RUNNING
+        -> CANCELLED
+        -> ABORTED
+
+    RUNNING
+        -> WAITING
+        -> PAUSED
+        -> RECOVERING
+        -> COMPLETED
+        -> FAILED
+        -> CANCELLED
+        -> ABORTED
+
+    WAITING
+        -> RUNNING
+        -> PAUSED
+        -> RECOVERING
+        -> FAILED
+        -> CANCELLED
+        -> ABORTED
+
+    PAUSED
+        -> READY
+        -> RUNNING
+        -> RECOVERING
+        -> CANCELLED
+        -> ABORTED
+
+    RECOVERING
+        -> READY
+        -> RUNNING
+        -> WAITING
+        -> FAILED
+        -> CANCELLED
+        -> ABORTED
+
+Terminal model:
+
+    COMPLETED
+        -> no outgoing lifecycle edges in canonical model
+
+    FAILED
+        -> no outgoing lifecycle edges in canonical model
+
+    CANCELLED
+        -> no outgoing lifecycle edges in canonical model
+
+    ABORTED
+        -> no outgoing lifecycle edges in canonical model
+
+
+QUESTIONS TO RESOLVE FROM SCAN:
+
+A. Should CREATED -> CANCELLED be allowed?
+
+B. Should CREATED -> ABORTED be allowed?
+
+C. Should READY -> PAUSED be allowed?
+
+D. Should WAITING -> READY be allowed, or return only to RUNNING?
+
+E. Should PAUSED -> READY and PAUSED -> RUNNING both exist?
+
+F. Should RECOVERING -> READY be legal?
+
+G. Should RECOVERING -> WAITING be legal?
+
+H. Should WAITING -> COMPLETED ever be legal directly?
+
+I. Should PAUSED -> FAILED be legal directly?
+
+J. Should RECOVERING -> COMPLETED be legal directly?
+
+Do not implement until these are resolved against current architecture.
+
+
+================================================================================
+SECTION 9 - PROPOSED PHASE 3.1 AUTHORITY BOUNDARY
+================================================================================
+
+Workflow State Machine OWNS:
+
+- canonical workflow lifecycle states, by reference to frozen WorkflowStatus
+- canonical terminal-state classification
+- canonical non-terminal-state classification
+- legal lifecycle transition graph
+- immutable transition-model declaration
+- deterministic state/transition inspection
+- lifecycle model explanation
+- state classification helpers
+- allowed-next-state lookup as MODEL INSPECTION
+
+
+Workflow State Machine DOES NOT OWN:
+
+- runtime transition request validation
+- transition rejection policy
+- transition mutation of workflow instances
+- lifecycle history recording
+- transition timestamps
+- terminal-state enforcement/protection
+- workflow persistence
+- checkpoints
+- pause/resume execution behavior
+- recovery execution
+- failure recovery policy
+- coordinator invocation
+- workflow execution
+- Runtime Registration
+- Runtime jobs
+- stage dependency planning
+- stage result handoff
+
+
+================================================================================
+SECTION 10 - EXPECTED IMPLEMENTATION SHAPE
+================================================================================
+
+Potential path:
+
+    backend/server/coordination/workflow_lifecycle/state_machine.py
+
+
+Potential identity:
+
+    WORKFLOW_STATE_MACHINE_VERSION =
+        "workflow_state_machine_v3.1.0"
+
+    WORKFLOW_STATE_MACHINE_SCHEMA_VERSION =
+        "workflow_state_machine_schema_v1"
+
+
+Potential APIs:
+
+    workflow_states()
+
+    terminal_workflow_states()
+
+    non_terminal_workflow_states()
+
+    allowed_next_states(
+        state
+    )
+
+    has_transition_edge(
+        from_state,
+        to_state
+    )
+
+    workflow_state_machine_snapshot()
+
+    explain_workflow_state_machine_v3_1()
+
+
+Important:
+
+    has_transition_edge(...)
+
+must be MODEL INSPECTION only.
+
+It must not itself become the Phase 3.2 transition validator.
+
+
+================================================================================
+SECTION 11 - 3.1 / 3.2 BOUNDARY
+================================================================================
+
+3.1 answers:
+
+    "What edges exist in the canonical lifecycle graph?"
+
+
+3.2 answers:
+
+    "Given a requested transition for a workflow, is this request legal?"
+
+
+Example:
+
+3.1:
+
+    has_transition_edge(
+        RUNNING,
+        PAUSED
+    )
+        -> True
+
+
+3.2:
+
+    validate_transition(
+        current_state=RUNNING,
+        requested_state=PAUSED,
+        workflow_context=...
+    )
+
+        -> validation result / violations
+
+
+This separation must remain strict.
+
+
+================================================================================
+SECTION 12 - 3.1 / 3.4 TERMINAL BOUNDARY
+================================================================================
+
+3.1 may declare:
+
+    FAILED is terminal
+
+and:
+
+    allowed_next_states(
+        FAILED
+    )
+        -> ()
+
+
+But 3.1 does NOT own the enforcement mechanism that protects a terminal
+workflow instance from attempted mutation.
+
+That belongs to:
+
+    3.4 Terminal-State Protection
+
+
+================================================================================
+SCAN COMPLETE
+================================================================================
+
+No production files were modified.
+
+NEXT:
+Analyze the scan findings, resolve the transition graph, then implement
+the canonical Phase 3.1 Workflow State Machine.
+================================================================================

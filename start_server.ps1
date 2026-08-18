@@ -1,4 +1,4 @@
-# start_server.ps1 — reliable starter for LinkCraftor (Windows/PowerShell)
+# start_server.ps1 â€” reliable starter for LinkCraftor (Windows/PowerShell)
 $ErrorActionPreference = "Stop"
 
 # 1) Go to project root
@@ -15,7 +15,7 @@ if (!(Test-Path ".venv")) {
 
 # 4) Ensure required packages
 pip install --upgrade pip >$null
-pip install flask flask-cors >$null
+pip install fastapi "uvicorn[standard]" >$null
 
 # 5) Choose a free port (prefer 8001, else 8003)
 $port = 8001
@@ -25,9 +25,9 @@ if ($inUse) {
   $port = 8003
 }
 
-# 6) Tell server.py which port to use
-$env:LINKCRAFTOR_PORT = "$port"
+# 6) Canonical FastAPI backend startup
+# Port is passed directly to Uvicorn.
 
 # 7) Start the server
 Write-Host "Starting server on http://127.0.0.1:$port ..."
-python server.py
+python -m uvicorn backend.server.main:app --host 127.0.0.1 --port $port

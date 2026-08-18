@@ -1,0 +1,1151 @@
+﻿
+====================================================================================================
+PHASE U1.2 ? FOCUSED UPLOAD ROUTE / API IDENTIFICATION
+====================================================================================================
+
+====================================================================================================
+A. REQUIRED FILE EXISTENCE
+====================================================================================================
+files_route: True :: backend\server\routes\files.py
+main: True :: backend\server\main.py
+root_server: True :: server.py
+frontend_api: True :: frontend\public\assets\js\app\api.js
+frontend_config: True :: frontend\public\assets\js\app\config.js
+frontend_upload: True :: frontend\public\assets\js\features\upload.js
+top_coordinator: True :: backend\server\pipelines\upload_document\coordinator.py
+uduc_coordinator: True :: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\coordinator.py
+upload_intake: True :: backend\server\pipelines\upload_document\uploaded_document_to_uduc_pipeline\upload_intake.py
+
+====================================================================================================
+B. CURRENT CANONICAL BACKEND UPLOAD ROUTE
+====================================================================================================
+00631:     *,
+00632:     add_document_ids: List[str] | None = None,
+00633:     add_draft_ids: List[str] | None = None,
+00634:     add_imported_urls: List[str] | None = None,
+00635:     add_live_domain_urls: List[str] | None = None,
+00636:     add_upload_ids: List[str] | None = None,
+00637: ) -> Dict[str, Any]:
+00638:     """Block obsolete membership-array mutation."""
+00639:     raise RuntimeError(
+00640:         "Membership-array Active Target Set merging is forbidden. "
+00641:         "Rebuild the canonical set from source target pools."
+00642:     )
+00643: 
+00644: 
+00645: # -------------------------
+00646: # API
+00647: # -------------------------
+00648: 
+00649: @router.post("/upload")
+00650: async def upload_file(
+00651:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+00652:     file: UploadFile = File(...),
+00653: ):
+00654:     """
+00655:     Canonical Upload Document API entry point.
+00656: 
+00657:     The HTTP route performs no Pipeline 2 implementation directly.
+00658:     It delegates the upload-intake workflow to the canonical
+00659:     Ingestion and Unified Content Pipeline.
+00660:     """
+00661: 
+00662:     from backend.server.pipelines.upload_document import (
+00663:         run_upload_document,
+00664:     )
+00665:     from backend.server.pipelines.upload_document.uploaded_document_to_uduc_pipeline import (
+00666:         UploadIntakeDependencies,
+00667:     )
+----------------------------------------------------------------------------------------------------
+00668: 
+----------------------------------------------------------------------------------------------------
+00669:     dependencies = UploadIntakeDependencies(
+00670:         guess_extension=_guess_ext,
+00671:         normalize_workspace_id=_ws,
+00672:         extract_preview=_extract_preview_from_bytes,
+00673:         store_and_index=_store_and_index,
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+C. LEGACY FILES ROUTE
+====================================================================================================
+01143:         "is_html": bool(preview.get("is_html")),
+01144:         "truncated": bool(preview.get("truncated")),
+01145:         "job_id": None,
+01146:         "processing_status": "not_applicable",
+01147:         "h1": hit.get("h1") or "",
+01148:         "h1_source": hit.get("h1_source") or "",
+01149:         "h1_error": hit.get("h1_error") or "",
+01150:     }
+01151: 
+01152: 
+01153: @legacy_router.post("/upload")
+01154: async def legacy_upload(
+01155:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+01156:     file: UploadFile = File(...),
+01157: ):
+01158:     return await upload_file(workspace_id=workspace_id, file=file)
+01159: 
+01160: 
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+D. FILES ROUTER PREFIX / REGISTRATION
+====================================================================================================
+00030:     from docx import Document as DocxDocument  # python-docx
+00031: except Exception:
+00032:     DocxDocument = None
+00033: 
+00034: 
+00035: router = APIRouter(prefix="/api/files", tags=["files"])
+00036: legacy_router = APIRouter(prefix="/api", tags=["legacy"])
+00037: 
+00038: ALLOWED_EXT = {".docx", ".txt", ".md", ".html", ".htm"}
+00039: 
+00040: BASE_DIR = Path(__file__).resolve().parents[1]  # backend/server
+----------------------------------------------------------------------------------------------------
+00041: DATA_DIR = BASE_DIR / "data"
+----------------------------------------------------------------------------------------------------
+00855: 
+00856: 
+00857: # FIX: this route previously lived on `router` (prefix /api/files) with a full
+00858: # path of "/api/site/target_pools/active_target_set", producing the URL
+00859: # /api/files/api/site/target_pools/active_target_set. It now lives on
+00860: # legacy_router (prefix /api) so the effective URL is
+00861: # /api/site/target_pools/active_target_set as intended.
+00862: @legacy_router.get("/site/target_pools/active_target_set")
+00863: def get_active_target_set(
+00864:     workspace_id: str | None = Query(None),
+00865:     workspaceId: str | None = Query(None),
+----------------------------------------------------------------------------------------------------
+00866: ):
+00867:     try:
+----------------------------------------------------------------------------------------------------
+01148:         "h1_source": hit.get("h1_source") or "",
+01149:         "h1_error": hit.get("h1_error") or "",
+01150:     }
+01151: 
+01152: 
+01153: @legacy_router.post("/upload")
+01154: async def legacy_upload(
+01155:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+01156:     file: UploadFile = File(...),
+01157: ):
+01158:     return await upload_file(workspace_id=workspace_id, file=file)
+----------------------------------------------------------------------------------------------------
+
+FILE: backend\server\main.py
+00093: 
+00094: 
+00095: from .routes.engine_scoring import router as engine_scoring_router
+00096: 
+00097: 
+00098: from .routes.files import router as files_router
+00099: 
+00100: 
+00101: from .routes.health import router as health_router
+00102: 
+00103: 
+----------------------------------------------------------------------------------------------------
+00148: 
+00149: 
+00150: app = FastAPI(title="LinkCraftor API", version="0.1.0")
+00151: 
+00152: 
+00153: app.include_router(owner_audit_router)
+00154: 
+00155: 
+00156: app.include_router(workspace_autosave_router)
+00157: 
+00158: 
+----------------------------------------------------------------------------------------------------
+00159: 
+00160: 
+00161: 
+----------------------------------------------------------------------------------------------------
+00695: 
+00696: 
+00697: if not _already_mounted("backend.server.routes.health", "/"):
+00698: 
+00699: 
+00700:     app.include_router(health_router, tags=["health"])
+00701: 
+00702: 
+00703: if not _already_mounted("backend.server.routes.imported_targets_urls_compat", "/api/urls"):
+00704: 
+00705: 
+----------------------------------------------------------------------------------------------------
+00706:     app.include_router(imported_urls_router, tags=["urls"])
+00707: 
+00708: 
+00709: if not _already_mounted("backend.server.routes.draft_topics", "/api/draft"):
+00710: 
+00711: 
+----------------------------------------------------------------------------------------------------
+00712:     app.include_router(draft_router, tags=["draft"])
+00713: 
+00714: 
+00715: if not _already_mounted("backend.server.routes.planning", "/api/planning"):
+00716: 
+00717: 
+----------------------------------------------------------------------------------------------------
+00718:     app.include_router(planning_router, tags=["planning"])
+00719: 
+00720: 
+00721: if not _already_mounted("backend.server.routes.engine_run", "/api/engine"):
+00722: 
+00723: 
+----------------------------------------------------------------------------------------------------
+00724:     app.include_router(engine_run_router, tags=["engine"])
+00725: 
+00726: 
+00727: if not _already_mounted("backend.server.routes.engine_decisions", "/api/engine"):
+00728: 
+00729: 
+----------------------------------------------------------------------------------------------------
+00730:     app.include_router(engine_decisions_router, tags=["engine-decisions"])
+00731: 
+00732: 
+00733: if not _already_mounted("backend.server.routes.engine_scoring", "/api/engine"):
+00734: 
+00735: 
+----------------------------------------------------------------------------------------------------
+00736:     app.include_router(engine_scoring_router, tags=["engine-scoring"])
+00737: 
+00738: 
+00739: if not _already_mounted("backend.server.routes.files", "/api"):
+00740: 
+00741: 
+----------------------------------------------------------------------------------------------------
+00742:     app.include_router(files_router, tags=["files"])
+00743: 
+00744: 
+00745: if not _already_mounted("backend.server.routes.rb2_run", "/api/rb2"):
+00746: 
+00747: 
+----------------------------------------------------------------------------------------------------
+00748:     app.include_router(rb2_runner_router, prefix="/api/rb2", tags=["rb2"])
+00749: 
+00750: 
+00751: if not _already_mounted("backend.server.routes.workspace_health", "/api/workspace"):
+00752: 
+00753: 
+----------------------------------------------------------------------------------------------------
+00754:     app.include_router(workspace_health_router, tags=["workspace"])
+00755: 
+00756: 
+00757: if not _already_mounted("backend.server.routes.rebuild_routes", "/api/rebuild"):
+00758: 
+00759: 
+----------------------------------------------------------------------------------------------------
+00760:     app.include_router(rebuild_router)
+00761: 
+00762: 
+00763: if not _already_mounted("backend.server.routes.reload_routes", "/api/reload"):
+00764: 
+00765: 
+----------------------------------------------------------------------------------------------------
+00766:     app.include_router(reload_router)
+00767: 
+00768: 
+00769: app.include_router(orchestration_router)
+00770: 
+00771: 
+----------------------------------------------------------------------------------------------------
+00772: if not _already_mounted("backend.server.routes.document_registry", "/api/site/target_pools/document_registry"):
+00773: 
+00774: 
+----------------------------------------------------------------------------------------------------
+00775:     app.include_router(
+00776: 
+00777: 
+00778:         document_registry_router,
+00779: 
+00780: 
+----------------------------------------------------------------------------------------------------
+00788: 
+00789: 
+00790: if not _already_mounted("backend.server.tms.routes", "/api/tms"):
+00791: 
+00792: 
+00793:     app.include_router(tms_router)
+00794: 
+00795: 
+00796: if not _already_mounted("backend.server.routes.external.owner_sources", "/api/external/owner_sources_runtime"):
+00797:     app.include_router(
+00798:         external_owner_sources_router,
+----------------------------------------------------------------------------------------------------
+00799:         prefix="/api/external/owner_sources_runtime",
+00800:         tags=["external-owner-sources"],
+00801:     )
+00802: if not _already_mounted("backend.server.routes.external.manual", "/api/external/manual_runtime"):
+----------------------------------------------------------------------------------------------------
+00803:     app.include_router(
+00804:         external_manual_router,
+00805:         prefix="/api/external/manual_runtime",
+00806:         tags=["external-manual"],
+00807:     )
+00808: if not _already_mounted("backend.server.routes.external.runtime", "/api/external/runtime"):
+----------------------------------------------------------------------------------------------------
+00809:     app.include_router(
+00810:         external_runtime_router,
+00811:         prefix="/api/external/runtime",
+00812:         tags=["external-runtime"],
+00813:     )
+00814: if site_reader_router is not None:
+----------------------------------------------------------------------------------------------------
+00815: 
+00816: 
+00817:     if not _already_mounted("backend.server.routes.site_reader", "/api/site"):
+00818: 
+00819: 
+00820:         app.include_router(site_reader_router, prefix="/api/site", tags=["site-reader"])
+00821: app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runtime")
+00822: 
+00823: 
+00824: # =========================
+00825: 
+----------------------------------------------------------------------------------------------------
+00826: 
+----------------------------------------------------------------------------------------------------
+00856: 
+00857:     return {"routes": out, "site_reader_mount_error": site_reader_mount_error}
+00858: 
+00859: 
+00860: if not _already_mounted("backend.server.routes.external.import_runs", "/api/external/import_runs_runtime"):
+00861:     app.include_router(
+00862:         import_runs_runtime_router,
+00863:         prefix="/api/external/import_runs_runtime",
+00864:     )
+00865: 
+00866: 
+----------------------------------------------------------------------------------------------------
+00867: if not _already_mounted("backend.server.routes.external.auto_cleanup", "/api/external/auto_cleanup_runtime"):
+00868:     app.include_router(
+00869:         auto_cleanup_runtime_router,
+00870:         prefix="/api/external/auto_cleanup_runtime",
+00871:     )
+00872: 
+00873: 
+----------------------------------------------------------------------------------------------------
+00874: if not _already_mounted("backend.server.routes.external.sitemap_import", "/api/external/sitemap_import_runtime"):
+00875:     app.include_router(
+00876:         sitemap_import_runtime_router,
+00877:         prefix="/api/external/sitemap_import_runtime",
+00878:     )
+00879: 
+00880: 
+----------------------------------------------------------------------------------------------------
+00881: if not _already_mounted("backend.server.routes.external.resolve", "/api/external/resolve_runtime"):
+00882:     app.include_router(
+00883:         resolve_runtime_router,
+00884:         prefix="/api/external/resolve_runtime",
+00885:     )
+00886: 
+00887: 
+----------------------------------------------------------------------------------------------------
+00888: if not _already_mounted("backend.server.routes.external.import_clear", "/api/external/import_clear_runtime"):
+00889:     app.include_router(
+00890:         import_clear_runtime_router,
+00891:         prefix="/api/external/import_clear_runtime",
+00892:     )
+00893: 
+00894: 
+----------------------------------------------------------------------------------------------------
+00895: from .routes.site_workspace import router as site_workspace_router
+00896: app.include_router(site_workspace_router)
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+E. FRONTEND LIVE UPLOAD CALL
+====================================================================================================
+
+FILE: frontend\public\assets\js\app\api.js
+00001: // assets/js/app/api.js
+00002: // Uploads ALL formats to backend /api/files/upload (so they get stored + indexed into pools).
+00003: // Also keeps originals locally so “Download original” works without a server.
+00004: //
+00005: // Point API_BASE at your FastAPI server (we default to 8001 for dev).
+00006: const API_BASE =
+00007:   (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE) ||
+00008:   "http://127.0.0.1:8001";
+00009: 
+00010: // Keep originals so “Download original” works without a server.
+----------------------------------------------------------------------------------------------------
+00053:   return ws;
+00054: }
+00055: 
+00056: // -------------------------
+00057: // Upload
+00058: // -------------------------
+00059: // NOTE: This now uploads every file type to backend so it is persisted + indexed for pools.
+00060: // It still reads some formats locally only to keep a smooth preview, but the source of truth is backend.
+00061: export async function uploadFile(file, workspaceId) {
+00062:   if (!file || !file.name) throw new Error("No file provided");
+00063: 
+00064:   const ws = getWorkspaceId(workspaceId);
+00065:   const ext = extOf(file.name);
+00066: 
+00067:   // Store original blob locally for "Download original"
+00068:   ORIGINAL_BLOBS.set(file.name, file);
+00069: 
+----------------------------------------------------------------------------------------------------
+00070:   // Always upload to backend so it lands in:
+00071:   // backend/server/data/docs/<ws>/
+00072:   const fd = new FormData();
+00073:   fd.append("file", file);
+00074: 
+00075:   const res = await fetch(`${API_BASE}/api/files/upload?workspace_id=${encodeURIComponent(ws)}`, {
+00076:     method: "POST",
+00077:     body: fd,
+00078:   });
+00079: 
+00080:   let data;
+----------------------------------------------------------------------------------------------------
+00081:   try {
+00082:     data = await res.json();
+00083:   } catch {
+----------------------------------------------------------------------------------------------------
+00137: 
+00138: export function exportRarUrl() {
+00139:   return `${API_BASE}/api/export/rar`;
+00140: }
+00141: 
+00142: // Try backend DOCX first; if missing, fall back to Word-compatible .doc (HTML)
+00143: export async function exportDocx(filename, bodyHtml) {
+00144:   try {
+00145:     const res = await fetch(`${API_BASE}/api/export/docx`, {
+00146:       method: "POST",
+00147:       headers: { "Content-Type": "application/json" },
+00148:       body: JSON.stringify({ filename, html: bodyHtml }),
+00149:     });
+00150:     if (res.ok) return await res.blob();
+00151:   } catch (_) {
+00152:     // ignore and fall through
+00153:   }
+----------------------------------------------------------------------------------------------------
+
+FILE: frontend\public\assets\js\app\config.js
+00003: // Base for your backend API. You can override it by setting window.LC_API_BASE before scripts load.
+00004: export const API_BASE =
+00005:   (typeof window !== "undefined" && window.LC_API_BASE
+00006:     ? String(window.LC_API_BASE).replace(/\/$/, "")
+00007:     : (typeof window !== "undefined" ? window.location.origin : "")) || "";
+00008: 
+00009: // (Optional) central paths used by api.js. Safe to keep even if app.js only imports API_BASE.
+00010: export const ENDPOINTS = Object.freeze({
+00011:   upload:          `${API_BASE}/api/upload?workspace_id=default`,
+00012:   exportDocx:      `${API_BASE}/api/export/docx`,
+00013:   exportZip:       `${API_BASE}/api/export/zip`,
+00014:   exportRar:       `${API_BASE}/api/export/rar`,
+00015:   downloadOriginal: (filename) =>
+00016:     `${API_BASE}/api/original/${encodeURIComponent(filename || "")}`,
+00017: });
+----------------------------------------------------------------------------------------------------
+
+FILE: frontend\public\assets\js\features\upload.js
+
+====================================================================================================
+F. ROUTE ? UPLOAD PIPELINE / COORDINATOR REFERENCES
+====================================================================================================
+00652:     file: UploadFile = File(...),
+00653: ):
+00654:     """
+00655:     Canonical Upload Document API entry point.
+00656: 
+00657:     The HTTP route performs no Pipeline 2 implementation directly.
+00658:     It delegates the upload-intake workflow to the canonical
+00659:     Ingestion and Unified Content Pipeline.
+00660:     """
+00661: 
+00662:     from backend.server.pipelines.upload_document import (
+00663:         run_upload_document,
+00664:     )
+00665:     from backend.server.pipelines.upload_document.uploaded_document_to_uduc_pipeline import (
+00666:         UploadIntakeDependencies,
+00667:     )
+00668: 
+00669:     dependencies = UploadIntakeDependencies(
+00670:         guess_extension=_guess_ext,
+00671:         normalize_workspace_id=_ws,
+00672:         extract_preview=_extract_preview_from_bytes,
+----------------------------------------------------------------------------------------------------
+00673:         store_and_index=_store_and_index,
+----------------------------------------------------------------------------------------------------
+00674:         workspace_directory=_ws_dir,
+00675:         allowed_extensions=ALLOWED_EXT,
+----------------------------------------------------------------------------------------------------
+00676:     )
+00677: 
+00678:     return await run_upload_document(
+00679:         workspace_id=workspace_id,
+00680:         file=file,
+00681:         dependencies=dependencies,
+00682:     )
+00683: 
+00684: 
+00685: @router.post("/clear_session")
+00686: def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
+00687:     ws_norm = _ws(workspace_id)
+00688: 
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+G. TOP UPLOAD DOCUMENT COORDINATOR
+====================================================================================================
+00001: """
+00002: Canonical Upload Document Coordinator
+00003: 
+00004: Dependency-aware execution:
+00005: 
+00006: UPLOADED DOCUMENT
+----------------------------------------------------------------------------------------------------
+00007:     -> Uploaded Document-to-UDUC Pipeline
+00008:     -> Uploaded Document-to-Highlight Pipeline
+00009:     -> Uploaded Document Registry-to-Active Target Set Pipeline
+00010: 
+----------------------------------------------------------------------------------------------------
+00011: Pipeline 2 executes first because it creates the uploaded-document identity,
+----------------------------------------------------------------------------------------------------
+00012: stored-file metadata, and extracted content required by Pipelines 1 and 3.
+----------------------------------------------------------------------------------------------------
+00013: 
+----------------------------------------------------------------------------------------------------
+00014: After Pipeline 2 completes, Pipelines 1 and 3 execute as independent
+00015: downstream branches using the Pipeline 2 result.
+----------------------------------------------------------------------------------------------------
+00016: """
+00017: 
+00018: from __future__ import annotations
+00019: 
+00020: from typing import Any, Dict
+00021: 
+00022: from fastapi import UploadFile
+----------------------------------------------------------------------------------------------------
+00023: 
+00024: from .uploaded_document_to_uduc_pipeline import (
+----------------------------------------------------------------------------------------------------
+00025:     UploadIntakeDependencies,
+00026:     run_uploaded_document_to_uduc_pipeline,
+----------------------------------------------------------------------------------------------------
+00027: )
+00028: from .uploaded_document_to_highlight_pipeline import (
+----------------------------------------------------------------------------------------------------
+00029:     run_uploaded_document_to_highlight_pipeline,
+----------------------------------------------------------------------------------------------------
+00030: )
+----------------------------------------------------------------------------------------------------
+00031: from .uploaded_document_registry_to_active_target_set_pipeline import (
+00032:     run_uploaded_document_registry_to_active_target_set_pipeline,
+----------------------------------------------------------------------------------------------------
+00033: )
+----------------------------------------------------------------------------------------------------
+00034: 
+00035: 
+----------------------------------------------------------------------------------------------------
+00036: def _required_string(
+----------------------------------------------------------------------------------------------------
+00037:     source: Dict[str, Any],
+00038:     *keys: str,
+00039: ) -> str:
+00040:     for key in keys:
+----------------------------------------------------------------------------------------------------
+00050: 
+00051:     return ""
+00052: 
+00053: 
+00054: async def run_upload_document(
+00055:     *,
+00056:     workspace_id: str,
+00057:     file: UploadFile,
+00058:     dependencies: UploadIntakeDependencies,
+----------------------------------------------------------------------------------------------------
+00059: ) -> Dict[str, Any]:
+00060:     """
+00061:     Canonical top-level Upload Document entry point.
+----------------------------------------------------------------------------------------------------
+00062: 
+----------------------------------------------------------------------------------------------------
+00063:     Execution order:
+00064:     1. Uploaded Document-to-UDUC Pipeline
+00065:     2. Uploaded Document-to-Highlight Pipeline
+----------------------------------------------------------------------------------------------------
+00066:     3. Uploaded Document Registry-to-Active Target Set Pipeline
+00067:     """
+00068: 
+----------------------------------------------------------------------------------------------------
+00069:     pipeline_2 = await run_uploaded_document_to_uduc_pipeline(
+----------------------------------------------------------------------------------------------------
+00070:         workspace_id=workspace_id,
+----------------------------------------------------------------------------------------------------
+00071:         file=file,
+00072:         dependencies=dependencies,
+00073:     )
+----------------------------------------------------------------------------------------------------
+00074: 
+00075:     if not isinstance(pipeline_2, dict):
+00076:         raise RuntimeError(
+00077:             "Uploaded Document-to-UDUC Pipeline returned "
+00078:             "a non-dictionary result."
+00079:         )
+00080: 
+00081:     if pipeline_2.get("ok") is not True:
+----------------------------------------------------------------------------------------------------
+00082:         return {
+00083:             "ok": False,
+00084:             "pipeline": "upload_document",
+00085:             "status": "UDUC_PIPELINE_FAILED",
+00086:             "execution_started": True,
+00087:             "execution_completed": False,
+00088:             "pipelines": {
+----------------------------------------------------------------------------------------------------
+00089:                 "uploaded_document_to_uduc_pipeline": pipeline_2,
+----------------------------------------------------------------------------------------------------
+00090:                 "uploaded_document_to_highlight_pipeline": {
+00091:                     "executed": False,
+00092:                     "reason": "Blocked by Pipeline 2 failure.",
+00093:                 },
+----------------------------------------------------------------------------------------------------
+00094:                 "uploaded_document_registry_to_active_target_set_pipeline": {
+----------------------------------------------------------------------------------------------------
+00095:                     "executed": False,
+00096:                     "reason": "Blocked by Pipeline 2 failure.",
+00097:                 },
+00098:             },
+----------------------------------------------------------------------------------------------------
+00136:             "ext",
+00137:         ),
+00138:     }
+00139: 
+00140:     pipeline_1 = run_uploaded_document_to_highlight_pipeline(
+00141:         workspace_id=str(
+00142:             pipeline_2.get("workspace_id") or workspace_id
+00143:         ),
+00144:         document_id=document_id,
+----------------------------------------------------------------------------------------------------
+00145:         extraction_result=extraction_result,
+00146:     )
+00147: 
+00148:     pipeline_3 = (
+00149:         run_uploaded_document_registry_to_active_target_set_pipeline(
+00150:             workspace_id=str(
+00151:                 pipeline_2.get("workspace_id") or workspace_id
+00152:             ),
+00153:             document_id=document_id,
+----------------------------------------------------------------------------------------------------
+00159:                 "title": extraction_result["title"],
+00160:                 "content_body": extraction_result["text"],
+00161:                 "content_html": extraction_result["html"],
+00162:                 "source_format": extraction_result["source_format"],
+00163:                 "upload_metadata": document_metadata,
+00164:             },
+00165:         )
+00166:     )
+00167: 
+----------------------------------------------------------------------------------------------------
+00172:     )
+00173: 
+00174:     return {
+00175:         # ------------------------------------------------------------
+00176:         # Canonical HTTP upload compatibility contract
+00177:         # ------------------------------------------------------------
+00178:         # The editor upload client consumes these fields directly.
+00179:         # Pipeline 2 remains the authoritative producer.
+00180:         "ok": overall_ok,
+----------------------------------------------------------------------------------------------------
+00181:         "workspace_id": str(
+00182:             pipeline_2.get("workspace_id") or workspace_id
+----------------------------------------------------------------------------------------------------
+00194: 
+00195:         # ------------------------------------------------------------
+00196:         # Canonical orchestration metadata
+00197:         # ------------------------------------------------------------
+00198:         "pipeline": "upload_document",
+00199:         "document_id": document_id,
+00200:         "status": (
+00201:             "UPLOAD_DOCUMENT_PIPELINES_COMPLETED"
+00202:             if overall_ok
+----------------------------------------------------------------------------------------------------
+00203:             else "UPLOAD_DOCUMENT_PIPELINES_PARTIALLY_FAILED"
+00204:         ),
+00205:         "execution_started": True,
+----------------------------------------------------------------------------------------------------
+00206:         "execution_completed": True,
+00207:         "execution_order": [
+----------------------------------------------------------------------------------------------------
+00208:             "uploaded_document_to_uduc_pipeline",
+00209:             "uploaded_document_to_highlight_pipeline",
+00210:             (
+00211:                 "uploaded_document_registry_to_"
+00212:                 "active_target_set_pipeline"
+----------------------------------------------------------------------------------------------------
+00213:             ),
+----------------------------------------------------------------------------------------------------
+00214:         ],
+00215:         "pipelines": {
+----------------------------------------------------------------------------------------------------
+00216:             "uploaded_document_to_uduc_pipeline": pipeline_2,
+00217:             "uploaded_document_to_highlight_pipeline": pipeline_1,
+00218:             (
+00219:                 "uploaded_document_registry_to_"
+00220:                 "active_target_set_pipeline"
+----------------------------------------------------------------------------------------------------
+00221:             ): pipeline_3,
+----------------------------------------------------------------------------------------------------
+00222:         },
+00223:     }
+----------------------------------------------------------------------------------------------------
+00224: 
+00225: 
+00226: __all__ = [
+00227:     "run_upload_document",
+00228: ]
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+H. UPLOADED DOCUMENT ? UDUC COORDINATOR
+====================================================================================================
+00001: """
+00002: Uploaded Document-to-UDUC Pipeline
+00003: 
+00004: Entry-point scope:
+00005: 
+00006: UPLOADED DOCUMENT
+00007:     -> Upload API / File Route
+----------------------------------------------------------------------------------------------------
+00008:     -> Uploaded Document-to-UDUC Pipeline Coordinator
+00009:     -> Upload Intake
+00010: 
+00011: The coordinator delegates the upload request into the existing canonical
+00012: upload-intake implementation.
+00013: 
+----------------------------------------------------------------------------------------------------
+00014: The worker, format detection, format router, extractor, and UDUC internals
+----------------------------------------------------------------------------------------------------
+00015: remain in their existing production locations.
+00016: """
+00017: 
+----------------------------------------------------------------------------------------------------
+00018: from __future__ import annotations
+00019: 
+----------------------------------------------------------------------------------------------------
+00020: from typing import Any, Dict
+00021: 
+00022: from fastapi import UploadFile
+00023: 
+----------------------------------------------------------------------------------------------------
+00024: from .upload_intake import (
+00025:     UploadIntakeDependencies,
+----------------------------------------------------------------------------------------------------
+00026:     run_upload_intake,
+00027: )
+----------------------------------------------------------------------------------------------------
+00028: 
+00029: 
+----------------------------------------------------------------------------------------------------
+00030: async def run_uploaded_document_to_uduc_pipeline(
+----------------------------------------------------------------------------------------------------
+00031:     *,
+----------------------------------------------------------------------------------------------------
+00032:     workspace_id: str,
+00033:     file: UploadFile,
+00034:     dependencies: UploadIntakeDependencies,
+00035: ) -> Dict[str, Any]:
+----------------------------------------------------------------------------------------------------
+00036:     """
+00037:     Canonical entry point for the Uploaded Document-to-UDUC Pipeline.
+00038: 
+00039:     This coordinator owns orchestration only and delegates directly to the
+----------------------------------------------------------------------------------------------------
+00040:     existing upload-intake boundary.
+00041:     """
+00042: 
+----------------------------------------------------------------------------------------------------
+00043:     result = await run_upload_intake(
+00044:         workspace_id=workspace_id,
+00045:         file=file,
+----------------------------------------------------------------------------------------------------
+00046:         dependencies=dependencies,
+00047:     )
+00048: 
+----------------------------------------------------------------------------------------------------
+00049:     if not isinstance(result, dict):
+00050:         raise RuntimeError(
+00051:             "Uploaded Document-to-UDUC upload intake returned "
+00052:             "a non-dictionary result."
+00053:         )
+00054: 
+00055:     result["pipeline"] = "uploaded_document_to_uduc_pipeline"
+00056:     result["pipeline_entry"] = (
+----------------------------------------------------------------------------------------------------
+00057:         "run_uploaded_document_to_uduc_pipeline"
+00058:     )
+00059: 
+00060:     return result
+----------------------------------------------------------------------------------------------------
+00061: 
+00062: 
+----------------------------------------------------------------------------------------------------
+00063: __all__ = [
+00064:     "run_uploaded_document_to_uduc_pipeline",
+00065: ]
+----------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+I. UPLOAD INTAKE
+====================================================================================================
+00001: """
+00002: Upload Document Pipeline 2 — Upload Intake Boundary
+00003: 
+00004: Responsibilities:
+00005: - validate the upload request;
+00006: - validate the allowed extension;
+00007: - normalize the workspace identity;
+----------------------------------------------------------------------------------------------------
+00008: - read the uploaded file;
+00009: - produce the immediate preview extraction;
+00010: - save and index the uploaded file;
+00011: - create the existing asynchronous document_upload_job;
+----------------------------------------------------------------------------------------------------
+00012: - preserve the existing API response contract.
+----------------------------------------------------------------------------------------------------
+00013: 
+00014: This module does not own:
+00015: - phrase intelligence;
+00016: - highlight selection;
+----------------------------------------------------------------------------------------------------
+00017: - editor painting;
+00018: - Document Registry persistence;
+00019: - Active Target Set mutation.
+00020: """
+00021: 
+00022: from __future__ import annotations
+00023: 
+----------------------------------------------------------------------------------------------------
+00024: import traceback
+00025: from dataclasses import dataclass
+00026: from pathlib import Path
+00027: from typing import Any, Callable, Dict, Iterable
+00028: 
+00029: from fastapi import HTTPException, UploadFile
+00030: 
+00031: 
+----------------------------------------------------------------------------------------------------
+00037:     The existing low-level storage and extraction helpers still live in
+00038:     routes/files.py. They are injected here so Pipeline 2 can own the upload
+00039:     workflow without introducing a circular import.
+00040:     """
+00041: 
+00042:     guess_extension: Callable[[str], str]
+00043:     normalize_workspace_id: Callable[[str], str]
+00044:     extract_preview: Callable[[str, str, bytes], Dict[str, Any]]
+00045:     store_and_index: Callable[..., Dict[str, Any]]
+00046:     workspace_directory: Callable[[str], Path]
+00047:     allowed_extensions: Iterable[str]
+----------------------------------------------------------------------------------------------------
+00048: 
+----------------------------------------------------------------------------------------------------
+00049: 
+00050: async def run_upload_intake(
+00051:     *,
+----------------------------------------------------------------------------------------------------
+00052:     workspace_id: str,
+----------------------------------------------------------------------------------------------------
+00053:     file: UploadFile,
+00054:     dependencies: UploadIntakeDependencies,
+00055: ) -> Dict[str, Any]:
+----------------------------------------------------------------------------------------------------
+00056:     """
+00057:     Execute the canonical Pipeline 2 upload-intake boundary.
+----------------------------------------------------------------------------------------------------
+00058:     """
+00059: 
+00060:     if not file or not file.filename:
+00061:         raise HTTPException(
+00062:             status_code=400,
+00063:             detail="No file uploaded.",
+00064:         )
+00065: 
+----------------------------------------------------------------------------------------------------
+00066:     extension = dependencies.guess_extension(file.filename)
+00067: 
+00068:     allowed_extensions = {
+00069:         str(value or "").strip().lower()
+00070:         for value in dependencies.allowed_extensions
+00071:         if str(value or "").strip()
+----------------------------------------------------------------------------------------------------
+00072:     }
+00073: 
+----------------------------------------------------------------------------------------------------
+00074:     if extension not in allowed_extensions:
+00075:         raise HTTPException(
+----------------------------------------------------------------------------------------------------
+00076:             status_code=400,
+00077:             detail=f"File type not allowed: {extension}",
+00078:         )
+00079: 
+----------------------------------------------------------------------------------------------------
+00080:     normalized_workspace_id = dependencies.normalize_workspace_id(
+00081:         workspace_id
+00082:     )
+----------------------------------------------------------------------------------------------------
+00083: 
+00084:     raw = await file.read()
+00085: 
+----------------------------------------------------------------------------------------------------
+00086:     preview = dependencies.extract_preview(
+----------------------------------------------------------------------------------------------------
+00087:         Path(file.filename).name,
+00088:         extension,
+00089:         raw,
+00090:     )
+00091: 
+00092:     metadata = dependencies.store_and_index(
+----------------------------------------------------------------------------------------------------
+00093:         normalized_workspace_id,
+----------------------------------------------------------------------------------------------------
+00094:         file,
+00095:         raw,
+00096:         preview_html=str(preview.get("html") or ""),
+00097:         preview_text=str(preview.get("text") or ""),
+----------------------------------------------------------------------------------------------------
+00098:     )
+----------------------------------------------------------------------------------------------------
+00102:     try:
+00103:         from backend.server.orchestration.service import (
+00104:             create_orchestration_job,
+00105:         )
+00106: 
+00107:         stored_path = str(
+00108:             dependencies.workspace_directory(
+00109:                 normalized_workspace_id
+00110:             )
+00111:             / str(metadata.get("stored_name") or "")
+00112:         )
+----------------------------------------------------------------------------------------------------
+00113: 
+----------------------------------------------------------------------------------------------------
+00114:         document_id = str(
+----------------------------------------------------------------------------------------------------
+00115:             metadata.get("doc_id") or ""
+00116:         ).strip()
+----------------------------------------------------------------------------------------------------
+00117: 
+00118:         processing_job = create_orchestration_job(
+00119:             workspace_id=normalized_workspace_id,
+----------------------------------------------------------------------------------------------------
+00120:             job_type="document_upload_job",
+----------------------------------------------------------------------------------------------------
+00121:             payload={
+00122:                 "workspace_id": normalized_workspace_id,
+00123:                 "doc_id": document_id,
+00124:                 "stored_path": stored_path,
+----------------------------------------------------------------------------------------------------
+00125:                 "stored_name": str(
+----------------------------------------------------------------------------------------------------
+00126:                     metadata.get("stored_name") or ""
+00127:                 ),
+----------------------------------------------------------------------------------------------------
+00128:                 "original_name": str(
+----------------------------------------------------------------------------------------------------
+00129:                     metadata.get("filename") or ""
+----------------------------------------------------------------------------------------------------
+00130:                 ),
+00131:                 "html": str(preview.get("html") or ""),
+----------------------------------------------------------------------------------------------------
+00132:                 "text": str(preview.get("text") or ""),
+00133:                 "source_route": "/upload",
+00134:                 "document_count": 1,
+----------------------------------------------------------------------------------------------------
+00135:             },
+00136:             metadata={
+00137:                 "phase": "phase_2_background_orchestration",
+00138:                 "filename": str(
+00139:                     metadata.get("filename") or ""
+----------------------------------------------------------------------------------------------------
+00140:                 ),
+00141:                 "stored_name": str(
+----------------------------------------------------------------------------------------------------
+00142:                     metadata.get("stored_name") or ""
+00143:                 ),
+----------------------------------------------------------------------------------------------------
+00144:                 "document_count": 1,
+----------------------------------------------------------------------------------------------------
+00145:             },
+00146:             priority=5,
+00147:         )
+----------------------------------------------------------------------------------------------------
+00148: 
+00149:         processing_job_id = processing_job.job_id
+----------------------------------------------------------------------------------------------------
+00150: 
+00151:         metadata["universal_knowledge_orchestration"] = {
+00152:             "ok": True,
+00153:             "status": "queued",
+00154:             "note": (
+00155:                 "Phase 2: orchestration job created and queued "
+00156:                 "without blocking upload."
+----------------------------------------------------------------------------------------------------
+00163:             "[UPLOAD_ORCHESTRATION_QUEUE_ERROR]",
+00164:             repr(exc),
+00165:         )
+00166:         traceback.print_exc()
+00167: 
+00168:         metadata["universal_knowledge_orchestration"] = {
+00169:             "ok": False,
+00170:             "status": "queue_failed",
+00171:             "error": str(exc)[:160],
+00172:             "job_id": None,
+00173:         }
+----------------------------------------------------------------------------------------------------
+00174: 
+00175:     return {
+00176:         "ok": True,
+00177:         "workspace_id": normalized_workspace_id,
+00178:         "doc": metadata,
+00179:         "filename": preview.get("filename"),
+00180:         "ext": preview.get("ext"),
+----------------------------------------------------------------------------------------------------
+00181:         "text": preview.get("text"),
+00182:         "html": preview.get("html"),
+----------------------------------------------------------------------------------------------------
+00183:         "is_html": bool(preview.get("is_html")),
+----------------------------------------------------------------------------------------------------
+00184:         "truncated": bool(preview.get("truncated")),
+----------------------------------------------------------------------------------------------------
+00186:         "processing_status": (
+00187:             "queued"
+00188:             if processing_job_id
+00189:             else "queue_failed"
+00190:         ),
+00191:         "pipeline": "uploaded_document_to_uduc_pipeline",
+00192:         "pipeline_stage": "upload_intake",
+00193:     }
+00194: 
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+J. ROOT /api/upload CHECK
+====================================================================================================
+00013: BASE_DIR = Path(__file__).resolve().parent
+00014: PUBLIC_DIR = BASE_DIR / "public"
+00015: UPLOAD_DIR = BASE_DIR / "uploads"
+00016: UPLOAD_DIR.mkdir(exist_ok=True)
+00017: 
+00018: app = Flask(
+00019:     __name__,
+00020:     static_folder=str(PUBLIC_DIR),
+00021:     static_url_path=""  # so /assets/... resolves
+00022: )
+00023: CORS(app)
+00024: 
+00025: # ---------- ROUTES ----------
+00026: 
+00027: @app.get("/health")
+00028: def health():
+00029:     return jsonify({"ok": True})
+00030: 
+00031: @app.get("/")
+00032: def root():
+00033:     # Serve your main page (public/app.html)
+00034:     return send_from_directory(str(PUBLIC_DIR), "app.html")
+00035: 
+00036: # Serve any other static file under /public (assets, css, js, images, etc.)
+00037: @app.get("/<path:filename>")
+00038: def public_files(filename):
+00039:     return send_from_directory(str(PUBLIC_DIR), filename)
+00040: 
+00041: # ---------- UPLOAD + EXTRACT ----------
+00042: 
+00043: def _html_escape(s: str) -> str:
+----------------------------------------------------------------------------------------------------
+00044:     return (
+00045:         s.replace("&", "&amp;")
+00046:          .replace("<", "&lt;")
+00047:          .replace(">", "&gt;")
+----------------------------------------------------------------------------------------------------
+00048:     )
+00049: 
+00050: def _strip_tags(s: str) -> str:
+00051:     # very simple HTML -> text (for matching)
+00052:     return re.sub(r"<[^>]+>", " ", s)
+00053: 
+----------------------------------------------------------------------------------------------------
+00054: @app.post("/api/upload")
+00055: def api_upload():
+00056:     """
+00057:     Expects form-data: file=<uploaded file>
+00058:     Returns JSON: { filename, ext, text, html, truncated }
+----------------------------------------------------------------------------------------------------
+00059:       - text: plain text (ALWAYS a string)
+00060:       - html: best-effort HTML for faithful display
+00061:     """
+00062:     if "file" not in request.files:
+00063:         return jsonify({"error": "no file part"}), 400
+00064:     f = request.files["file"]
+00065:     if f.filename == "":
+----------------------------------------------------------------------------------------------------
+00066:         return jsonify({"error": "empty filename"}), 400
+00067: 
+00068:     from werkzeug.utils import secure_filename
+00069:     filename = secure_filename(f.filename)
+----------------------------------------------------------------------------------------------------
+00070:     ext = Path(filename).suffix.lower()
+----------------------------------------------------------------------------------------------------
+00112:                     html = result.value or ""
+00113:                 text = _strip_tags(html) if html else ""
+00114:             except Exception:
+00115:                 # fallback: raw bytes to text (not perfect but avoids crash)
+00116:                 raw = save_path.read_bytes().decode("utf-8", errors="ignore")
+00117:                 text = raw
+00118:                 html = f"<pre>{_html_escape(raw)}</pre>"
+00119: 
+00120:         else:
+00121:             return jsonify({"error": f"unsupported ext {ext}"}), 400
+00122: 
+00123:     except Exception as e:
+00124:         return jsonify({"error": f"extract failed: {e}"}), 500
+00125: 
+00126:     # truncate text to keep client light (200k chars)
+00127:     def _truncate(s: str, limit=200000):
+00128:         s = s or ""
+00129:         return (s[:limit], len(s) > limit)
+00130: 
+00131:     text, was_trunc = _truncate(text, 200000)
+00132: 
+00133:     # IMPORTANT: always return strings to avoid `(text || '').split` crashes
+00134:     if not isinstance(text, str):
+00135:         text = str(text or "")
+00136:     if not isinstance(html, str):
+00137:         html = ""
+00138: 
+00139:     return jsonify({
+00140:         "filename": filename,
+00141:         "ext": ext,
+00142:         "text": text,   # PLAIN TEXT for matching (always string)
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================
+K. CURRENT PRODUCTION COLLISION CHECK
+====================================================================================================
+backend\server\routes\files.py:649 :: @router.post("/upload")
+backend\server\routes\files.py:1153 :: @legacy_router.post("/upload")
+backend\server\routes\imported_targets_urls_compat.py:250 :: @router.post("/upload")
+frontend\public\assets\js\app\api.js:2 :: // Uploads ALL formats to backend /api/files/upload (so they get stored + indexed into pools).
+frontend\public\assets\js\app\api.js:75 ::   const res = await fetch(`${API_BASE}/api/files/upload?workspace_id=${encodeURIComponent(ws)}`, {
+
+CURRENT_PRODUCTION_UPLOAD_REFERENCE_COUNT: 5
+
+====================================================================================================
+L. U1.2 EXECUTION RESULT
+====================================================================================================
+PRODUCTION_FILES_MODIFIED: False
+UPLOAD_STORAGE_MODIFIED: False
+BODY_STORE_MODIFIED: False
+UUCD_STORE_MODIFIED: False
+JOBS_CREATED: False
+RUNTIME_EXECUTED: False
+
+PHASE_U1_2_FOCUSED_SCAN: COMPLETE

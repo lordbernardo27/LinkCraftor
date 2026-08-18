@@ -1,0 +1,2329 @@
+﻿================================================================================
+LINKCRAFTOR UNIVERSAL COORDINATION FRAMEWORK
+PHASE 3.3 - LIFECYCLE HISTORY DISCOVERY SCAN
+Generated: 2026-08-17 18:21:00
+================================================================================
+
+PURPOSE
+-------
+Determine the exact canonical authority and implementation boundary for:
+
+    3.3 Lifecycle History
+
+using the already-frozen:
+
+1. Universal Workflow Contract - Phase 1.1
+2. Workflow State Machine - Phase 3.1
+3. Transition Validation - Phase 3.2
+
+This scan is READ-ONLY.
+
+No production files are modified.
+
+
+IMPORTANT PHASE BOUNDARY
+------------------------
+
+3.1 owns:
+
+    canonical lifecycle graph
+
+
+3.2 owns:
+
+    requested-transition validation
+
+
+3.3 should own:
+
+    immutable lifecycle transition-history evidence
+
+
+3.3 must NOT prematurely implement:
+
+- workflow state mutation                  -> lifecycle execution layer
+- transition validation authority         -> 3.2
+- terminal-state protection               -> 3.4
+- durable history persistence             -> Phase 8
+- checkpoints                             -> Phase 8
+- recovery policy/execution               -> Phase 9
+- Runtime execution                       -> Phase 5
+
+
+================================================================================
+SECTION 1 - FROZEN PHASE 3.2 TRANSITION VALIDATION
+================================================================================
+"""
+LinkCraftor Universal Coordination Framework
+Phase 3.2 - Transition Validation
+============================================
+
+Pure validation of requested workflow lifecycle transitions against the
+frozen Phase 3.1 Workflow State Machine.
+
+This component does NOT:
+- define lifecycle graph edges;
+- define workflow statuses;
+- mutate workflow state;
+- record lifecycle history;
+- enforce terminal-state protection;
+- persist lifecycle state;
+- execute coordinators or Runtime jobs;
+- perform recovery.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MappingProxyType
+from typing import (
+    Any,
+    Final,
+    Mapping,
+    Optional,
+    Tuple,
+)
+
+from backend.server.coordination.universal_workflows.contract import (
+    UniversalWorkflowContractError,
+    UniversalWorkflowStatus,
+)
+
+from backend.server.coordination.workflow_lifecycle.state_machine import (
+    WORKFLOW_STATE_MACHINE_VERSION,
+    coerce_workflow_state,
+    has_transition_edge,
+)
+
+
+# ============================================================================
+# 1. Component identity
+# ============================================================================
+
+TRANSITION_VALIDATION_VERSION: Final[str] = (
+    "transition_validation_v3.2.0"
+)
+
+TRANSITION_VALIDATION_SCHEMA_VERSION: Final[str] = (
+    "transition_validation_schema_v1"
+)
+
+
+# ============================================================================
+# 2. Violation codes
+# ============================================================================
+
+VIOLATION_CURRENT_STATE_INVALID: Final[str] = (
+    "current_state_invalid"
+)
+
+VIOLATION_REQUESTED_STATE_INVALID: Final[str] = (
+    "requested_state_invalid"
+)
+
+VIOLATION_TRANSITION_NOT_DECLARED: Final[str] = (
+    "transition_not_declared"
+)
+
+
+# ============================================================================
+# 3. Errors
+# ============================================================================
+
+class TransitionValidationError(
+    ValueError
+):
+    """Base error for Transition Validation."""
+
+
+class InvalidWorkflowTransitionError(
+    TransitionValidationError
+):
+    """Raised when a required workflow transition is invalid."""
+
+    def __init__(
+        self,
+        result: "TransitionValidationResult",
+    ) -> None:
+
+        self.result = result
+
+        super().__init__(
+            (
+                "invalid workflow transition: "
+                f"{result.current_state!r} -> "
+                f"{result.requested_state!r}"
+            )
+        )
+
+
+# ============================================================================
+# 4. Immutable helpers
+# ============================================================================
+
+def _freeze(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        Mapping,
+    ):
+
+        return MappingProxyType(
+            {
+                str(key): _freeze(item)
+                for key, item
+                in value.items()
+            }
+        )
+
+    if isinstance(
+        value,
+        list,
+    ):
+
+        return tuple(
+            _freeze(item)
+            for item
+            in value
+        )
+
+    if isinstance(
+        value,
+        tuple,
+    ):
+
+        return tuple(
+            _freeze(item)
+            for item
+            in value
+        )
+
+    return value
+
+
+def _raw_state_evidence(
+    value: Any,
+) -> Any:
+
+    if isinstance(
+        value,
+        UniversalWorkflowStatus,
+    ):
+
+        return value.value
+
+    if isinstance(
+        value,
+        str,
+    ):
+
+        return value
+
+    return repr(
+        value
+    )
+
+
+def _violation(
+    *,
+    code: str,
+    message: str,
+    field: str,
+    current_state: Any,
+    requested_state: Any,
+) -> Mapping[
+    str,
+    Any,
+]:
+
+    return MappingProxyType(
+        {
+            "code": code,
+            "message": message,
+            "field": field,
+            "current_state": (
+                _raw_state_evidence(
+                    current_state
+                )
+            ),
+            "requested_state": (
+                _raw_state_evidence(
+                    requested_state
+                )
+            ),
+        }
+    )
+
+
+# ============================================================================
+# 5. Immutable validation result
+# ============================================================================
+
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class TransitionValidationResult:
+
+    current_state: Optional[
+        UniversalWorkflowStatus
+    ]
+
+    requested_state: Optional[
+        UniversalWorkflowStatus
+    ]
+
+    is_valid: bool
+
+    violations: Tuple[
+        Mapping[
+            str,
+            Any,
+        ],
+        ...,
+    ]
+
+    checked_rule_count: int
+
+    validation_version: str = (
+        TRANSITION_VALIDATION_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "violations",
+            tuple(
+                _freeze(item)
+                for item
+                in self.violations
+            ),
+        )
+
+    def to_dict(
+        self,
+    ) -> Mapping[
+        str,
+        Any,
+    ]:
+
+        return MappingProxyType(
+            {
+                "current_state": (
+                    self.current_state.value
+                    if self.current_state
+                    is not None
+                    else None
+                ),
+                "requested_state": (
+                    self.requested_state.value
+                    if self.requested_state
+                    is not None
+                    else None
+                ),
+                "is_valid":
+                    self.is_valid,
+                "violations":
+                    self.violations,
+                "checked_rule_count":
+                    self.checked_rule_count,
+                "validation_version":
+                    self.validation_version,
+            }
+        )
+
+
+# ============================================================================
+# 6. Transition validation
+# ============================================================================
+
+def validate_workflow_transition(
+    current_state: Any,
+    requested_state: Any,
+) -> TransitionValidationResult:
+    """
+    Validate one requested lifecycle transition.
+
+    Rules:
+
+    1. current_state must resolve to UniversalWorkflowStatus.
+    2. requested_state must resolve to UniversalWorkflowStatus.
+    3. current_state -> requested_state must exist in frozen Phase 3.1.
+
+    This function does not mutate workflow state.
+    """
+
+    violations = []
+
+    normalized_current: Optional[
+        UniversalWorkflowStatus
+    ] = None
+
+    normalized_requested: Optional[
+        UniversalWorkflowStatus
+    ] = None
+
+    checked_rule_count = 0
+
+
+    # ------------------------------------------------------------------------
+    # Rule 1 - current state
+    # ------------------------------------------------------------------------
+
+    checked_rule_count += 1
+
+    try:
+
+        normalized_current = (
+            coerce_workflow_state(
+                current_state
+            )
+        )
+
+    except (
+        UniversalWorkflowContractError,
+        ValueError,
+        TypeError,
+    ):
+
+        violations.append(
+            _violation(
+                code=(
+                    VIOLATION_CURRENT_STATE_INVALID
+                ),
+                message=(
+                    "current_state does not resolve "
+                    "to UniversalWorkflowStatus"
+                ),
+                field="current_state",
+                current_state=current_state,
+                requested_state=requested_state,
+            )
+        )
+
+        return TransitionValidationResult(
+            current_state=None,
+            requested_state=None,
+            is_valid=False,
+            violations=tuple(
+                violations
+            ),
+            checked_rule_count=(
+                checked_rule_count
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 2 - requested state
+    # ------------------------------------------------------------------------
+
+    checked_rule_count += 1
+
+    try:
+
+        normalized_requested = (
+            coerce_workflow_state(
+                requested_state
+            )
+        )
+
+    except (
+        UniversalWorkflowContractError,
+        ValueError,
+        TypeError,
+    ):
+
+        violations.append(
+            _violation(
+                code=(
+                    VIOLATION_REQUESTED_STATE_INVALID
+                ),
+                message=(
+                    "requested_state does not resolve "
+                    "to UniversalWorkflowStatus"
+                ),
+                field="requested_state",
+                current_state=(
+                    normalized_current
+                ),
+                requested_state=(
+                    requested_state
+                ),
+            )
+        )
+
+        return TransitionValidationResult(
+            current_state=(
+                normalized_current
+            ),
+            requested_state=None,
+            is_valid=False,
+            violations=tuple(
+                violations
+            ),
+            checked_rule_count=(
+                checked_rule_count
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 3 - canonical edge
+    # ------------------------------------------------------------------------
+
+    checked_rule_count += 1
+
+    if not has_transition_edge(
+        normalized_current,
+        normalized_requested,
+    ):
+
+        violations.append(
+            _violation(
+                code=(
+                    VIOLATION_TRANSITION_NOT_DECLARED
+                ),
+                message=(
+                    "requested lifecycle transition "
+                    "is not declared by the frozen "
+                    "Phase 3.1 Workflow State Machine"
+                ),
+                field="transition",
+                current_state=(
+                    normalized_current
+                ),
+                requested_state=(
+                    normalized_requested
+                ),
+            )
+        )
+
+
+    return TransitionValidationResult(
+        current_state=(
+            normalized_current
+        ),
+        requested_state=(
+            normalized_requested
+        ),
+        is_valid=(
+            not violations
+        ),
+        violations=tuple(
+            violations
+        ),
+        checked_rule_count=(
+            checked_rule_count
+        ),
+    )
+
+
+# ============================================================================
+# 7. Require-style API
+# ============================================================================
+
+def require_valid_workflow_transition(
+    current_state: Any,
+    requested_state: Any,
+) -> TransitionValidationResult:
+    """
+    Require a valid workflow lifecycle transition.
+
+    Returns the immutable validation result when valid.
+
+    Raises InvalidWorkflowTransitionError when invalid.
+    """
+
+    result = (
+        validate_workflow_transition(
+            current_state,
+            requested_state,
+        )
+    )
+
+    if not result.is_valid:
+
+        raise InvalidWorkflowTransitionError(
+            result
+        )
+
+    return result
+
+
+# ============================================================================
+# 8. Architecture declaration
+# ============================================================================
+
+def explain_transition_validation_v3_2(
+) -> Mapping[
+    str,
+    Any,
+]:
+
+    return MappingProxyType(
+        {
+            "phase":
+                "3.2",
+
+            "component":
+                "Transition Validation",
+
+            "version":
+                TRANSITION_VALIDATION_VERSION,
+
+            "schema_version":
+                TRANSITION_VALIDATION_SCHEMA_VERSION,
+
+            "state_machine_version":
+                WORKFLOW_STATE_MACHINE_VERSION,
+
+            "validation_direction":
+                "current_state_to_requested_state",
+
+            "validation_rules": (
+                (
+                    "current_state resolves to "
+                    "UniversalWorkflowStatus"
+                ),
+                (
+                    "requested_state resolves to "
+                    "UniversalWorkflowStatus"
+                ),
+                (
+                    "transition edge exists in "
+                    "frozen Phase 3.1"
+                ),
+            ),
+
+            "violation_codes": (
+                VIOLATION_CURRENT_STATE_INVALID,
+                VIOLATION_REQUESTED_STATE_INVALID,
+                VIOLATION_TRANSITION_NOT_DECLARED,
+            ),
+
+            "owns": (
+                "requested workflow transition validation",
+                (
+                    "current/requested lifecycle "
+                    "state normalization"
+                ),
+                (
+                    "exact edge validation against "
+                    "frozen Phase 3.1"
+                ),
+                (
+                    "deterministic transition-validation "
+                    "result"
+                ),
+                (
+                    "immutable validation "
+                    "violations/evidence"
+                ),
+                (
+                    "canonical invalid-transition error "
+                    "for require-style API"
+                ),
+                "validation inspection/explanation",
+            ),
+
+            "does_not_own": (
+                "workflow lifecycle graph definition",
+                "workflow status vocabulary",
+                "workflow status mutation",
+                "workflow object reconstruction",
+                "lifecycle history",
+                "transition timestamp generation",
+                "terminal-state protection enforcement",
+                "workflow persistence",
+                "checkpointing",
+                "pause execution behavior",
+                "resume execution behavior",
+                "recovery execution",
+                "recovery policy",
+                "coordinator execution",
+                "Runtime Registration",
+                "Runtime jobs",
+                "dependency planning",
+                "stage result handoff",
+            ),
+
+            "future_authority": {
+                "3.3":
+                    "Lifecycle History",
+
+                "3.4":
+                    "Terminal-State Protection",
+
+                "8.0":
+                    "Workflow State Persistence",
+
+                "9.0":
+                    "Coordination Recovery",
+            },
+        }
+    )
+
+
+__all__ = [
+    "TRANSITION_VALIDATION_VERSION",
+    "TRANSITION_VALIDATION_SCHEMA_VERSION",
+    "VIOLATION_CURRENT_STATE_INVALID",
+    "VIOLATION_REQUESTED_STATE_INVALID",
+    "VIOLATION_TRANSITION_NOT_DECLARED",
+    "TransitionValidationError",
+    "InvalidWorkflowTransitionError",
+    "TransitionValidationResult",
+    "validate_workflow_transition",
+    "require_valid_workflow_transition",
+    "explain_transition_validation_v3_2",
+]
+
+
+================================================================================
+SECTION 2 - FROZEN PHASE 3.1 STATE MACHINE
+================================================================================
+
+  backend\server\coordination\workflow_lifecycle\state_machine.py:6:Canonical workflow lifecycle MODEL.
+  backend\server\coordination\workflow_lifecycle\state_machine.py:7:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:8:This component reuses the frozen UniversalWorkflowStatus vocabulary from
+  backend\server\coordination\workflow_lifecycle\state_machine.py:9:the Universal Workflow Contract.
+  backend\server\coordination\workflow_lifecycle\state_machine.py:10:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:11:It defines:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:12:- canonical state classification;
+  backend\server\coordination\workflow_lifecycle\state_machine.py:13:- canonical terminal/non-terminal classification;
+  backend\server\coordination\workflow_lifecycle\state_machine.py:42:    UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:43:    TERMINAL_WORKFLOW_STATUSES,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:44:    UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:45:)
+  backend\server\coordination\workflow_lifecycle\state_machine.py:46:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:47:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:48:# ============================================================================
+  backend\server\coordination\workflow_lifecycle\state_machine.py:49:# 1. Component identity
+  backend\server\coordination\workflow_lifecycle\state_machine.py:50:# ============================================================================
+  backend\server\coordination\workflow_lifecycle\state_machine.py:51:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:52:WORKFLOW_STATE_MACHINE_VERSION: Final[str] = (
+  backend\server\coordination\workflow_lifecycle\state_machine.py:53:    "workflow_state_machine_v3.1.0"
+  backend\server\coordination\workflow_lifecycle\state_machine.py:54:)
+  backend\server\coordination\workflow_lifecycle\state_machine.py:55:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:56:WORKFLOW_STATE_MACHINE_SCHEMA_VERSION: Final[str] = (
+  backend\server\coordination\workflow_lifecycle\state_machine.py:57:    "workflow_state_machine_schema_v1"
+  backend\server\coordination\workflow_lifecycle\state_machine.py:65:_CANONICAL_WORKFLOW_STATES: Final[
+  backend\server\coordination\workflow_lifecycle\state_machine.py:66:    Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:67:        UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:68:        ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:69:    ]
+  backend\server\coordination\workflow_lifecycle\state_machine.py:70:] = (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:71:    UniversalWorkflowStatus.CREATED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:72:    UniversalWorkflowStatus.READY,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:73:    UniversalWorkflowStatus.RUNNING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:74:    UniversalWorkflowStatus.WAITING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:75:    UniversalWorkflowStatus.PAUSED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:76:    UniversalWorkflowStatus.RECOVERING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:77:    UniversalWorkflowStatus.COMPLETED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:78:    UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:79:    UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:80:    UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:81:)
+  backend\server\coordination\workflow_lifecycle\state_machine.py:82:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:83:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:84:_CANONICAL_TERMINAL_STATES: Final[
+  backend\server\coordination\workflow_lifecycle\state_machine.py:85:    Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:86:        UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:87:        ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:88:    ]
+  backend\server\coordination\workflow_lifecycle\state_machine.py:89:] = tuple(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:90:    state
+  backend\server\coordination\workflow_lifecycle\state_machine.py:91:    for state
+  backend\server\coordination\workflow_lifecycle\state_machine.py:98:_CANONICAL_NON_TERMINAL_STATES: Final[
+  backend\server\coordination\workflow_lifecycle\state_machine.py:99:    Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:100:        UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:101:        ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:102:    ]
+  backend\server\coordination\workflow_lifecycle\state_machine.py:103:] = tuple(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:104:    state
+  backend\server\coordination\workflow_lifecycle\state_machine.py:105:    for state
+  backend\server\coordination\workflow_lifecycle\state_machine.py:116:_WORKFLOW_TRANSITION_GRAPH: Final[
+  backend\server\coordination\workflow_lifecycle\state_machine.py:117:    Mapping[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:118:        UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:119:        Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:120:            UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:121:            ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:122:        ],
+  backend\server\coordination\workflow_lifecycle\state_machine.py:123:    ]
+  backend\server\coordination\workflow_lifecycle\state_machine.py:124:] = MappingProxyType(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:125:    {
+> backend\server\coordination\workflow_lifecycle\state_machine.py:126:        UniversalWorkflowStatus.CREATED: (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:127:            UniversalWorkflowStatus.READY,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:128:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:129:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:130:        ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:131:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:132:        UniversalWorkflowStatus.READY: (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:133:            UniversalWorkflowStatus.RUNNING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:134:            UniversalWorkflowStatus.PAUSED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:135:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:136:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:137:        ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:138:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:139:        UniversalWorkflowStatus.RUNNING: (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:140:            UniversalWorkflowStatus.WAITING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:141:            UniversalWorkflowStatus.PAUSED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:142:            UniversalWorkflowStatus.RECOVERING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:143:            UniversalWorkflowStatus.COMPLETED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:144:            UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:145:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:146:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:147:        ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:148:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:149:        UniversalWorkflowStatus.WAITING: (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:150:            UniversalWorkflowStatus.RUNNING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:151:            UniversalWorkflowStatus.PAUSED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:152:            UniversalWorkflowStatus.RECOVERING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:153:            UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:154:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:155:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:156:        ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:157:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:158:        UniversalWorkflowStatus.PAUSED: (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:159:            UniversalWorkflowStatus.READY,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:160:            UniversalWorkflowStatus.RUNNING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:161:            UniversalWorkflowStatus.RECOVERING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:162:            UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:163:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:164:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:165:        ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:166:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:167:        UniversalWorkflowStatus.RECOVERING: (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:168:            UniversalWorkflowStatus.READY,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:169:            UniversalWorkflowStatus.RUNNING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:170:            UniversalWorkflowStatus.WAITING,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:171:            UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:172:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:173:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:174:        ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:175:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:176:        UniversalWorkflowStatus.COMPLETED: (),
+> backend\server\coordination\workflow_lifecycle\state_machine.py:177:        UniversalWorkflowStatus.FAILED: (),
+> backend\server\coordination\workflow_lifecycle\state_machine.py:178:        UniversalWorkflowStatus.CANCELLED: (),
+> backend\server\coordination\workflow_lifecycle\state_machine.py:179:        UniversalWorkflowStatus.ABORTED: (),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:180:    }
+  backend\server\coordination\workflow_lifecycle\state_machine.py:181:)
+  backend\server\coordination\workflow_lifecycle\state_machine.py:182:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:183:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:184:# ============================================================================
+  backend\server\coordination\workflow_lifecycle\state_machine.py:188:_WORKFLOW_STATE_SEMANTICS: Final[
+  backend\server\coordination\workflow_lifecycle\state_machine.py:189:    Mapping[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:190:        UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:191:        str,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:192:    ]
+  backend\server\coordination\workflow_lifecycle\state_machine.py:193:] = MappingProxyType(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:194:    {
+> backend\server\coordination\workflow_lifecycle\state_machine.py:195:        UniversalWorkflowStatus.CREATED:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:196:            "Workflow instance exists but has not yet reached readiness.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:197:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:198:        UniversalWorkflowStatus.READY:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:199:            "Workflow prerequisites are satisfied and execution may begin.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:200:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:201:        UniversalWorkflowStatus.RUNNING:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:202:            "Workflow is actively progressing through coordinated work.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:203:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:204:        UniversalWorkflowStatus.WAITING:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:205:            "Workflow cannot currently advance because required coordination "
+  backend\server\coordination\workflow_lifecycle\state_machine.py:206:            "evidence, dependency completion, branch/join completion, or an "
+  backend\server\coordination\workflow_lifecycle\state_machine.py:207:            "external event is pending.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:208:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:209:        UniversalWorkflowStatus.PAUSED:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:210:            "Workflow has been deliberately suspended.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:211:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:212:        UniversalWorkflowStatus.RECOVERING:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:213:            "Workflow is in non-terminal recovery handling before either "
+  backend\server\coordination\workflow_lifecycle\state_machine.py:214:            "returning to an executable/waiting state or reaching terminal "
+  backend\server\coordination\workflow_lifecycle\state_machine.py:215:            "failure.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:216:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:217:        UniversalWorkflowStatus.COMPLETED:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:218:            "Workflow completed successfully.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:219:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:220:        UniversalWorkflowStatus.FAILED:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:221:            "Workflow reached terminal failure.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:222:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:223:        UniversalWorkflowStatus.CANCELLED:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:224:            "Workflow was terminated through controlled cancellation.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:225:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:226:        UniversalWorkflowStatus.ABORTED:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:227:            "Workflow was terminated outside normal controlled completion "
+  backend\server\coordination\workflow_lifecycle\state_machine.py:228:            "or cancellation progression.",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:229:    }
+  backend\server\coordination\workflow_lifecycle\state_machine.py:230:)
+  backend\server\coordination\workflow_lifecycle\state_machine.py:231:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:237:def coerce_workflow_state(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:238:    state: Any,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:239:) -> UniversalWorkflowStatus:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:240:    """
+  backend\server\coordination\workflow_lifecycle\state_machine.py:241:    Convert a status value into the frozen canonical workflow status enum.
+  backend\server\coordination\workflow_lifecycle\state_machine.py:242:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:243:    This performs status normalization only.
+  backend\server\coordination\workflow_lifecycle\state_machine.py:244:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:246:    """
+  backend\server\coordination\workflow_lifecycle\state_machine.py:247:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:248:    return UniversalWorkflowStatus.coerce(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:249:        state
+  backend\server\coordination\workflow_lifecycle\state_machine.py:250:    )
+  backend\server\coordination\workflow_lifecycle\state_machine.py:251:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:252:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:253:# ============================================================================
+  backend\server\coordination\workflow_lifecycle\state_machine.py:257:def workflow_states(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:258:) -> Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:259:    UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:260:    ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:261:]:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:262:    """Return every canonical workflow lifecycle state."""
+  backend\server\coordination\workflow_lifecycle\state_machine.py:263:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:264:    return _CANONICAL_WORKFLOW_STATES
+  backend\server\coordination\workflow_lifecycle\state_machine.py:265:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:266:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:267:def terminal_workflow_states(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:268:) -> Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:269:    UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:270:    ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:271:]:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:272:    """Return canonical terminal states."""
+  backend\server\coordination\workflow_lifecycle\state_machine.py:273:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:274:    return _CANONICAL_TERMINAL_STATES
+  backend\server\coordination\workflow_lifecycle\state_machine.py:275:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:276:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:277:def non_terminal_workflow_states(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:278:) -> Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:279:    UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:280:    ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:281:]:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:282:    """Return canonical non-terminal states."""
+  backend\server\coordination\workflow_lifecycle\state_machine.py:283:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:284:    return _CANONICAL_NON_TERMINAL_STATES
+  backend\server\coordination\workflow_lifecycle\state_machine.py:333:    state: Any,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:334:) -> Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:335:    UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:336:    ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:337:]:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:338:    """
+  backend\server\coordination\workflow_lifecycle\state_machine.py:339:    Return lifecycle edges declared by the canonical state-machine model.
+  backend\server\coordination\workflow_lifecycle\state_machine.py:340:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:353:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:354:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:355:def has_transition_edge(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:356:    from_state: Any,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:357:    to_state: Any,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:358:) -> bool:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:359:    """
+  backend\server\coordination\workflow_lifecycle\state_machine.py:360:    Return whether one edge exists in the canonical lifecycle graph.
+  backend\server\coordination\workflow_lifecycle\state_machine.py:385:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:386:
+> backend\server\coordination\workflow_lifecycle\state_machine.py:387:def transition_edges(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:388:) -> Tuple[
+  backend\server\coordination\workflow_lifecycle\state_machine.py:389:    Tuple[
+> backend\server\coordination\workflow_lifecycle\state_machine.py:390:        UniversalWorkflowStatus,
+> backend\server\coordination\workflow_lifecycle\state_machine.py:391:        UniversalWorkflowStatus,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:392:    ],
+  backend\server\coordination\workflow_lifecycle\state_machine.py:393:    ...,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:394:]:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:395:    """Return all canonical transition edges deterministically."""
+  backend\server\coordination\workflow_lifecycle\state_machine.py:396:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:451:        {
+  backend\server\coordination\workflow_lifecycle\state_machine.py:452:            "state_machine_version":
+> backend\server\coordination\workflow_lifecycle\state_machine.py:453:                WORKFLOW_STATE_MACHINE_VERSION,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:454:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:455:            "schema_version":
+  backend\server\coordination\workflow_lifecycle\state_machine.py:456:                WORKFLOW_STATE_MACHINE_SCHEMA_VERSION,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:457:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:458:            "workflow_contract_version":
+  backend\server\coordination\workflow_lifecycle\state_machine.py:476:            "transition_edge_count":
+  backend\server\coordination\workflow_lifecycle\state_machine.py:477:                len(
+> backend\server\coordination\workflow_lifecycle\state_machine.py:478:                    transition_edges()
+  backend\server\coordination\workflow_lifecycle\state_machine.py:479:                ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:480:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:481:            "states":
+  backend\server\coordination\workflow_lifecycle\state_machine.py:482:                tuple(
+  backend\server\coordination\workflow_lifecycle\state_machine.py:483:                    state.value
+  backend\server\coordination\workflow_lifecycle\state_machine.py:549:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:550:            "version":
+> backend\server\coordination\workflow_lifecycle\state_machine.py:551:                WORKFLOW_STATE_MACHINE_VERSION,
+  backend\server\coordination\workflow_lifecycle\state_machine.py:552:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:553:            "model_authority":
+  backend\server\coordination\workflow_lifecycle\state_machine.py:554:                "canonical_lifecycle_graph",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:555:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:556:            "status_authority":
+  backend\server\coordination\workflow_lifecycle\state_machine.py:557:                (
+> backend\server\coordination\workflow_lifecycle\state_machine.py:558:                    "UniversalWorkflowStatus "
+  backend\server\coordination\workflow_lifecycle\state_machine.py:559:                    "from frozen Universal Workflow Contract"
+  backend\server\coordination\workflow_lifecycle\state_machine.py:560:                ),
+  backend\server\coordination\workflow_lifecycle\state_machine.py:561:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:562:            "owns": (
+  backend\server\coordination\workflow_lifecycle\state_machine.py:563:                "canonical workflow lifecycle state reference",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:615:
+  backend\server\coordination\workflow_lifecycle\state_machine.py:616:__all__ = [
+> backend\server\coordination\workflow_lifecycle\state_machine.py:617:    "WORKFLOW_STATE_MACHINE_VERSION",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:618:    "WORKFLOW_STATE_MACHINE_SCHEMA_VERSION",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:619:    "coerce_workflow_state",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:620:    "workflow_states",
+> backend\server\coordination\workflow_lifecycle\state_machine.py:621:    "terminal_workflow_states",
+> backend\server\coordination\workflow_lifecycle\state_machine.py:622:    "non_terminal_workflow_states",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:623:    "is_terminal_workflow_state",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:624:    "is_non_terminal_workflow_state",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:625:    "workflow_state_semantics",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:626:    "allowed_next_states",
+> backend\server\coordination\workflow_lifecycle\state_machine.py:627:    "has_transition_edge",
+> backend\server\coordination\workflow_lifecycle\state_machine.py:628:    "transition_edges",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:629:    "workflow_state_machine_snapshot",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:630:    "explain_workflow_state_machine_v3_1",
+  backend\server\coordination\workflow_lifecycle\state_machine.py:631:]
+
+
+
+
+================================================================================
+SECTION 3 - UNIVERSAL WORKFLOW CONTRACT IDENTITY / TIMESTAMPS
+================================================================================
+
+  backend\server\coordination\universal_workflows\contract.py:54:REQUIRED_UNIVERSAL_WORKFLOW_FIELDS: Final[Tuple[str, ...]] = (
+  backend\server\coordination\universal_workflows\contract.py:55:    # Identity
+> backend\server\coordination\universal_workflows\contract.py:56:    "workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:57:    "workflow_type",
+  backend\server\coordination\universal_workflows\contract.py:58:    "workflow_version",
+  backend\server\coordination\universal_workflows\contract.py:59:    "workspace_id",
+  backend\server\coordination\universal_workflows\contract.py:60:
+  backend\server\coordination\universal_workflows\contract.py:61:    # Ownership / coordination
+  backend\server\coordination\universal_workflows\contract.py:64:
+  backend\server\coordination\universal_workflows\contract.py:65:    # Correlation
+> backend\server\coordination\universal_workflows\contract.py:66:    "correlation_id",
+> backend\server\coordination\universal_workflows\contract.py:67:    "parent_workflow_id",
+> backend\server\coordination\universal_workflows\contract.py:68:    "root_workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:69:
+  backend\server\coordination\universal_workflows\contract.py:70:    # Lifecycle
+> backend\server\coordination\universal_workflows\contract.py:71:    "status",
+  backend\server\coordination\universal_workflows\contract.py:72:
+  backend\server\coordination\universal_workflows\contract.py:73:    # Workflow data
+  backend\server\coordination\universal_workflows\contract.py:74:    "input_reference",
+  backend\server\coordination\universal_workflows\contract.py:75:    "context",
+  backend\server\coordination\universal_workflows\contract.py:76:    "metadata",
+  backend\server\coordination\universal_workflows\contract.py:91:
+  backend\server\coordination\universal_workflows\contract.py:92:    # Timestamps
+> backend\server\coordination\universal_workflows\contract.py:93:    "created_at",
+> backend\server\coordination\universal_workflows\contract.py:94:    "started_at",
+> backend\server\coordination\universal_workflows\contract.py:95:    "updated_at",
+> backend\server\coordination\universal_workflows\contract.py:96:    "completed_at",
+> backend\server\coordination\universal_workflows\contract.py:97:    "failed_at",
+> backend\server\coordination\universal_workflows\contract.py:98:    "cancelled_at",
+  backend\server\coordination\universal_workflows\contract.py:99:
+  backend\server\coordination\universal_workflows\contract.py:100:    # Failure
+  backend\server\coordination\universal_workflows\contract.py:101:    "failure_code",
+  backend\server\coordination\universal_workflows\contract.py:102:    "failure_message",
+  backend\server\coordination\universal_workflows\contract.py:103:    "failure_details",
+  backend\server\coordination\universal_workflows\contract.py:126:
+  backend\server\coordination\universal_workflows\contract.py:127:# ============================================================================
+> backend\server\coordination\universal_workflows\contract.py:128:# 4. Workflow lifecycle status
+  backend\server\coordination\universal_workflows\contract.py:129:# ============================================================================
+  backend\server\coordination\universal_workflows\contract.py:130:
+> backend\server\coordination\universal_workflows\contract.py:131:class UniversalWorkflowStatus(str, enum.Enum):
+  backend\server\coordination\universal_workflows\contract.py:132:    CREATED = "CREATED"
+  backend\server\coordination\universal_workflows\contract.py:133:    READY = "READY"
+  backend\server\coordination\universal_workflows\contract.py:134:    RUNNING = "RUNNING"
+  backend\server\coordination\universal_workflows\contract.py:135:    WAITING = "WAITING"
+  backend\server\coordination\universal_workflows\contract.py:136:    PAUSED = "PAUSED"
+  backend\server\coordination\universal_workflows\contract.py:142:
+  backend\server\coordination\universal_workflows\contract.py:143:    @classmethod
+> backend\server\coordination\universal_workflows\contract.py:144:    def coerce(cls, value: Any) -> "UniversalWorkflowStatus":
+  backend\server\coordination\universal_workflows\contract.py:145:        if isinstance(value, cls):
+  backend\server\coordination\universal_workflows\contract.py:146:            return value
+  backend\server\coordination\universal_workflows\contract.py:147:
+  backend\server\coordination\universal_workflows\contract.py:148:        if not isinstance(value, str):
+  backend\server\coordination\universal_workflows\contract.py:149:            raise UniversalWorkflowContractError(
+> backend\server\coordination\universal_workflows\contract.py:150:                "workflow status must be a string or UniversalWorkflowStatus"
+  backend\server\coordination\universal_workflows\contract.py:151:            )
+  backend\server\coordination\universal_workflows\contract.py:152:
+  backend\server\coordination\universal_workflows\contract.py:153:        normalized = value.strip().upper()
+  backend\server\coordination\universal_workflows\contract.py:154:
+  backend\server\coordination\universal_workflows\contract.py:155:        try:
+  backend\server\coordination\universal_workflows\contract.py:157:        except ValueError as exc:
+  backend\server\coordination\universal_workflows\contract.py:158:            raise UniversalWorkflowContractError(
+> backend\server\coordination\universal_workflows\contract.py:159:                f"unknown workflow status: {value!r}"
+  backend\server\coordination\universal_workflows\contract.py:160:            ) from exc
+  backend\server\coordination\universal_workflows\contract.py:161:
+  backend\server\coordination\universal_workflows\contract.py:162:
+> backend\server\coordination\universal_workflows\contract.py:163:TERMINAL_WORKFLOW_STATUSES: Final[frozenset[UniversalWorkflowStatus]] = (
+  backend\server\coordination\universal_workflows\contract.py:164:    frozenset(
+  backend\server\coordination\universal_workflows\contract.py:165:        {
+> backend\server\coordination\universal_workflows\contract.py:166:            UniversalWorkflowStatus.COMPLETED,
+> backend\server\coordination\universal_workflows\contract.py:167:            UniversalWorkflowStatus.FAILED,
+> backend\server\coordination\universal_workflows\contract.py:168:            UniversalWorkflowStatus.CANCELLED,
+> backend\server\coordination\universal_workflows\contract.py:169:            UniversalWorkflowStatus.ABORTED,
+  backend\server\coordination\universal_workflows\contract.py:170:        }
+  backend\server\coordination\universal_workflows\contract.py:171:    )
+  backend\server\coordination\universal_workflows\contract.py:172:)
+  backend\server\coordination\universal_workflows\contract.py:173:
+  backend\server\coordination\universal_workflows\contract.py:174:
+  backend\server\coordination\universal_workflows\contract.py:408:
+  backend\server\coordination\universal_workflows\contract.py:409:    # Identity
+> backend\server\coordination\universal_workflows\contract.py:410:    workflow_id: str
+  backend\server\coordination\universal_workflows\contract.py:411:    workflow_type: str
+  backend\server\coordination\universal_workflows\contract.py:412:    workflow_version: str
+  backend\server\coordination\universal_workflows\contract.py:413:    workspace_id: str
+  backend\server\coordination\universal_workflows\contract.py:414:
+  backend\server\coordination\universal_workflows\contract.py:415:    # Coordinator identity
+  backend\server\coordination\universal_workflows\contract.py:418:
+  backend\server\coordination\universal_workflows\contract.py:419:    # Correlation
+> backend\server\coordination\universal_workflows\contract.py:420:    correlation_id: str
+> backend\server\coordination\universal_workflows\contract.py:421:    parent_workflow_id: Optional[str]
+> backend\server\coordination\universal_workflows\contract.py:422:    root_workflow_id: str
+  backend\server\coordination\universal_workflows\contract.py:423:
+  backend\server\coordination\universal_workflows\contract.py:424:    # Lifecycle
+> backend\server\coordination\universal_workflows\contract.py:425:    status: UniversalWorkflowStatus
+  backend\server\coordination\universal_workflows\contract.py:426:
+  backend\server\coordination\universal_workflows\contract.py:427:    # Workflow input/context
+  backend\server\coordination\universal_workflows\contract.py:428:    input_reference: Optional[str]
+  backend\server\coordination\universal_workflows\contract.py:429:    context: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:430:    metadata: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:445:
+  backend\server\coordination\universal_workflows\contract.py:446:    # Timestamps
+> backend\server\coordination\universal_workflows\contract.py:447:    created_at: str = ""
+> backend\server\coordination\universal_workflows\contract.py:448:    started_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:449:    updated_at: str = ""
+> backend\server\coordination\universal_workflows\contract.py:450:    completed_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:451:    failed_at: Optional[str] = None
+> backend\server\coordination\universal_workflows\contract.py:452:    cancelled_at: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:453:
+  backend\server\coordination\universal_workflows\contract.py:454:    # Failure
+  backend\server\coordination\universal_workflows\contract.py:455:    failure_code: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:456:    failure_message: Optional[str] = None
+  backend\server\coordination\universal_workflows\contract.py:457:    failure_details: Mapping[str, Any] = field(default_factory=dict)
+  backend\server\coordination\universal_workflows\contract.py:463:        violations: list[str] = []
+  backend\server\coordination\universal_workflows\contract.py:464:
+> backend\server\coordination\universal_workflows\contract.py:465:        workflow_id = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:466:            self.workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:467:            name="workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:468:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:469:        )
+  backend\server\coordination\universal_workflows\contract.py:470:
+  backend\server\coordination\universal_workflows\contract.py:471:        workflow_type = _require_nonempty_string(
+  backend\server\coordination\universal_workflows\contract.py:472:            self.workflow_type,
+  backend\server\coordination\universal_workflows\contract.py:499:        )
+  backend\server\coordination\universal_workflows\contract.py:500:
+> backend\server\coordination\universal_workflows\contract.py:501:        correlation_id = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:502:            self.correlation_id,
+> backend\server\coordination\universal_workflows\contract.py:503:            name="correlation_id",
+  backend\server\coordination\universal_workflows\contract.py:504:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:505:        )
+  backend\server\coordination\universal_workflows\contract.py:506:
+> backend\server\coordination\universal_workflows\contract.py:507:        parent_workflow_id = _optional_string(
+> backend\server\coordination\universal_workflows\contract.py:508:            self.parent_workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:509:            name="parent_workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:510:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:511:        )
+  backend\server\coordination\universal_workflows\contract.py:512:
+> backend\server\coordination\universal_workflows\contract.py:513:        root_workflow_id = _require_nonempty_string(
+> backend\server\coordination\universal_workflows\contract.py:514:            self.root_workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:515:            name="root_workflow_id",
+  backend\server\coordination\universal_workflows\contract.py:516:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:517:        )
+  backend\server\coordination\universal_workflows\contract.py:518:
+  backend\server\coordination\universal_workflows\contract.py:519:        try:
+> backend\server\coordination\universal_workflows\contract.py:520:            status = UniversalWorkflowStatus.coerce(
+> backend\server\coordination\universal_workflows\contract.py:521:                self.status
+  backend\server\coordination\universal_workflows\contract.py:522:            )
+  backend\server\coordination\universal_workflows\contract.py:523:        except UniversalWorkflowContractError as exc:
+  backend\server\coordination\universal_workflows\contract.py:524:            violations.extend(
+  backend\server\coordination\universal_workflows\contract.py:525:                exc.violations or (str(exc),)
+  backend\server\coordination\universal_workflows\contract.py:526:            )
+> backend\server\coordination\universal_workflows\contract.py:527:            status = UniversalWorkflowStatus.CREATED
+  backend\server\coordination\universal_workflows\contract.py:528:
+  backend\server\coordination\universal_workflows\contract.py:529:        input_reference = _optional_string(
+  backend\server\coordination\universal_workflows\contract.py:530:            self.input_reference,
+  backend\server\coordination\universal_workflows\contract.py:531:            name="input_reference",
+  backend\server\coordination\universal_workflows\contract.py:532:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:611:        )
+  backend\server\coordination\universal_workflows\contract.py:612:
+> backend\server\coordination\universal_workflows\contract.py:613:        created_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:614:            self.created_at,
+> backend\server\coordination\universal_workflows\contract.py:615:            name="created_at",
+  backend\server\coordination\universal_workflows\contract.py:616:            required=True,
+  backend\server\coordination\universal_workflows\contract.py:617:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:618:        )
+  backend\server\coordination\universal_workflows\contract.py:619:
+> backend\server\coordination\universal_workflows\contract.py:620:        updated_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:621:            self.updated_at,
+> backend\server\coordination\universal_workflows\contract.py:622:            name="updated_at",
+  backend\server\coordination\universal_workflows\contract.py:623:            required=True,
+  backend\server\coordination\universal_workflows\contract.py:624:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:625:        )
+  backend\server\coordination\universal_workflows\contract.py:626:
+> backend\server\coordination\universal_workflows\contract.py:627:        started_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:628:            self.started_at,
+> backend\server\coordination\universal_workflows\contract.py:629:            name="started_at",
+  backend\server\coordination\universal_workflows\contract.py:630:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:631:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:632:        )
+  backend\server\coordination\universal_workflows\contract.py:633:
+> backend\server\coordination\universal_workflows\contract.py:634:        completed_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:635:            self.completed_at,
+> backend\server\coordination\universal_workflows\contract.py:636:            name="completed_at",
+  backend\server\coordination\universal_workflows\contract.py:637:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:638:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:639:        )
+  backend\server\coordination\universal_workflows\contract.py:640:
+> backend\server\coordination\universal_workflows\contract.py:641:        failed_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:642:            self.failed_at,
+> backend\server\coordination\universal_workflows\contract.py:643:            name="failed_at",
+  backend\server\coordination\universal_workflows\contract.py:644:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:645:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:646:        )
+  backend\server\coordination\universal_workflows\contract.py:647:
+> backend\server\coordination\universal_workflows\contract.py:648:        cancelled_at = _normalize_timestamp(
+> backend\server\coordination\universal_workflows\contract.py:649:            self.cancelled_at,
+> backend\server\coordination\universal_workflows\contract.py:650:            name="cancelled_at",
+  backend\server\coordination\universal_workflows\contract.py:651:            required=False,
+  backend\server\coordination\universal_workflows\contract.py:652:            violations=violations,
+  backend\server\coordination\universal_workflows\contract.py:653:        )
+  backend\server\coordination\universal_workflows\contract.py:654:
+  backend\server\coordination\universal_workflows\contract.py:655:        contract_version = _require_nonempty_string(
+  backend\server\coordination\universal_workflows\contract.py:669:        # ------------------------------------------------------------------
+  backend\server\coordination\universal_workflows\contract.py:670:
+> backend\server\coordination\universal_workflows\contract.py:671:        if parent_workflow_id is None:
+> backend\server\coordination\universal_workflows\contract.py:672:            if root_workflow_id != workflow_id:
+  backend\server\coordination\universal_workflows\contract.py:673:                violations.append(
+> backend\server\coordination\universal_workflows\contract.py:674:                    "a root workflow must have root_workflow_id equal to workflow_id"
+  backend\server\coordination\universal_workflows\contract.py:675:                )
+  backend\server\coordination\universal_workflows\contract.py:676:        else:
+> backend\server\coordination\universal_workflows\contract.py:677:            if parent_workflow_id == workflow_id:
+  backend\server\coordination\universal_workflows\contract.py:678:                violations.append(
+> backend\server\coordination\universal_workflows\contract.py:679:                    "parent_workflow_id cannot equal workflow_id"
+  backend\server\coordination\universal_workflows\contract.py:680:                )
+  backend\server\coordination\universal_workflows\contract.py:681:
+  backend\server\coordination\universal_workflows\contract.py:682:        stage_sets = {
+  backend\server\coordination\universal_workflows\contract.py:683:            "completed": set(completed_stages),
+  backend\server\coordination\universal_workflows\contract.py:684:            "pending": set(pending_stages),
+  backend\server\coordination\universal_workflows\contract.py:719:
+  backend\server\coordination\universal_workflows\contract.py:720:        if (
+> backend\server\coordination\universal_workflows\contract.py:721:            status == UniversalWorkflowStatus.COMPLETED
+> backend\server\coordination\universal_workflows\contract.py:722:            and completed_at is None
+  backend\server\coordination\universal_workflows\contract.py:723:        ):
+  backend\server\coordination\universal_workflows\contract.py:724:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:725:                "completed_at is required when status is COMPLETED"
+  backend\server\coordination\universal_workflows\contract.py:726:            )
+  backend\server\coordination\universal_workflows\contract.py:727:
+  backend\server\coordination\universal_workflows\contract.py:728:        if (
+> backend\server\coordination\universal_workflows\contract.py:729:            status == UniversalWorkflowStatus.FAILED
+> backend\server\coordination\universal_workflows\contract.py:730:            and failed_at is None
+  backend\server\coordination\universal_workflows\contract.py:731:        ):
+  backend\server\coordination\universal_workflows\contract.py:732:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:733:                "failed_at is required when status is FAILED"
+  backend\server\coordination\universal_workflows\contract.py:734:            )
+  backend\server\coordination\universal_workflows\contract.py:735:
+  backend\server\coordination\universal_workflows\contract.py:736:        if (
+> backend\server\coordination\universal_workflows\contract.py:737:            status == UniversalWorkflowStatus.CANCELLED
+> backend\server\coordination\universal_workflows\contract.py:738:            and cancelled_at is None
+  backend\server\coordination\universal_workflows\contract.py:739:        ):
+  backend\server\coordination\universal_workflows\contract.py:740:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:741:                "cancelled_at is required when status is CANCELLED"
+  backend\server\coordination\universal_workflows\contract.py:742:            )
+  backend\server\coordination\universal_workflows\contract.py:743:
+  backend\server\coordination\universal_workflows\contract.py:744:        if (
+> backend\server\coordination\universal_workflows\contract.py:745:            status == UniversalWorkflowStatus.FAILED
+  backend\server\coordination\universal_workflows\contract.py:746:            and failure_code is None
+  backend\server\coordination\universal_workflows\contract.py:747:        ):
+  backend\server\coordination\universal_workflows\contract.py:748:            violations.append(
+> backend\server\coordination\universal_workflows\contract.py:749:                "failure_code is required when status is FAILED"
+  backend\server\coordination\universal_workflows\contract.py:750:            )
+  backend\server\coordination\universal_workflows\contract.py:751:
+  backend\server\coordination\universal_workflows\contract.py:752:        if (
+> backend\server\coordination\universal_workflows\contract.py:753:            status == UniversalWorkflowStatus.COMPLETED
+  backend\server\coordination\universal_workflows\contract.py:754:            and failed_stages
+  backend\server\coordination\universal_workflows\contract.py:755:        ):
+  backend\server\coordination\universal_workflows\contract.py:756:            violations.append(
+  backend\server\coordination\universal_workflows\contract.py:757:                "COMPLETED workflow cannot contain failed_stages"
+  backend\server\coordination\universal_workflows\contract.py:758:            )
+  backend\server\coordination\universal_workflows\contract.py:759:
+  backend\server\coordination\universal_workflows\contract.py:760:        if (
+> backend\server\coordination\universal_workflows\contract.py:761:            created_at is not None
+> backend\server\coordination\universal_workflows\contract.py:762:            and updated_at is not None
+  backend\server\coordination\universal_workflows\contract.py:763:        ):
+  backend\server\coordination\universal_workflows\contract.py:764:            created_dt = datetime.fromisoformat(
+> backend\server\coordination\universal_workflows\contract.py:765:                created_at.replace("Z", "+00:00")
+  backend\server\coordination\universal_workflows\contract.py:766:            )
+  backend\server\coordination\universal_workflows\contract.py:767:            updated_dt = datetime.fromisoformat(
+> backend\server\coordination\universal_workflows\contract.py:768:                updated_at.replace("Z", "+00:00")
+  backend\server\coordination\universal_workflows\contract.py:769:            )
+  backend\server\coordination\universal_workflows\contract.py:770:
+  backend\server\coordination\universal_workflows\contract.py:771:            if updated_dt < created_dt:
+  backend\server\coordination\universal_workflows\contract.py:772:                violations.append(
+> backend\server\coordination\universal_workflows\contract.py:773:                    "updated_at cannot be earlier than created_at"
+  backend\server\coordination\universal_workflows\contract.py:774:                )
+  backend\server\coordination\universal_workflows\contract.py:775:
+  backend\server\coordination\universal_workflows\contract.py:776:        if violations:
+  backend\server\coordination\universal_workflows\contract.py:777:            raise UniversalWorkflowContractError(
+  backend\server\coordination\universal_workflows\contract.py:778:                "Universal Workflow Contract validation failed",
+  backend\server\coordination\universal_workflows\contract.py:780:            )
+  backend\server\coordination\universal_workflows\contract.py:781:
+> backend\server\coordination\universal_workflows\contract.py:782:        object.__setattr__(self, "workflow_id", workflow_id)
+  backend\server\coordination\universal_workflows\contract.py:783:        object.__setattr__(self, "workflow_type", workflow_type)
+  backend\server\coordination\universal_workflows\contract.py:784:        object.__setattr__(self, "workflow_version", workflow_version)
+  backend\server\coordination\universal_workflows\contract.py:785:        object.__setattr__(self, "workspace_id", workspace_id)
+  backend\server\coordination\universal_workflows\contract.py:786:        object.__setattr__(self, "coordinator_id", coordinator_id)
+  backend\server\coordination\universal_workflows\contract.py:787:        object.__setattr__(self, "coordinator_version", coordinator_version)
+> backend\server\coordination\universal_workflows\contract.py:788:        object.__setattr__(self, "correlation_id", correlation_id)
+> backend\server\coordination\universal_workflows\contract.py:789:        object.__setattr__(self, "parent_workflow_id", parent_workflow_id)
+> backend\server\coordination\universal_workflows\contract.py:790:        object.__setattr__(self, "root_workflow_id", root_workflow_id)
+> backend\server\coordination\universal_workflows\contract.py:791:        object.__setattr__(self, "status", status)
+  backend\server\coordination\universal_workflows\contract.py:792:        object.__setattr__(self, "input_reference", input_reference)
+  backend\server\coordination\universal_workflows\contract.py:793:        object.__setattr__(self, "context", context)
+  backend\server\coordination\universal_workflows\contract.py:794:        object.__setattr__(self, "metadata", metadata)
+  backend\server\coordination\universal_workflows\contract.py:795:        object.__setattr__(self, "current_stage", current_stage)
+  backend\server\coordination\universal_workflows\contract.py:796:        object.__setattr__(self, "completed_stages", completed_stages)
+  backend\server\coordination\universal_workflows\contract.py:801:        object.__setattr__(self, "artifact_references", artifact_references)
+  backend\server\coordination\universal_workflows\contract.py:802:        object.__setattr__(self, "idempotency_key", idempotency_key)
+> backend\server\coordination\universal_workflows\contract.py:803:        object.__setattr__(self, "created_at", created_at)
+> backend\server\coordination\universal_workflows\contract.py:804:        object.__setattr__(self, "started_at", started_at)
+> backend\server\coordination\universal_workflows\contract.py:805:        object.__setattr__(self, "updated_at", updated_at)
+> backend\server\coordination\universal_workflows\contract.py:806:        object.__setattr__(self, "completed_at", completed_at)
+> backend\server\coordination\universal_workflows\contract.py:807:        object.__setattr__(self, "failed_at", failed_at)
+> backend\server\coordination\universal_workflows\contract.py:808:        object.__setattr__(self, "cancelled_at", cancelled_at)
+  backend\server\coordination\universal_workflows\contract.py:809:        object.__setattr__(self, "failure_code", failure_code)
+  backend\server\coordination\universal_workflows\contract.py:810:        object.__setattr__(self, "failure_message", failure_message)
+  backend\server\coordination\universal_workflows\contract.py:811:        object.__setattr__(self, "failure_details", failure_details)
+  backend\server\coordination\universal_workflows\contract.py:812:        object.__setattr__(self, "contract_version", contract_version)
+  backend\server\coordination\universal_workflows\contract.py:813:
+  backend\server\coordination\universal_workflows\contract.py:818:    def to_canonical_dict(self) -> dict[str, Any]:
+  backend\server\coordination\universal_workflows\contract.py:819:        return {
+> backend\server\coordination\universal_workflows\contract.py:820:            "workflow_id": self.workflow_id,
+  backend\server\coordination\universal_workflows\contract.py:821:            "workflow_type": self.workflow_type,
+  backend\server\coordination\universal_workflows\contract.py:822:            "workflow_version": self.workflow_version,
+  backend\server\coordination\universal_workflows\contract.py:823:            "workspace_id": self.workspace_id,
+  backend\server\coordination\universal_workflows\contract.py:824:            "coordinator_id": self.coordinator_id,
+  backend\server\coordination\universal_workflows\contract.py:825:            "coordinator_version": self.coordinator_version,
+> backend\server\coordination\universal_workflows\contract.py:826:            "correlation_id": self.correlation_id,
+> backend\server\coordination\universal_workflows\contract.py:827:            "parent_workflow_id": self.parent_workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:828:            "root_workflow_id": self.root_workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:829:            "status": self.status.value,
+  backend\server\coordination\universal_workflows\contract.py:830:            "input_reference": self.input_reference,
+  backend\server\coordination\universal_workflows\contract.py:831:            "context": _thaw(self.context),
+  backend\server\coordination\universal_workflows\contract.py:832:            "metadata": _thaw(self.metadata),
+  backend\server\coordination\universal_workflows\contract.py:833:            "current_stage": self.current_stage,
+  backend\server\coordination\universal_workflows\contract.py:834:            "completed_stages": list(self.completed_stages),
+  backend\server\coordination\universal_workflows\contract.py:839:            "artifact_references": list(self.artifact_references),
+  backend\server\coordination\universal_workflows\contract.py:840:            "idempotency_key": self.idempotency_key,
+> backend\server\coordination\universal_workflows\contract.py:841:            "created_at": self.created_at,
+> backend\server\coordination\universal_workflows\contract.py:842:            "started_at": self.started_at,
+> backend\server\coordination\universal_workflows\contract.py:843:            "updated_at": self.updated_at,
+> backend\server\coordination\universal_workflows\contract.py:844:            "completed_at": self.completed_at,
+> backend\server\coordination\universal_workflows\contract.py:845:            "failed_at": self.failed_at,
+> backend\server\coordination\universal_workflows\contract.py:846:            "cancelled_at": self.cancelled_at,
+  backend\server\coordination\universal_workflows\contract.py:847:            "failure_code": self.failure_code,
+  backend\server\coordination\universal_workflows\contract.py:848:            "failure_message": self.failure_message,
+  backend\server\coordination\universal_workflows\contract.py:849:            "failure_details": _thaw(self.failure_details),
+  backend\server\coordination\universal_workflows\contract.py:850:            "contract_version": self.contract_version,
+  backend\server\coordination\universal_workflows\contract.py:851:        }
+  backend\server\coordination\universal_workflows\contract.py:924:        kwargs = dict(data)
+  backend\server\coordination\universal_workflows\contract.py:925:
+> backend\server\coordination\universal_workflows\contract.py:926:        kwargs["status"] = UniversalWorkflowStatus.coerce(
+> backend\server\coordination\universal_workflows\contract.py:927:            kwargs["status"]
+  backend\server\coordination\universal_workflows\contract.py:928:        )
+  backend\server\coordination\universal_workflows\contract.py:929:
+  backend\server\coordination\universal_workflows\contract.py:930:        return cls(**kwargs)
+  backend\server\coordination\universal_workflows\contract.py:931:
+  backend\server\coordination\universal_workflows\contract.py:932:    @classmethod
+  backend\server\coordination\universal_workflows\contract.py:960:            "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+  backend\server\coordination\universal_workflows\contract.py:961:            "contract_version": self.contract_version,
+> backend\server\coordination\universal_workflows\contract.py:962:            "workflow_id": self.workflow_id,
+  backend\server\coordination\universal_workflows\contract.py:963:            "workflow_type": self.workflow_type,
+  backend\server\coordination\universal_workflows\contract.py:964:            "workflow_version": self.workflow_version,
+  backend\server\coordination\universal_workflows\contract.py:965:            "workspace_id": self.workspace_id,
+> backend\server\coordination\universal_workflows\contract.py:966:            "root_workflow_id": self.root_workflow_id,
+> backend\server\coordination\universal_workflows\contract.py:967:            "correlation_id": self.correlation_id,
+  backend\server\coordination\universal_workflows\contract.py:968:        }
+  backend\server\coordination\universal_workflows\contract.py:969:
+  backend\server\coordination\universal_workflows\contract.py:970:        return _fingerprint(
+  backend\server\coordination\universal_workflows\contract.py:971:            _canonical_json(material)
+  backend\server\coordination\universal_workflows\contract.py:972:        )
+  backend\server\coordination\universal_workflows\contract.py:1043:    "UNIVERSAL_WORKFLOW_SCHEMA_VERSION",
+  backend\server\coordination\universal_workflows\contract.py:1044:    "REQUIRED_UNIVERSAL_WORKFLOW_FIELDS",
+> backend\server\coordination\universal_workflows\contract.py:1045:    "TERMINAL_WORKFLOW_STATUSES",
+  backend\server\coordination\universal_workflows\contract.py:1046:    "UniversalWorkflow",
+> backend\server\coordination\universal_workflows\contract.py:1047:    "UniversalWorkflowStatus",
+  backend\server\coordination\universal_workflows\contract.py:1048:    "UniversalWorkflowValidationReport",
+  backend\server\coordination\universal_workflows\contract.py:1049:    "UniversalWorkflowContractError",
+  backend\server\coordination\universal_workflows\contract.py:1050:    "validate_universal_workflow",
+  backend\server\coordination\universal_workflows\contract.py:1051:]
+
+
+
+
+================================================================================
+SECTION 4 - EXISTING LIFECYCLE HISTORY / EVENT PATTERNS
+================================================================================
+
+Path                                                                                              LineNumber Line                     
+----                                                                                              ---------- ----                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        356     from_state: Any,     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        357     to_state: Any,       
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        369             from_state   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        375             to_state     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        399             from_state,  
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        400             to_state,    
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        402         for from_state   
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        404         for to_state     
+C:\Users\HP\Documents\LinkCraftor\backend\server\coordination\workflow_lifecycle\state_machine.py        406             from_state   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py               694     occurred_at: datetime
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py               725                          
+                                                                                                             "occurred_at",           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py               727                          
+                                                                                                             self.occurred_at,        
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py               728                          
+                                                                                                             field_name="occurred_at",
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py               970                          
+                                                                                                             occurred_at=_utc_now(),  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        604     occurred_at: datetime
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        634         occurred_at =    
+                                                                                                             _normalise_datetime(     
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        635                          
+                                                                                                             self.occurred_at,        
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        636                          
+                                                                                                             field_name="occurred_at",
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        639         if occurred_at   
+                                                                                                             is None:                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        641                          
+                                                                                                             "occurred_at is          
+                                                                                                             required."               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        646                          
+                                                                                                             "occurred_at",           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                        647             occurred_at, 
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                       1183                          
+                                                                                                             occurred_at=_utc_now(),  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                      235     previous_state: str  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                      246                          
+                                                                                                             "previous_state",        
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                      300                          
+                                                                                                             "previous_state": (      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                      301                          
+                                                                                                             self.previous_state      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                     1736                          
+                                                                                                             previous_state=(         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       3141     previous_state =     
+e_repair_executor_engine_v1.pre_rebuild_backup.py                                                            record.get(              
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       3168                          
+e_repair_executor_engine_v1.pre_rebuild_backup.py                                                            "previous_state":        
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       3169                          
+e_repair_executor_engine_v1.pre_rebuild_backup.py                                                            previous_state,          
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5427     previous_states = {  
+e_repair_executor_engine_v1.py                                                                                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5441                          
+e_repair_executor_engine_v1.py                                                                               previous_states[         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5446             and          
+e_repair_executor_engine_v1.py                                                                               previous_states[         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5485                          
+e_repair_executor_engine_v1.py                                                                               "previous_states":       
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5486                          
+e_repair_executor_engine_v1.py                                                                               previous_states,         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5580                          
+e_repair_executor_engine_v1.py                                                                               "previous_states":       
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl       5581                          
+e_repair_executor_engine_v1.py                                                                               previous_states,         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        573     previous_state_value 
+e_state_manager_v1.py                                                                                        = mapping.get(           
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        574         "previous_state" 
+e_state_manager_v1.py                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        577     previous_state = None
+e_state_manager_v1.py                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        579     if                   
+e_state_manager_v1.py                                                                                        previous_state_value is  
+                                                                                                             not None:                
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        580         previous_state = 
+e_state_manager_v1.py                                                                                        _require_string(         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        581                          
+e_state_manager_v1.py                                                                                        previous_state_value,    
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        582             field_name="p
+e_state_manager_v1.py                                                                                        revious_state",          
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        585         if               
+e_state_manager_v1.py                                                                                        previous_state not in BOD
+                                                                                                             Y_STORE_LIFECYCLE_STATES:
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        588                 +        
+e_state_manager_v1.py                                                                                        previous_state           
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        656         if               
+e_state_manager_v1.py                                                                                        previous_state is not    
+                                                                                                             None:                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        658                 "Initial 
+e_state_manager_v1.py                                                                                        lifecycle records must   
+                                                                                                             not define               
+                                                                                                             previous_state."         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        672         if               
+e_state_manager_v1.py                                                                                        previous_state is None:  
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        674                          
+e_state_manager_v1.py                                                                                        "Transitioned lifecycle  
+                                                                                                             records require          
+                                                                                                             previous_state."         
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        730         "previous_state":
+e_state_manager_v1.py                                                                                                                 
+C:\Users\HP\Documents\LinkCraftor\backend\server\universal_article_body_store\body_store_lifecycl        731                          
+e_state_manager_v1.py                                                                                        previous_state,          
+
+
+
+
+================================================================================
+SECTION 5 - RUNTIME / ORCHESTRATION HISTORY PATTERNS
+================================================================================
+
+Path                                                                                            LineNumber Line                                                                        
+----                                                                                            ---------- ----                                                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py             694     occurred_at: datetime                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py             725             "occurred_at",                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py             727                 self.occurred_at,                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py             728                 field_name="occurred_at",                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py             903     def audit_history(                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_capability_negotiation.py             970                 occurred_at=_utc_now(),                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      604     occurred_at: datetime                                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      634         occurred_at = _normalise_datetime(                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      635             self.occurred_at,                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      636             field_name="occurred_at",                                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      639         if occurred_at is None:                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      641                 "occurred_at is required."                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      646             "occurred_at",                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      647             occurred_at,                                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                      987     def audit_history(                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_feature_flags.py                     1183                 occurred_at=_utc_now(),                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\audit.py                         2 """Runtime Schema Audit History.                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\audit.py                         4 This module provides an append-only, hash-chained history for Runtime Schema
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\audit.py                       779     def history(                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\audit.py                       853             self.history()                                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\audit.py                       860         records = self.history()                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\audit.py                      1009             for record in self.history()                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   370     history: tuple[                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   402             "history",                                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   403             tuple(self.history),                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   418         self._history: list[                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   422         self._subject_history: dict[                                        
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   605                 self._history[-1]                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   606                 if self._history                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   612                     self._history                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   630             self._history.append(                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   634             self._subject_history.setdefault(                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   674     def history(                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   681         """Return global or subject-specific transfer history."""           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   685                     self._history                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   695                 self._subject_history.get(                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   739         """Verify sequence, chain, history, and current-owner integrity.""" 
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   748                 self._history                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   796             history = tuple(                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   797                 self._history                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   807                 "history": [                                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   809                     for record in history                                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ownership.py                   816                 history=history,                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ports.py                       450     def history(                                                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\ports.py                       454         """Return global or subject-filtered audit history."""              
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    720             "ownership_history": list(                                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    721                 self._ownership._history                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    723             "ownership_subject_history": {                                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    727                     "_subject_history",                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    743                     self._ownership._history                                
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    798         self._ownership._history = list(                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    800                 "ownership_history"                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    806             "_subject_history",                                             
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    808             self._ownership._subject_history = (                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                    811                         "ownership_subject_history"                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                   1789         ownership_history = [                                               
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                   1792             in self._ownership.history()                                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                   1848                 len(ownership_history),                                     
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                   1857             "ownership_history": (                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                   1858                 ownership_history                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\registry.py                   2317                         .history()                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\snapshots.py                   139     history = audit_log.history()                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\snapshots.py                   140     if not history:                                                         
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\snapshots.py                   142     return history[-1].record_hash                                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_schema\types.py                       227     """Action recorded in schema audit history."""                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py         88 UNIVERSAL_ORCHESTRATION_STATE_TRANSITIONS: Final[                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        265         UNIVERSAL_ORCHESTRATION_STATE_TRANSITIONS[                          
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        295         in UNIVERSAL_ORCHESTRATION_STATE_TRANSITIONS[                       
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        301 def validate_universal_orchestration_state_transition(                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        349         not in UNIVERSAL_ORCHESTRATION_STATE_TRANSITIONS[                   
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        356             code="illegal_orchestration_state_transition",                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        504             UNIVERSAL_ORCHESTRATION_STATE_TRANSITIONS[                      
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        563         validate_universal_orchestration_state_transition(                  
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        741     "UNIVERSAL_ORCHESTRATION_STATE_TRANSITIONS",                            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\state_model.py        748     "validate_universal_orchestration_state_transition",                    
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\cleanup.py                    814             "job_history_rule": (                                           
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\cleanup.py                    815                 "Universal Job history survives Queue Cleanup; "            
+C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\capacity.py                  535                 "does not maintain capacity history",                       
+
+
+
+
+================================================================================
+SECTION 6 - PHASE 3.2 FROZEN HASH INTEGRITY
+================================================================================
+
+3.2 Transition Validation
+Path:     backend\server\coordination\workflow_lifecycle\transition_validation.py
+Expected: 69A952141E920E63B32B12AF1E9FB79D6296961FED40BCB94F007123BF9BD746
+Actual:   69A952141E920E63B32B12AF1E9FB79D6296961FED40BCB94F007123BF9BD746
+Match:    True
+
+================================================================================
+SECTION 7 - PHASE 3.1 FROZEN HASH INTEGRITY
+================================================================================
+
+3.1 Workflow State Machine
+Path:     backend\server\coordination\workflow_lifecycle\state_machine.py
+Expected: 144327A4E9C8989FCF0F4DBD10BCF6D7203F503930D81CB8E24644D86D2BB662
+Actual:   144327A4E9C8989FCF0F4DBD10BCF6D7203F503930D81CB8E24644D86D2BB662
+Match:    True
+
+================================================================================
+SECTION 8 - PHASE 2 FROZEN HASH INTEGRITY
+================================================================================
+
+2.1 Workflow Registry
+Path:     backend\server\coordination\workflow_registry\registry.py
+Expected: 34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Actual:   34786F74443BAC9049F3CD805CBF8BDB6275C6EF05B94C9BF42579E114CA4564
+Match:    True
+
+2.2 Coordinator Registration
+Path:     backend\server\coordination\coordinator_registry\registry.py
+Expected: C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Actual:   C9E324DF0C4D5AEA8D1D0C91D8FB3A3B479BB9A0830B0C4494186C01C298F071
+Match:    True
+
+2.3 Registration Validation
+Path:     backend\server\coordination\registration_validation\validator.py
+Expected: 30853E34C6F09B89A2C67D50D91C06EB4B2436A12918DC4E26197EB6159E8453
+Actual:   30853E34C6F09B89A2C67D50D91C06EB4B2436A12918DC4E26197EB6159E8453
+Match:    True
+
+2.4 Version Management
+Path:     backend\server\coordination\version_management\manager.py
+Expected: 118B628ABFCA7CF74B218520D6CF6E0AD4AF2CD6FFE9FB7FE711927A68412E25
+Actual:   118B628ABFCA7CF74B218520D6CF6E0AD4AF2CD6FFE9FB7FE711927A68412E25
+Match:    True
+
+================================================================================
+SECTION 9 - PHASE 3.3 CANONICAL DESIGN QUESTIONS
+================================================================================
+
+1. Should Phase 3.3 perform a lifecycle transition?
+
+Expected:
+NO.
+
+That would combine mutation/execution authority with history recording.
+
+
+2. Should Phase 3.3 decide whether an edge is legal?
+
+Expected:
+NO.
+
+That authority is already frozen in:
+
+    3.2 Transition Validation
+
+
+3. Should Phase 3.3 accept only validated transition information?
+
+Recommended:
+YES.
+
+A history entry should describe a transition known to have passed 3.2.
+
+
+4. Should Lifecycle History create a second transition graph?
+
+NO.
+
+
+5. Should Lifecycle History define a new workflow-status enum?
+
+NO.
+
+
+6. Should Lifecycle History persist records to disk/database?
+
+NO.
+
+Durable persistence belongs to:
+
+    8.0 Workflow State Persistence
+
+
+7. Then what does 3.3 own?
+
+The canonical immutable HISTORY RECORD MODEL and pure history operations.
+
+
+8. Should one history entry identify the workflow?
+
+YES.
+
+Proposed identity fields:
+
+    event_id
+    workflow_id
+    correlation_id
+
+
+9. Should history identify both states?
+
+YES.
+
+    from_state
+    to_state
+
+
+10. Should a history entry contain time evidence?
+
+YES.
+
+Proposed:
+
+    occurred_at
+
+This is evidence supplied when constructing the record.
+
+3.3 should validate/normalize the timestamp, not generate operational
+transition timestamps automatically unless explicitly required.
+
+
+11. Should 3.3 call datetime.now() internally?
+
+Recommended:
+NO.
+
+Why:
+
+- deterministic tests
+- caller supplies the actual transition time
+- avoids 3.3 becoming transition execution authority
+
+
+12. Should occurred_at require timezone awareness?
+
+YES.
+
+Canonical timestamps throughout LinkCraftor should remain timezone-aware.
+
+
+13. Should history entry include transition validation version?
+
+YES.
+
+This provides provenance to the exact validator used.
+
+
+14. Should history entry include Workflow State Machine version?
+
+YES.
+
+This preserves lifecycle-model provenance.
+
+
+15. Should history entry include metadata?
+
+YES, but immutable.
+
+Proposed:
+
+    metadata
+
+
+16. Should history entry include reason?
+
+Recommended:
+YES as optional evidence.
+
+Potential:
+
+    reason
+
+
+17. Should history entry include actor/source?
+
+Recommended:
+YES as optional provenance.
+
+Potential fields:
+
+    source
+    actor_id
+
+
+18. Should history know Runtime job IDs?
+
+Not as required canonical fields.
+
+Runtime/job-specific details can live in metadata until later integration phases.
+
+
+19. Should history record invalid transition attempts?
+
+Recommended:
+NO in the canonical lifecycle transition history.
+
+3.3 should record accepted lifecycle transitions.
+
+Invalid attempts belong to validation/audit evidence, not canonical state history.
+
+
+20. Could invalid-attempt auditing exist later?
+
+YES.
+
+That belongs more naturally to:
+
+    10.5 Audit Trail
+
+rather than the canonical lifecycle-state progression history.
+
+
+21. Should same-state records be allowed?
+
+NO.
+
+Because 3.2 rejects same-state transitions under the frozen graph.
+
+
+22. Should terminal outgoing history entries exist?
+
+NO.
+
+Because 3.2 rejects them.
+
+
+23. Should Lifecycle History expose deterministic sorting?
+
+YES.
+
+Likely by:
+
+    occurred_at
+    event_id
+
+But 3.3 should not silently reorder records unless the API explicitly
+does so.
+
+
+24. Should Lifecycle History expose append semantics?
+
+YES, but PURE / in-memory collection transformation.
+
+Example:
+
+    append_lifecycle_history(
+        history,
+        entry
+    )
+
+returns a NEW immutable tuple.
+
+It must not mutate the input collection.
+
+
+25. Should append require chronological order?
+
+Recommended:
+YES.
+
+If the history already has entries:
+
+    new.occurred_at >= last.occurred_at
+
+This protects deterministic lifecycle chronology.
+
+
+26. Should equal timestamps be allowed?
+
+Recommended:
+YES if event_id provides deterministic tie identity.
+
+Multiple lifecycle events may legitimately share timestamp precision.
+
+
+27. Should duplicate event_id be rejected?
+
+YES.
+
+
+28. Should duplicate exact transition records be rejected?
+
+At minimum duplicate event_id must be rejected.
+
+Broader idempotency authority is Phase 11.2, so do not overreach.
+
+
+29. Should history verify workflow_id consistency?
+
+YES.
+
+One history sequence should belong to one workflow.
+
+
+30. Should correlation_id consistency be mandatory?
+
+Recommended:
+YES when both entries provide it.
+
+
+31. Should event IDs be generated by 3.3?
+
+Recommended:
+NO.
+
+Caller supplies canonical event_id.
+
+This preserves deterministic behavior and avoids hidden randomness.
+
+
+32. Should 3.3 import Runtime?
+
+NO.
+
+
+33. Should 3.3 import registries?
+
+NO.
+
+
+34. Should 3.3 write files?
+
+NO.
+
+
+35. Should 3.3 know dependency graphs?
+
+NO.
+
+
+36. Should 3.3 know stage results?
+
+NO.
+
+
+================================================================================
+SECTION 10 - PROPOSED LIFECYCLE HISTORY ENTRY
+================================================================================
+
+Potential immutable record:
+
+    LifecycleHistoryEntry
+
+
+Proposed fields:
+
+    event_id
+    workflow_id
+    correlation_id
+    from_state
+    to_state
+    occurred_at
+    reason
+    source
+    actor_id
+    metadata
+    transition_validation_version
+    state_machine_version
+    history_version
+
+
+Potential count:
+
+    12 fields
+
+
+Semantics:
+
+event_id
+    unique transition-history event identity
+
+workflow_id
+    owning workflow
+
+correlation_id
+    workflow correlation provenance
+
+from_state
+    normalized previous workflow state
+
+to_state
+    normalized resulting workflow state
+
+occurred_at
+    timezone-aware transition occurrence time supplied by caller
+
+reason
+    optional human/system explanation
+
+source
+    optional origin identifier
+
+actor_id
+    optional actor/system identity
+
+metadata
+    immutable extension evidence
+
+transition_validation_version
+    exact 3.2 provenance
+
+state_machine_version
+    exact 3.1 provenance
+
+history_version
+    3.3 contract version
+
+
+================================================================================
+SECTION 11 - PROPOSED PHASE 3.3 APIs
+================================================================================
+
+Potential path:
+
+    backend/server/coordination/workflow_lifecycle/lifecycle_history.py
+
+
+Potential identity:
+
+    LIFECYCLE_HISTORY_VERSION =
+        "lifecycle_history_v3.3.0"
+
+    LIFECYCLE_HISTORY_SCHEMA_VERSION =
+        "lifecycle_history_schema_v1"
+
+
+Potential errors:
+
+    LifecycleHistoryError
+
+    InvalidLifecycleHistoryEntryError
+
+    DuplicateLifecycleHistoryEventError
+
+    LifecycleHistorySequenceError
+
+
+Potential APIs:
+
+    create_lifecycle_history_entry(
+        *,
+        event_id,
+        workflow_id,
+        correlation_id,
+        from_state,
+        to_state,
+        occurred_at,
+        reason=None,
+        source=None,
+        actor_id=None,
+        metadata=None,
+    )
+
+    append_lifecycle_history(
+        history,
+        entry,
+    )
+
+    validate_lifecycle_history(
+        history,
+    )
+
+    lifecycle_history_snapshot(
+        history,
+    )
+
+    explain_lifecycle_history_v3_3()
+
+
+================================================================================
+SECTION 12 - 3.2 / 3.3 CONTRACT
+================================================================================
+
+3.2 owns:
+
+    validate_workflow_transition(...)
+
+
+3.3 should consume 3.2 validation.
+
+Example:
+
+    create_lifecycle_history_entry(
+        from_state="RUNNING",
+        to_state="WAITING",
+        ...
+    )
+
+internally confirms:
+
+    validate_workflow_transition(
+        "RUNNING",
+        "WAITING"
+    ).is_valid
+
+
+Important:
+
+3.3 is NOT redefining transition legality.
+
+It is consuming 3.2 as upstream authority.
+
+
+================================================================================
+SECTION 13 - HISTORY RECORD VS PERSISTENCE
+================================================================================
+
+3.3:
+
+    defines immutable history records
+    validates history chronology
+    validates history sequence consistency
+    returns immutable history collections
+
+
+Phase 8:
+
+    stores those records durably
+    reloads those records after restart
+    checkpoints workflow state
+    persists pause/resume/restart state
+
+
+Therefore:
+
+    lifecycle_history.py
+
+must contain NO:
+
+    database writes
+    filesystem writes
+    Redis writes
+    S3 writes
+    SQLite writes
+
+
+================================================================================
+SECTION 14 - HISTORY VS AUDIT TRAIL
+================================================================================
+
+3.3 Lifecycle History should answer:
+
+    "What valid workflow lifecycle transitions occurred?"
+
+
+10.5 Audit Trail can later answer:
+
+    "Who attempted what, whether it was accepted/rejected, and what
+     governance/security evidence exists?"
+
+
+Therefore invalid transition attempts should not pollute canonical
+workflow lifecycle history.
+
+
+================================================================================
+SECTION 15 - HISTORY SEQUENCE RULES
+================================================================================
+
+Proposed validation rules for an immutable history sequence:
+
+RULE 1
+------
+Every item must be LifecycleHistoryEntry.
+
+
+RULE 2
+------
+event_id values must be unique.
+
+
+RULE 3
+------
+workflow_id must remain identical across the sequence.
+
+
+RULE 4
+------
+correlation_id must remain compatible across the sequence.
+
+
+RULE 5
+------
+occurred_at must be non-decreasing.
+
+
+RULE 6
+------
+For adjacent entries:
+
+    previous.to_state
+        ==
+    current.from_state
+
+This creates a continuous lifecycle chain.
+
+
+RULE 7
+------
+Every recorded from_state -> to_state must be valid under frozen 3.2.
+
+
+RULE 8
+------
+Every entry must carry canonical 3.2 validation provenance.
+
+
+RULE 9
+------
+Every entry must carry canonical 3.1 state-machine provenance.
+
+
+================================================================================
+SECTION 16 - EXAMPLE VALID HISTORY
+================================================================================
+
+    event-001
+    CREATED -> READY
+    2026-08-17T18:00:00+00:00
+
+    event-002
+    READY -> RUNNING
+    2026-08-17T18:00:01+00:00
+
+    event-003
+    RUNNING -> WAITING
+    2026-08-17T18:00:02+00:00
+
+    event-004
+    WAITING -> RUNNING
+    2026-08-17T18:00:03+00:00
+
+    event-005
+    RUNNING -> COMPLETED
+    2026-08-17T18:00:04+00:00
+
+
+================================================================================
+SECTION 17 - EXAMPLE INVALID HISTORY
+================================================================================
+
+BROKEN CONTINUITY:
+
+    CREATED -> READY
+    RUNNING -> COMPLETED
+
+Invalid because:
+
+    previous.to_state = READY
+    current.from_state = RUNNING
+
+
+TIME REVERSAL:
+
+    RUNNING -> WAITING
+    occurred_at = 18:05
+
+    WAITING -> RUNNING
+    occurred_at = 18:04
+
+
+DUPLICATE EVENT ID:
+
+    event-001
+    event-001
+
+
+INVALID TRANSITION:
+
+    FAILED -> RECOVERING
+
+
+MIXED WORKFLOW IDs:
+
+    workflow-A
+    workflow-B
+
+
+================================================================================
+SECTION 18 - PROPOSED AUTHORITY BOUNDARY
+================================================================================
+
+Lifecycle History OWNS:
+
+- canonical lifecycle history-entry contract
+- immutable transition-history evidence
+- valid-transition provenance
+- history event identity validation
+- workflow identity consistency
+- correlation identity consistency
+- chronology validation
+- adjacent-state continuity validation
+- deterministic history inspection
+- immutable append semantics
+- immutable history snapshot/evidence
+- Lifecycle History architecture explanation
+
+
+Lifecycle History DOES NOT OWN:
+
+- workflow lifecycle graph
+- workflow status vocabulary
+- requested-transition legality
+- workflow status mutation
+- transition execution
+- terminal-state protection enforcement
+- durable persistence
+- checkpoints
+- pause execution
+- resume execution
+- recovery execution
+- recovery policy
+- Runtime Registration
+- Runtime jobs
+- coordinator execution
+- dependency planning
+- stage result handoff
+- security audit trail
+
+
+================================================================================
+SECTION 19 - EXPECTED END STATE
+================================================================================
+
+If 3.3 later passes certification:
+
+3.0 Workflow Lifecycle
+
+    3.1 Workflow State Machine
+        CERTIFIED + FROZEN
+
+    3.2 Transition Validation
+        CERTIFIED + FROZEN
+
+    3.3 Lifecycle History
+        CERTIFIED + FROZEN
+
+    3.4 Terminal-State Protection
+        NEXT
+
+    3.5 Lifecycle Certification
+        PENDING
+
+
+================================================================================
+SCAN COMPLETE
+================================================================================
+
+No production files were modified.
+
+NEXT:
+Analyze the scan findings, resolve the exact Lifecycle History record and
+sequence contract, then implement Phase 3.3.
+================================================================================

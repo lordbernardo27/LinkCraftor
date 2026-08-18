@@ -1,0 +1,369 @@
+﻿
+==============================================================================================================
+PHASE U1.2 ? ISSUE 1 ? /api/upload ROUTE OWNERSHIP SCAN
+==============================================================================================================
+
+==============================================================================================================
+A. EVERY CURRENT-PRODUCTION /api/upload REFERENCE
+==============================================================================================================
+API_UPLOAD_REFERENCE_COUNT: 3
+server.py:3 :: # - /api/upload returns BOTH plain text (for matching) and HTML (for display)
+server.py:54 :: @app.post("/api/upload")
+frontend/public/assets/js/app/config.js:11 :: upload:          `${API_BASE}/api/upload?workspace_id=default`,
+
+==============================================================================================================
+B. BACKEND ROUTE DEFINITIONS INVOLVING /upload
+==============================================================================================================
+UPLOAD_ROUTE_DECORATOR_COUNT: 5
+
+ROUTE :: backend/server/routes/files.py:649
+DECORATOR :: @router.post("/upload")
+00637: ) -> Dict[str, Any]:
+00638:     """Block obsolete membership-array mutation."""
+00639:     raise RuntimeError(
+00640:         "Membership-array Active Target Set merging is forbidden. "
+00641:         "Rebuild the canonical set from source target pools."
+00642:     )
+00643: 
+00644: 
+00645: # -------------------------
+00646: # API
+00647: # -------------------------
+00648: 
+00649: @router.post("/upload")
+00650: async def upload_file(
+00651:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+00652:     file: UploadFile = File(...),
+00653: ):
+00654:     """
+00655:     Canonical Upload Document API entry point.
+00656: 
+00657:     The HTTP route performs no Pipeline 2 implementation directly.
+00658:     It delegates the upload-intake workflow to the canonical
+00659:     Ingestion and Unified Content Pipeline.
+00660:     """
+00661: 
+
+ROUTE :: backend/server/routes/files.py:1153
+DECORATOR :: @legacy_router.post("/upload")
+01141:         "text": preview.get("text"),
+01142:         "html": preview.get("html"),
+01143:         "is_html": bool(preview.get("is_html")),
+01144:         "truncated": bool(preview.get("truncated")),
+01145:         "job_id": None,
+01146:         "processing_status": "not_applicable",
+01147:         "h1": hit.get("h1") or "",
+01148:         "h1_source": hit.get("h1_source") or "",
+01149:         "h1_error": hit.get("h1_error") or "",
+01150:     }
+01151: 
+01152: 
+01153: @legacy_router.post("/upload")
+01154: async def legacy_upload(
+01155:     workspace_id: str = Query("ws_betterhealthcheck_com"),
+01156:     file: UploadFile = File(...),
+01157: ):
+01158:     return await upload_file(workspace_id=workspace_id, file=file)
+01159: 
+01160: 
+
+ROUTE :: backend/server/routes/imported_targets_urls_compat.py:250
+DECORATOR :: @router.post("/upload")
+00238:     ct = (content_type or "").lower()
+00239:     if "text/csv" in ct:
+00240:         return "csv"
+00241:     if "application/xml" in ct or "text/xml" in ct:
+00242:         return "xml"
+00243:     if "text/plain" in ct:
+00244:         return "txt"
+00245: 
+00246:     # default safest
+00247:     return "txt"
+00248: 
+00249: 
+00250: @router.post("/upload")
+00251: async def upload_urls(
+00252:     request: Request,
+00253:     workspace_id: Optional[str] = Query(None),
+00254:     workspaceId: Optional[str] = Query(None),
+00255: ):
+00256:     """
+00257:     Frontend legacy upload -> writes to WS-only imported_targets_<ws>.<ext>.
+00258:     Supports multipart OR raw body.
+00259:     """
+00260:     ws = _pick_ws(workspace_id, workspaceId)
+00261: 
+00262:     filename, data = await _extract_upload_from_request(request)
+
+ROUTE :: backend/server/routes/site_reader.py:1089
+DECORATOR :: @router.get("/target_pools/upload/preview")
+01077:         "ok": True,
+01078:         "workspace_id": ws,
+01079:         "pool": "draft",
+01080:         "total": len(items),
+01081:         "limit": limit,
+01082:         "offset": offset,
+01083:         "items": slice_,
+01084:     }
+01085: 
+01086: # -------------------------
+01087: # Target Pools: Upload
+01088: # -------------------------
+01089: @router.get("/target_pools/upload/preview")
+01090: def preview_upload_target_pool(
+01091:     workspace_id: str = Query(..., description="Workspace scope (must start with ws_)"),
+01092:     limit: int = Query(20, ge=1, le=200),
+01093:     offset: int = Query(0, ge=0, le=200000),
+01094: ):
+01095:     ws, err = _ws_or_error(workspace_id)
+01096:     if err:
+01097:         return err
+01098: 
+01099:     fp = Path(f"backend/server/data/phrase_pools/upload/upload_phrase_pool_{ws}.json")
+01100:     if not fp.exists():
+01101:         return {"ok": False, "workspace_id": ws, "error": "pool_file_missing"}
+
+ROUTE :: server.py:54
+DECORATOR :: @app.post("/api/upload")
+00042: 
+00043: def _html_escape(s: str) -> str:
+00044:     return (
+00045:         s.replace("&", "&amp;")
+00046:          .replace("<", "&lt;")
+00047:          .replace(">", "&gt;")
+00048:     )
+00049: 
+00050: def _strip_tags(s: str) -> str:
+00051:     # very simple HTML -> text (for matching)
+00052:     return re.sub(r"<[^>]+>", " ", s)
+00053: 
+00054: @app.post("/api/upload")
+00055: def api_upload():
+00056:     """
+00057:     Expects form-data: file=<uploaded file>
+00058:     Returns JSON: { filename, ext, text, html, truncated }
+00059:       - text: plain text (ALWAYS a string)
+00060:       - html: best-effort HTML for faithful display
+00061:     """
+00062:     if "file" not in request.files:
+00063:         return jsonify({"error": "no file part"}), 400
+00064:     f = request.files["file"]
+00065:     if f.filename == "":
+00066:         return jsonify({"error": "empty filename"}), 400
+
+==============================================================================================================
+C. ROUTER PREFIX OWNERSHIP
+==============================================================================================================
+backend/server/routes/files.py:35 :: router = APIRouter(prefix="/api/files", tags=["files"])
+backend/server/routes/files.py:36 :: legacy_router = APIRouter(prefix="/api", tags=["legacy"])
+backend/server/routes/imported_targets_urls_compat.py:13 :: router = APIRouter(prefix="/api/urls", tags=["urls-compat"])
+
+==============================================================================================================
+D. MAIN.PY ROUTER IMPORT / MOUNT ANALYSIS
+==============================================================================================================
+00086: from .routes.imported_targets_urls_compat import router as imported_urls_router
+00098: from .routes.files import router as files_router
+00153: app.include_router(owner_audit_router)
+00156: app.include_router(workspace_autosave_router)
+00700:     app.include_router(health_router, tags=["health"])
+00703: if not _already_mounted("backend.server.routes.imported_targets_urls_compat", "/api/urls"):
+00706:     app.include_router(imported_urls_router, tags=["urls"])
+00712:     app.include_router(draft_router, tags=["draft"])
+00718:     app.include_router(planning_router, tags=["planning"])
+00724:     app.include_router(engine_run_router, tags=["engine"])
+00730:     app.include_router(engine_decisions_router, tags=["engine-decisions"])
+00736:     app.include_router(engine_scoring_router, tags=["engine-scoring"])
+00739: if not _already_mounted("backend.server.routes.files", "/api"):
+00742:     app.include_router(files_router, tags=["files"])
+00748:     app.include_router(rb2_runner_router, prefix="/api/rb2", tags=["rb2"])
+00754:     app.include_router(workspace_health_router, tags=["workspace"])
+00760:     app.include_router(rebuild_router)
+00766:     app.include_router(reload_router)
+00769: app.include_router(orchestration_router)
+00775:     app.include_router(
+00793:     app.include_router(tms_router)
+00797:     app.include_router(
+00803:     app.include_router(
+00809:     app.include_router(
+00820:         app.include_router(site_reader_router, prefix="/api/site", tags=["site-reader"])
+00821: app.include_router(resolver_runtime_router, prefix="/api/external/resolver_runtime")
+00861:     app.include_router(
+00868:     app.include_router(
+00875:     app.include_router(
+00882:     app.include_router(
+00889:     app.include_router(
+00896: app.include_router(site_workspace_router)
+
+==============================================================================================================
+E. legacy_router GLOBAL REFERENCES
+==============================================================================================================
+LEGACY_ROUTER_REFERENCE_COUNT: 7
+backend/server/EXTERNAL_SUBSYSTEM_CERTIFICATION.json:8 :: "legacy_router_status": "QUARANTINED",
+backend/server/EXTERNAL_SUBSYSTEM_CERTIFICATION.json:9 :: "legacy_router_location": "backend/app/_legacy_quarantine/routers/external.py.quarantined",
+backend/server/legacy_retirement_report.json:11 :: "legacy_router_archive": "backend/app/routers/external.py",
+backend/server/routes/files.py:36 :: legacy_router = APIRouter(prefix="/api", tags=["legacy"])
+backend/server/routes/files.py:860 :: # legacy_router (prefix /api) so the effective URL is
+backend/server/routes/files.py:862 :: @legacy_router.get("/site/target_pools/active_target_set")
+backend/server/routes/files.py:1153 :: @legacy_router.post("/upload")
+
+==============================================================================================================
+F. FRONTEND /api/upload CALLERS
+==============================================================================================================
+FRONTEND_API_UPLOAD_REFERENCE_COUNT: 1
+frontend/public/assets/js/app/config.js:11 :: upload:          `${API_BASE}/api/upload?workspace_id=default`,
+
+==============================================================================================================
+G. FRONTEND /api/files/upload CALLERS
+==============================================================================================================
+FRONTEND_CANONICAL_UPLOAD_REFERENCE_COUNT: 2
+frontend/public/assets/js/app/api.js:2 :: // Uploads ALL formats to backend /api/files/upload (so they get stored + indexed into pools).
+frontend/public/assets/js/app/api.js:75 :: const res = await fetch(`${API_BASE}/api/files/upload?workspace_id=${encodeURIComponent(ws)}`, {
+
+==============================================================================================================
+H. ROOT server.py STARTUP / DEPENDENCY REFERENCES
+==============================================================================================================
+ROOT_SERVER_STARTUP_REFERENCE_COUNT: 4
+start_server.ps1:28 :: [server.py] :: # 6) Tell server.py which port to use
+start_server.ps1:33 :: [python server.py] :: python server.py
+start_server.ps1:33 :: [server.py] :: python server.py
+discovery_evidence/phase_2_1_2_job_creation_engine_20260729_230056/ast_and_regex_findings.json:662188 :: [server.py] :: "path": "server.py",
+
+==============================================================================================================
+I. UPLOAD ROUTE ? COORDINATOR BYPASS CHECK
+==============================================================================================================
+
+ROUTE_FILE: backend/server/routes/files.py
+ROUTE_DECORATOR: @router.post("/upload")
+CALLS_run_upload_document: True
+CALLS_upload_file: True
+CALLS_run_uploaded_document_to_uduc_pipeline: False
+USES_FLASK_request_files: False
+PERFORMS_LOCAL_EXTRACTION: False
+
+ROUTE_FILE: backend/server/routes/files.py
+ROUTE_DECORATOR: @legacy_router.post("/upload")
+CALLS_run_upload_document: False
+CALLS_upload_file: True
+CALLS_run_uploaded_document_to_uduc_pipeline: False
+USES_FLASK_request_files: False
+PERFORMS_LOCAL_EXTRACTION: False
+
+ROUTE_FILE: backend/server/routes/imported_targets_urls_compat.py
+ROUTE_DECORATOR: @router.post("/upload")
+CALLS_run_upload_document: False
+CALLS_upload_file: False
+CALLS_run_uploaded_document_to_uduc_pipeline: False
+USES_FLASK_request_files: False
+PERFORMS_LOCAL_EXTRACTION: False
+
+ROUTE_FILE: backend/server/routes/site_reader.py
+ROUTE_DECORATOR: @router.get("/target_pools/upload/preview")
+CALLS_run_upload_document: False
+CALLS_upload_file: False
+CALLS_run_uploaded_document_to_uduc_pipeline: False
+USES_FLASK_request_files: False
+PERFORMS_LOCAL_EXTRACTION: True
+
+ROUTE_FILE: server.py
+ROUTE_DECORATOR: @app.post("/api/upload")
+CALLS_run_upload_document: False
+CALLS_upload_file: False
+CALLS_run_uploaded_document_to_uduc_pipeline: False
+USES_FLASK_request_files: True
+PERFORMS_LOCAL_EXTRACTION: True
+
+==============================================================================================================
+J. imported_targets_urls_compat.py UPLOAD ROUTE
+==============================================================================================================
+IMPORTED_TARGETS_UPLOAD_ROUTE_LINE: 250
+00215: 
+00216:             if isinstance(v, (bytes, bytearray)):
+00217:                 return ("upload.bin", bytes(v))
+00218:             if isinstance(v, str) and v.strip():
+00219:                 return ("upload.txt", v.encode("utf-8"))
+00220: 
+00221:         return (None, b"")
+00222: 
+00223:     # raw body
+00224:     data = await request.body()
+00225:     return ("upload.bin", data or b"")
+00226: 
+00227: 
+00228: def _infer_ext(filename: str, content_type: str) -> str:
+00229:     fn = (filename or "").lower().strip()
+00230: 
+00231:     if fn.endswith(".csv"):
+00232:         return "csv"
+00233:     if fn.endswith(".txt"):
+00234:         return "txt"
+00235:     if fn.endswith(".xml"):
+00236:         return "xml"
+00237: 
+00238:     ct = (content_type or "").lower()
+00239:     if "text/csv" in ct:
+00240:         return "csv"
+00241:     if "application/xml" in ct or "text/xml" in ct:
+00242:         return "xml"
+00243:     if "text/plain" in ct:
+00244:         return "txt"
+00245: 
+00246:     # default safest
+00247:     return "txt"
+00248: 
+00249: 
+00250: @router.post("/upload")
+00251: async def upload_urls(
+00252:     request: Request,
+00253:     workspace_id: Optional[str] = Query(None),
+00254:     workspaceId: Optional[str] = Query(None),
+00255: ):
+00256:     """
+00257:     Frontend legacy upload -> writes to WS-only imported_targets_<ws>.<ext>.
+00258:     Supports multipart OR raw body.
+00259:     """
+00260:     ws = _pick_ws(workspace_id, workspaceId)
+00261: 
+00262:     filename, data = await _extract_upload_from_request(request)
+00263:     if not data:
+00264:         raise HTTPException(status_code=400, detail="Empty upload")
+00265: 
+00266:     _ensure_data_dir()
+00267:     p = _paths(ws)
+00268: 
+00269:     ext = _infer_ext(filename or "", request.headers.get("content-type") or "")
+00270:     out_path = p.get(ext)
+00271:     if not out_path:
+00272:         raise HTTPException(status_code=400, detail="Unsupported file type")
+00273: 
+00274:     try:
+00275:         with open(out_path, "wb") as f:
+00276:             f.write(data)
+00277:     except Exception as e:
+00278:         raise HTTPException(status_code=500, detail=f"Failed to save: {e}")
+00279: 
+00280:     after = _load_all(ws)
+00281:     return {
+00282:         "ok": True,
+00283:         "build": IMPORTS_COMPAT_BUILD,
+00284:         "workspace_id": ws,
+00285:         "saved_to": out_path,
+
+==============================================================================================================
+K. ISSUE 1 SUMMARY
+==============================================================================================================
+API_UPLOAD_REFERENCE_COUNT: 3
+UPLOAD_ROUTE_DECORATOR_COUNT: 5
+LEGACY_ROUTER_REFERENCE_COUNT: 7
+FRONTEND_API_UPLOAD_REFERENCE_COUNT: 1
+FRONTEND_CANONICAL_UPLOAD_REFERENCE_COUNT: 2
+ROOT_SERVER_STARTUP_REFERENCE_COUNT: 4
+
+PRODUCTION_FILES_MODIFIED: False
+UPLOAD_STORAGE_MODIFIED: False
+BODY_STORE_MODIFIED: False
+UUCD_STORE_MODIFIED: False
+JOBS_CREATED: False
+RUNTIME_EXECUTED: False
+
+PHASE_U1_2_ISSUE1_API_UPLOAD_ROUTE_OWNERSHIP_SCAN: COMPLETE
+==============================================================================================================

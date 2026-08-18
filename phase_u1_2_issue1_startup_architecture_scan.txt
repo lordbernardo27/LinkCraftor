@@ -1,0 +1,705 @@
+﻿
+==============================================================================================================
+PHASE U1.2 ? ISSUE 1 ? STARTUP ARCHITECTURE INSPECTION
+==============================================================================================================
+
+==============================================================================================================
+A. STARTUP FILES
+==============================================================================================================
+
+FILE: start_server.ps1
+EXISTS: True
+00001: # start_server.ps1 — reliable starter for LinkCraftor (Windows/PowerShell)
+00002: $ErrorActionPreference = "Stop"
+00003: 
+00004: # 1) Go to project root
+00005: Set-Location "C:\Users\HP\Documents\LinkCraftor"
+00006: 
+00007: # 2) Make a virtual environment if missing
+00008: if (!(Test-Path ".venv")) {
+00009:   Write-Host "Creating virtual environment..."
+00010:   py -m venv .venv
+00011: }
+00012: 
+00013: # 3) Activate venv
+00014: & ".\.venv\Scripts\Activate.ps1"
+00015: 
+00016: # 4) Ensure required packages
+00017: pip install --upgrade pip >$null
+00018: pip install flask flask-cors >$null
+00019: 
+00020: # 5) Choose a free port (prefer 8001, else 8003)
+00021: $port = 8001
+00022: $inUse = (Get-NetTCPConnection -State Listen -LocalPort $port -ErrorAction SilentlyContinue)
+00023: if ($inUse) {
+00024:   Write-Host "Port $port busy. Switching to 8003."
+00025:   $port = 8003
+00026: }
+00027: 
+00028: # 6) Tell server.py which port to use
+00029: $env:LINKCRAFTOR_PORT = "$port"
+00030: 
+00031: # 7) Start the server
+00032: Write-Host "Starting server on http://127.0.0.1:$port ..."
+00033: python server.py
+
+FILE: server.py
+EXISTS: True
+00001: # server.py — SIMPLE, RELIABLE SERVER (FULL FILE)
+00002: # - Serves public/app.html
+00003: # - /api/upload returns BOTH plain text (for matching) and HTML (for display)
+00004: # - Handles .txt, .md, .html/.htm, .docx (docx via mammoth if installed)
+00005: # - Health check: /health
+00006: 
+00007: import os
+00008: from pathlib import Path
+00009: from flask import Flask, send_from_directory, jsonify, request
+00010: from flask_cors import CORS
+00011: import re
+00012: 
+00013: BASE_DIR = Path(__file__).resolve().parent
+00014: PUBLIC_DIR = BASE_DIR / "public"
+00015: UPLOAD_DIR = BASE_DIR / "uploads"
+00016: UPLOAD_DIR.mkdir(exist_ok=True)
+00017: 
+00018: app = Flask(
+00019:     __name__,
+00020:     static_folder=str(PUBLIC_DIR),
+00021:     static_url_path=""  # so /assets/... resolves
+00022: )
+00023: CORS(app)
+00024: 
+00025: # ---------- ROUTES ----------
+00026: 
+00027: @app.get("/health")
+00028: def health():
+00029:     return jsonify({"ok": True})
+00030: 
+00031: @app.get("/")
+00032: def root():
+00033:     # Serve your main page (public/app.html)
+00034:     return send_from_directory(str(PUBLIC_DIR), "app.html")
+00035: 
+00036: # Serve any other static file under /public (assets, css, js, images, etc.)
+00037: @app.get("/<path:filename>")
+00038: def public_files(filename):
+00039:     return send_from_directory(str(PUBLIC_DIR), filename)
+00040: 
+00041: # ---------- UPLOAD + EXTRACT ----------
+00042: 
+00043: def _html_escape(s: str) -> str:
+00044:     return (
+00045:         s.replace("&", "&amp;")
+00046:          .replace("<", "&lt;")
+00047:          .replace(">", "&gt;")
+00048:     )
+00049: 
+00050: def _strip_tags(s: str) -> str:
+00051:     # very simple HTML -> text (for matching)
+00052:     return re.sub(r"<[^>]+>", " ", s)
+00053: 
+00054: @app.post("/api/upload")
+00055: def api_upload():
+00056:     """
+00057:     Expects form-data: file=<uploaded file>
+00058:     Returns JSON: { filename, ext, text, html, truncated }
+00059:       - text: plain text (ALWAYS a string)
+00060:       - html: best-effort HTML for faithful display
+00061:     """
+00062:     if "file" not in request.files:
+00063:         return jsonify({"error": "no file part"}), 400
+00064:     f = request.files["file"]
+00065:     if f.filename == "":
+00066:         return jsonify({"error": "empty filename"}), 400
+00067: 
+00068:     from werkzeug.utils import secure_filename
+00069:     filename = secure_filename(f.filename)
+00070:     ext = Path(filename).suffix.lower()
+00071: 
+00072:     allowed = {".txt", ".md", ".html", ".htm", ".docx"}
+00073:     if ext not in allowed:
+00074:         return jsonify({"error": f"file type not allowed: {ext}"}), 400
+00075: 
+00076:     save_path = UPLOAD_DIR / filename
+00077:     f.save(save_path)
+00078: 
+00079:     text = ""
+00080:     html = ""
+00081: 
+00082:     try:
+00083:         if ext == ".txt":
+00084:             # read as utf-8 with ignore to avoid errors
+00085:             raw = save_path.read_text(encoding="utf-8", errors="ignore")
+00086:             text = raw
+00087:             html = f"<pre>{_html_escape(raw)}</pre>"
+00088: 
+00089:         elif ext == ".md":
+00090:             # Try markdown2 for nice HTML; fallback to <pre> if not installed
+00091:             try:
+00092:                 import markdown2
+00093:                 md = save_path.read_text(encoding="utf-8", errors="ignore")
+00094:                 html = markdown2.markdown(md)
+00095:                 text = _strip_tags(html)
+00096:             except Exception:
+00097:                 md = save_path.read_text(encoding="utf-8", errors="ignore")
+00098:                 text = md
+00099:                 html = f"<pre>{_html_escape(md)}</pre>"
+00100: 
+00101:         elif ext in {".html", ".htm"}:
+00102:             raw = save_path.read_text(encoding="utf-8", errors="ignore")
+00103:             html = raw
+00104:             text = _strip_tags(raw)
+00105: 
+00106:         elif ext == ".docx":
+00107:             # Prefer mammoth for .docx -> HTML
+00108:             try:
+00109:                 import mammoth
+00110:                 with open(save_path, "rb") as docx_file:
+00111:                     result = mammoth.convert_to_html(docx_file)
+00112:                     html = result.value or ""
+00113:                 text = _strip_tags(html) if html else ""
+00114:             except Exception:
+00115:                 # fallback: raw bytes to text (not perfect but avoids crash)
+00116:                 raw = save_path.read_bytes().decode("utf-8", errors="ignore")
+00117:                 text = raw
+00118:                 html = f"<pre>{_html_escape(raw)}</pre>"
+00119: 
+00120:         else:
+00121:             return jsonify({"error": f"unsupported ext {ext}"}), 400
+00122: 
+00123:     except Exception as e:
+00124:         return jsonify({"error": f"extract failed: {e}"}), 500
+00125: 
+00126:     # truncate text to keep client light (200k chars)
+00127:     def _truncate(s: str, limit=200000):
+00128:         s = s or ""
+00129:         return (s[:limit], len(s) > limit)
+00130: 
+00131:     text, was_trunc = _truncate(text, 200000)
+00132: 
+00133:     # IMPORTANT: always return strings to avoid `(text || '').split` crashes
+00134:     if not isinstance(text, str):
+00135:         text = str(text or "")
+00136:     if not isinstance(html, str):
+00137:         html = ""
+00138: 
+00139:     return jsonify({
+00140:         "filename": filename,
+00141:         "ext": ext,
+00142:         "text": text,   # PLAIN TEXT for matching (always string)
+00143:         "html": html,   # HTML for display (best effort)
+00144:         "truncated": was_trunc
+00145:     })
+00146: 
+00147: # ---------- MAIN ----------
+00148: 
+00149: if __name__ == "__main__":
+00150:     port = int(os.environ.get("LINKCRAFTOR_PORT", "8001"))
+00151:     # debug=True to see errors in console; change to False for quieter logs
+00152:     app.run(host="127.0.0.1", port=port, debug=True)
+
+FILE: C:\Users\HP\Documents\LinkCraftor\run.py
+EXISTS: False
+
+FILE: C:\Users\HP\Documents\LinkCraftor\main.py
+EXISTS: False
+
+FILE: package.json
+EXISTS: True
+00001: {
+00002:   "name": "linkcraftor",
+00003:   "version": "1.0.0",
+00004:   "description": "",
+00005:   "main": "index.js",
+00006:   "scripts": {
+00007:     "start": "node server.js",
+00008:     "dev": "nodemon server.js"
+00009:   },
+00010:   "keywords": [],
+00011:   "author": "",
+00012:   "license": "ISC",
+00013:   "dependencies": {
+00014:     "cors": "^2.8.5",
+00015:     "express": "^5.1.0",
+00016:     "linkedom": "^0.18.12",
+00017:     "mammoth": "^1.10.0",
+00018:     "multer": "^2.0.2"
+00019:   },
+00020:   "devDependencies": {
+00021:     "nodemon": "^3.1.10"
+00022:   }
+00023: }
+
+FILE: C:\Users\HP\Documents\LinkCraftor\docker-compose.yml
+EXISTS: False
+
+FILE: C:\Users\HP\Documents\LinkCraftor\docker-compose.yaml
+EXISTS: False
+
+FILE: C:\Users\HP\Documents\LinkCraftor\Procfile
+EXISTS: False
+
+==============================================================================================================
+B. FASTAPI / UVICORN STARTUP REFERENCES
+==============================================================================================================
+FASTAPI_STARTUP_REFERENCE_COUNT: 11
+inspect_routes.py:1 :: from backend.server.main import app
+replace_clear_session_block.py:23 :: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+server.py:150 :: port = int(os.environ.get("LINKCRAFTOR_PORT", "8001"))
+start_server.ps1:20 :: # 5) Choose a free port (prefer 8001, else 8003)
+start_server.ps1:21 :: $port = 8001
+test_all_4_docs.py:6 :: url = "http://127.0.0.1:8001/api/engine/run"
+tmp_upload_http.py:3 :: base = "http://127.0.0.1:8001/api/files/upload?workspace_id=betterhealthcheck_com"
+backend/external_service.py:9 :: #   uvicorn external_service:app --reload --port 8002
+scripts/test_preview.ps1:12 :: $uploadUrl = "http://127.0.0.1:8001/api/files/upload?workspace_id=default"
+scripts/test_preview.ps1:34 :: $previewUrl = "http://127.0.0.1:8001/api/files/preview?workspace_id=default&doc_id=$docId"
+backend/server/scripts/check_phase13_draft_rebuild_api_verification.py:12 :: BASE_URL = "http://127.0.0.1:8001"
+
+==============================================================================================================
+C. FLASK / server.py STARTUP REFERENCES
+==============================================================================================================
+FLASK_STARTUP_REFERENCE_COUNT: 19
+locate_website_body_pipeline.py:116 :: if len(text.strip()) > 1000 and ("whattoexpect" in text.lower() or "<article" in text.lower() or len(text.strip()) > 5000):
+openapi.json:1 :: {"openapi":"3.1.0","info":{"title":"FastAPI","version":"0.1.0"},"paths":{"/":{"get":{"summary":"Serve Index","operationId":"serve_index__get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/api/urls/import":{"post":{"tags":["urls"],"summary":"Import Urls","operationId":"import_urls_api_urls_import_post","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_import_urls_api_urls_import_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/urls/list":{"get":{"tags":["urls"],"summary":"List Urls","operationId":"list_urls_api_urls_list_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":200000,"minimum":1,"default":50000,"title":"Limit"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/urls/stats":{"get":{"tags":["urls"],"summary":"Stats Urls","operationId":"stats_urls_api_urls_stats_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/urls/clear":{"post":{"tags":["urls"],"summary":"Clear Urls","operationId":"clear_urls_api_urls_clear_post","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/draft/import":{"post":{"tags":["draft"],"summary":"Import Draft","operationId":"import_draft_api_draft_import_post","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_import_draft_api_draft_import_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/draft/list":{"get":{"tags":["draft"],"summary":"List Draft","operationId":"list_draft_api_draft_list_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":200000,"minimum":1,"default":50000,"title":"Limit"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/draft/meta":{"get":{"tags":["draft"],"summary":"Draft Meta","operationId":"draft_meta_api_draft_meta_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/draft/clear":{"post":{"tags":["draft"],"summary":"Clear Draft","operationId":"clear_draft_api_draft_clear_post","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/planning/draft_audit":{"get":{"tags":["planning"],"summary":"Draft Audit","description":"Compare draft planned_url vs imported sitemap URLs.\n\nReturns:\n  - matched: draft topics whose planned_url exists in sitemap\n  - missing: draft topics whose planned_url is NOT in sitemap\n  - counts + small samples (up to `limit`)","operationId":"draft_audit_api_planning_draft_audit_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}},{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":200000,"minimum":1,"default":5000,"title":"Limit"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/engine/score":{"post":{"tags":["engine"],"summary":"Score Endpoint","operationId":"score_endpoint_api_engine_score_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ScoreRequest"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/files/upload":{"post":{"tags":["files"],"summary":"Upload File","operationId":"upload_file_api_files_upload_post","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"requestBody":{"required":true,"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_upload_file_api_files_upload_post"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/files/list":{"get":{"tags":["files"],"summary":"List Files","operationId":"list_files_api_files_list_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/files/work/list":{"get":{"tags":["files"],"summary":"Work List","operationId":"work_list_api_files_work_list_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/files/save":{"post":{"tags":["files"],"summary":"Save Doc","operationId":"save_doc_api_files_save_post","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}},{"name":"doc_id","in":"query","required":true,"schema":{"type":"string","title":"Doc Id"}}],"requestBody":{"content":{"application/json":{"schema":{"type":"object","additionalProperties":true,"title":"Payload"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/files/get":{"get":{"tags":["files"],"summary":"Get File","operationId":"get_file_api_files_get_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}},{"name":"doc_id","in":"query","required":true,"schema":{"type":"string","title":"Doc Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/files/preview":{"get":{"tags":["files"],"summary":"Preview File","operationId":"preview_file_api_files_preview_get","parameters":[{"name":"workspace_id","in":"query","required":false,"schema":{"type":"string","default":"default","title":"Workspace Id"}},{"name":"doc_id","in":"query","required":true,"schema":{"type":"string","title":"Doc Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/engine/decision":{"post":{"tags":["engine-decisions"],"summary":"Ingest Decision","operationId":"ingest_decision_api_engine_decision_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/DecisionEvent"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/DecisionWriteResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/engine/decisions/recent":{"get":{"tags":["engine-decisions"],"summary":"Recent Decisions","operationId":"recent_decisions_api_engine_decisions_recent_get","parameters":[{"name":"limit","in":"query","required":false,"schema":{"type":"integer","maximum":200,"minimum":1,"default":20,"title":"Limit"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/engine/decisions/aggregate":{"get":{"tags":["engine-decisions"],"summary":"Aggregate Decisions","operationId":"aggregate_decisions_api_engine_decisions_aggregate_get","parameters":[{"name":"workspaceId","in":"query","required":true,"schema":{"type":"string","minLength":1,"title":"Workspaceid"}},{"name":"docId","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Docid"}},{"name":"limit_scan","in":"query","required":false,"schema":{"type":"integer","maximum":200000,"minimum":100,"default":5000,"title":"Limit Scan"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/health":{"get":{"summary":"Health","operationId":"health_api_health_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/health":{"get":{"summary":"Health","operationId":"health_health_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/__routes":{"get":{"summary":"Routes","operationId":"routes___routes_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/api/convert/docx":{"post":{"summary":"Convert Docx","operationId":"convert_docx_api_convert_docx_post","requestBody":{"content":{"multipart/form-data":{"schema":{"$ref":"#/components/schemas/Body_convert_docx_api_convert_docx_post"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/export/docx":{"post":{"summary":"Export Docx","operationId":"export_docx_api_export_docx_post","requestBody":{"content":{"application/json":{"schema":{"additionalProperties":true,"type":"object","title":"Payload"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/external/resolve":{"get":{"summary":"External Resolve","operationId":"external_resolve_api_external_resolve_get","parameters":[{"name":"phrase","in":"query","required":true,"schema":{"type":"string","title":"Phrase"}},{"name":"lang","in":"query","required":false,"schema":{"type":"string","default":"en","title":"Lang"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"type":"array","items":{"$ref":"#/components/schemas/ExternalCandidate"},"title":"Response External Resolve Api External Resolve Get"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/api/external/log":{"post":{"summary":"External Log","operationId":"external_log_api_external_log_post","requestBody":{"content":{"application/json":{"schema":{"$ref":"#/components/schemas/ExternalLogEvent"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}}},"components":{"schemas":{"Body_convert_docx_api_convert_docx_post":{"properties":{"file":{"type":"string","format":"binary","title":"File"}},"type":"object","required":["file"],"title":"Body_convert_docx_api_convert_docx_post"},"Body_import_draft_api_draft_import_post":{"properties":{"file":{"type":"string","format":"binary","title":"File"}},"type":"object","required":["file"],"title":"Body_import_draft_api_draft_import_post"},"Body_import_urls_api_urls_import_post":{"properties":{"file":{"type":"string","format":"binary","title":"File"}},"type":"object","required":["file"],"title":"Body_import_urls_api_urls_import_post"},"Body_upload_file_api_files_upload_post":{"properties":{"file":{"type":"string","format":"binary","title":"File"}},"type":"object","required":["file"],"title":"Body_upload_file_api_files_upload_post"},"CandidateModel":{"properties":{"id":{"type":"string","title":"Id"},"title":{"type":"string","title":"Title"},"url":{"type":"string","title":"Url"},"docId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Docid"},"sectionId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Sectionid"},"sourceType":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Sourcetype"},"isExternal":{"anyOf":[{"type":"boolean"},{"type":"null"}],"title":"Isexternal","default":false},"entities":{"items":{"additionalProperties":true,"type":"object"},"type":"array","title":"Entities"},"topicTypes":{"items":{"type":"string"},"type":"array","title":"Topictypes"},"sectionRoles":{"items":{"type":"string"},"type":"array","title":"Sectionroles"},"intentTags":{"items":{"type":"string"},"type":"array","title":"Intenttags"},"discourseTags":{"items":{"type":"string"},"type":"array","title":"Discoursetags"},"graphVector":{"anyOf":[{"items":{"type":"number"},"type":"array"},{"type":"null"}],"title":"Graphvector"},"graphRelations":{"items":{"additionalProperties":true,"type":"object"},"type":"array","title":"Graphrelations"},"domain":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Domain"},"isCanonicalTopic":{"anyOf":[{"type":"boolean"},{"type":"null"}],"title":"Iscanonicaltopic","default":false}},"type":"object","required":["id","title","url"],"title":"CandidateModel"},"DecisionEvent":{"properties":{"workspaceId":{"type":"string","minLength":1,"title":"Workspaceid"},"userId":{"type":"string","minLength":1,"title":"Userid"},"docId":{"type":"string","minLength":1,"title":"Docid"},"eventType":{"type":"string","minLength":1,"title":"Eventtype"},"timestamp":{"type":"integer","title":"Timestamp"},"payload":{"additionalProperties":true,"type":"object","title":"Payload"},"requestId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Requestid"},"source":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Source"}},"type":"object","required":["workspaceId","userId","docId","eventType"],"title":"DecisionEvent"},"DecisionWriteResponse":{"properties":{"ok":{"type":"boolean","title":"Ok","default":true},"written":{"type":"boolean","title":"Written","default":true},"path":{"type":"string","title":"Path"},"eventType":{"type":"string","title":"Eventtype"},"timestamp":{"type":"integer","title":"Timestamp"}},"type":"object","required":["path","eventType","timestamp"],"title":"DecisionWriteResponse"},"ExternalCandidate":{"properties":{"phrase":{"type":"string","title":"Phrase"},"url":{"type":"string","title":"Url"},"title":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Title"},"score":{"type":"number","title":"Score","default":1.0},"source":{"type":"string","title":"Source","default":"backend"}},"type":"object","required":["phrase","url"],"title":"ExternalCandidate"},"ExternalLogEvent":{"properties":{"event":{"type":"string","title":"Event","default":"auto_apply"},"phrase":{"type":"string","title":"Phrase"},"url":{"type":"string","title":"Url"},"title":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Title"},"providerId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Providerid"},"providerLabel":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Providerlabel"},"docCode":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Doccode"},"docTitle":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Doctitle"},"lang":{"type":"string","title":"Lang","default":"en"},"source":{"type":"string","title":"Source","default":"auto_link"}},"type":"object","required":["phrase","url"],"title":"ExternalLogEvent"},"HTTPValidationError":{"properties":{"detail":{"items":{"$ref":"#/components/schemas/ValidationError"},"type":"array","title":"Detail"}},"type":"object","title":"HTTPValidationError"},"PhraseContextModel":{"properties":{"workspaceId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Workspaceid"},"phraseText":{"type":"string","title":"Phrasetext"},"contextText":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Contexttext"},"docId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Docid"},"sectionId":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Sectionid"},"position":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Position"},"entities":{"items":{"additionalProperties":true,"type":"object"},"type":"array","title":"Entities"},"graphVector":{"anyOf":[{"items":{"type":"number"},"type":"array"},{"type":"null"}],"title":"Graphvector"},"graphRelations":{"items":{"additionalProperties":true,"type":"object"},"type":"array","title":"Graphrelations"},"contextType":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Contexttype"},"sectionType":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Sectiontype"},"intent":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Intent"},"discourseRole":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Discourserole"}},"type":"object","required":["phraseText"],"title":"PhraseContextModel"},"ScoreRequest":{"properties":{"phraseCtx":{"$ref":"#/components/schemas/PhraseContextModel"},"candidates":{"items":{"$ref":"#/components/schemas/CandidateModel"},"type":"array","title":"Candidates"}},"type":"object","required":["phraseCtx","candidates"],"title":"ScoreRequest"},"ValidationError":{"properties":{"loc":{"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array","title":"Location"},"msg":{"type":"string","title":"Message"},"type":{"type":"string","title":"Error Type"}},"type":"object","required":["loc","msg","type"],"title":"ValidationError"}}}}
+start_server.ps1:28 :: # 6) Tell server.py which port to use
+start_server.ps1:33 :: python server.py
+backend/server/owner/audit_routes.py:56 :: limit: int = Query(1000, ge=1, le=5000),
+backend/server/routes/draft_topics.py:270 :: limit: int = Query(50000, ge=1, le=200000),
+backend/server/routes/engine_decisions.py:116 :: limit_scan: int = 50000
+backend/server/routes/engine_decisions.py:181 :: limit_scan: int = 50000
+backend/server/routes/engine_decisions.py:284 :: limit_scan: int = 50000,
+backend/server/routes/engine_decisions.py:348 :: limit_scan: int = Query(5000, ge=100, le=200000),
+backend/server/routes/engine_decisions.py:358 :: limit_scan: int = Query(5000, ge=100, le=200000),
+backend/server/routes/engine_decisions.py:374 :: limit_scan: int = Query(5000, ge=100, le=200000),
+backend/server/routes/imported_targets_urls_compat.py:148 :: limit: int = Query(200000, ge=1, le=500000),
+backend/server/routes/planning.py:41 :: limit: int = Query(5000, ge=1, le=200000),
+backend/server/routes/rb2_run.py:324 :: def _build_candidate_pool(workspace_id: str, limit: int = 50000) -> List[Dict[str, Any]]:
+backend/server/routes/rb2_run.py:675 :: full_pool = _build_candidate_pool(workspace_id, limit=50000)
+backend/server/stores/enterprise_raw_html_acquisition_engine.py:186 :: or "<article" in html[:5000].lower()
+backend/server/routes/external/resolver.py:128 :: limit: int = Query(50, ge=1, le=5000, description="Number of results to return"),
+backend/server/pipelines/upload_document/uploaded_document_to_highlight_pipeline/coordinator.py:99 :: min(int(max_candidates or 500), 5000),
+
+==============================================================================================================
+D. FRONTEND API BASE / PORT OWNERSHIP
+==============================================================================================================
+
+FILE: frontend/public/index.before_delete_why_this_link_card.html
+03534: window.LINKCRAFTOR_API_BASE = "http://127.0.0.1:8001";
+03535: console.log("[Config] LINKCRAFTOR_API_BASE =", window.LINKCRAFTOR_API_BASE);
+
+FILE: frontend/public/index.before_final_expected_modal.html
+02743: window.LINKCRAFTOR_API_BASE = "http://127.0.0.1:8001";
+02744: console.log("[Config] LINKCRAFTOR_API_BASE =", window.LINKCRAFTOR_API_BASE);
+
+FILE: frontend/public/index.before_remove_why_this_link_card.html
+03534: window.LINKCRAFTOR_API_BASE = "http://127.0.0.1:8001";
+03535: console.log("[Config] LINKCRAFTOR_API_BASE =", window.LINKCRAFTOR_API_BASE);
+
+FILE: frontend/public/index.html
+04367: window.LINKCRAFTOR_API_BASE = "http://127.0.0.1:8001";
+04368: console.log("[Config] LINKCRAFTOR_API_BASE =", window.LINKCRAFTOR_API_BASE);
+
+FILE: frontend/public/index.html.before_kpi_refinement_20260731_111151.html
+03511: window.LINKCRAFTOR_API_BASE = "http://127.0.0.1:8001";
+03512: console.log("[Config] LINKCRAFTOR_API_BASE =", window.LINKCRAFTOR_API_BASE);
+
+FILE: frontend/public/assets/js/app.backup.before_cleanup.js
+00111: const API_BASE =
+00112: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+00113: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+00159: const res = await fetch(`${API_BASE}${API_DECISION}`, {
+00240: const URLS_API_BASE =
+00241: (API_BASE && String(API_BASE).trim())
+00242: ? String(API_BASE).replace(/\/+$/, "")
+00243: : "http://127.0.0.1:8001";
+00299: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00384: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00389: `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+00399: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00401: `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${encodeURIComponent(limit)}`
+00426: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00627: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00695: const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
+01550: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+01553: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02248: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02255: `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+02266: `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${limit}`
+02299: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02301: const url = `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+02403: const EXTERNAL_API_BASE = "";
+02419: const base = String(window.LINKCRAFTOR_API_BASE || "").replace(/\/+$/,"");
+02421: console.warn("[ExtAutoLink] LINKCRAFTOR_API_BASE is empty � cannot call backend");
+02468: const base = (window.LINKCRAFTOR_API_BASE || EXTERNAL_API_BASE || "")
+02628: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02631: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+03143: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+03146: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+04495: const res = await fetch(`${API_BASE}/sitemap/fetch-content`, {
+05820: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05843: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05845: const res = await fetch(`${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+05925: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+05926: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+05927: : "http://127.0.0.1:8001";
+06415: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06499: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06507: `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
+06515: `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`
+06524: await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+06541: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06728: const API_BASE =
+06729: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06778: const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
+06791: const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+06870: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06873: const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+06889: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+07036: `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
+07074: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+
+FILE: frontend/public/assets/js/app.js
+00109: const API_BASE =
+00110: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+00111: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+00171: const res = await fetch(`${API_BASE}${API_DECISION}`, {
+00255: const URLS_API_BASE =
+00256: (API_BASE && String(API_BASE).trim())
+00257: ? String(API_BASE).replace(/\/+$/, "")
+00258: : "http://127.0.0.1:8001";
+00314: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00427: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00432: `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+00442: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00444: `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${encodeURIComponent(limit)}`
+00471: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00639: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00707: const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
+01680: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+01683: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02496: const EXTERNAL_API_BASE = "";
+02529: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02532: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02551: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02556: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+02565: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+02574: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+03199: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+03202: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+03917: const res = await fetch(`${API_BASE}/sitemap/fetch-content`, {
+04997: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05002: await fetch(`${API_BASE}/api/files/active_target_set/save`, {
+05212: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05235: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05237: const res = await fetch(`${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+05317: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+05318: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+05319: : "http://127.0.0.1:8001";
+05806: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05890: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05898: `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
+05906: `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`
+05915: await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+05932: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06196: const API_BASE =
+06197: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06246: const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
+06259: const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+06354: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06357: const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+06373: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06725: `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
+06929: const res = await fetch(`${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`, {
+07045: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07134: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07222: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07377: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07457: const API_BASE =
+07458: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07462: `${API_BASE}/api/rebuild/sweep/${encodeURIComponent(ws)}`,
+07469: `${API_BASE}/api/rebuild/process/${encodeURIComponent(ws)}?limit=20`,
+07627: const API_BASE =
+07628: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07632: `${API_BASE}/api/reload/state/${encodeURIComponent(ws)}`
+07717: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+07755: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+07763: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+07771: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+
+FILE: frontend/public/assets/js/app/api.js
+00002: // Uploads ALL formats to backend /api/files/upload (so they get stored + indexed into pools).
+00005: // Point API_BASE at your FastAPI server (we default to 8001 for dev).
+00006: const API_BASE =
+00007: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE) ||
+00008: "http://127.0.0.1:8001";
+00075: const res = await fetch(`${API_BASE}/api/files/upload?workspace_id=${encodeURIComponent(ws)}`, {
+00130: return `${API_BASE}/api/download/original?file=${encodeURIComponent(filename)}`;
+00135: return `${API_BASE}/api/export/zip`;
+00139: return `${API_BASE}/api/export/rar`;
+00145: const res = await fetch(`${API_BASE}/api/export/docx`, {
+
+FILE: frontend/public/assets/js/app/config.js
+00003: // Base for your backend API. You can override it by setting window.LC_API_BASE before scripts load.
+00004: export const API_BASE =
+00005: (typeof window !== "undefined" && window.LC_API_BASE
+00006: ? String(window.LC_API_BASE).replace(/\/$/, "")
+00009: // (Optional) central paths used by api.js. Safe to keep even if app.js only imports API_BASE.
+00011: upload:          `${API_BASE}/api/upload?workspace_id=default`,
+00012: exportDocx:      `${API_BASE}/api/export/docx`,
+00013: exportZip:       `${API_BASE}/api/export/zip`,
+00014: exportRar:       `${API_BASE}/api/export/rar`,
+00016: `${API_BASE}/api/original/${encodeURIComponent(filename || "")}`,
+
+FILE: frontend/public/assets/js/editor/editor-ui.js
+00084: let url = prompt("Enter URL (https://…):", "http://127.0.0.1:8001/index.html");
+
+FILE: frontend/public/assets/js/features/external_helix.js
+00010: const API_BASE = (global.LINKCRAFTOR_API_BASE || "").replace(/\/+$/,"");
+00011: const BACKEND_RESOLVE_URL = (API_BASE ? API_BASE : "") + "/api/external/runtime/resolve";
+
+FILE: frontend/public/assets/js/features/sitemap-import.js
+00007: const API_BASE = "http://127.0.0.1:8001";
+00025: const res = await fetch(`${API_BASE}/api/urls/import?workspace_id=default`, {
+
+FILE: frontend/public/assets/js/modules/engine-api.js
+00002: const BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+
+FILE: frontend/public/assets/js/references/references.js
+00010: // - Honors optional window.LC_PROXY(url) for CORS (e.g., `${API_BASE}/api/proxy?url=...`).
+
+FILE: frontend/public/assets/js/backups/autosave_workspace_guard_20260730_135729/app.js
+00109: const API_BASE =
+00110: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+00111: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+00171: const res = await fetch(`${API_BASE}${API_DECISION}`, {
+00255: const URLS_API_BASE =
+00256: (API_BASE && String(API_BASE).trim())
+00257: ? String(API_BASE).replace(/\/+$/, "")
+00258: : "http://127.0.0.1:8001";
+00314: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00427: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00432: `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+00442: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00444: `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${encodeURIComponent(limit)}`
+00471: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00639: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00707: const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
+01680: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+01683: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02496: const EXTERNAL_API_BASE = "";
+02529: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02532: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02551: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02556: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+02565: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+02574: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+03199: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+03202: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+03917: const res = await fetch(`${API_BASE}/sitemap/fetch-content`, {
+04997: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05002: await fetch(`${API_BASE}/api/files/active_target_set/save`, {
+05212: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05235: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05237: const res = await fetch(`${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+05317: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+05318: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+05319: : "http://127.0.0.1:8001";
+05806: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05890: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05898: `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
+05906: `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`
+05915: await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+05932: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06196: const API_BASE =
+06197: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06246: const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
+06259: const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+06354: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06357: const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+06373: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06723: `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
+06928: const res = await fetch(`${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`, {
+07044: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07133: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07221: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07376: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07456: const API_BASE =
+07457: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07461: `${API_BASE}/api/rebuild/sweep/${encodeURIComponent(ws)}`,
+07468: `${API_BASE}/api/rebuild/process/${encodeURIComponent(ws)}?limit=20`,
+07626: const API_BASE =
+07627: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07631: `${API_BASE}/api/reload/state/${encodeURIComponent(ws)}`
+07716: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+07754: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+07762: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+07770: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+
+FILE: frontend/public/assets/js/backups/domain_modal_atomic_wiring_20260727_025428/app.js
+00109: const API_BASE =
+00110: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+00111: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+00171: const res = await fetch(`${API_BASE}${API_DECISION}`, {
+00255: const URLS_API_BASE =
+00256: (API_BASE && String(API_BASE).trim())
+00257: ? String(API_BASE).replace(/\/+$/, "")
+00258: : "http://127.0.0.1:8001";
+00314: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00427: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00432: `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+00442: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00444: `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${encodeURIComponent(limit)}`
+00471: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00639: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00707: const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
+01680: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+01683: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02496: const EXTERNAL_API_BASE = "";
+02529: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02532: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02551: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02556: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+02565: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+02574: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+03199: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+03202: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+03917: const res = await fetch(`${API_BASE}/sitemap/fetch-content`, {
+04997: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05002: await fetch(`${API_BASE}/api/files/active_target_set/save`, {
+05212: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05235: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05237: const res = await fetch(`${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+05317: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+05318: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+05319: : "http://127.0.0.1:8001";
+05806: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05890: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05898: `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
+05906: `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`
+05915: await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+05932: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06196: const API_BASE =
+06197: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06246: const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
+06259: const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+06354: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06357: const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+06373: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06722: `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
+06936: const res = await fetch(`${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`, {
+07052: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07141: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07229: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07384: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07464: const API_BASE =
+07465: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07469: `${API_BASE}/api/rebuild/sweep/${encodeURIComponent(ws)}`,
+07476: `${API_BASE}/api/rebuild/process/${encodeURIComponent(ws)}?limit=20`,
+07634: const API_BASE =
+07635: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07639: `${API_BASE}/api/reload/state/${encodeURIComponent(ws)}`
+07724: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+07762: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+07770: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+07778: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+
+FILE: frontend/public/assets/js/backups/fix_custom_workspace_name_order_20260730_140206/app.js
+00109: const API_BASE =
+00110: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+00111: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+00171: const res = await fetch(`${API_BASE}${API_DECISION}`, {
+00255: const URLS_API_BASE =
+00256: (API_BASE && String(API_BASE).trim())
+00257: ? String(API_BASE).replace(/\/+$/, "")
+00258: : "http://127.0.0.1:8001";
+00314: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00427: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00432: `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(workspaceId)}`,
+00442: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00444: `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=${encodeURIComponent(limit)}`
+00471: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00639: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+00707: const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${encodeURIComponent(ws)}&limit=5000`);
+01680: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+01683: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02496: const EXTERNAL_API_BASE = "";
+02529: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02532: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+02551: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+02556: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+02565: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+02574: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+03199: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+03202: const res = await fetch(`${API_BASE}/api/files/preview?workspace_id=${encodeURIComponent(ws)}&doc_id=${encodeURIComponent(docId)}`);
+03917: const res = await fetch(`${API_BASE}/sitemap/fetch-content`, {
+04997: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05002: await fetch(`${API_BASE}/api/files/active_target_set/save`, {
+05212: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05235: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05237: const res = await fetch(`${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(workspaceId)}&limit=200000`);
+05317: (typeof window !== "undefined" && window.LINKCRAFTOR_API_BASE)
+05318: ? String(window.LINKCRAFTOR_API_BASE).replace(/\/+$/, "")
+05319: : "http://127.0.0.1:8001";
+05806: const base = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05890: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+05898: `${API_BASE}/api/draft/import?workspace_id=${encodeURIComponent(ws)}`,
+05906: `${API_BASE}/api/draft/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`
+05915: await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+05932: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06196: const API_BASE =
+06197: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06246: const url = `${API_BASE}/api/urls/import?workspace_id=${encodeURIComponent(ws)}`;
+06259: const url = `${API_BASE}/api/urls/list?workspace_id=${encodeURIComponent(ws)}&limit=200000`;
+06354: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+06357: const saveRes = await fetch(`${API_BASE}/api/site/target_pools/active_target_set/save`, {
+06373: `${API_BASE}/api/site/target_pools/rebuild_all?workspace_id=${encodeURIComponent(ws)}`,
+06723: `${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`,
+06928: const res = await fetch(`${window.LINKCRAFTOR_API_BASE}/api/site/workspace/connect_domain`, {
+07044: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07133: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07221: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07376: const apiBase = window.LINKCRAFTOR_API_BASE || "";
+07456: const API_BASE =
+07457: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07461: `${API_BASE}/api/rebuild/sweep/${encodeURIComponent(ws)}`,
+07468: `${API_BASE}/api/rebuild/process/${encodeURIComponent(ws)}?limit=20`,
+07626: const API_BASE =
+07627: (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001")
+07631: `${API_BASE}/api/reload/state/${encodeURIComponent(ws)}`
+07716: const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
+07754: await fetch(`${API_BASE}/api/files/clear_session?workspace_id=${encodeURIComponent(ws)}`, {
+07762: await fetch(`${API_BASE}/api/urls/clear?workspace_id=${encodeURIComponent(ws)}`, {
+07770: await fetch(`${API_BASE}/api/draft/clear?workspace_id=${encodeURIComponent(ws)}`, {
+
+==============================================================================================================
+E. ROOT server.py ROLE SIGNALS
+==============================================================================================================
+Flask(: 1
+send_from_directory: 3
+static_folder=: 1
+@app.get("/"): 1
+@app.post("/api/upload"): 1
+app.run(: 1
+PORT: 2
+UPLOAD_DIR: 3
+
+==============================================================================================================
+F. backend/server/main.py ROLE SIGNALS
+==============================================================================================================
+FastAPI(: 1
+include_router(files_router: 1
+StaticFiles: 5
+mount(: 4
+CORSMiddleware: 2
+
+==============================================================================================================
+G. SCAN RESULT
+==============================================================================================================
+PRODUCTION_FILES_MODIFIED: False
+UPLOAD_STORAGE_MODIFIED: False
+BODY_STORE_MODIFIED: False
+UUCD_STORE_MODIFIED: False
+JOBS_CREATED: False
+RUNTIME_EXECUTED: False
+
+PHASE_U1_2_ISSUE1_STARTUP_ARCHITECTURE_SCAN: COMPLETE

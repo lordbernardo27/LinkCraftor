@@ -1,0 +1,494 @@
+LINKCRAFTOR
+UNIVERSAL COORDINATION FRAMEWORK
+PHASE 4.3 — DEEP-CHAIN DEFECT SOURCE SCAN
+============================================================================================================
+
+File: backend\server\coordination\dependency_planning\cycle_detection.py
+Current SHA256: BC4A40999FEE0540D2254D9F99E12C1D97D25662953026ADDDABC429B42212B1
+Frozen SHA exact: True
+
+PROVEN DEFECT:
+2500-stage acyclic chain raises RecursionError
+Python default recursion limit observed: 1000
+
+============================================================================================================
+TOP-LEVEL FUNCTIONS
+============================================================================================================
+_freeze (lines 112-147)
+_canonicalize_cycle_path (lines 276-326)
+detect_dependency_cycles (lines 333-483)
+require_acyclic_dependency_graph (lines 490-502)
+cycle_detection_snapshot (lines 509-549)
+explain_cycle_detection_v4_3 (lines 556-685)
+
+============================================================================================================
+DETECT / GUARD IMPLEMENTATION
+============================================================================================================
+
+------------------------------------------------------------------------------------------------------------
+detect_dependency_cycles (lines 333-483)
+------------------------------------------------------------------------------------------------------------
+def detect_dependency_cycles(
+    graph: DependencyGraph,
+) -> CycleDetectionResult:
+    """
+    Detect directed cycles after enforcing frozen Phase 4.2 validity.
+
+    Uses deterministic lexical DFS with an active recursion stack.
+
+    Returns canonical cycle witnesses rather than an exhaustive enumeration
+    of every mathematically possible simple cycle.
+    """
+
+    if not isinstance(
+        graph,
+        DependencyGraph,
+    ):
+        raise InvalidCycleDetectionRequestError(
+            "graph must be a Phase 4.1 DependencyGraph."
+        )
+
+    # Phase 4.2 owns semantic validity and self-dependency rejection.
+    require_valid_dependency_graph(
+        graph
+    )
+
+    WHITE = 0
+    GRAY = 1
+    BLACK = 2
+
+    state = {
+        node_id: WHITE
+        for node_id
+        in graph.node_ids
+    }
+
+    active_stack: list[str] = []
+
+    active_index: dict[
+        str,
+        int,
+    ] = {}
+
+    witnesses: set[
+        tuple[str, ...]
+    ] = set()
+
+
+    def visit(
+        node_id: str,
+    ) -> None:
+        state[
+            node_id
+        ] = GRAY
+
+        active_index[
+            node_id
+        ] = len(
+            active_stack
+        )
+
+        active_stack.append(
+            node_id
+        )
+
+        for dependent in stage_dependents(
+            graph,
+            node_id,
+        ):
+            dependent_state = state[
+                dependent
+            ]
+
+            if dependent_state == WHITE:
+                visit(
+                    dependent
+                )
+
+            elif dependent_state == GRAY:
+                start = active_index[
+                    dependent
+                ]
+
+                raw_cycle = tuple(
+                    active_stack[
+                        start:
+                    ]
+                ) + (
+                    dependent,
+                )
+
+                witnesses.add(
+                    _canonicalize_cycle_path(
+                        raw_cycle
+                    )
+                )
+
+        active_stack.pop()
+
+        active_index.pop(
+            node_id,
+            None,
+        )
+
+        state[
+            node_id
+        ] = BLACK
+
+
+    for node_id in graph.node_ids:
+        if state[
+            node_id
+        ] == WHITE:
+            visit(
+                node_id
+            )
+
+
+    canonical_witnesses = tuple(
+        CycleWitness(
+            stage_ids=path
+        )
+        for path
+        in sorted(
+            witnesses
+        )
+    )
+
+    has_cycle = bool(
+        canonical_witnesses
+    )
+
+    return CycleDetectionResult(
+        is_acyclic=(
+            not has_cycle
+        ),
+        has_cycle=has_cycle,
+        node_count=len(
+            graph.node_ids
+        ),
+        edge_count=len(
+            graph.edges
+        ),
+        cycle_witness_count=len(
+            canonical_witnesses
+        ),
+        cycle_witnesses=canonical_witnesses,
+        graph_version=graph.graph_version,
+        detection_version=(
+            CYCLE_DETECTION_VERSION
+        ),
+    )
+
+------------------------------------------------------------------------------------------------------------
+require_acyclic_dependency_graph (lines 490-502)
+------------------------------------------------------------------------------------------------------------
+def require_acyclic_dependency_graph(
+    graph: DependencyGraph,
+) -> CycleDetectionResult:
+    result = detect_dependency_cycles(
+        graph
+    )
+
+    if result.has_cycle:
+        raise CyclicDependencyGraphError(
+            result
+        )
+
+    return result
+
+------------------------------------------------------------------------------------------------------------
+cycle_detection_snapshot (lines 509-549)
+------------------------------------------------------------------------------------------------------------
+def cycle_detection_snapshot(
+    graph: DependencyGraph,
+) -> Mapping[str, Any]:
+    result = detect_dependency_cycles(
+        graph
+    )
+
+    return _freeze(
+        {
+            "detection_version":
+                CYCLE_DETECTION_VERSION,
+
+            "schema_version":
+                CYCLE_DETECTION_SCHEMA_VERSION,
+
+            "graph_version":
+                result.graph_version,
+
+            "is_acyclic":
+                result.is_acyclic,
+
+            "has_cycle":
+                result.has_cycle,
+
+            "node_count":
+                result.node_count,
+
+            "edge_count":
+                result.edge_count,
+
+            "cycle_witness_count":
+                result.cycle_witness_count,
+
+            "cycle_witnesses":
+                tuple(
+                    witness.to_dict()
+                    for witness
+                    in result.cycle_witnesses
+                ),
+        }
+    )
+
+------------------------------------------------------------------------------------------------------------
+explain_cycle_detection_v4_3 (lines 556-685)
+------------------------------------------------------------------------------------------------------------
+def explain_cycle_detection_v4_3(
+) -> Mapping[str, Any]:
+    return _freeze(
+        {
+            "phase":
+                "4.3",
+
+            "component":
+                "Cycle Detection",
+
+            "version":
+                CYCLE_DETECTION_VERSION,
+
+            "schema_version":
+                CYCLE_DETECTION_SCHEMA_VERSION,
+
+            "input_authority":
+                "Phase 4.1 DependencyGraph",
+
+            "validation_precondition":
+                "Phase 4.2 Dependency Validation",
+
+            "upstream_versions": {
+                "4.1":
+                    DEPENDENCY_GRAPH_VERSION,
+
+                "4.2":
+                    DEPENDENCY_VALIDATION_VERSION,
+            },
+
+            "algorithm": {
+                "family":
+                    "deterministic DFS active-stack",
+
+                "node_order":
+                    "lexical",
+
+                "dependent_order":
+                    "lexical",
+
+                "evidence":
+                    "canonical cycle witnesses",
+
+                "exhaustive_simple_cycle_enumeration":
+                    False,
+            },
+
+            "owns": (
+                "directed dependency cycle detection",
+                "acyclic/cyclic determination",
+                "deterministic cycle witness evidence",
+                "require-acyclic dependency graph guard",
+                "immutable cycle detection snapshot",
+            ),
+
+            "does_not_own": (
+                "dependency graph construction",
+                "dependency semantic validation",
+                "self-dependency validation",
+                "topological execution ordering",
+                "runnable-stage resolution",
+                "execution planning",
+                "planning certification",
+                "Runtime Registration",
+                "Runtime jobs",
+                "Runtime dispatch",
+                "business handler execution",
+                "stage result handoff",
+                "workflow persistence",
+                "workflow recovery",
+            ),
+
+            "graph_semantics": {
+                "empty_graph":
+                    "acyclic",
+
+                "isolated_nodes":
+                    "acyclic",
+
+                "acyclic_chain":
+                    "acyclic",
+
+                "branch_join_without_back_edge":
+                    "acyclic",
+
+                "two_node_cycle":
+                    "cyclic",
+
+                "multi_node_cycle":
+                    "cyclic",
+
+                "self_dependency":
+                    (
+                        "invalid upstream; "
+                        "Phase 4.2 owns rejection"
+                    ),
+            },
+
+            "future_authority": {
+                "4.4":
+                    "Runnable Stage Resolver",
+
+                "4.5":
+                    "Execution Planner",
+
+                "4.6":
+                    "Planning Certification",
+            },
+
+            "execution_properties": {
+                "read_only":
+                    True,
+
+                "deterministic":
+                    True,
+
+                "side_effect_free":
+                    True,
+
+                "graph_mutation":
+                    False,
+
+                "runtime_execution":
+                    False,
+
+                "persistence":
+                    False,
+            },
+        }
+    )
+
+============================================================================================================
+NESTED FUNCTIONS INSIDE detect_dependency_cycles
+============================================================================================================
+
+------------------------------------------------------------------------------------------------------------
+visit (lines 380-438)
+------------------------------------------------------------------------------------------------------------
+    def visit(
+        node_id: str,
+    ) -> None:
+        state[
+            node_id
+        ] = GRAY
+
+        active_index[
+            node_id
+        ] = len(
+            active_stack
+        )
+
+        active_stack.append(
+            node_id
+        )
+
+        for dependent in stage_dependents(
+            graph,
+            node_id,
+        ):
+            dependent_state = state[
+                dependent
+            ]
+
+            if dependent_state == WHITE:
+                visit(
+                    dependent
+                )
+
+            elif dependent_state == GRAY:
+                start = active_index[
+                    dependent
+                ]
+
+                raw_cycle = tuple(
+                    active_stack[
+                        start:
+                    ]
+                ) + (
+                    dependent,
+                )
+
+                witnesses.add(
+                    _canonicalize_cycle_path(
+                        raw_cycle
+                    )
+                )
+
+        active_stack.pop()
+
+        active_index.pop(
+            node_id,
+            None,
+        )
+
+        state[
+            node_id
+        ] = BLACK
+
+============================================================================================================
+RECURSION EVIDENCE
+============================================================================================================
+call: require_valid_dependency_graph @ line 354
+call: set @ line 377
+call: tuple @ line 450
+call: bool @ line 460
+call: CycleDetectionResult @ line 464
+call: isinstance @ line 345
+call: InvalidCycleDetectionRequestError @ line 349
+call: len @ line 389
+call: append @ line 393
+call: stage_dependents @ line 397
+call: pop @ line 429
+call: pop @ line 431
+call: visit @ line 445
+call: CycleWitness @ line 451
+call: len @ line 469
+call: len @ line 472
+call: len @ line 475
+call: visit @ line 406
+call: sorted @ line 455
+call: add @ line 423
+call: tuple @ line 415
+call: _canonicalize_cycle_path @ line 424
+
+============================================================================================================
+CURRENT PUBLIC CLASSES / FUNCTIONS
+============================================================================================================
+CycleDetectionError
+InvalidCycleDetectionRequestError
+CyclicDependencyGraphError
+CycleWitness
+CycleDetectionResult
+detect_dependency_cycles
+require_acyclic_dependency_graph
+cycle_detection_snapshot
+explain_cycle_detection_v4_3
+
+============================================================================================================
+SOURCE MARKERS
+============================================================================================================
+deterministic DFS: True
+active-stack: True
+cycle witness: True
+cycle_witness_count: True
+topological: True
+runtime: True
+dependency_validation: True
