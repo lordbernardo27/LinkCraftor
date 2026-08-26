@@ -1,4 +1,4 @@
-"""
+﻿"""
 Upload Document Pipeline 2 — Upload Intake Boundary
 
 Responsibilities:
@@ -6,9 +6,9 @@ Responsibilities:
 - validate the allowed extension;
 - normalize the workspace identity;
 - read the uploaded file;
-- produce the immediate UI/API preview extraction;
-- save and index the uploaded source file;
-- run the dedicated Uploaded Document Extractor on the stored source file;
+- produce the immediate preview extraction;
+- save and index the uploaded file;
+- create the existing asynchronous document_upload_job;
 - preserve the existing API response contract.
 
 This module does not own:
@@ -27,11 +27,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
 from fastapi import HTTPException, UploadFile
-
-from backend.server.stores.upload_document_extractor import (
-    extract_upload_document_v1,
-    serialize_upload_extraction_result,
-)
 
 
 @dataclass(frozen=True)
@@ -62,21 +57,13 @@ async def run_upload_intake(
     Execute the canonical Pipeline 2 upload-intake boundary.
     """
 
-    if not file:
+    if not file or not file.filename:
         raise HTTPException(
             status_code=400,
             detail="No file uploaded.",
         )
 
-    filename = str(file.filename or "").strip()
-
-    if not filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file must have a filename.",
-        )
-
-    extension = dependencies.guess_extension(filename)
+    extension = dependencies.guess_extension(file.filename)
 
     allowed_extensions = {
         str(value or "").strip().lower()
@@ -96,14 +83,8 @@ async def run_upload_intake(
 
     raw = await file.read()
 
-    if not raw:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file is empty.",
-        )
-
     preview = dependencies.extract_preview(
-        Path(filename).name,
+        Path(file.filename).name,
         extension,
         raw,
     )
@@ -116,47 +97,97 @@ async def run_upload_intake(
         preview_text=str(preview.get("text") or ""),
     )
 
-    stored_name = str(metadata.get("stored_name") or "").strip()
+    processing_job_id = None
 
-    if not stored_name:
-        raise RuntimeError(
-            "Upload storage completed without a stored_name."
+    try:
+        from backend.server.orchestration.service import (
+            create_orchestration_job,
         )
 
-    stored_path = (
-        dependencies.workspace_directory(
-            normalized_workspace_id
-        )
-        / stored_name
-    )
-
-    if not stored_path.is_file():
-        raise RuntimeError(
-            "Stored uploaded source file could not be found: "
-            f"{stored_path}"
+        stored_path = str(
+            dependencies.workspace_directory(
+                normalized_workspace_id
+            )
+            / str(metadata.get("stored_name") or "")
         )
 
-    extraction_result = extract_upload_document_v1(
-        stored_path
-    )
+        document_id = str(
+            metadata.get("doc_id") or ""
+        ).strip()
 
-    extraction = serialize_upload_extraction_result(
-        extraction_result
-    )
+        processing_job = create_orchestration_job(
+            workspace_id=normalized_workspace_id,
+            job_type="document_upload_job",
+            payload={
+                "workspace_id": normalized_workspace_id,
+                "doc_id": document_id,
+                "stored_path": stored_path,
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "original_name": str(
+                    metadata.get("filename") or ""
+                ),
+                "html": str(preview.get("html") or ""),
+                "text": str(preview.get("text") or ""),
+                "source_route": "/upload",
+                "document_count": 1,
+            },
+            metadata={
+                "phase": "phase_2_background_orchestration",
+                "filename": str(
+                    metadata.get("filename") or ""
+                ),
+                "stored_name": str(
+                    metadata.get("stored_name") or ""
+                ),
+                "document_count": 1,
+            },
+            priority=5,
+        )
+
+        processing_job_id = processing_job.job_id
+
+        metadata["universal_knowledge_orchestration"] = {
+            "ok": True,
+            "status": "queued",
+            "note": (
+                "Phase 2: orchestration job created and queued "
+                "without blocking upload."
+            ),
+            "job_id": processing_job_id,
+        }
+
+    except Exception as exc:
+        print(
+            "[UPLOAD_ORCHESTRATION_QUEUE_ERROR]",
+            repr(exc),
+        )
+        traceback.print_exc()
+
+        metadata["universal_knowledge_orchestration"] = {
+            "ok": False,
+            "status": "queue_failed",
+            "error": str(exc)[:160],
+            "job_id": None,
+        }
 
     return {
         "ok": True,
         "workspace_id": normalized_workspace_id,
         "doc": metadata,
-        "extraction": extraction,
         "filename": preview.get("filename"),
         "ext": preview.get("ext"),
         "text": preview.get("text"),
         "html": preview.get("html"),
         "is_html": bool(preview.get("is_html")),
         "truncated": bool(preview.get("truncated")),
-        "job_id": None,
-        "processing_status": "not_applicable",
+        "job_id": processing_job_id,
+        "processing_status": (
+            "queued"
+            if processing_job_id
+            else "queue_failed"
+        ),
         "pipeline": "uploaded_document_to_uduc_pipeline",
         "pipeline_stage": "upload_intake",
     }

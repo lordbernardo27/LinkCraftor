@@ -6,9 +6,8 @@ Responsibilities:
 - validate the allowed extension;
 - normalize the workspace identity;
 - read the uploaded file;
-- produce the immediate UI/API preview extraction;
-- save and index the uploaded source file;
-- run the dedicated Uploaded Document Extractor on the stored source file;
+- produce the immediate preview extraction;
+- save and index the uploaded file;
 - preserve the existing API response contract.
 
 This module does not own:
@@ -27,11 +26,6 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable
 
 from fastapi import HTTPException, UploadFile
-
-from backend.server.stores.upload_document_extractor import (
-    extract_upload_document_v1,
-    serialize_upload_extraction_result,
-)
 
 
 @dataclass(frozen=True)
@@ -62,21 +56,13 @@ async def run_upload_intake(
     Execute the canonical Pipeline 2 upload-intake boundary.
     """
 
-    if not file:
+    if not file or not file.filename:
         raise HTTPException(
             status_code=400,
             detail="No file uploaded.",
         )
 
-    filename = str(file.filename or "").strip()
-
-    if not filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file must have a filename.",
-        )
-
-    extension = dependencies.guess_extension(filename)
+    extension = dependencies.guess_extension(file.filename)
 
     allowed_extensions = {
         str(value or "").strip().lower()
@@ -96,14 +82,8 @@ async def run_upload_intake(
 
     raw = await file.read()
 
-    if not raw:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file is empty.",
-        )
-
     preview = dependencies.extract_preview(
-        Path(filename).name,
+        Path(file.filename).name,
         extension,
         raw,
     )
@@ -116,39 +96,10 @@ async def run_upload_intake(
         preview_text=str(preview.get("text") or ""),
     )
 
-    stored_name = str(metadata.get("stored_name") or "").strip()
-
-    if not stored_name:
-        raise RuntimeError(
-            "Upload storage completed without a stored_name."
-        )
-
-    stored_path = (
-        dependencies.workspace_directory(
-            normalized_workspace_id
-        )
-        / stored_name
-    )
-
-    if not stored_path.is_file():
-        raise RuntimeError(
-            "Stored uploaded source file could not be found: "
-            f"{stored_path}"
-        )
-
-    extraction_result = extract_upload_document_v1(
-        stored_path
-    )
-
-    extraction = serialize_upload_extraction_result(
-        extraction_result
-    )
-
     return {
         "ok": True,
         "workspace_id": normalized_workspace_id,
         "doc": metadata,
-        "extraction": extraction,
         "filename": preview.get("filename"),
         "ext": preview.get("ext"),
         "text": preview.get("text"),

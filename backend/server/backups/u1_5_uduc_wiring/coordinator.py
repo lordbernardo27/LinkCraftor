@@ -19,10 +19,6 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
-from backend.server.stores.uploaded_document_unified_content import (
-    build_and_write_uduc_from_extraction_result,
-)
-
 from fastapi import UploadFile
 
 from .uploaded_document_to_uduc_pipeline import (
@@ -121,119 +117,56 @@ async def run_upload_document(
             "Pipeline 2 result does not contain a document ID."
         )
 
-    # ------------------------------------------------------------
-    # Dedicated extraction is authoritative for ingestion.
-    # Immediate preview fields remain UI/highlight compatibility only.
-    # ------------------------------------------------------------
-
-    extraction_result = pipeline_2.get("extraction")
-
-    if not isinstance(extraction_result, dict):
-        raise RuntimeError(
-            "Pipeline 2 result does not contain the dedicated "
-            "UploadExtractionResult."
-        )
-
-    extraction_text = _required_string(
-        extraction_result,
-        "text",
-        "content_body",
-    )
-
-    extraction_title = _required_string(
-        extraction_result,
-        "title",
-    ) or _required_string(
-        document_metadata,
-        "title",
-        "filename",
-    )
-
-    extraction_source_format = _required_string(
-        extraction_result,
-        "source_type",
-        "source_format",
-    )
-
-    normalized_workspace_id = str(
-        pipeline_2.get("workspace_id") or workspace_id
-    )
-
-    # ------------------------------------------------------------
-    # Canonical UDUC construction + persistence.
-    # ------------------------------------------------------------
-
-    uduc_result = build_and_write_uduc_from_extraction_result(
-        extraction_result=extraction_result,
-        workspace_id=normalized_workspace_id,
-        document_id=document_id,
-        original_filename=_required_string(
+    extraction_result = {
+        "title": _required_string(
             document_metadata,
+            "title",
             "filename",
         ),
-        stored_filename=_required_string(
-            document_metadata,
-            "stored_name",
+        "text": _required_string(
+            pipeline_2,
+            "text",
         ),
-        source_metadata=document_metadata,
-    )
-
-    if not isinstance(uduc_result, dict):
-        raise RuntimeError(
-            "UDUC builder/writer returned a non-dictionary result."
-        )
-
-    if uduc_result.get("ok") is not True:
-        raise RuntimeError(
-            "UDUC builder/writer did not complete successfully."
-        )
-
-    uduc = uduc_result.get("uduc")
-
-    if not isinstance(uduc, dict):
-        raise RuntimeError(
-            "UDUC builder/writer result does not contain "
-            "serialized UDUC."
-        )
-
-    # ------------------------------------------------------------
-    # Highlight pipeline receives dedicated extracted text.
-    # Preview HTML remains compatibility-only because the dedicated
-    # extractor's canonical output is plain extracted document content.
-    # ------------------------------------------------------------
-
-    highlight_extraction_result = {
-        "title": extraction_title,
-        "text": extraction_text,
         "html": _required_string(
             pipeline_2,
             "html",
         ),
-        "source_format": extraction_source_format,
+        "source_format": _required_string(
+            pipeline_2,
+            "ext",
+        ),
     }
 
     pipeline_1 = run_uploaded_document_to_highlight_pipeline(
-        workspace_id=normalized_workspace_id,
+        workspace_id=str(
+            pipeline_2.get("workspace_id") or workspace_id
+        ),
         document_id=document_id,
-        extraction_result=highlight_extraction_result,
+        extraction_result=extraction_result,
     )
-
-    # ------------------------------------------------------------
-    # Registry handoff receives real UDUC instead of a hand-built
-    # preview-derived pseudo-unified-content dictionary.
-    # ------------------------------------------------------------
 
     pipeline_3 = (
         run_uploaded_document_registry_to_active_target_set_pipeline(
-            workspace_id=normalized_workspace_id,
+            workspace_id=str(
+                pipeline_2.get("workspace_id") or workspace_id
+            ),
             document_id=document_id,
-            unified_content=uduc,
+            unified_content={
+                "document_id": document_id,
+                "workspace_id": str(
+                    pipeline_2.get("workspace_id") or workspace_id
+                ),
+                "title": extraction_result["title"],
+                "content_body": extraction_result["text"],
+                "content_html": extraction_result["html"],
+                "source_format": extraction_result["source_format"],
+                "upload_metadata": document_metadata,
+            },
         )
     )
 
     overall_ok = (
         pipeline_2.get("ok") is True
-        and uduc_result.get("ok") is True
         and pipeline_1.get("ok") is True
         and pipeline_3.get("ok") is True
     )

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import os
-import threading
 import json
 import uuid
 import re
@@ -36,7 +35,7 @@ except Exception:
 router = APIRouter(prefix="/api/files", tags=["files"])
 legacy_router = APIRouter(prefix="/api", tags=["legacy"])
 
-ALLOWED_EXT = {".docx", ".txt", ".md", ".markdown", ".html", ".htm"}
+ALLOWED_EXT = {".docx", ".txt", ".md", ".html", ".htm"}
 
 BASE_DIR = Path(__file__).resolve().parents[1]  # backend/server
 DATA_DIR = BASE_DIR / "data"
@@ -103,20 +102,91 @@ def _quality_gate_h1(h: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _normalize_docx_title_in_place(stored_path: str) -> Dict[str, Any]:
+    if not stored_path:
+        return {"ok": False, "error": "docx_missing_path"}
+    if DocxDocument is None:
+        return {"ok": False, "error": "python_docx_not_available"}
+
+    try:
+        doc = DocxDocument(stored_path)
+    except Exception as e:
+        return {"ok": False, "error": f"docx_read_failed:{str(e)[:120]}"}
+
+    paras = getattr(doc, "paragraphs", []) or []
+    if not paras:
+        return {"ok": True, "changed": False, "reason": "no_paragraphs"}
+
+    first_h2_idx = None
+    for i, p in enumerate(paras):
+        try:
+            sname = (p.style.name or "").strip()
+        except Exception:
+            sname = ""
+        if sname in ("Heading 2", "Heading 3", "Heading 4", "Heading 5", "Heading 6"):
+            first_h2_idx = i
+            break
+
+    search_upto = first_h2_idx if first_h2_idx is not None else len(paras)
+    target_i = None
+    target_p = None
+
+    for i in range(search_upto):
+        p = paras[i]
+        txt = (getattr(p, "text", "") or "").strip()
+        if not txt:
+            continue
+        target_i = i
+        target_p = p
+        break
+
+    if target_p is None:
+        return {"ok": True, "changed": False, "reason": "no_nonempty_para"}
+
+    try:
+        cur_style = (target_p.style.name or "").strip()
+    except Exception:
+        cur_style = ""
+
+    if cur_style in ("Title", "Heading 1"):
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": f"already_{cur_style}",
+            "para_index": target_i,
+        }
+
+    ok, reason = _quality_gate_h1((getattr(target_p, "text", "") or "").strip())
+    if not ok:
+        return {
+            "ok": True,
+            "changed": False,
+            "reason": f"failed_quality_gate:{reason}",
+            "para_index": target_i,
+        }
+
+    try:
+        target_p.style = "Title"
+    except Exception as e:
+        return {"ok": False, "error": f"set_style_failed:{str(e)[:120]}", "para_index": target_i}
+
+    try:
+        doc.save(stored_path)
+    except Exception as e:
+        return {"ok": False, "error": f"docx_save_failed:{str(e)[:120]}", "para_index": target_i}
+
+    return {
+        "ok": True,
+        "changed": True,
+        "reason": "promoted_first_para_to_Title",
+        "para_index": target_i,
+        "from_style": cur_style,
+    }
+
+
 def _strict_h1_from_docx_file(stored_path: str) -> Tuple[str, str, str]:
-    """
-    Read DOCX title/H1 information without ever modifying the source file.
-
-    Priority:
-    1. Genuine Title / Heading 1 paragraph.
-    2. First suitable non-empty paragraph before the first lower-level
-       heading (Heading 2-6), using the existing H1 quality gate.
-
-    This function is intentionally read-only.
-    """
     if not stored_path:
         return "", "", "docx_missing_path"
-
     if DocxDocument is None:
         return "", "", "docx_reader_unavailable"
 
@@ -125,15 +195,12 @@ def _strict_h1_from_docx_file(stored_path: str) -> Tuple[str, str, str]:
     except Exception as e:
         return "", "", f"docx_read_failed:{str(e)[:120]}"
 
-    paras = getattr(doc, "paragraphs", []) or []
-
-    # First preference: a genuine structural Title / Heading 1.
-    for p in paras:
+    for p in getattr(doc, "paragraphs", []) or []:
         txt = (getattr(p, "text", "") or "").strip()
-
         if not txt:
             continue
 
+        style_name = ""
         try:
             style_name = (p.style.name or "").strip()
         except Exception:
@@ -141,53 +208,9 @@ def _strict_h1_from_docx_file(stored_path: str) -> Tuple[str, str, str]:
 
         if style_name in ("Heading 1", "Title"):
             ok, reason = _quality_gate_h1(txt)
-
             if not ok:
                 return "", "", f"failed_quality_gate:{reason}"
-
             return txt, f"docx:{style_name}", ""
-
-    # Fallback: infer a title from the first suitable paragraph
-    # before the first lower-level heading. This preserves the
-    # useful behavior of the former in-place normalizer without
-    # changing or saving the uploaded DOCX.
-    first_lower_heading_idx = None
-
-    for i, p in enumerate(paras):
-        try:
-            style_name = (p.style.name or "").strip()
-        except Exception:
-            style_name = ""
-
-        if style_name in (
-            "Heading 2",
-            "Heading 3",
-            "Heading 4",
-            "Heading 5",
-            "Heading 6",
-        ):
-            first_lower_heading_idx = i
-            break
-
-    search_upto = (
-        first_lower_heading_idx
-        if first_lower_heading_idx is not None
-        else len(paras)
-    )
-
-    for i in range(search_upto):
-        p = paras[i]
-        txt = (getattr(p, "text", "") or "").strip()
-
-        if not txt:
-            continue
-
-        ok, reason = _quality_gate_h1(txt)
-
-        if not ok:
-            return "", "", f"failed_quality_gate:{reason}"
-
-        return txt, "docx:inferred_first_paragraph", ""
 
     return "", "", "no_strict_h1_found"
 
@@ -287,23 +310,6 @@ def _index_path(workspace_id: str) -> Path:
     return _ws_dir(workspace_id) / "index.json"
 
 
-_INDEX_LOCKS_GUARD = threading.Lock()
-_INDEX_LOCKS: Dict[str, threading.RLock] = {}
-
-
-def _index_lock(path: Path) -> threading.RLock:
-    key = str(path.resolve())
-
-    with _INDEX_LOCKS_GUARD:
-        lock = _INDEX_LOCKS.get(key)
-
-        if lock is None:
-            lock = threading.RLock()
-            _INDEX_LOCKS[key] = lock
-
-        return lock
-
-
 def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
@@ -316,86 +322,13 @@ def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
 
 def _safe_write_index(path: Path, items: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    tmp = path.with_name(
-        f"{path.name}.{uuid.uuid4().hex}.tmp"
-    )
-
-    try:
-        tmp.write_text(
-            json.dumps(
-                items,
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-
-        os.replace(tmp, path)
-
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except Exception:
-            pass
-
-
-_WINDOWS_RESERVED_FILENAMES = {
-    "con",
-    "prn",
-    "aux",
-    "nul",
-    *(f"com{i}" for i in range(1, 10)),
-    *(f"lpt{i}" for i in range(1, 10)),
-}
-
-
-def _safe_upload_filename(filename: str) -> str:
-    raw = str(filename or "").strip()
-
-    if not raw:
-        raise ValueError("Uploaded file must have a filename.")
-
-    # Browsers/clients may supply either POSIX or Windows-style paths.
-    basename = raw.replace("\\", "/").rsplit("/", 1)[-1].strip()
-
-    if not basename or basename in {".", ".."}:
-        raise ValueError("Uploaded filename is invalid.")
-
-    # Remove control characters and characters forbidden by Windows.
-    basename = re.sub(r"[\x00-\x1f<>:\"/\\|?*]", "_", basename)
-
-    # Windows does not permit trailing spaces or periods.
-    basename = basename.rstrip(" .")
-
-    basename = re.sub(r"_+", "_", basename)
-
-    if not basename:
-        raise ValueError("Uploaded filename is invalid.")
-
-    stem = Path(basename).stem.casefold()
-
-    if stem in _WINDOWS_RESERVED_FILENAMES:
-        basename = f"_{basename}"
-
-    # Keep room for the document-id prefix in the stored filename.
-    if len(basename) > 180:
-        suffix = Path(basename).suffix
-        stem_text = Path(basename).stem
-
-        suffix_limit = min(len(suffix), 20)
-        suffix = suffix[:suffix_limit]
-
-        remaining = max(1, 180 - len(suffix))
-        basename = stem_text[:remaining] + suffix
-
-    return basename
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _guess_ext(filename: str) -> str:
-    safe_name = _safe_upload_filename(filename)
-    return (Path(safe_name).suffix or "").lower()
+    return (Path((filename or "").strip()).suffix or "").lower()
 
 
 def _strip_tags(s: str) -> str:
@@ -551,15 +484,19 @@ def _store_and_index(
     preview_html: str,
     preview_text: str,
 ) -> Dict[str, Any]:
-    safe_name = _safe_upload_filename(file.filename)
-    ext = _guess_ext(safe_name)
+    ext = _guess_ext(file.filename)
     ws_dir = _ws_dir(workspace_id)
     ws_dir.mkdir(parents=True, exist_ok=True)
 
     doc_id = uuid.uuid4().hex
+    safe_name = Path(file.filename).name
     stored_name = f"{doc_id}__{safe_name}"
     stored_path = ws_dir / stored_name
     stored_path.write_bytes(raw)
+
+    normalize_info: Dict[str, Any] = {}
+    if ext == ".docx":
+        normalize_info = _normalize_docx_title_in_place(str(stored_path))
 
     h1, h1_source, h1_error = _derive_h1_for_index(
         ext=ext,
@@ -568,8 +505,8 @@ def _store_and_index(
         stored_path=str(stored_path),
     )
 
-    # Record the byte size of the persisted immutable source file
-    # plus the original upload size.
+    # Normalization may rewrite the stored .docx; record the size actually
+    # on disk (plus the original upload size) so the index never lies.
     try:
         stored_bytes = int(stored_path.stat().st_size)
     except Exception:
@@ -587,25 +524,13 @@ def _store_and_index(
         "h1": h1,
         "h1_source": h1_source,
         "h1_error": h1_error,
+        "docx_normalize": normalize_info if ext == ".docx" else {},
     }
 
     idx_path = _index_path(workspace_id)
-
-    with _index_lock(idx_path):
-        items = _safe_read_index(idx_path)
-
-        if any(
-            str(item.get("doc_id") or "") == doc_id
-            for item in items
-            if isinstance(item, dict)
-        ):
-            raise RuntimeError(
-                f"Duplicate upload registry document_id: {doc_id}"
-            )
-
-        items.append(meta)
-        _safe_write_index(idx_path, items)
-
+    items = _safe_read_index(idx_path)
+    items.append(meta)
+    _safe_write_index(idx_path, items)
     return meta
 
 
@@ -626,6 +551,9 @@ def _update_index_h1(
         if isinstance(rec, dict) and str(rec.get("doc_id") or "") == doc_id:
             stored_name = str(rec.get("stored_name") or "")
             stored_path = str(ws_dir / stored_name) if stored_name else None
+
+            if (ext or "").lower().strip() == ".docx" and stored_path:
+                _normalize_docx_title_in_place(stored_path)
 
             h1, h1_source, h1_error = _derive_h1_for_index(
                 ext=ext,
@@ -1012,6 +940,9 @@ def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
         ext = _guess_ext(safe_name)
         if ext not in ALLOWED_EXT:
             continue
+
+        if ext == ".docx":
+            _normalize_docx_title_in_place(str(p))
 
         try:
             raw = p.read_bytes()

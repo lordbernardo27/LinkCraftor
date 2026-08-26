@@ -62,21 +62,13 @@ async def run_upload_intake(
     Execute the canonical Pipeline 2 upload-intake boundary.
     """
 
-    if not file:
+    if not file or not file.filename:
         raise HTTPException(
             status_code=400,
             detail="No file uploaded.",
         )
 
-    filename = str(file.filename or "").strip()
-
-    if not filename:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file must have a filename.",
-        )
-
-    extension = dependencies.guess_extension(filename)
+    extension = dependencies.guess_extension(file.filename)
 
     allowed_extensions = {
         str(value or "").strip().lower()
@@ -96,14 +88,8 @@ async def run_upload_intake(
 
     raw = await file.read()
 
-    if not raw:
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file is empty.",
-        )
-
     preview = dependencies.extract_preview(
-        Path(filename).name,
+        Path(file.filename).name,
         extension,
         raw,
     )

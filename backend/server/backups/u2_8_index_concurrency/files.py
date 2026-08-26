@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import io
 import os
-import threading
 import json
 import uuid
 import re
@@ -287,23 +286,6 @@ def _index_path(workspace_id: str) -> Path:
     return _ws_dir(workspace_id) / "index.json"
 
 
-_INDEX_LOCKS_GUARD = threading.Lock()
-_INDEX_LOCKS: Dict[str, threading.RLock] = {}
-
-
-def _index_lock(path: Path) -> threading.RLock:
-    key = str(path.resolve())
-
-    with _INDEX_LOCKS_GUARD:
-        lock = _INDEX_LOCKS.get(key)
-
-        if lock is None:
-            lock = threading.RLock()
-            _INDEX_LOCKS[key] = lock
-
-        return lock
-
-
 def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
     if not path.exists():
         return []
@@ -316,29 +298,9 @@ def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
 
 def _safe_write_index(path: Path, items: List[Dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-
-    tmp = path.with_name(
-        f"{path.name}.{uuid.uuid4().hex}.tmp"
-    )
-
-    try:
-        tmp.write_text(
-            json.dumps(
-                items,
-                ensure_ascii=False,
-                indent=2,
-            ),
-            encoding="utf-8",
-        )
-
-        os.replace(tmp, path)
-
-    finally:
-        try:
-            if tmp.exists():
-                tmp.unlink()
-        except Exception:
-            pass
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(items, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 _WINDOWS_RESERVED_FILENAMES = {
@@ -568,8 +530,8 @@ def _store_and_index(
         stored_path=str(stored_path),
     )
 
-    # Record the byte size of the persisted immutable source file
-    # plus the original upload size.
+    # Normalization may rewrite the stored .docx; record the size actually
+    # on disk (plus the original upload size) so the index never lies.
     try:
         stored_bytes = int(stored_path.stat().st_size)
     except Exception:
@@ -590,22 +552,9 @@ def _store_and_index(
     }
 
     idx_path = _index_path(workspace_id)
-
-    with _index_lock(idx_path):
-        items = _safe_read_index(idx_path)
-
-        if any(
-            str(item.get("doc_id") or "") == doc_id
-            for item in items
-            if isinstance(item, dict)
-        ):
-            raise RuntimeError(
-                f"Duplicate upload registry document_id: {doc_id}"
-            )
-
-        items.append(meta)
-        _safe_write_index(idx_path, items)
-
+    items = _safe_read_index(idx_path)
+    items.append(meta)
+    _safe_write_index(idx_path, items)
     return meta
 
 
