@@ -194,7 +194,13 @@ _MD_IMAGE_RE = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _MD_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]*\)")
 _MD_ORDERED_LIST_RE = re.compile(r"^\d{1,3}[.)]\s+")
 _MD_HR_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})\s*$")
-_MD_EMPHASIS_RE = re.compile(r"(\*\*|__|\*|_|`)(.+?)\1")
+_MD_STAR_OR_CODE_RE = re.compile(
+    r"(\*\*|\*|`)(.+?)\1"
+)
+
+_MD_UNDERSCORE_EMPHASIS_RE = re.compile(
+    r"(?<!\w)(__|_)(.+?)\1(?!\w)"
+)
 
 
 def _clean_markdown_line_prefix_v2(line: str) -> str:
@@ -215,10 +221,25 @@ _clean_markdown_line_prefix_v1 = _clean_markdown_line_prefix_v2
 def _strip_md_inline_v1(text: str) -> str:
     out = _MD_IMAGE_RE.sub(lambda m: m.group(1), text)   # ![alt](src) -> alt
     out = _MD_LINK_RE.sub(lambda m: m.group(1), out)     # [text](url) -> text
+
+    # Strip real Markdown emphasis/code delimiters while preserving
+    # underscores that are part of ordinary tokens such as user_id,
+    # product_name, API_RESPONSE_CODE, and similar identifiers.
     prev = None
+
     while prev != out:  # nested emphasis: **bold *italic***
         prev = out
-        out = _MD_EMPHASIS_RE.sub(lambda m: m.group(2), out)
+
+        out = _MD_STAR_OR_CODE_RE.sub(
+            lambda m: m.group(2),
+            out,
+        )
+
+        out = _MD_UNDERSCORE_EMPHASIS_RE.sub(
+            lambda m: m.group(2),
+            out,
+        )
+
     return out
 
 

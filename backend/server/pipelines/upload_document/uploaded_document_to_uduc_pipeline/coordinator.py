@@ -1,4 +1,4 @@
-﻿"""
+"""
 Uploaded Document-to-UDUC Pipeline
 
 Entry-point scope:
@@ -11,7 +11,7 @@ UPLOADED DOCUMENT
 The coordinator delegates the upload request into the existing canonical
 upload-intake implementation.
 
-The worker, format detection, format router, extractor, and UDUC internals
+Format detection, format routing, extraction, and UDUC internals
 remain in their existing production locations.
 """
 

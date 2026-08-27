@@ -14,7 +14,6 @@ UDUC_PIPELINE_VERSION = "verification_6d_uduc_v1_1"
 # FIX: anchored to the package (backend/server), matching files.py, instead
 # of a CWD-relative "backend/server/data/..." string. Previously artifacts
 # landed under whatever directory the server happened to be launched from,
-# and _read_upload_index_hit silently found nothing.
 BASE_DIR = Path(__file__).resolve().parents[1]  # backend/server
 UDUC_OUTPUT_DIR = BASE_DIR / "data" / "uploaded_document_unified_content"
 
@@ -84,34 +83,6 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
-
-
-def _read_upload_index_hit(workspace_id: str, document_id: str) -> Dict[str, Any]:
-    candidates = [
-        BASE_DIR / "data" / "docs" / workspace_id / "index.json",
-        BASE_DIR / "data" / "uploads" / workspace_id / "index.json",
-    ]
-
-    for fp in candidates:
-        if not fp.exists():
-            continue
-
-        try:
-            raw = json.loads(fp.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-
-        rows = raw if isinstance(raw, list) else raw.get("items", []) if isinstance(raw, dict) else []
-
-        for row in rows:
-            if isinstance(row, dict) and str(row.get("doc_id") or row.get("document_id") or "").strip() == document_id:
-                return row
-
-    # FIX: one debug breadcrumb instead of total silence — the enrichment
-    # path (h1 / stored_name / bytes) being dead in production previously
-    # had zero signal.
-    print(f"[UDUC_INDEX_MISS] workspace={workspace_id} doc={document_id}")
-    return {}
 
 
 def _paragraphs_from_content_body(content_body: str) -> List[Dict[str, Any]]:
@@ -310,9 +281,12 @@ def build_uduc_from_upload_extraction_result(
 
     doc_id = _safe_document_id(inferred_document_id)
 
-    index_hit = _read_upload_index_hit(ws, doc_id) if doc_id != "unknown_document" else {}
-
-    source_path = str(er.get("source_path") or stored_path or index_hit.get("stored_path") or "")
+    source_path = str(
+        er.get("source_path")
+        or stored_path
+        or src_meta.get("stored_path")
+        or ""
+    )
     source_type = str(er.get("source_type") or meta.get("source_type") or "").strip()
     source_format = source_type or str(meta.get("extension") or "").replace(".", "").strip() or "uploaded_document"
 
@@ -321,7 +295,6 @@ def build_uduc_from_upload_extraction_result(
         or src_meta.get("original_filename")
         or src_meta.get("filename")
         or meta.get("filename")
-        or index_hit.get("filename")
         or Path(source_path).name
         or ""
     )
@@ -332,7 +305,6 @@ def build_uduc_from_upload_extraction_result(
         or src_meta.get("stored_name")
         or meta.get("stored_filename")
         or meta.get("stored_name")
-        or index_hit.get("stored_name")
         or Path(source_path).name
         or ""
     )
@@ -341,22 +313,38 @@ def build_uduc_from_upload_extraction_result(
         stored_path
         or src_meta.get("stored_path")
         or meta.get("stored_path")
-        or index_hit.get("stored_path")
         or source_path
         or ""
     )
 
-    title = str(er.get("title") or meta.get("title") or index_hit.get("h1") or "").strip()
+    title = str(
+        er.get("title")
+        or meta.get("title")
+        or src_meta.get("title")
+        or src_meta.get("h1")
+        or ""
+    ).strip()
+
     headings = _as_list(er.get("headings"))
-    h1 = str(meta.get("h1") or index_hit.get("h1") or (headings[0] if headings else title) or "").strip()
+
+    h1 = str(
+        meta.get("h1")
+        or src_meta.get("h1")
+        or (headings[0] if headings else title)
+        or ""
+    ).strip()
 
     content_body = str(er.get("content_body") or er.get("text") or "").strip()
     structure = _build_uduc_structure(content_body, headings)
 
     extension = str(meta.get("extension") or Path(original_name).suffix.lower() or "").strip()
 
-    # FIX: file_size falls back to None (was ""), avoiding mixed int/str typing.
-    file_size = src_meta.get("file_size") or src_meta.get("bytes") or index_hit.get("bytes") or None
+    # Canonical upload source metadata owns persisted byte-count evidence.
+    file_size = (
+        src_meta.get("file_size")
+        or src_meta.get("bytes")
+        or None
+    )
 
     merged_metadata: Dict[str, Any] = {
         "extension": extension,

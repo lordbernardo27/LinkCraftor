@@ -1,0 +1,163 @@
+"""
+Upload Document Pipeline 2 — Upload Intake Boundary
+
+Responsibilities:
+- validate the upload request;
+- validate the allowed extension;
+- normalize the workspace identity;
+- read the uploaded file;
+- produce the immediate UI/API preview extraction;
+- save and index the uploaded source file;
+- run the dedicated Uploaded Document Extractor on the stored source file;
+- preserve the existing API response contract.
+
+This module does not own:
+- phrase intelligence;
+- highlight selection;
+- editor painting;
+- Document Registry persistence;
+- Active Target Set mutation.
+"""
+
+from __future__ import annotations
+
+import traceback
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable
+
+from fastapi import HTTPException, UploadFile
+
+from backend.server.stores.upload_document_extractor import (
+    extract_upload_document_v1,
+    serialize_upload_extraction_result,
+)
+
+
+@dataclass(frozen=True)
+class UploadIntakeDependencies:
+    """
+    Transitional dependency boundary.
+
+    The existing low-level storage and extraction helpers still live in
+    routes/files.py. They are injected here so Pipeline 2 can own the upload
+    workflow without introducing a circular import.
+    """
+
+    guess_extension: Callable[[str], str]
+    normalize_workspace_id: Callable[[str], str]
+    extract_preview: Callable[[str, str, bytes], Dict[str, Any]]
+    store_and_index: Callable[..., Dict[str, Any]]
+    workspace_directory: Callable[[str], Path]
+    allowed_extensions: Iterable[str]
+
+
+async def run_upload_intake(
+    *,
+    workspace_id: str,
+    file: UploadFile,
+    dependencies: UploadIntakeDependencies,
+) -> Dict[str, Any]:
+    """
+    Execute the canonical Pipeline 2 upload-intake boundary.
+    """
+
+    if not file:
+        raise HTTPException(
+            status_code=400,
+            detail="No file uploaded.",
+        )
+
+    filename = str(file.filename or "").strip()
+
+    if not filename:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file must have a filename.",
+        )
+
+    extension = dependencies.guess_extension(filename)
+
+    allowed_extensions = {
+        str(value or "").strip().lower()
+        for value in dependencies.allowed_extensions
+        if str(value or "").strip()
+    }
+
+    if extension not in allowed_extensions:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File type not allowed: {extension}",
+        )
+
+    normalized_workspace_id = dependencies.normalize_workspace_id(
+        workspace_id
+    )
+
+    raw = await file.read()
+
+    if not raw:
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file is empty.",
+        )
+
+    preview = dependencies.extract_preview(
+        Path(filename).name,
+        extension,
+        raw,
+    )
+
+    metadata = dependencies.store_and_index(
+        normalized_workspace_id,
+        file,
+        raw,
+        preview_html=str(preview.get("html") or ""),
+        preview_text=str(preview.get("text") or ""),
+    )
+
+    stored_name = str(metadata.get("stored_name") or "").strip()
+
+    if not stored_name:
+        raise RuntimeError(
+            "Upload storage completed without a stored_name."
+        )
+
+    stored_path = (
+        dependencies.workspace_directory(
+            normalized_workspace_id
+        )
+        / stored_name
+    )
+
+    if not stored_path.is_file():
+        raise RuntimeError(
+            "Stored uploaded source file could not be found: "
+            f"{stored_path}"
+        )
+
+    extraction_result = extract_upload_document_v1(
+        stored_path
+    )
+
+    extraction = serialize_upload_extraction_result(
+        extraction_result
+    )
+
+    return {
+        "ok": True,
+        "workspace_id": normalized_workspace_id,
+        "doc": metadata,
+        "extraction": extraction,
+        "filename": preview.get("filename"),
+        "ext": preview.get("ext"),
+        "text": preview.get("text"),
+        "html": preview.get("html"),
+        "is_html": bool(preview.get("is_html")),
+        "truncated": bool(preview.get("truncated")),
+        "job_id": None,
+        "processing_status": "not_applicable",
+        "pipeline": "uploaded_document_to_uduc_pipeline",
+        "pipeline_stage": "upload_intake",
+    }
+

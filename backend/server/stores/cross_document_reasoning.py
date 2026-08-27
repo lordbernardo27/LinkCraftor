@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -1345,10 +1345,6 @@ def explain_intent_classification_orchestration_v1(
                 "_is_intent_phrase",
                 "_score_with_strength",
                 "_semantic_overlap",
-            ],
-            "upload_intel_store_v2": [
-                "_looks_like_intent_phrase",
-                "_quality_score_for",
             ],
             "document_registry_pool": [
                 "_classify_page_type",

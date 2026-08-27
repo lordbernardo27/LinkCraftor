@@ -305,6 +305,12 @@ def _index_lock(path: Path) -> threading.RLock:
 
 
 def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
+    """
+    Tolerant reader for read-only compatibility surfaces.
+
+    Mutation paths MUST use _strict_read_index_for_update() so a malformed
+    existing registry can never be silently interpreted as an empty registry.
+    """
     if not path.exists():
         return []
     try:
@@ -312,6 +318,40 @@ def _safe_read_index(path: Path) -> List[Dict[str, Any]]:
         return [x for x in data if isinstance(x, dict)] if isinstance(data, list) else []
     except Exception:
         return []
+
+
+def _strict_read_index_for_update(path: Path) -> List[Dict[str, Any]]:
+    """
+    Fail-closed registry reader for every read-modify-write transaction.
+
+    A missing registry is a valid empty workspace. An existing registry must
+    be valid JSON, must be a list, and every record must be an object.
+    """
+    if not path.exists():
+        return []
+
+    try:
+        data = json.loads(
+            path.read_text(encoding="utf-8")
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "Upload registry is unreadable and cannot be modified safely."
+        ) from exc
+
+    if not isinstance(data, list):
+        raise RuntimeError(
+            "Upload registry has an invalid root structure and "
+            "cannot be modified safely."
+        )
+
+    if any(not isinstance(item, dict) for item in data):
+        raise RuntimeError(
+            "Upload registry contains malformed records and "
+            "cannot be modified safely."
+        )
+
+    return data
 
 
 def _safe_write_index(path: Path, items: List[Dict[str, Any]]) -> None:
@@ -482,7 +522,7 @@ def _extract_preview_from_bytes(filename: str, ext: str, raw: bytes) -> Dict[str
         html_out = "<pre>" + _html_escape(text) + "</pre>"
         is_html = False
 
-    elif ext == ".md":
+    elif ext in (".md", ".markdown"):
         md = _decode_text_bytes(raw)
         try:
             import markdown2
@@ -559,52 +599,70 @@ def _store_and_index(
     doc_id = uuid.uuid4().hex
     stored_name = f"{doc_id}__{safe_name}"
     stored_path = ws_dir / stored_name
-    stored_path.write_bytes(raw)
-
-    h1, h1_source, h1_error = _derive_h1_for_index(
-        ext=ext,
-        preview_html=preview_html or "",
-        preview_text=preview_text or "",
-        stored_path=str(stored_path),
-    )
-
-    # Record the byte size of the persisted immutable source file
-    # plus the original upload size.
-    try:
-        stored_bytes = int(stored_path.stat().st_size)
-    except Exception:
-        stored_bytes = len(raw)
-
-    meta = {
-        "doc_id": doc_id,
-        "filename": safe_name,
-        "ext": ext,
-        "bytes": stored_bytes,
-        "original_bytes": len(raw),
-        "content_type": file.content_type or "",
-        "uploaded_at": _utc_now_iso(),
-        "stored_name": stored_name,
-        "h1": h1,
-        "h1_source": h1_source,
-        "h1_error": h1_error,
-    }
-
     idx_path = _index_path(workspace_id)
 
     with _index_lock(idx_path):
-        items = _safe_read_index(idx_path)
+        # Validate the existing registry BEFORE creating a new source file.
+        # A corrupt registry must fail closed rather than becoming [].
+        items = _strict_read_index_for_update(idx_path)
 
         if any(
             str(item.get("doc_id") or "") == doc_id
             for item in items
-            if isinstance(item, dict)
         ):
             raise RuntimeError(
                 f"Duplicate upload registry document_id: {doc_id}"
             )
 
-        items.append(meta)
-        _safe_write_index(idx_path, items)
+        source_created = False
+
+        try:
+            stored_path.write_bytes(raw)
+            source_created = True
+
+            h1, h1_source, h1_error = _derive_h1_for_index(
+                ext=ext,
+                preview_html=preview_html or "",
+                preview_text=preview_text or "",
+                stored_path=str(stored_path),
+            )
+
+            # Record the byte size of the persisted immutable source file
+            # plus the original upload size.
+            try:
+                stored_bytes = int(stored_path.stat().st_size)
+            except Exception:
+                stored_bytes = len(raw)
+
+            meta = {
+                "doc_id": doc_id,
+                "filename": safe_name,
+                "ext": ext,
+                "bytes": stored_bytes,
+                "original_bytes": len(raw),
+                "content_type": file.content_type or "",
+                "uploaded_at": _utc_now_iso(),
+                "stored_name": stored_name,
+                "h1": h1,
+                "h1_source": h1_source,
+                "h1_error": h1_error,
+            }
+
+            items.append(meta)
+            _safe_write_index(idx_path, items)
+
+        except Exception:
+            # The registry commit did not complete. Remove only the source
+            # created by this transaction so no orphan upload is left behind.
+            if source_created:
+                try:
+                    stored_path.unlink(missing_ok=True)
+                except Exception as rollback_exc:
+                    raise RuntimeError(
+                        "Upload registry commit failed and the newly "
+                        "created source file could not be rolled back."
+                    ) from rollback_exc
+            raise
 
     return meta
 
@@ -618,28 +676,138 @@ def _update_index_h1(
     text_in: str,
 ) -> Dict[str, Any] | None:
     idxp = _index_path(workspace_id)
-    items = _safe_read_index(idxp)
-
     ws_dir = _ws_dir(workspace_id)
 
-    for rec in items:
-        if isinstance(rec, dict) and str(rec.get("doc_id") or "") == doc_id:
-            stored_name = str(rec.get("stored_name") or "")
-            stored_path = str(ws_dir / stored_name) if stored_name else None
+    with _index_lock(idxp):
+        items = _strict_read_index_for_update(idxp)
 
-            h1, h1_source, h1_error = _derive_h1_for_index(
-                ext=ext,
-                preview_html=html_in or "",
-                preview_text=text_in or "",
-                stored_path=stored_path,
-            )
-            rec["h1"] = h1
-            rec["h1_source"] = h1_source
-            rec["h1_error"] = h1_error
-            rec["h1_updated_at"] = _utc_now_iso()
-            _safe_write_index(idxp, items)
-            return rec
+        for rec in items:
+            if str(rec.get("doc_id") or "") == doc_id:
+                stored_name = str(rec.get("stored_name") or "")
+                stored_path = (
+                    str(ws_dir / stored_name)
+                    if stored_name
+                    else None
+                )
+
+                h1, h1_source, h1_error = _derive_h1_for_index(
+                    ext=ext,
+                    preview_html=html_in or "",
+                    preview_text=text_in or "",
+                    stored_path=stored_path,
+                )
+
+                rec["h1"] = h1
+                rec["h1_source"] = h1_source
+                rec["h1_error"] = h1_error
+                rec["h1_updated_at"] = _utc_now_iso()
+
+                _safe_write_index(idxp, items)
+                return rec
+
     return None
+
+def _rollback_committed_upload(
+    workspace_id: str,
+    doc_id: str,
+    *,
+    expected_stored_name: str,
+) -> None:
+    """
+    Compensate a committed upload-intake transaction that failed before
+    run_upload_intake() could complete successfully.
+
+    This rollback is deliberately document-scoped. It may remove only the
+    registry record and persisted source belonging to the supplied doc_id
+    and expected stored filename.
+
+    Downstream UDUC/highlight/Active-Target-Set failures must not call this
+    helper; once upload intake succeeds, the canonical uploaded source is
+    retained for recovery/retry.
+    """
+    canonical_doc_id = str(doc_id or "").strip()
+    canonical_stored_name = str(expected_stored_name or "").strip()
+
+    if not canonical_doc_id:
+        raise RuntimeError(
+            "Committed upload rollback requires a document_id."
+        )
+
+    if not canonical_stored_name:
+        raise RuntimeError(
+            "Committed upload rollback requires a stored filename."
+        )
+
+    if (
+        Path(canonical_stored_name).name != canonical_stored_name
+        or canonical_stored_name in {".", ".."}
+    ):
+        raise RuntimeError(
+            "Committed upload rollback received an invalid stored filename."
+        )
+
+    idx_path = _index_path(workspace_id)
+    ws_dir = _ws_dir(workspace_id)
+    stored_path = ws_dir / canonical_stored_name
+
+    with _index_lock(idx_path):
+        items = _strict_read_index_for_update(idx_path)
+
+        matches = [
+            rec
+            for rec in items
+            if str(rec.get("doc_id") or "").strip() == canonical_doc_id
+        ]
+
+        if len(matches) > 1:
+            raise RuntimeError(
+                "Committed upload rollback found duplicate registry records "
+                f"for document_id: {canonical_doc_id}"
+            )
+
+        # Idempotent retry boundary: if the registry record has already been
+        # removed, delete only the exact expected source if it still exists.
+        if not matches:
+            stored_path.unlink(missing_ok=True)
+            return
+
+        record = matches[0]
+        registry_stored_name = str(
+            record.get("stored_name") or ""
+        ).strip()
+
+        if registry_stored_name != canonical_stored_name:
+            raise RuntimeError(
+                "Committed upload rollback stored filename does not match "
+                "the canonical registry record."
+            )
+
+        remaining = [
+            rec
+            for rec in items
+            if str(rec.get("doc_id") or "").strip() != canonical_doc_id
+        ]
+
+        # Remove the registry record atomically first. If source deletion then
+        # fails, restore the original registry so we do not leave a registered
+        # document pointing at an intentionally deleted/missing source.
+        _safe_write_index(idx_path, remaining)
+
+        try:
+            stored_path.unlink(missing_ok=True)
+        except Exception as rollback_exc:
+            try:
+                _safe_write_index(idx_path, items)
+            except Exception as restore_exc:
+                raise RuntimeError(
+                    "Committed upload rollback could not delete the source "
+                    "and could not restore the original registry."
+                ) from restore_exc
+
+            raise RuntimeError(
+                "Committed upload rollback could not delete the source; "
+                "the original registry record was restored."
+            ) from rollback_exc
 
 
 # NOTE: The former _docs_index_path/_append_to_docs_index helpers were removed.
@@ -744,15 +912,131 @@ async def upload_file(
         normalize_workspace_id=_ws,
         extract_preview=_extract_preview_from_bytes,
         store_and_index=_store_and_index,
+        rollback_committed_upload=_rollback_committed_upload,
         workspace_directory=_ws_dir,
         allowed_extensions=ALLOWED_EXT,
     )
 
-    return await run_upload_document(
-        workspace_id=workspace_id,
-        file=file,
-        dependencies=dependencies,
+    try:
+        internal_result = await run_upload_document(
+            workspace_id=workspace_id,
+            file=file,
+            dependencies=dependencies,
+        )
+
+        if not isinstance(internal_result, dict):
+            raise RuntimeError(
+                "Upload Document coordinator returned an invalid response."
+            )
+
+    except HTTPException:
+        # Preserve intentional client-facing FastAPI errors unchanged.
+        raise
+
+    except Exception:
+        # Keep detailed diagnostics server-side only.
+        print("[UPLOAD_DOCUMENT_INTERNAL_ERROR]")
+        traceback.print_exc()
+
+        raise HTTPException(
+            status_code=500,
+            detail="Upload processing failed.",
+        ) from None
+
+    # ------------------------------------------------------------
+    # Canonical PUBLIC upload response boundary.
+    #
+    # The coordinator may retain rich internal pipeline diagnostics,
+    # extraction records, filesystem source paths, UDUC details, etc.
+    # None of those internal structures are returned directly to the
+    # browser.
+    # ------------------------------------------------------------
+
+    raw_doc = internal_result.get("doc")
+
+    if not isinstance(raw_doc, dict):
+        raw_doc = {}
+
+    public_doc_fields = (
+        "doc_id",
+        "filename",
+        "ext",
+        "bytes",
+        "original_bytes",
+        "content_type",
+        "uploaded_at",
+        "stored_name",
+        "h1",
+        "h1_source",
+        "h1_error",
     )
+
+    public_doc = {
+        key: raw_doc.get(key)
+        for key in public_doc_fields
+        if key in raw_doc
+    }
+
+    document_id = str(
+        internal_result.get("document_id")
+        or public_doc.get("doc_id")
+        or ""
+    ).strip()
+
+    public_response = {
+        "ok": internal_result.get("ok") is True,
+        "workspace_id": str(
+            internal_result.get("workspace_id")
+            or _ws(workspace_id)
+        ),
+        "doc": public_doc,
+        "filename": str(
+            internal_result.get("filename")
+            or public_doc.get("filename")
+            or ""
+        ),
+        "ext": str(
+            internal_result.get("ext")
+            or public_doc.get("ext")
+            or ""
+        ),
+        "text": internal_result.get("text") or "",
+        "html": internal_result.get("html") or "",
+        "is_html": bool(
+            internal_result.get("is_html", False)
+        ),
+        "truncated": bool(
+            internal_result.get("truncated", False)
+        ),
+        "pipeline": "upload_document",
+        "document_id": document_id,
+        "status": str(
+            internal_result.get("status") or ""
+        ),
+        "execution_started": bool(
+            internal_result.get(
+                "execution_started",
+                True,
+            )
+        ),
+        "execution_completed": bool(
+            internal_result.get(
+                "execution_completed",
+                True,
+            )
+        ),
+        "job_id": None,
+        "processing_status": "not_applicable",
+    }
+
+    # Coordinator-level failure details may contain internal implementation
+    # information. Expose only a stable, generic public failure message.
+    if public_response["ok"] is not True:
+        public_response["detail"] = (
+            "Upload processing did not complete successfully."
+        )
+
+    return public_response
 
 
 @router.post("/clear_session")
@@ -776,32 +1060,48 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
         except Exception as e:
             print("[CLEAR_FILE_SESSION_REMOVE_ERROR]", str(fp), repr(e))
 
-    # Clear uploaded workspace document files for this session.
-    # This prevents re-upload from being blocked as duplicate after Clear Session.
-    # FIX: only remove stored upload files ("{doc_id}__{name}"); previously this
-    # deleted EVERY file in the directory, wiping index.json and work_index.json.
-    try:
-        ws_dir = _ws_dir(ws_norm)
-        if ws_dir.exists() and ws_dir.is_dir():
-            for fp in ws_dir.iterdir():
-                try:
-                    if not fp.is_file():
-                        continue
-                    if fp.name in _WS_PROTECTED_FILES:
-                        continue
-                    if fp.suffix == ".tmp" or "__" in fp.name:
-                        fp.unlink()
-                        removed_files.append(str(fp))
-                except Exception as e:
-                    print("[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]", str(fp), repr(e))
-    except Exception as e:
-        print("[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]", repr(e))
+    # Serialize document-file clearing and the authoritative index reset
+    # against uploads, H1 mutations, and reindex operations.
+    clear_idx_path = _index_path(ws_norm)
 
-    # Keep the document index consistent with the now-empty upload directory.
-    try:
-        _safe_write_index(_index_path(ws_norm), [])
-    except Exception as e:
-        print("[CLEAR_FILE_SESSION_INDEX_RESET_ERROR]", repr(e))
+    with _index_lock(clear_idx_path):
+        # Clear uploaded workspace document files for this session.
+        # This prevents re-upload from being blocked as duplicate after Clear Session.
+        # FIX: only remove stored upload files ("{doc_id}__{name}"); previously this
+        # deleted EVERY file in the directory, wiping index.json and work_index.json.
+        try:
+            ws_dir = _ws_dir(ws_norm)
+            if ws_dir.exists() and ws_dir.is_dir():
+                for fp in ws_dir.iterdir():
+                    try:
+                        if not fp.is_file():
+                            continue
+                        if fp.name in _WS_PROTECTED_FILES:
+                            continue
+                        if fp.suffix == ".tmp" or "__" in fp.name:
+                            fp.unlink()
+                            removed_files.append(str(fp))
+                    except Exception as e:
+                        print(
+                            "[CLEAR_FILE_SESSION_WORKSPACE_FILE_ERROR]",
+                            str(fp),
+                            repr(e),
+                        )
+        except Exception as e:
+            print(
+                "[CLEAR_FILE_SESSION_WORKSPACE_DIR_ERROR]",
+                repr(e),
+            )
+
+        # Clear Session is an explicit authoritative reset. It intentionally
+        # replaces the registry instead of requiring a valid prior index.
+        try:
+            _safe_write_index(clear_idx_path, [])
+        except Exception as e:
+            print(
+                "[CLEAR_FILE_SESSION_INDEX_RESET_ERROR]",
+                repr(e),
+            )
 
     try:
         live_payload = load_optional_source_payload(
@@ -991,67 +1291,91 @@ def reindex_h1s(workspace_id: str = Query("ws_betterhealthcheck_com")):
 
     entries: List[Dict[str, Any]] = []
     errors: List[Dict[str, Any]] = []
-
-    for p in ws_dir.iterdir():
-        if not p.is_file():
-            continue
-        name = p.name
-        if name in _WS_PROTECTED_FILES:
-            continue
-        if name.endswith(".tmp"):
-            continue
-        if "__" not in name:
-            continue
-
-        doc_id, safe_name = name.split("__", 1)
-        doc_id = (doc_id or "").strip()
-        safe_name = (safe_name or "").strip()
-        if not doc_id or len(doc_id) < 16:
-            continue
-
-        ext = _guess_ext(safe_name)
-        if ext not in ALLOWED_EXT:
-            continue
-
-        try:
-            raw = p.read_bytes()
-        except Exception as e:
-            errors.append({"file": name, "error": "read_failed", "detail": str(e)[:120]})
-            continue
-
-        preview = _extract_preview_from_bytes(safe_name, ext, raw)
-        h1, h1_source, h1_error = _derive_h1_for_index(
-            ext=ext,
-            preview_html=str(preview.get("html") or ""),
-            preview_text=str(preview.get("text") or ""),
-            stored_path=str(p),
-        )
-
-        try:
-            uploaded_at = _utc_from_timestamp_iso(p.stat().st_mtime)
-            size_bytes = int(p.stat().st_size)
-        except Exception:
-            uploaded_at = _utc_now_iso()
-            size_bytes = len(raw)
-
-        entries.append(
-            {
-                "doc_id": doc_id,
-                "filename": safe_name,
-                "ext": ext,
-                "bytes": size_bytes,
-                "content_type": "",
-                "uploaded_at": uploaded_at,
-                "stored_name": name,
-                "h1": h1,
-                "h1_source": h1_source,
-                "h1_error": h1_error,
-            }
-        )
-
-    entries.sort(key=lambda x: x.get("uploaded_at", ""), reverse=True)
     idx_path = _index_path(ws_norm)
-    _safe_write_index(idx_path, entries)
+
+    # Reindex is an explicit authoritative reconstruction from persisted
+    # source files. Hold the same lock for the complete scan + write so an
+    # upload cannot appear between the scan and index replacement.
+    with _index_lock(idx_path):
+        for p in ws_dir.iterdir():
+            if not p.is_file():
+                continue
+            name = p.name
+            if name in _WS_PROTECTED_FILES:
+                continue
+            if name.endswith(".tmp"):
+                continue
+            if "__" not in name:
+                continue
+
+            doc_id, safe_name = name.split("__", 1)
+            doc_id = (doc_id or "").strip()
+            safe_name = (safe_name or "").strip()
+            if not doc_id or len(doc_id) < 16:
+                continue
+
+            ext = _guess_ext(safe_name)
+            if ext not in ALLOWED_EXT:
+                continue
+
+            try:
+                raw = p.read_bytes()
+            except Exception as e:
+                errors.append(
+                    {
+                        "file": name,
+                        "error": "read_failed",
+                        "detail": str(e)[:120],
+                    }
+                )
+                continue
+
+            preview = _extract_preview_from_bytes(
+                safe_name,
+                ext,
+                raw,
+            )
+
+            h1, h1_source, h1_error = _derive_h1_for_index(
+                ext=ext,
+                preview_html=str(preview.get("html") or ""),
+                preview_text=str(preview.get("text") or ""),
+                stored_path=str(p),
+            )
+
+            try:
+                uploaded_at = _utc_from_timestamp_iso(
+                    p.stat().st_mtime
+                )
+                size_bytes = int(p.stat().st_size)
+            except Exception:
+                uploaded_at = _utc_now_iso()
+                size_bytes = len(raw)
+
+            entries.append(
+                {
+                    "doc_id": doc_id,
+                    "filename": safe_name,
+                    "ext": ext,
+                    "bytes": size_bytes,
+                    "content_type": "",
+                    "uploaded_at": uploaded_at,
+                    "stored_name": name,
+                    "h1": h1,
+                    "h1_source": h1_source,
+                    "h1_error": h1_error,
+                }
+            )
+
+        entries.sort(
+            key=lambda x: x.get("uploaded_at", ""),
+            reverse=True,
+        )
+
+        _safe_write_index(
+            idx_path,
+            entries,
+        )
 
     return {
         "ok": True,

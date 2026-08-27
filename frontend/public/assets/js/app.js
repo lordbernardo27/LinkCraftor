@@ -1,4 +1,4 @@
-﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
 // ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
@@ -564,11 +564,54 @@ let applyingAll = false;
 let STOPWORDS = new Set(DEFAULT_STOPWORDS);
 
 // --- Session format lock (null until first upload) ---
-let SESSION_FORMAT = null; // ".docx" | ".md" | ".html" | ".txt"
+// Canonical editor families: .docx | .md | .html | .txt
+let SESSION_FORMAT = null;
 
-// Extract lowercase extension (includes leading dot, e.g., ".docx")
+// All physical extensions accepted by the Uploaded Document backend.
+const DEFAULT_DOCUMENT_ACCEPT =
+  ".docx,.md,.markdown,.html,.htm,.txt";
+
+// Extract lowercase physical extension (includes leading dot).
 function extOf(name = "") {
   return (String(name).match(/\.[^.]+$/)?.[0] || "").toLowerCase();
+}
+
+// Convert physical upload aliases into the four editor session families.
+// The original filename/extension is NOT modified before backend upload.
+function canonicalSessionFormat(ext = "") {
+  let value = String(ext || "").trim().toLowerCase();
+
+  if (value && !value.startsWith(".")) {
+    value = `.${value}`;
+  }
+
+  if (value === ".markdown") return ".md";
+  if (value === ".htm") return ".html";
+
+  return value;
+}
+
+function acceptListForSession(ext = "") {
+  const family = canonicalSessionFormat(ext);
+
+  if (family === ".docx") return ".docx";
+  if (family === ".txt") return ".txt";
+  if (family === ".md") return ".md,.markdown";
+  if (family === ".html") return ".html,.htm";
+
+  return DEFAULT_DOCUMENT_ACCEPT;
+}
+
+function uploadMenuSessionFormat(acceptValue = "") {
+  const accept = String(acceptValue || "").trim().toLowerCase();
+
+  if (!accept || accept === ".zip,.rar") {
+    return "";
+  }
+
+  return canonicalSessionFormat(
+    accept.split(",")[0] || ""
+  );
 }
 
 
@@ -1246,14 +1289,46 @@ const btnNextDoc = $("btnNextDoc");
 const btnUploadMain = $("btnUploadMain");
 const btnUploadMenu = $("btnUploadMenu");
 const uploadMenu = $("uploadMenu");
-let currentAccept = ".docx,.md,.html,.txt";
+let currentAccept = DEFAULT_DOCUMENT_ACCEPT;
 
 const btnBulkApply = $("btnBulkApply");
 
 
-// Session format kept on a safe global key to avoid redeclare/HMR issues
-function getSessionFormat(){ try { return window.__LC_SESSION_FORMAT__ || ""; } catch { return ""; } }
-function setSessionFormat(ext){ try { window.__LC_SESSION_FORMAT__ = ext || ""; } catch {} }
+// Keep every frontend session-format surface synchronized.
+function getSessionFormat(){
+  try {
+    const raw =
+      window.__LC_SESSION_FORMAT__ ||
+      SESSION_FORMAT ||
+      window.__LC__?.SESSION_FORMAT ||
+      localStorage.getItem("lc_session_format") ||
+      "";
+
+    return canonicalSessionFormat(raw);
+  } catch {
+    return canonicalSessionFormat(
+      window.__LC_SESSION_FORMAT__ || SESSION_FORMAT || ""
+    );
+  }
+}
+
+function setSessionFormat(ext){
+  try {
+    const family = canonicalSessionFormat(ext);
+    if (!family) return;
+
+    SESSION_FORMAT = family;
+    currentAccept = acceptListForSession(family);
+    window.__LC_SESSION_FORMAT__ = family;
+
+    window.__LC__ = window.__LC__ || {};
+    window.__LC__.SESSION_FORMAT = family;
+
+    try {
+      localStorage.setItem("lc_session_format", family);
+    } catch {}
+  } catch {}
+}
 
 const btnDownloadMain = $("btnDownloadMain");
 const btnDownloadMenu = $("btnDownloadMenu");
@@ -1598,17 +1673,35 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
   // Core implementations (namespaced; never collide)
   function __getSessionFormatNS(){
     try {
-      return W.__LC__.SESSION_FORMAT || (localStorage.getItem("lc_session_format") || "");
+      return canonicalSessionFormat(
+        W.__LC__.SESSION_FORMAT ||
+        W.__LC_SESSION_FORMAT__ ||
+        localStorage.getItem("lc_session_format") ||
+        ""
+      );
     } catch {
-      return W.__LC__.SESSION_FORMAT || "";
+      return canonicalSessionFormat(
+        W.__LC__.SESSION_FORMAT ||
+        W.__LC_SESSION_FORMAT__ ||
+        ""
+      );
     }
   }
 
   function __setSessionFormatNS(ext){
     try{
-      if (!ext) return;
-      W.__LC__.SESSION_FORMAT = ext;
-      try { localStorage.setItem("lc_session_format", ext); } catch {}
+      const family = canonicalSessionFormat(ext);
+      if (!family) return;
+
+      SESSION_FORMAT = family;
+      currentAccept = acceptListForSession(family);
+      W.__LC_SESSION_FORMAT__ = family;
+      W.__LC__.SESSION_FORMAT = family;
+
+      try {
+        localStorage.setItem("lc_session_format", family);
+      } catch {}
+
       // defer menu sync until DOM is ready; no crash if not present
       const sync = () => { try { __ensureDownloadMenuForSessionNS(); } catch {} };
       if (document.readyState === "loading") {
@@ -1621,7 +1714,9 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
 
   function __ensureDownloadMenuForSessionNS(){
     try{
-      const sess = (__getSessionFormatNS() || "").toLowerCase();   // ".docx" | ".md" | ".txt" | ".html" | ""
+      const sess = canonicalSessionFormat(
+        __getSessionFormatNS() || ""
+      );
       const menu = document.getElementById("downloadMenu");
       if (!menu) return;
 
@@ -2148,7 +2243,7 @@ btnDownloadMenu?.addEventListener("click", () => toggleMenu(downloadMenu, btnDow
 
 /* Uploads */
 function setAcceptAndOpen(acceptList) {
-  const accept = acceptList || ".docx,.md,.html,.txt";
+  const accept = acceptList || DEFAULT_DOCUMENT_ACCEPT;
   if (fileInput) {
     fileInput.setAttribute("accept", accept);
     fileInput.click();
@@ -2161,13 +2256,20 @@ function refreshUploadMenuForSessionFormat(){
     const buttons = Array.from(uploadMenu.querySelectorAll("button[data-accept]"));
     buttons.forEach(btn=>{
       const acc = btn.getAttribute("data-accept") || "";
-      // Keep zip/rar visible if you still use them for bulk-import; otherwise hide them too.
-      if (!SESSION_FORMAT) {
-        btn.style.display = ""; // show all before the first upload
-      } else if (acc === SESSION_FORMAT || acc === ".zip,.rar" || acc === "") {
-        btn.style.display = ""; // show same-format, bulk, and default
+      const requestedFamily = uploadMenuSessionFormat(acc);
+      const sessionFamily = canonicalSessionFormat(SESSION_FORMAT || "");
+
+      // Keep zip/rar visible for the separate bulk-import path.
+      if (!sessionFamily) {
+        btn.style.display = "";
+      } else if (
+        acc === ".zip,.rar" ||
+        acc === "" ||
+        requestedFamily === sessionFamily
+      ) {
+        btn.style.display = "";
       } else {
-        btn.style.display = "none"; // hide other formats
+        btn.style.display = "none";
       }
     });
   } catch {}
@@ -2192,17 +2294,34 @@ if (uploadMenu) uploadMenu.querySelectorAll("button").forEach(btn=>{
   btn.addEventListener("click", (e)=>{
     e.stopPropagation();
     const accept = btn.getAttribute("data-accept") || "";
-    const map = { "": ".docx,.md,.html,.txt", ".zip,.rar": ".zip,.rar", ".docx": ".docx", ".md": ".md", ".html": ".html", ".txt": ".txt" };
+    const requestedFamily = uploadMenuSessionFormat(accept);
+    const sessionFamily = canonicalSessionFormat(
+      getSessionFormat() || SESSION_FORMAT || ""
+    );
 
-    // If SESSION_FORMAT is locked, only allow that exact format (zip/rar still allowed for bulk-import if you use it).
-    if (SESSION_FORMAT && accept && accept.startsWith(".")) {
-      if (accept !== SESSION_FORMAT) {
-        showToast(errorBox, `This session is locked to ${SESSION_FORMAT} files.`, 1600);
-        return;
-      }
+    // A locked session accepts physical aliases from the same family.
+    if (
+      sessionFamily &&
+      requestedFamily &&
+      accept !== ".zip,.rar" &&
+      requestedFamily !== sessionFamily
+    ) {
+      showToast(
+        errorBox,
+        `This session is locked to ${sessionFamily} files.`,
+        1600
+      );
+      return;
     }
 
-    setAcceptAndOpen(SESSION_FORMAT ? SESSION_FORMAT : (map[accept] || ".docx,.md,.html,.txt"));
+    const pickerAccept =
+      accept === ".zip,.rar"
+        ? ".zip,.rar"
+        : sessionFamily
+          ? acceptListForSession(sessionFamily)
+          : (accept || DEFAULT_DOCUMENT_ACCEPT);
+
+    setAcceptAndOpen(pickerAccept);
     hideMenu(uploadMenu, btnUploadMenu);
   });
 });
@@ -2254,32 +2373,6 @@ if(currentExport==="rar")      { window.location.href = exportRarUrl(); return; 
 function delay(ms){ return new Promise(res=>setTimeout(res, ms)); }
 
 
-async function lcFileSha256(file) {
-  const buffer = await file.arrayBuffer();
-  const hashBuffer = await crypto.subtle.digest("SHA-256", buffer);
-  return Array.from(new Uint8Array(hashBuffer))
-    .map(b => b.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function lcUploadHashKey(ws) {
-  return `lc_uploaded_file_hashes_${ws || "default"}`;
-}
-
-function lcLoadUploadedHashes(ws) {
-  try {
-    return new Set(JSON.parse(localStorage.getItem(lcUploadHashKey(ws)) || "[]"));
-  } catch {
-    return new Set();
-  }
-}
-
-function lcSaveUploadedHashes(ws, set) {
-  try {
-    localStorage.setItem(lcUploadHashKey(ws), JSON.stringify(Array.from(set)));
-  } catch {}
-}
-
 /* Upload handler */
 fileInput?.addEventListener("change", async () => {
   const fl = fileInput.files;
@@ -2287,17 +2380,27 @@ fileInput?.addEventListener("change", async () => {
 
   safeSetText(errorBox, "", "error");
 
-  let sessExt = getSessionFormat();
-  const firstExt = extOf(fl[0]?.name || "");
+  let sessExt = canonicalSessionFormat(
+    getSessionFormat()
+  );
+
+  const firstExt = canonicalSessionFormat(
+    extOf(fl[0]?.name || "")
+  );
 
   if (!sessExt) {
     setSessionFormat(firstExt || ".txt");
     sessExt = getSessionFormat();
 
-    currentAccept = sessExt;
+    currentAccept = acceptListForSession(sessExt);
 
     try {
-      if (fileInput) fileInput.setAttribute("accept", sessExt);
+      if (fileInput) {
+        fileInput.setAttribute(
+          "accept",
+          acceptListForSession(sessExt)
+        );
+      }
     } catch {}
 
     try {
@@ -2309,11 +2412,12 @@ fileInput?.addEventListener("change", async () => {
 
   let accepted = 0;
   let skipped = 0;
-  let duplicates = 0;
 
   try {
     for (const file of fl) {
-      const ext = extOf(file?.name || "");
+      const ext = canonicalSessionFormat(
+        extOf(file?.name || "")
+      );
 
       if (ext !== sessExt) {
         skipped++;
@@ -2321,38 +2425,14 @@ fileInput?.addEventListener("change", async () => {
       }
 
       const ws = getCurrentWorkspaceId("");
-      const uploadedHashes = lcLoadUploadedHashes(ws);
-      const fileHash = await lcFileSha256(file);
-
-      if (uploadedHashes.has(fileHash)) {
-        duplicates++;
-        showToast(errorBox, "This document already exists in this session.", 2400);
-        continue;
-      }
 
       const data = await uploadFile(file, ws);
 
-      if (data?.duplicate_detected || data?.ok === false) {
-        if (data?.duplicate_detected) {
-          duplicates++;
-          uploadedHashes.add(fileHash);
-          lcSaveUploadedHashes(ws, uploadedHashes);
-
-          showToast(
-            errorBox,
-            data?.message || "This document already exists in this session.",
-            2400
-          );
-          continue;
-        }
-
-        throw new Error(data?.message || data?.reason || "Upload failed.");
+      if (data?.ok === false) {
+        throw new Error(
+          data?.message || data?.reason || "Upload failed."
+        );
       }
-
-      data.file_hash = fileHash;
-
-      uploadedHashes.add(fileHash);
-      lcSaveUploadedHashes(ws, uploadedHashes);
 
       getOrAssignCode(data);
       docs.push(data);
@@ -2361,10 +2441,6 @@ fileInput?.addEventListener("change", async () => {
 
     if (accepted === 0) {
       const parts = [];
-
-      if (duplicates) {
-        parts.push("File already exists");
-      }
 
       if (skipped) {
         parts.push(`${skipped} skipped because session is locked to ${sessExt}`);
@@ -2613,15 +2689,6 @@ try {
   try { APPLIED_LINKS = []; } catch {}
   try { LINKED_SET.clear(); } catch {}
   try { LINKED_MAP.clear(); } catch {}
-  // Clear upload duplicate hash memory.
-try {
-  localStorage.removeItem(lcUploadHashKey(ws));
-} catch {}
-
-try {
-  window.LC_UPLOAD_FILE_SIGNATURES = new Set();
-} catch {}
-
   // Clear UI.
   if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editingâ€¦";
   if (editor) editor.innerHTML = "";
@@ -5026,12 +5093,19 @@ function renderDoc(i){
   syncActiveDocumentMembership(activeDocId);
   const code = getOrAssignCode(d);
 
-  const ext = (d.ext || "").toLowerCase();
+  const ext = canonicalSessionFormat(
+    (d.ext || "").toLowerCase()
+  );
   const safeText = typeof d.text === "string" ? d.text : String(d.text || "");
   const safeHtml = typeof d.html === "string" ? d.html : "";
 
   if (viewerEl){
-    const ext = (d.ext || ((d.filename||"").match(/\.[^.]+$/)?.[0] || "")).toLowerCase();
+    const ext = canonicalSessionFormat(
+      (
+        d.ext ||
+        ((d.filename || "").match(/\.[^.]+$/)?.[0] || "")
+      ).toLowerCase()
+    );
 
     if ((ext === ".html" || ext === ".htm") && safeHtml && safeHtml.trim()){
       const { headStyles, bodyHtml } = extractHtmlPayload(safeHtml);
@@ -5636,11 +5710,24 @@ async function boot() {
     rebuildPublishedTopics();
 
     if (docs.length) {
-      const firstExt = extOf(docs[0]?.filename || docs[0]?.ext || "");
+      const firstExt = canonicalSessionFormat(
+        extOf(docs[0]?.filename || docs[0]?.ext || "")
+      );
+
       if (firstExt) {
-        SESSION_FORMAT = firstExt;
-        currentAccept = SESSION_FORMAT;
-        fileInput?.setAttribute("accept", SESSION_FORMAT);
+        setSessionFormat(firstExt);
+
+        const recoveredFamily = getSessionFormat();
+
+        currentAccept = acceptListForSession(
+          recoveredFamily
+        );
+
+        fileInput?.setAttribute(
+          "accept",
+          acceptListForSession(recoveredFamily)
+        );
+
         refreshUploadMenuForSessionFormat();
       }
     }
