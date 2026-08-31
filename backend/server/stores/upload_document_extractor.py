@@ -529,10 +529,16 @@ def _extract_docx_paragraphs_v2(path: str | Path) -> List[Dict[str, Any]]:
             gap = pxml[pos:m.start()]
             if "\n" in gap:
                 parts.append("\n")
+            elif " " in gap:
+                parts.append(" ")
             parts.append(html_lib.unescape(m.group(1)))
             pos = m.end()
-        if "\n" in pxml[pos:]:
+
+        trailing_gap = pxml[pos:]
+        if "\n" in trailing_gap:
             parts.append("\n")
+        elif " " in trailing_gap:
+            parts.append(" ")
 
         text = "".join(parts)
         # Normalize within the paragraph but keep internal line breaks.
