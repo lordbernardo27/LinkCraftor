@@ -19,8 +19,14 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+from backend.server.stores.upload_document_extractor import (
+    UploadExtractionResult,
+)
+from backend.server.stores.upload_document_normalizer import (
+    normalize_uploaded_document_v1,
+)
 from backend.server.stores.uploaded_document_unified_content import (
-    build_and_write_uduc_from_extraction_result,
+    build_and_write_uduc_from_normalized_content,
 )
 
 from fastapi import UploadFile
@@ -160,11 +166,112 @@ async def run_upload_document(
     )
 
     # ------------------------------------------------------------
-    # Canonical UDUC construction + persistence.
+    # Canonical U7 normalization.
+    #
+    # Pipeline 2 returns the serialized UploadExtractionResult for
+    # compatibility. Reconstruct the canonical U6 result, then pass it
+    # through U7 before UDUC construction.
     # ------------------------------------------------------------
 
-    uduc_result = build_and_write_uduc_from_extraction_result(
-        extraction_result=extraction_result,
+    extraction_metadata = extraction_result.get(
+        "metadata"
+    )
+
+    if not isinstance(
+        extraction_metadata,
+        dict,
+    ):
+        extraction_metadata = {}
+
+    extraction_headings = extraction_result.get(
+        "headings"
+    )
+
+    if not isinstance(
+        extraction_headings,
+        list,
+    ) or not all(
+        isinstance(
+            heading,
+            str,
+        )
+        for heading in extraction_headings
+    ):
+        raise RuntimeError(
+            "Pipeline 2 extraction headings are malformed."
+        )
+
+    canonical_extraction_result = UploadExtractionResult(
+        source_path=str(
+            extraction_result.get(
+                "source_path"
+            )
+            or ""
+        ),
+        source_type=str(
+            extraction_result.get(
+                "source_type"
+            )
+            or ""
+        ),
+        title=str(
+            extraction_result.get(
+                "title"
+            )
+            or ""
+        ),
+        text=str(
+            extraction_result.get(
+                "text"
+            )
+            or ""
+        ),
+        headings=list(
+            extraction_headings
+        ),
+        metadata=dict(
+            extraction_metadata
+        ),
+        extraction_status=str(
+            extraction_result.get(
+                "extraction_status"
+            )
+            or ""
+        ),
+        extraction_confidence=float(
+            extraction_result.get(
+                "extraction_confidence"
+            )
+            or 0.0
+        ),
+        created_at=str(
+            extraction_result.get(
+                "created_at"
+            )
+            or ""
+        ),
+    )
+
+    normalized_content = (
+        normalize_uploaded_document_v1(
+            canonical_extraction_result
+        )
+    )
+
+    if (
+        normalized_content.normalization_status
+        != "success"
+    ):
+        raise RuntimeError(
+            "Canonical uploaded-document normalization did not complete successfully."
+        )
+
+    # ------------------------------------------------------------
+    # Canonical U8 UDUC construction + persistence.
+    # ------------------------------------------------------------
+
+    uduc_result = build_and_write_uduc_from_normalized_content(
+        normalized_content=normalized_content,
         workspace_id=normalized_workspace_id,
         document_id=document_id,
         original_filename=_required_string(

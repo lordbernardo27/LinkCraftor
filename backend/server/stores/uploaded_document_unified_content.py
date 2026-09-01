@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -7,9 +7,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from backend.server.stores.upload_document_normalizer import (
+    NormalizedUploadedDocumentContent,
+)
 
-UDUC_SCHEMA_VERSION = "uploaded_document_unified_content_v1"
-UDUC_PIPELINE_VERSION = "verification_6d_uduc_v1_1"
+
+UDUC_SCHEMA_VERSION = "uploaded_document_unified_content_v2"
+UDUC_PIPELINE_VERSION = "uploaded_document_uduc_pipeline_v2"
 
 # FIX: anchored to the package (backend/server), matching files.py, instead
 # of a CWD-relative "backend/server/data/..." string. Previously artifacts
@@ -44,6 +48,11 @@ class UploadedDocumentUnifiedContent:
 
     extraction_status: str = ""
     extraction_confidence: float = 0.0
+    extraction_created_at: str = ""
+
+    normalization_status: str = ""
+    normalization_version: str = ""
+    normalized_at: str = ""
 
     created_at: str = ""
 
@@ -53,29 +62,57 @@ def _now_iso() -> str:
 
 
 def _safe_workspace_id(workspace_id: str | None) -> str:
-    raw = str(workspace_id or "default").strip()
+    if workspace_id is None:
+        raise ValueError(
+            "workspace_id is required."
+        )
+
+    raw = str(workspace_id).strip()
+
     if not raw:
-        raw = "default"
-    raw = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw)
+        raise ValueError(
+            "workspace_id must be non-blank."
+        )
+
+    raw = re.sub(
+        r"[^a-zA-Z0-9_\-]",
+        "_",
+        raw,
+    )
+
+    if not raw:
+        raise ValueError(
+            "workspace_id is invalid after sanitization."
+        )
+
     return raw[:100]
 
 
-def _safe_document_id(document_id: str | None, fallback: str = "") -> str:
-    raw = str(document_id or fallback or "").strip()
+def _safe_document_id(document_id: str | None) -> str:
+    if document_id is None:
+        raise ValueError(
+            "document_id is required."
+        )
+
+    raw = str(document_id).strip()
+
     if not raw:
-        raw = "unknown_document"
-    raw = re.sub(r"[^a-zA-Z0-9_\-]", "_", raw)
+        raise ValueError(
+            "document_id must be non-blank."
+        )
+
+    raw = re.sub(
+        r"[^a-zA-Z0-9_\-]",
+        "_",
+        raw,
+    )
+
+    if not raw:
+        raise ValueError(
+            "document_id is invalid after sanitization."
+        )
+
     return raw[:120]
-
-
-def _as_list(value: Any) -> List[str]:
-    if isinstance(value, list):
-        return [str(x).strip() for x in value if str(x).strip()]
-    if isinstance(value, tuple):
-        return [str(x).strip() for x in value if str(x).strip()]
-    if isinstance(value, str) and value.strip():
-        return [value.strip()]
-    return []
 
 
 def _as_float(value: Any, default: float = 0.0) -> float:
@@ -101,7 +138,7 @@ def _paragraphs_from_content_body(content_body: str) -> List[Dict[str, Any]]:
 
     idx = 0
     for i, m in enumerate(re.finditer(r"[^\n]+(?:\n(?!\n)[^\n]*)*", raw), start=1):
-        block = m.group(0).strip()
+        block = m.group(0)
         if not block:
             continue
         idx += 1
@@ -116,8 +153,8 @@ def _paragraphs_from_content_body(content_body: str) -> List[Dict[str, Any]]:
             }
         )
 
-    if not paragraphs and raw.strip():
-        block = raw.strip()
+    if not paragraphs and raw:
+        block = raw
         paragraphs = [{
             "index": 1,
             "text": block,
@@ -136,7 +173,7 @@ def _build_heading_map(headings: List[str], content_body: str) -> List[Dict[str,
 
     search_from = 0
     for i, heading in enumerate(headings, start=1):
-        h = str(heading or "").strip()
+        h = heading
         if not h:
             continue
 
@@ -168,13 +205,16 @@ def _build_uduc_structure(content_body: str, headings: List[str]) -> Dict[str, A
     # FIX: document_order is now actual reading order — headings and
     # paragraphs interleaved by character position — instead of "all
     # headings, then all paragraphs", which contradicted the field's name.
-    ordered: List[tuple[int, Dict[str, Any]]] = []
+    ordered: List[
+        tuple[int, int, Dict[str, Any]]
+    ] = []
 
     for h in heading_map:
         pos = h.get("char_position")
         ordered.append(
             (
-                pos if isinstance(pos, int) else -1,
+                0 if isinstance(pos, int) else 1,
+                pos if isinstance(pos, int) else 0,
                 {
                     "type": "heading",
                     "index": h.get("index"),
@@ -187,6 +227,7 @@ def _build_uduc_structure(content_body: str, headings: List[str]) -> Dict[str, A
     for p in paragraphs:
         ordered.append(
             (
+                0,
                 int(p.get("start_char") or 0),
                 {
                     "type": "paragraph",
@@ -198,10 +239,23 @@ def _build_uduc_structure(content_body: str, headings: List[str]) -> Dict[str, A
             )
         )
 
-    # Headings sort just before the paragraph that contains them (same
-    # position): stable sort with heading entries added first achieves that.
-    ordered.sort(key=lambda t: t[0])
-    document_order = [item for _, item in ordered]
+    # Positioned entries sort by their real content position.
+    # Stable ordering keeps headings before paragraphs at equal positions
+    # because heading entries are added first.
+    #
+    # Unmatched headings retain char_position=None and sort after all
+    # positioned content rather than receiving a synthetic document position.
+    ordered.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+        )
+    )
+
+    document_order = [
+        item
+        for _, _, item in ordered
+    ]
 
     word_count = len([w for w in re.split(r"\s+", str(content_body or "")) if w.strip()])
 
@@ -229,70 +283,95 @@ def _build_uduc_structure(content_body: str, headings: List[str]) -> Dict[str, A
     }
 
 
-def build_uduc_from_upload_extraction_result(
+def build_uduc_from_normalized_content(
     *,
-    extraction_result: Any,
+    normalized_content: NormalizedUploadedDocumentContent,
     workspace_id: str,
     document_id: str | None = None,
     original_filename: str | None = None,
     stored_filename: str | None = None,
     stored_path: str | None = None,
-    source_metadata: Optional[Dict[str, Any]] = None,
+    source_metadata: Optional[
+        Dict[str, Any]
+    ] = None,
 ) -> UploadedDocumentUnifiedContent:
     """
-    Convert UploadExtractionResult into Uploaded Document Unified Content.
+    Build canonical UDUC v2 from the canonical U7 output.
 
-    Boundary rules:
-    - Does not extract documents.
-    - Does not clean or rewrite content_body.
-    - Does not perform phrase extraction.
-    - Does not perform semantic analysis.
-    - Does not build UUCD.
+    Canonical boundary:
+        NormalizedUploadedDocumentContent
+        -> UDUC structural/schema construction
+        -> UploadedDocumentUnifiedContent
+
+    U8 derives structure but does not re-normalize or rewrite the
+    canonical U7 title, text, or headings.
     """
 
-    ws = _safe_workspace_id(workspace_id)
+    if not isinstance(
+        normalized_content,
+        NormalizedUploadedDocumentContent,
+    ):
+        raise TypeError(
+            "Expected NormalizedUploadedDocumentContent."
+        )
 
-    if isinstance(extraction_result, dict):
-        er = extraction_result
-    else:
-        er = {
-            "source_path": getattr(extraction_result, "source_path", ""),
-            "source_type": getattr(extraction_result, "source_type", ""),
-            "title": getattr(extraction_result, "title", ""),
-            "text": getattr(extraction_result, "text", ""),
-            "headings": getattr(extraction_result, "headings", []),
-            "metadata": getattr(extraction_result, "metadata", {}),
-            "extraction_status": getattr(extraction_result, "extraction_status", ""),
-            "extraction_confidence": getattr(extraction_result, "extraction_confidence", 0.0),
-            "created_at": getattr(extraction_result, "created_at", ""),
-        }
+    if (
+        normalized_content.normalization_status
+        != "success"
+    ):
+        raise ValueError(
+            "UDUC requires successfully normalized content."
+        )
 
-    meta = er.get("metadata") if isinstance(er.get("metadata"), dict) else {}
-    src_meta = dict(source_metadata or {})
-
-    inferred_document_id = (
-        document_id
-        or src_meta.get("doc_id")
-        or src_meta.get("document_id")
-        or meta.get("doc_id")
-        or meta.get("document_id")
-        or ""
+    ws = _safe_workspace_id(
+        workspace_id
     )
 
-    doc_id = _safe_document_id(inferred_document_id)
+    meta = (
+        dict(normalized_content.metadata)
+        if isinstance(
+            normalized_content.metadata,
+            dict,
+        )
+        else {}
+    )
+
+    src_meta = dict(
+        source_metadata or {}
+    )
+
+    doc_id = _safe_document_id(
+        document_id
+    )
 
     source_path = str(
-        er.get("source_path")
+        normalized_content.source_path
         or stored_path
         or src_meta.get("stored_path")
         or ""
     )
-    source_type = str(er.get("source_type") or meta.get("source_type") or "").strip()
-    source_format = source_type or str(meta.get("extension") or "").replace(".", "").strip() or "uploaded_document"
+
+    normalized_source_type = (
+        normalized_content.source_type
+    )
+
+    source_format = (
+        normalized_source_type
+        or str(
+            meta.get("extension")
+            or ""
+        ).replace(
+            ".",
+            "",
+        ).strip()
+        or "uploaded_document"
+    )
 
     original_name = (
         original_filename
-        or src_meta.get("original_filename")
+        or src_meta.get(
+            "original_filename"
+        )
         or src_meta.get("filename")
         or meta.get("filename")
         or Path(source_path).name
@@ -301,9 +380,13 @@ def build_uduc_from_upload_extraction_result(
 
     stored_name = (
         stored_filename
-        or src_meta.get("stored_filename")
+        or src_meta.get(
+            "stored_filename"
+        )
         or src_meta.get("stored_name")
-        or meta.get("stored_filename")
+        or meta.get(
+            "stored_filename"
+        )
         or meta.get("stored_name")
         or Path(source_path).name
         or ""
@@ -317,49 +400,92 @@ def build_uduc_from_upload_extraction_result(
         or ""
     )
 
-    title = str(
-        er.get("title")
-        or meta.get("title")
-        or src_meta.get("title")
-        or src_meta.get("h1")
+    # Canonical U7 content authority.
+    # Do not strip, clean, normalize, or infer these values.
+    title = normalized_content.title
+    headings = list(
+        normalized_content.headings
+    )
+    content_body = (
+        normalized_content.text
+    )
+
+    # Canonical H1 is a structural compatibility field derived
+    # only from U7-normalized content.
+    h1 = (
+        headings[0]
+        if headings
+        else title
+    )
+
+    structure = _build_uduc_structure(
+        content_body,
+        headings,
+    )
+
+    extension = str(
+        meta.get("extension")
+        or Path(
+            str(original_name or "")
+        ).suffix.lower()
         or ""
     ).strip()
 
-    headings = _as_list(er.get("headings"))
+    if meta.get("file_size") is not None:
+        file_size = meta.get("file_size")
+    elif src_meta.get("file_size") is not None:
+        file_size = src_meta.get("file_size")
+    elif src_meta.get("bytes") is not None:
+        file_size = src_meta.get("bytes")
+    else:
+        file_size = None
 
-    h1 = str(
-        meta.get("h1")
-        or src_meta.get("h1")
-        or (headings[0] if headings else title)
-        or ""
-    ).strip()
-
-    content_body = str(er.get("content_body") or er.get("text") or "").strip()
-    structure = _build_uduc_structure(content_body, headings)
-
-    extension = str(meta.get("extension") or Path(original_name).suffix.lower() or "").strip()
-
-    # Canonical upload source metadata owns persisted byte-count evidence.
-    file_size = (
-        src_meta.get("file_size")
-        or src_meta.get("bytes")
-        or None
+    normalization_metadata = (
+        dict(
+            meta.get("normalization")
+        )
+        if isinstance(
+            meta.get("normalization"),
+            dict,
+        )
+        else {}
     )
 
     merged_metadata: Dict[str, Any] = {
         "extension": extension,
         "file_size": file_size,
-        "extraction_method": meta.get("method") or meta.get("extractor") or "",
-        "extraction_timestamp": er.get("created_at") or _now_iso(),
-        "paragraph_count": meta.get("paragraph_count"),
-        "heading_count": meta.get("heading_count") if meta.get("heading_count") is not None else len(headings),
-        "line_count": meta.get("line_count"),
+        "extraction_method": (
+            meta.get("extraction_method")
+            or meta.get("method")
+            or meta.get("extractor")
+            or src_meta.get("extraction_method")
+            or ""
+        ),
+        "extraction_timestamp": (
+            normalized_content.extraction_created_at
+        ),
+        "paragraph_count": meta.get(
+            "paragraph_count"
+        ),
+        "heading_count": (
+            meta.get("heading_count")
+            if meta.get("heading_count")
+            is not None
+            else len(headings)
+        ),
+        "line_count": meta.get(
+            "line_count"
+        ),
         "source_metadata": {
             **src_meta,
             **meta,
         },
+        "normalization": (
+            normalization_metadata
+        ),
         "boundary": {
             "performs_extraction": False,
+            "performs_normalization": False,
             "performs_cleaning": False,
             "performs_phrase_extraction": False,
             "performs_semantic_analysis": False,
@@ -368,23 +494,50 @@ def build_uduc_from_upload_extraction_result(
     }
 
     return UploadedDocumentUnifiedContent(
-        schema_version=UDUC_SCHEMA_VERSION,
-        pipeline_version=UDUC_PIPELINE_VERSION,
+        schema_version=(
+            UDUC_SCHEMA_VERSION
+        ),
+        pipeline_version=(
+            UDUC_PIPELINE_VERSION
+        ),
         workspace_id=ws,
         document_id=doc_id,
         source_type="uploaded_document",
         source_format=source_format,
-        original_filename=str(original_name or ""),
-        stored_filename=str(stored_name or ""),
-        stored_path=str(final_stored_path or ""),
+        original_filename=str(
+            original_name or ""
+        ),
+        stored_filename=str(
+            stored_name or ""
+        ),
+        stored_path=str(
+            final_stored_path or ""
+        ),
         title=title,
         h1=h1,
         headings=headings,
         content_body=content_body,
         structure=structure,
         metadata=merged_metadata,
-        extraction_status=str(er.get("extraction_status") or ""),
-        extraction_confidence=_as_float(er.get("extraction_confidence"), 0.0),
+        extraction_status=(
+            normalized_content.extraction_status
+        ),
+        extraction_confidence=_as_float(
+            normalized_content.extraction_confidence,
+            0.0,
+        ),
+        extraction_created_at=(
+            normalized_content.extraction_created_at
+        ),
+        normalization_status=(
+            normalized_content.normalization_status
+        ),
+        normalization_version=(
+            normalized_content.normalization_version
+        ),
+        normalized_at=(
+            normalized_content.normalized_at
+        ),
         created_at=_now_iso(),
     )
 
@@ -412,36 +565,62 @@ def write_uduc(uduc: UploadedDocumentUnifiedContent) -> Path:
 
 def read_uduc(workspace_id: str, document_id: str) -> Dict[str, Any]:
     path = uduc_output_path(workspace_id, document_id)
+
     if not path.exists():
         return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
+
+    data = json.loads(
+        path.read_text(
+            encoding="utf-8"
+        )
+    )
+
+    if not isinstance(
+        data,
+        dict,
+    ):
+        raise ValueError(
+            "Persisted UDUC must be a JSON object."
+        )
+
+    return data
 
 
-def build_and_write_uduc_from_extraction_result(
+def build_and_write_uduc_from_normalized_content(
     *,
-    extraction_result: Any,
+    normalized_content: NormalizedUploadedDocumentContent,
     workspace_id: str,
     document_id: str | None = None,
     original_filename: str | None = None,
     stored_filename: str | None = None,
     stored_path: str | None = None,
-    source_metadata: Optional[Dict[str, Any]] = None,
+    source_metadata: Optional[
+        Dict[str, Any]
+    ] = None,
 ) -> Dict[str, Any]:
-    uduc = build_uduc_from_upload_extraction_result(
-        extraction_result=extraction_result,
+    """
+    Canonical U8 builder + persistence entry point.
+    """
+
+    uduc = build_uduc_from_normalized_content(
+        normalized_content=(
+            normalized_content
+        ),
         workspace_id=workspace_id,
         document_id=document_id,
-        original_filename=original_filename,
-        stored_filename=stored_filename,
+        original_filename=(
+            original_filename
+        ),
+        stored_filename=(
+            stored_filename
+        ),
         stored_path=stored_path,
         source_metadata=source_metadata,
     )
 
-    path = write_uduc(uduc)
+    path = write_uduc(
+        uduc
+    )
 
     return {
         "ok": True,
@@ -452,26 +631,3 @@ def build_and_write_uduc_from_extraction_result(
     }
 
 
-def explain_uploaded_document_unified_content_v1() -> Dict[str, Any]:
-    return {
-        "stage": "Verification 6D",
-        "component": "Uploaded Document Unified Content",
-        "schema_version": UDUC_SCHEMA_VERSION,
-        "pipeline_version": UDUC_PIPELINE_VERSION,
-        "canonical_content_field": "content_body",
-        "input": "UploadExtractionResult",
-        "output": "UploadedDocumentUnifiedContent",
-        "contract": {
-            "paragraph_boundaries": "blank lines in content_body (from extractor)",
-            "paragraph_offsets": "start_char/end_char into content_body",
-            "document_order": "true reading order (headings + paragraphs interleaved)",
-            "paths": "anchored to backend/server, not process CWD",
-        },
-        "boundary": {
-            "performs_extraction": False,
-            "performs_cleaning": False,
-            "performs_phrase_extraction": False,
-            "performs_semantic_analysis": False,
-            "creates_uucd": False,
-        },
-    }
