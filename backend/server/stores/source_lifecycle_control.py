@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import hashlib
@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 LIFECYCLE_CONTROL_SCHEMA_VERSION = "source_lifecycle_control_v1"
 
-DATA_ROOT = Path("backend/server/data")
+DATA_ROOT = Path(__file__).resolve().parents[1] / "data"
 LIFECYCLE_CONTROL_DIR = DATA_ROOT / "source_lifecycle_controls"
 PURGE_LEDGER_DIR = DATA_ROOT / "source_purge_ledgers"
 
@@ -278,6 +278,7 @@ def update_source_version(
     source["sync_allowed"] = True
     source["latest_snapshot_id"] = version_record["snapshot_id"]
     source["latest_asset_version_id"] = version_record["asset_version_id"]
+    source["version_status"] = "VERSION_REGISTRY_ALIGNED"
     source["updated_at"] = _now_iso()
 
     event = _record_event(
@@ -358,6 +359,189 @@ def explicit_purge_source(
         "lifecycle_control_path": str(lifecycle_control_path(workspace_id)),
     }
 
+
+def authorize_source(
+    *,
+    workspace_id: str,
+    source_type: str,
+    source_id: str,
+    authorization_basis: str,
+    authorized_by: str = "system",
+    reason: str = "",
+) -> Dict[str, Any]:
+    registry = load_lifecycle_control(workspace_id)
+    key = _source_key(source_type, source_id)
+    source = registry.get("sources", {}).get(key)
+
+    if not isinstance(source, dict):
+        raise ValueError("Source must be registered before authorization.")
+
+    if source.get("status") != "active":
+        raise ValueError("Only an active source may be authorized.")
+
+    basis = str(authorization_basis or "").strip()
+    if not basis:
+        raise ValueError("authorization_basis is required.")
+
+    now = _now_iso()
+    source["authorization_status"] = "AUTHORIZED"
+    source["workspace_authorized"] = True
+    source["authorization_basis"] = basis
+    source["authorized_by"] = str(authorized_by or "system")
+    source["authorized_at"] = now
+    source["updated_at"] = now
+
+    event = _record_event(
+        registry,
+        event_type="source_authorized",
+        source_type=source_type,
+        source_id=source_id,
+        document_ids=source.get("document_ids", []),
+        reason=reason,
+        metadata={
+            "authorization_status": "AUTHORIZED",
+            "workspace_authorized": True,
+            "authorization_basis": basis,
+            "authorized_by": source["authorized_by"],
+        },
+    )
+
+    save_lifecycle_control(workspace_id, registry)
+    return {"ok": True, "source": source, "event": event}
+
+
+def authorize_semantic_processing(
+    *,
+    workspace_id: str,
+    source_type: str,
+    source_id: str,
+    authorized_by: str = "system",
+    reason: str = "",
+) -> Dict[str, Any]:
+    registry = load_lifecycle_control(workspace_id)
+    key = _source_key(source_type, source_id)
+    source = registry.get("sources", {}).get(key)
+
+    if not isinstance(source, dict):
+        raise ValueError("Source must be registered before semantic authorization.")
+
+    if source.get("status") != "active":
+        raise ValueError("Only an active source may enter semantic processing.")
+
+    if source.get("authorization_status") != "AUTHORIZED":
+        raise ValueError("Source authorization must be AUTHORIZED.")
+
+    if source.get("workspace_authorized") is not True:
+        raise ValueError("Workspace authorization must be verified.")
+
+    if not str(source.get("latest_snapshot_id") or "").strip():
+        raise ValueError("A valid source snapshot reference is required.")
+
+    if not str(source.get("latest_asset_version_id") or "").strip():
+        raise ValueError("A valid asset version reference is required.")
+
+    if source.get("version_status") != "VERSION_REGISTRY_ALIGNED":
+        raise ValueError("Version registry must be aligned.")
+
+    now = _now_iso()
+    source["active_semantic_processing"] = True
+    source["semantic_processing_authorized"] = True
+    source["semantic_authorization_status"] = "AUTHORIZED"
+    source["semantic_authorized_by"] = str(authorized_by or "system")
+    source["semantic_authorized_at"] = now
+    source["updated_at"] = now
+
+    event = _record_event(
+        registry,
+        event_type="semantic_processing_authorized",
+        source_type=source_type,
+        source_id=source_id,
+        document_ids=source.get("document_ids", []),
+        reason=reason,
+        metadata={
+            "semantic_processing_authorized": True,
+            "semantic_authorization_status": "AUTHORIZED",
+            "authorized_by": source["semantic_authorized_by"],
+        },
+    )
+
+    save_lifecycle_control(workspace_id, registry)
+    return {"ok": True, "source": source, "event": event}
+
+
+def evaluate_source_semantic_readiness(
+    *,
+    workspace_id: str,
+    source_type: str,
+    source_id: str,
+    document_id: str = "",
+    content_hash: str = "",
+) -> Dict[str, Any]:
+    registry = load_lifecycle_control(workspace_id)
+    key = _source_key(source_type, source_id)
+    source = registry.get("sources", {}).get(key)
+
+    reasons: List[str] = []
+
+    if not isinstance(source, dict):
+        reasons.append("SOURCE_NOT_REGISTERED")
+        source = {}
+    else:
+        if source.get("status") != "active":
+            reasons.append("SOURCE_NOT_ACTIVE")
+
+        if source.get("authorization_status") != "AUTHORIZED":
+            reasons.append("SOURCE_NOT_AUTHORIZED")
+
+        if source.get("workspace_authorized") is not True:
+            reasons.append("WORKSPACE_NOT_AUTHORIZED")
+
+        if not str(source.get("latest_snapshot_id") or "").strip():
+            reasons.append("SOURCE_SNAPSHOT_REFERENCE_MISSING")
+
+        if not str(source.get("latest_asset_version_id") or "").strip():
+            reasons.append("VERSION_ASSET_REFERENCE_MISSING")
+
+        if source.get("version_status") != "VERSION_REGISTRY_ALIGNED":
+            reasons.append("VERSION_REGISTRY_NOT_ALIGNED")
+
+        if source.get("semantic_processing_authorized") is not True:
+            reasons.append("SEMANTIC_PROCESSING_NOT_AUTHORIZED")
+
+        if source.get("semantic_authorization_status") != "AUTHORIZED":
+            reasons.append("SEMANTIC_AUTHORIZATION_NOT_AUTHORIZED")
+
+        if document_id and document_id not in (source.get("document_ids") or []):
+            reasons.append("DOCUMENT_NOT_REGISTERED_TO_SOURCE")
+
+        if content_hash:
+            versions = source.get("versions") or []
+            matching_version = any(
+                isinstance(version, dict)
+                and version.get("content_hash") == content_hash
+                and (
+                    not document_id
+                    or document_id in (version.get("document_ids") or [])
+                )
+                for version in versions
+            )
+            if not matching_version:
+                reasons.append("CONTENT_VERSION_NOT_REGISTERED")
+
+    eligible = len(reasons) == 0
+
+    return {
+        "schema_version": "source_semantic_readiness_v1",
+        "workspace_id": _safe_ws(workspace_id),
+        "source_key": key,
+        "source_type": source_type,
+        "source_id": source_id,
+        "document_id": document_id,
+        "eligible": eligible,
+        "readiness_status": "READY" if eligible else "BLOCKED",
+        "reasons": reasons,
+        "source": source,
+    }
 
 def explain_source_lifecycle_control_v1() -> Dict[str, Any]:
     return {

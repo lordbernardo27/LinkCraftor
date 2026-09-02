@@ -28,6 +28,9 @@ from backend.server.stores.upload_document_normalizer import (
 from backend.server.stores.uploaded_document_unified_content import (
     build_and_write_uduc_from_normalized_content,
 )
+from backend.server.universal_unified_content_document.uucd_engine_v1 import (
+    build_transient_uucd_from_uduc_v1,
+)
 
 from fastapi import UploadFile
 
@@ -304,6 +307,42 @@ async def run_upload_document(
         )
 
     # ------------------------------------------------------------
+    # ------------------------------------------------------------
+    # Canonical U9 UDUC -> Current Canonical UUCD convergence.
+    #
+    # Produces only the transient Current Canonical Option-3
+    # Universal Handoff Envelope.
+    #
+    # No Body Store write.
+    # No finalized UUCD persistence.
+    # No runtime.
+    # No Semantic Intelligence.
+    # No scorer.
+    # ------------------------------------------------------------
+
+    uucd_envelope = build_transient_uucd_from_uduc_v1(
+        uduc
+    )
+
+    if not isinstance(
+        uucd_envelope,
+        dict,
+    ):
+        raise RuntimeError(
+            "Uploaded Document U9 UUCD builder returned "
+            "a non-dictionary envelope."
+        )
+
+    if (
+        uucd_envelope.get(
+            "envelope_status"
+        )
+        != "READY_FOR_BODY_STORE"
+    ):
+        raise RuntimeError(
+            "Uploaded Document U9 UUCD envelope is not "
+            "READY_FOR_BODY_STORE."
+        )
     # Highlight pipeline receives dedicated extracted text.
     # Preview HTML remains compatibility-only because the dedicated
     # extractor's canonical output is plain extracted document content.
@@ -341,6 +380,9 @@ async def run_upload_document(
     overall_ok = (
         pipeline_2.get("ok") is True
         and uduc_result.get("ok") is True
+        and uucd_envelope.get(
+            "envelope_status"
+        ) == "READY_FOR_BODY_STORE"
         and pipeline_1.get("ok") is True
         and pipeline_3.get("ok") is True
     )
@@ -380,6 +422,7 @@ async def run_upload_document(
         "execution_completed": True,
         "execution_order": [
             "uploaded_document_to_uduc_pipeline",
+            "uploaded_document_to_current_canonical_uucd",
             "uploaded_document_to_highlight_pipeline",
             (
                 "uploaded_document_registry_to_"
@@ -388,6 +431,11 @@ async def run_upload_document(
         ],
         "pipelines": {
             "uploaded_document_to_uduc_pipeline": pipeline_2,
+            "uploaded_document_to_current_canonical_uucd": {
+                "ok": True,
+                "status": "READY_FOR_BODY_STORE",
+                "envelope": uucd_envelope,
+            },
             "uploaded_document_to_highlight_pipeline": pipeline_1,
             (
                 "uploaded_document_registry_to_"

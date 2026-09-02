@@ -1,4 +1,4 @@
-﻿"""
+"""
 Canonical Lifecycle Eligibility Runtime Handler v1.
 
 Canonical position:
@@ -32,6 +32,10 @@ import json
 import re
 from pathlib import Path
 from typing import Any, Mapping
+
+from backend.server.stores.source_lifecycle_control import (
+    evaluate_source_semantic_readiness,
+)
 
 
 LIFECYCLE_ELIGIBILITY_HANDLER_VERSION = (
@@ -554,6 +558,28 @@ def evaluate_lifecycle_eligibility_v1(
         expected_content_hash=content_hash,
     )
 
+    source_id = _require_text(
+        persisted_uucd.get(
+            "source_id"
+        ),
+        field_name="persisted_uucd.source_id",
+    )
+
+    semantic_readiness = evaluate_source_semantic_readiness(
+        workspace_id=workspace_id,
+        source_type=source_type,
+        source_id=source_id,
+        document_id=document_id,
+        content_hash=content_hash,
+    )
+
+    if semantic_readiness.get("eligible") is not True:
+        reasons = semantic_readiness.get("reasons") or []
+        raise LifecycleEligibilityContractError(
+            "Semantic Readiness Gate blocked this source: "
+            + ", ".join(str(reason) for reason in reasons)
+        )
+
     certificate = {
         "certificate_schema_version":
             LIFECYCLE_ELIGIBILITY_CERTIFICATE_SCHEMA_VERSION,
@@ -602,6 +628,26 @@ def evaluate_lifecycle_eligibility_v1(
 
         "content_body_in_persisted_uucd":
             False,
+
+        "source_id":
+            source_id,
+
+        "workspace_authorized":
+            True,
+
+        "source_authorized":
+            True,
+
+        "required_version_references_valid":
+            True,
+
+        "semantic_processing_authorized":
+            True,
+
+        "semantic_readiness_status":
+            semantic_readiness.get(
+                "readiness_status"
+            ),
 
         "lifecycle_eligible":
             True,

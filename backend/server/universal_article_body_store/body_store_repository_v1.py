@@ -1,4 +1,4 @@
-﻿"""Canonical Universal Article Body Store Repository.
+"""Canonical Universal Article Body Store Repository.
 
 The Repository is a thin facade over:
 
@@ -21,10 +21,6 @@ from backend.server.universal_article_body_store.body_store_manager_v1 import (
     list_workspace_bodies as manager_list_workspace_bodies,
     read_body as manager_read_body,
     verify_stored_body as manager_verify_stored_body,
-)
-
-from backend.server.universal_article_body_store.body_store_writer_v1 import (
-    write_verified_body_from_envelope_v1,
 )
 
 
@@ -54,6 +50,10 @@ def store_body(
         raise BodyStoreRepositoryError(
             "envelope must be a mapping."
         )
+
+    from backend.server.universal_article_body_store.body_store_writer_v1 import (
+        write_verified_body_from_envelope_v1,
+    )
 
     return write_verified_body_from_envelope_v1(
         envelope,

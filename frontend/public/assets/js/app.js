@@ -5258,7 +5258,26 @@ function loadState(){
     return true;
   }catch{ return false; }
 }
-function clearState(){ try { localStorage.removeItem(STORAGE_KEY); } catch {} }
+function clearState(){
+  try { localStorage.removeItem(STORAGE_KEY); } catch {}
+
+  // A cleared editor session must not retain its previous document-format lock.
+  try { SESSION_FORMAT = ""; } catch {}
+  try { currentAccept = DEFAULT_DOCUMENT_ACCEPT; } catch {}
+  try { window.__LC_SESSION_FORMAT__ = ""; } catch {}
+  try {
+    window.__LC__ = window.__LC__ || {};
+    window.__LC__.SESSION_FORMAT = "";
+  } catch {}
+  try { localStorage.removeItem("lc_session_format"); } catch {}
+  try {
+    if (fileInput) {
+      fileInput.value = "";
+      fileInput.setAttribute("accept", DEFAULT_DOCUMENT_ACCEPT);
+    }
+  } catch {}
+  try { refreshUploadMenuForSessionFormat(); } catch {}
+}
 function refreshDropdown(){
   for(let i=0;i<docs.length;i++){
   const code=docs[i]?(docs[i].docCode||getOrAssignCode(docs[i])):"";

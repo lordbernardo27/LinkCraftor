@@ -208,6 +208,16 @@ def _validate_persisted_uucd(
             "Persisted UUCD must not contain content_body."
         )
 
+    if (
+        record.get(
+            "body_status"
+        )
+        != "STORED_AND_VERIFIED"
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "body_status must be STORED_AND_VERIFIED."
+        )
+
     workspace_id = _require_non_empty_string(
         record.get(
             "workspace_id"
