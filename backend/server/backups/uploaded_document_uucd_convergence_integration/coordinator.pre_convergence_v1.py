@@ -31,9 +31,6 @@ from backend.server.stores.uploaded_document_unified_content import (
 from backend.server.universal_unified_content_document.uucd_engine_v1 import (
     build_transient_uucd_from_uduc_v1,
 )
-from backend.server.pipelines.upload_document.uploaded_document_uucd_convergence_v1 import (
-    converge_uploaded_document_uucd_v1,
-)
 
 from fastapi import UploadFile
 
@@ -310,20 +307,17 @@ async def run_upload_document(
         )
 
     # ------------------------------------------------------------
-    # Canonical Uploaded Document -> permanent UUCD convergence.
+    # ------------------------------------------------------------
+    # Canonical U9 UDUC -> Current Canonical UUCD convergence.
     #
-    # 1. Build transient Option-3 READY_FOR_BODY_STORE envelope.
-    # 2. Write + verify canonical Universal Article Body Store body.
-    # 3. Persist + verify permanent bodyless UUCD.
-    # 4. Apply Source Authorization + Lifecycle + Version Governance.
+    # Produces only the transient Current Canonical Option-3
+    # Universal Handoff Envelope.
     #
-    # This boundary does NOT execute:
-    # - Universal Runtime Infrastructure;
-    # - queue jobs;
-    # - Semantic Intelligence;
-    # - scorer.py;
-    # - linking;
-    # - highlighting.
+    # No Body Store write.
+    # No finalized UUCD persistence.
+    # No runtime.
+    # No Semantic Intelligence.
+    # No scorer.
     # ------------------------------------------------------------
 
     uucd_envelope = build_transient_uucd_from_uduc_v1(
@@ -349,34 +343,6 @@ async def run_upload_document(
             "Uploaded Document U9 UUCD envelope is not "
             "READY_FOR_BODY_STORE."
         )
-
-    uucd_convergence = (
-        converge_uploaded_document_uucd_v1(
-            uucd_envelope,
-            overwrite=False,
-            authorized_by="system",
-        )
-    )
-
-    if not isinstance(
-        uucd_convergence,
-        dict,
-    ):
-        raise RuntimeError(
-            "Uploaded Document UUCD convergence returned "
-            "a non-dictionary result."
-        )
-
-    if (
-        uucd_convergence.get(
-            "status"
-        )
-        != "UPLOADED_DOCUMENT_UUCD_CONVERGENCE_COMPLETE"
-    ):
-        raise RuntimeError(
-            "Uploaded Document UUCD convergence did not complete."
-        )
-
     # Highlight pipeline receives dedicated extracted text.
     # Preview HTML remains compatibility-only because the dedicated
     # extractor's canonical output is plain extracted document content.
@@ -417,10 +383,6 @@ async def run_upload_document(
         and uucd_envelope.get(
             "envelope_status"
         ) == "READY_FOR_BODY_STORE"
-        and uucd_convergence.get(
-            "status"
-        )
-        == "UPLOADED_DOCUMENT_UUCD_CONVERGENCE_COMPLETE"
         and pipeline_1.get("ok") is True
         and pipeline_3.get("ok") is True
     )
@@ -461,7 +423,6 @@ async def run_upload_document(
         "execution_order": [
             "uploaded_document_to_uduc_pipeline",
             "uploaded_document_to_current_canonical_uucd",
-            "uploaded_document_uucd_convergence",
             "uploaded_document_to_highlight_pipeline",
             (
                 "uploaded_document_registry_to_"
@@ -474,13 +435,6 @@ async def run_upload_document(
                 "ok": True,
                 "status": "READY_FOR_BODY_STORE",
                 "envelope": uucd_envelope,
-            },
-            "uploaded_document_uucd_convergence": {
-                "ok": True,
-                "status": uucd_convergence.get(
-                    "status"
-                ),
-                "result": uucd_convergence,
             },
             "uploaded_document_to_highlight_pipeline": pipeline_1,
             (

@@ -134,6 +134,7 @@ class LiveDomainTargetPoolResult:
 
     def to_payload(self) -> dict[str, Any]:
         return {
+            "schema_version": "live_domain_target_pool_v1",
             "type": "live_domain_target_pool",
             "version": "1.0",
             "workspace_id": self.workspace_id,
