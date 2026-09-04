@@ -1,0 +1,6486 @@
+from __future__ import annotations
+
+import hashlib
+import re
+
+from typing import Any, Mapping
+
+
+LOGICAL_INTELLIGENCE_VERSION = "logical_intelligence_v1"
+
+
+class LogicalIntelligenceError(ValueError):
+    """Raised when canonical Logical Intelligence contracts are violated."""
+
+
+def validate_logical_intelligence_intake_v1(
+    section_evidence_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Validate certified Phase 4.6.5 Section Evidence Intelligence
+    before Logical Intelligence begins.
+
+    This stage performs validation only.
+
+    It does NOT:
+    - infer logical relationships,
+    - classify premises or conclusions,
+    - perform causal reasoning,
+    - perform factual truth verification,
+    - select phrases, targets, URLs, or link types,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        section_evidence_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "section_evidence_result must be a mapping."
+        )
+
+    if (
+        section_evidence_result.get("schema_version")
+        != "section_evidence_intelligence_result_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Logical Intelligence requires "
+            "section_evidence_intelligence_result_v1."
+        )
+
+    if (
+        section_evidence_result.get("status")
+        != "SECTION_EVIDENCE_RESULT_COMPLETE"
+    ):
+        raise LogicalIntelligenceError(
+            "Section Evidence Intelligence is not complete."
+        )
+
+    if (
+        section_evidence_result.get("phase")
+        != "4.6.5"
+    ):
+        raise LogicalIntelligenceError(
+            "Logical Intelligence requires Phase 4.6.5 input."
+        )
+
+    if (
+        section_evidence_result.get("persistence_policy")
+        != "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE"
+    ):
+        raise LogicalIntelligenceError(
+            "Logical Intelligence requires transient "
+            "article-local Section Evidence."
+        )
+
+    units = section_evidence_result.get(
+        "section_evidence_units"
+    )
+
+    if not isinstance(units, list) or not units:
+        raise LogicalIntelligenceError(
+            "Section Evidence Unit collection is missing or empty."
+        )
+
+    canonical_order = list(
+        section_evidence_result.get(
+            "canonical_section_order"
+        )
+        or []
+    )
+
+    if not canonical_order:
+        raise LogicalIntelligenceError(
+            "Canonical section order is missing."
+        )
+
+    if len(units) != len(canonical_order):
+        raise LogicalIntelligenceError(
+            "Section unit count does not match canonical order."
+        )
+
+    actual_order = [
+        unit.get("section_id")
+        for unit in units
+        if isinstance(unit, Mapping)
+    ]
+
+    if actual_order != canonical_order:
+        raise LogicalIntelligenceError(
+            "Section Evidence Units are not in canonical order."
+        )
+
+    required_identity_fields = (
+        "workspace_id",
+        "document_id",
+        "source_type",
+        "source_id",
+        "content_hash",
+        "body_ref",
+        "article_id",
+    )
+
+    for field in required_identity_fields:
+        value = section_evidence_result.get(field)
+
+        if value in (
+            None,
+            "",
+        ):
+            raise LogicalIntelligenceError(
+                f"Missing canonical identity field: {field}"
+            )
+
+    required_layers = (
+        "structural_evidence",
+        "entity_concept_evidence",
+        "phrase_neighborhood_evidence",
+        "topic_intent_evidence",
+        "claim_evidence",
+        "evidence_strength",
+        "coverage",
+        "contradiction_analysis",
+    )
+
+    total_claims = 0
+    total_statements = 0
+
+    seen_section_ids = set()
+    seen_sentence_ids = set()
+
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            raise LogicalIntelligenceError(
+                "Invalid Section Evidence Unit."
+            )
+
+        section_id = str(
+            unit.get("section_id") or ""
+        ).strip()
+
+        if not section_id:
+            raise LogicalIntelligenceError(
+                "Section Evidence Unit has no section_id."
+            )
+
+        if section_id in seen_section_ids:
+            raise LogicalIntelligenceError(
+                f"Duplicate section_id: {section_id}"
+            )
+
+        seen_section_ids.add(
+            section_id
+        )
+
+        if (
+            unit.get("article_id")
+            != section_evidence_result.get("article_id")
+        ):
+            raise LogicalIntelligenceError(
+                "Section article_id does not match "
+                "the parent article."
+            )
+
+        state = (
+            unit.get("evidence_attachment_state")
+            or {}
+        )
+
+        for layer in required_layers:
+            if state.get(layer) != "ATTACHED":
+                raise LogicalIntelligenceError(
+                    f"Required evidence layer is not attached: "
+                    f"{layer}"
+                )
+
+            if not isinstance(
+                unit.get(layer),
+                Mapping,
+            ):
+                raise LogicalIntelligenceError(
+                    f"Required evidence payload is invalid: "
+                    f"{layer}"
+                )
+
+        finalization = (
+            unit.get(
+                "section_evidence_finalization"
+            )
+            or {}
+        )
+
+        if (
+            finalization.get(
+                "all_required_evidence_attached"
+            )
+            is not True
+        ):
+            raise LogicalIntelligenceError(
+                "Section Evidence finalization is incomplete."
+            )
+
+        if (
+            finalization.get("article_local_only")
+            is not True
+        ):
+            raise LogicalIntelligenceError(
+                "Logical Intelligence requires "
+                "article-local Section Evidence."
+            )
+
+        claim_evidence = (
+            unit.get("claim_evidence")
+            or {}
+        )
+
+        statements = (
+            claim_evidence.get("statements")
+            or []
+        )
+
+        claims = (
+            claim_evidence.get(
+                "claim_candidates"
+            )
+            or []
+        )
+
+        if not isinstance(statements, list):
+            raise LogicalIntelligenceError(
+                "Section statement collection is invalid."
+            )
+
+        if not isinstance(claims, list):
+            raise LogicalIntelligenceError(
+                "Section claim collection is invalid."
+            )
+
+        if (
+            len(statements)
+            != claim_evidence.get(
+                "statement_count"
+            )
+        ):
+            raise LogicalIntelligenceError(
+                "Section statement count mismatch."
+            )
+
+        if (
+            len(claims)
+            != claim_evidence.get(
+                "claim_candidate_count"
+            )
+        ):
+            raise LogicalIntelligenceError(
+                "Section claim candidate count mismatch."
+            )
+
+        total_statements += len(
+            statements
+        )
+
+        total_claims += len(
+            claims
+        )
+
+        previous_global_index = None
+
+        for claim in claims:
+            if not isinstance(claim, Mapping):
+                raise LogicalIntelligenceError(
+                    "Invalid claim candidate record."
+                )
+
+            if claim.get("claim_candidate") is not True:
+                raise LogicalIntelligenceError(
+                    "Non-claim record found inside "
+                    "claim_candidates."
+                )
+
+            if (
+                claim.get("article_id")
+                != section_evidence_result.get(
+                    "article_id"
+                )
+            ):
+                raise LogicalIntelligenceError(
+                    "Claim article_id mismatch."
+                )
+
+            if claim.get("section_id") != section_id:
+                raise LogicalIntelligenceError(
+                    "Claim section_id mismatch."
+                )
+
+            sentence_id = str(
+                claim.get("sentence_id") or ""
+            ).strip()
+
+            if not sentence_id:
+                raise LogicalIntelligenceError(
+                    "Claim candidate has no sentence_id."
+                )
+
+            if sentence_id in seen_sentence_ids:
+                raise LogicalIntelligenceError(
+                    f"Duplicate claim sentence_id: "
+                    f"{sentence_id}"
+                )
+
+            seen_sentence_ids.add(
+                sentence_id
+            )
+
+            global_index = claim.get(
+                "sentence_global_index"
+            )
+
+            if not isinstance(
+                global_index,
+                int,
+            ):
+                raise LogicalIntelligenceError(
+                    "Claim sentence_global_index "
+                    "must be an integer."
+                )
+
+            if (
+                previous_global_index is not None
+                and global_index
+                <= previous_global_index
+            ):
+                raise LogicalIntelligenceError(
+                    "Claim order is not monotonic "
+                    "inside the canonical section."
+                )
+
+            previous_global_index = (
+                global_index
+            )
+
+    summary = (
+        section_evidence_result.get(
+            "article_evidence_summary"
+        )
+        or {}
+    )
+
+    if (
+        total_statements
+        != summary.get("statement_count")
+    ):
+        raise LogicalIntelligenceError(
+            "Article statement count does not match "
+            "Section Evidence summary."
+        )
+
+    if (
+        total_claims
+        != summary.get("claim_candidate_count")
+    ):
+        raise LogicalIntelligenceError(
+            "Article claim count does not match "
+            "Section Evidence summary."
+        )
+
+    boundaries = (
+        section_evidence_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    forbidden_completed_work = (
+        "truth_assessment_performed",
+        "external_authority_check_performed",
+        "logical_reasoning_performed",
+        "claim_integrity_adjudication_performed",
+        "phrase_selected_for_linking",
+        "target_selected",
+        "url_selected",
+        "link_type_selected",
+        "highlight_color_selected",
+        "semantic_memory_write_performed",
+        "persistence_performed",
+    )
+
+    for field in forbidden_completed_work:
+        if boundaries.get(field) is not False:
+            raise LogicalIntelligenceError(
+                f"Unexpected upstream/downstream work "
+                f"detected: {field}"
+            )
+
+    return {
+        "schema_version":
+            "logical_intelligence_intake_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6B",
+
+        "status":
+            "LOGICAL_INTELLIGENCE_INTAKE_ACCEPTED",
+
+        "workspace_id":
+            section_evidence_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            section_evidence_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            section_evidence_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            section_evidence_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            section_evidence_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            section_evidence_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            section_evidence_result.get(
+                "article_id"
+            ),
+
+        "title":
+            section_evidence_result.get(
+                "title"
+            ),
+
+        "section_count":
+            len(units),
+
+        "statement_count":
+            total_statements,
+
+        "claim_candidate_count":
+            total_claims,
+
+        "canonical_section_order":
+            canonical_order,
+
+        "validation": {
+            "valid":
+                True,
+
+            "canonical_4_6_5_schema":
+                True,
+
+            "canonical_section_order_preserved":
+                True,
+
+            "all_required_evidence_attached":
+                True,
+
+            "article_identity_valid":
+                True,
+
+            "claim_identity_valid":
+                True,
+
+            "claim_order_valid":
+                True,
+
+            "article_local_only":
+                True,
+
+            "logical_reasoning_performed":
+                False,
+        },
+
+        "processing_boundaries": {
+            "validation_only":
+                True,
+
+            "article_body_reparsed":
+                False,
+
+            "logical_claim_units_built":
+                False,
+
+            "logical_signal_interpretation_performed":
+                False,
+
+            "logical_relation_detection_performed":
+                False,
+
+            "causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+
+            "external_authority_check_performed":
+                False,
+
+            "phrase_selected_for_linking":
+                False,
+
+            "target_selected":
+                False,
+
+            "url_selected":
+                False,
+
+            "semantic_memory_write_performed":
+                False,
+
+            "persistence_performed":
+                False,
+        },
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "logical_claim_unit_construction",
+    }
+
+
+def build_logical_claim_units_v1(
+    section_evidence_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Build canonical article-local Logical Claim Units from
+    certified Phase 4.6.5 Section Evidence.
+
+    This stage normalizes claims and their existing evidence
+    context for later Logical Intelligence processing.
+
+    It does NOT:
+    - interpret discourse signals,
+    - infer logical relationships,
+    - identify premises or conclusions,
+    - perform causal reasoning,
+    - determine factual truth,
+    - select links, phrases, targets, URLs, or colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    intake = validate_logical_intelligence_intake_v1(
+        section_evidence_result
+    )
+
+    if (
+        intake.get("status")
+        != "LOGICAL_INTELLIGENCE_INTAKE_ACCEPTED"
+    ):
+        raise LogicalIntelligenceError(
+            "Canonical Logical Intelligence intake "
+            "was not accepted."
+        )
+
+    article_id = str(
+        section_evidence_result.get(
+            "article_id"
+        )
+        or ""
+    )
+
+    section_units = section_evidence_result.get(
+        "section_evidence_units"
+    ) or []
+
+    logical_sections = []
+    all_logical_claim_units = []
+
+    seen_logical_ids = set()
+    seen_statement_ids = set()
+    seen_sentence_ids = set()
+
+    previous_global_index = None
+
+    for section in section_units:
+        section_id = str(
+            section.get("section_id")
+            or ""
+        )
+
+        claim_evidence = (
+            section.get("claim_evidence")
+            or {}
+        )
+
+        claims = list(
+            claim_evidence.get(
+                "claim_candidates"
+            )
+            or []
+        )
+
+        strength = (
+            section.get("evidence_strength")
+            or {}
+        )
+
+        claim_scores = list(
+            strength.get("claim_scores")
+            or []
+        )
+
+        contradiction = (
+            section.get(
+                "contradiction_analysis"
+            )
+            or {}
+        )
+
+        claim_flags = list(
+            contradiction.get(
+                "claim_flags"
+            )
+            or []
+        )
+
+        coverage = (
+            section.get("coverage")
+            or {}
+        )
+
+        if (
+            coverage.get("section_id")
+            != section_id
+        ):
+            raise LogicalIntelligenceError(
+                "Section coverage identity mismatch."
+            )
+
+        score_by_statement = {}
+        flag_by_statement = {}
+
+        for score in claim_scores:
+            statement_id = str(
+                score.get(
+                    "statement_evidence_id"
+                )
+                or ""
+            )
+
+            if not statement_id:
+                raise LogicalIntelligenceError(
+                    "Evidence-strength record has no "
+                    "statement_evidence_id."
+                )
+
+            if statement_id in score_by_statement:
+                raise LogicalIntelligenceError(
+                    "Duplicate evidence-strength mapping "
+                    f"for {statement_id}."
+                )
+
+            score_by_statement[
+                statement_id
+            ] = score
+
+        for flag in claim_flags:
+            statement_id = str(
+                flag.get(
+                    "statement_evidence_id"
+                )
+                or ""
+            )
+
+            if not statement_id:
+                raise LogicalIntelligenceError(
+                    "Claim flag record has no "
+                    "statement_evidence_id."
+                )
+
+            if statement_id in flag_by_statement:
+                raise LogicalIntelligenceError(
+                    "Duplicate claim-flag mapping "
+                    f"for {statement_id}."
+                )
+
+            flag_by_statement[
+                statement_id
+            ] = flag
+
+        if len(score_by_statement) != len(claims):
+            raise LogicalIntelligenceError(
+                "Claim-to-strength mapping is not one-to-one."
+            )
+
+        if len(flag_by_statement) != len(claims):
+            raise LogicalIntelligenceError(
+                "Claim-to-flag mapping is not one-to-one."
+            )
+
+        section_logical_claims = []
+
+        for claim_index, claim in enumerate(
+            claims
+        ):
+            statement_id = str(
+                claim.get(
+                    "statement_evidence_id"
+                )
+                or ""
+            )
+
+            sentence_id = str(
+                claim.get("sentence_id")
+                or ""
+            )
+
+            if not statement_id:
+                raise LogicalIntelligenceError(
+                    "Claim has no statement_evidence_id."
+                )
+
+            if statement_id in seen_statement_ids:
+                raise LogicalIntelligenceError(
+                    f"Duplicate statement_evidence_id: "
+                    f"{statement_id}"
+                )
+
+            if sentence_id in seen_sentence_ids:
+                raise LogicalIntelligenceError(
+                    f"Duplicate logical sentence_id: "
+                    f"{sentence_id}"
+                )
+
+            score = score_by_statement.get(
+                statement_id
+            )
+
+            flag = flag_by_statement.get(
+                statement_id
+            )
+
+            if score is None:
+                raise LogicalIntelligenceError(
+                    "Missing evidence-strength record "
+                    f"for {statement_id}."
+                )
+
+            if flag is None:
+                raise LogicalIntelligenceError(
+                    "Missing contradiction/insufficiency "
+                    f"record for {statement_id}."
+                )
+
+            for companion_name, companion in (
+                ("evidence-strength", score),
+                ("claim-flag", flag),
+            ):
+                if (
+                    companion.get("sentence_id")
+                    != sentence_id
+                ):
+                    raise LogicalIntelligenceError(
+                        f"{companion_name} sentence_id "
+                        "does not match claim."
+                    )
+
+                if (
+                    companion.get("section_id")
+                    != section_id
+                ):
+                    raise LogicalIntelligenceError(
+                        f"{companion_name} section_id "
+                        "does not match claim."
+                    )
+
+                if (
+                    companion.get(
+                        "statement_evidence_id"
+                    )
+                    != statement_id
+                ):
+                    raise LogicalIntelligenceError(
+                        f"{companion_name} statement identity "
+                        "does not match claim."
+                    )
+
+                if (
+                    companion.get("text")
+                    != claim.get("text")
+                ):
+                    raise LogicalIntelligenceError(
+                        f"{companion_name} text "
+                        "does not match canonical claim."
+                    )
+
+            global_index = claim.get(
+                "sentence_global_index"
+            )
+
+            article_position = claim.get(
+                "article_position"
+            )
+
+            if not isinstance(
+                global_index,
+                int,
+            ):
+                raise LogicalIntelligenceError(
+                    "Canonical sentence_global_index "
+                    "must be an integer."
+                )
+
+            if not isinstance(
+                article_position,
+                int,
+            ):
+                raise LogicalIntelligenceError(
+                    "Canonical article_position "
+                    "must be an integer."
+                )
+
+            if (
+                previous_global_index
+                is not None
+                and global_index
+                <= previous_global_index
+            ):
+                raise LogicalIntelligenceError(
+                    "Logical claims are not in canonical "
+                    "article sentence order."
+                )
+
+            stable_material = (
+                article_id
+                + "|"
+                + statement_id
+                + "|"
+                + sentence_id
+            )
+
+            logical_claim_unit_id = (
+                "logical_claim_"
+                + hashlib.sha256(
+                    stable_material.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:16]
+            )
+
+            if (
+                logical_claim_unit_id
+                in seen_logical_ids
+            ):
+                raise LogicalIntelligenceError(
+                    "Duplicate Logical Claim Unit ID."
+                )
+
+            logical_unit = {
+                "logical_claim_unit_id":
+                    logical_claim_unit_id,
+
+                "statement_evidence_id":
+                    statement_id,
+
+                "sentence_id":
+                    sentence_id,
+
+                "article_id":
+                    article_id,
+
+                "section_id":
+                    section_id,
+
+                "section_evidence_unit_id":
+                    section.get(
+                        "section_evidence_unit_id"
+                    ),
+
+                "section_index":
+                    section.get(
+                        "section_index"
+                    ),
+
+                "section_title":
+                    section.get(
+                        "section_title"
+                    ),
+
+                "heading_level":
+                    section.get(
+                        "heading_level"
+                    ),
+
+                "block_id":
+                    claim.get(
+                        "block_id"
+                    ),
+
+                "paragraph_id":
+                    claim.get(
+                        "paragraph_id"
+                    ),
+
+                "block_type":
+                    claim.get(
+                        "block_type"
+                    ),
+
+                "block_index":
+                    claim.get(
+                        "block_index"
+                    ),
+
+                "sentence_index":
+                    claim.get(
+                        "sentence_index"
+                    ),
+
+                "sentence_global_index":
+                    global_index,
+
+                "article_position":
+                    article_position,
+
+                "claim_index_in_section":
+                    claim_index,
+
+                "text":
+                    claim.get(
+                        "text"
+                    ),
+
+                "word_count":
+                    claim.get(
+                        "word_count"
+                    ),
+
+                "character_count":
+                    claim.get(
+                        "character_count"
+                    ),
+
+                "statement_form":
+                    claim.get(
+                        "statement_form"
+                    ),
+
+                "canonical_claim_candidate":
+                    True,
+
+                "evidence_context": {
+                    "evidence_strength_id":
+                        score.get(
+                            "evidence_strength_id"
+                        ),
+
+                    "evidence_strength_score":
+                        score.get(
+                            "evidence_strength_score"
+                        ),
+
+                    "evidence_strength_band":
+                        score.get(
+                            "evidence_strength_band"
+                        ),
+
+                    "evidence_strength_scope":
+                        score.get(
+                            "score_scope"
+                        ),
+
+                    "dimension_scores":
+                        dict(
+                            score.get(
+                                "dimension_scores"
+                            )
+                            or {}
+                        ),
+
+                    "raw_support_counts":
+                        dict(
+                            score.get(
+                                "raw_support_counts"
+                            )
+                            or {}
+                        ),
+
+                    "section_coverage_score":
+                        coverage.get(
+                            "coverage_score"
+                        ),
+
+                    "section_coverage_status":
+                        coverage.get(
+                            "coverage_status"
+                        ),
+
+                    "insufficient_evidence_flag":
+                        flag.get(
+                            "insufficient_evidence_flag"
+                        ),
+
+                    "insufficient_evidence_reasons":
+                        list(
+                            flag.get(
+                                "insufficient_evidence_reasons"
+                            )
+                            or []
+                        ),
+
+                    "negation_present":
+                        flag.get(
+                            "negation_present"
+                        ),
+
+                    "contradiction_candidate":
+                        flag.get(
+                            "contradiction_candidate"
+                        ),
+
+                    "contradiction_pair_ids":
+                        list(
+                            flag.get(
+                                "contradiction_pair_ids"
+                            )
+                            or []
+                        ),
+                },
+
+                "logical_analysis_state": {
+                    "discourse_signal_interpretation":
+                        "PENDING",
+
+                    "adjacent_relation_detection":
+                        "PENDING",
+
+                    "non_adjacent_relation_detection":
+                        "PENDING",
+
+                    "premise_conclusion_mapping":
+                        "PENDING",
+
+                    "qualification_exception_mapping":
+                        "PENDING",
+
+                    "conditional_mapping":
+                        "PENDING",
+
+                    "support_clarification_contrast_mapping":
+                        "PENDING",
+
+                    "logical_chain_construction":
+                        "PENDING",
+
+                    "logical_tension_detection":
+                        "PENDING",
+                },
+
+                "processing_boundaries": {
+                    "article_local_only":
+                        True,
+
+                    "logical_reasoning_performed":
+                        False,
+
+                    "causal_reasoning_performed":
+                        False,
+
+                    "truth_assessment_performed":
+                        False,
+
+                    "external_authority_check_performed":
+                        False,
+
+                    "phrase_selected_for_linking":
+                        False,
+
+                    "target_selected":
+                        False,
+
+                    "url_selected":
+                        False,
+
+                    "link_type_selected":
+                        False,
+
+                    "highlight_color_selected":
+                        False,
+
+                    "semantic_memory_write_performed":
+                        False,
+
+                    "persistence_performed":
+                        False,
+                },
+            }
+
+            seen_logical_ids.add(
+                logical_claim_unit_id
+            )
+
+            seen_statement_ids.add(
+                statement_id
+            )
+
+            seen_sentence_ids.add(
+                sentence_id
+            )
+
+            previous_global_index = (
+                global_index
+            )
+
+            section_logical_claims.append(
+                logical_unit
+            )
+
+            all_logical_claim_units.append(
+                logical_unit
+            )
+
+        logical_sections.append({
+            "section_id":
+                section_id,
+
+            "section_evidence_unit_id":
+                section.get(
+                    "section_evidence_unit_id"
+                ),
+
+            "section_index":
+                section.get(
+                    "section_index"
+                ),
+
+            "section_title":
+                section.get(
+                    "section_title"
+                ),
+
+            "heading_level":
+                section.get(
+                    "heading_level"
+                ),
+
+            "logical_claim_count":
+                len(
+                    section_logical_claims
+                ),
+
+            "logical_claim_units":
+                section_logical_claims,
+        })
+
+    expected_claim_count = (
+        section_evidence_result.get(
+            "article_evidence_summary",
+            {},
+        ).get(
+            "claim_candidate_count"
+        )
+    )
+
+    if (
+        len(all_logical_claim_units)
+        != expected_claim_count
+    ):
+        raise LogicalIntelligenceError(
+            "Logical Claim Unit count does not match "
+            "certified claim count."
+        )
+
+    if (
+        len(logical_sections)
+        != intake.get("section_count")
+    ):
+        raise LogicalIntelligenceError(
+            "Logical section count does not match "
+            "accepted intake."
+        )
+
+    return {
+        "schema_version":
+            "logical_claim_units_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6C",
+
+        "status":
+            "LOGICAL_CLAIM_UNITS_BUILT",
+
+        "workspace_id":
+            section_evidence_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            section_evidence_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            section_evidence_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            section_evidence_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            section_evidence_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            section_evidence_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            article_id,
+
+        "title":
+            section_evidence_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                section_evidence_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                logical_sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                all_logical_claim_units
+            ),
+
+        "logical_sections":
+            logical_sections,
+
+        "logical_claim_units":
+            all_logical_claim_units,
+
+        "construction_summary": {
+            "source_claim_count":
+                expected_claim_count,
+
+            "logical_claim_unit_count":
+                len(
+                    all_logical_claim_units
+                ),
+
+            "one_to_one_claim_mapping":
+                (
+                    len(all_logical_claim_units)
+                    == expected_claim_count
+                ),
+
+            "canonical_order_preserved":
+                True,
+
+            "evidence_strength_attached":
+                True,
+
+            "coverage_attached":
+                True,
+
+            "insufficiency_flags_attached":
+                True,
+
+            "contradiction_candidate_flags_attached":
+                True,
+
+            "logical_reasoning_performed":
+                False,
+        },
+
+        "processing_boundaries": {
+            "article_body_reparsed":
+                False,
+
+            "logical_claim_units_built":
+                True,
+
+            "logical_signal_interpretation_performed":
+                False,
+
+            "logical_relation_detection_performed":
+                False,
+
+            "premise_conclusion_mapping_performed":
+                False,
+
+            "logical_chain_construction_performed":
+                False,
+
+            "logical_tension_detection_performed":
+                False,
+
+            "causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+
+            "external_authority_check_performed":
+                False,
+
+            "phrase_selected_for_linking":
+                False,
+
+            "target_selected":
+                False,
+
+            "url_selected":
+                False,
+
+            "link_type_selected":
+                False,
+
+            "highlight_color_selected":
+                False,
+
+            "semantic_memory_write_performed":
+                False,
+
+            "persistence_performed":
+                False,
+        },
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "context_aware_discourse_signal_interpretation",
+    }
+
+
+def interpret_discourse_signals_v1(
+    logical_claim_units_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Interpret explicit article-local discourse signals inside
+    canonical Logical Claim Units.
+
+    This stage identifies candidate logical discourse roles only.
+
+    It does NOT:
+    - connect claims into logical relations,
+    - classify premise/conclusion pairs,
+    - perform causal reasoning,
+    - adjudicate contradictions,
+    - determine factual truth,
+    - perform external authority checks,
+    - select links, phrases, targets, URLs, or colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        logical_claim_units_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "logical_claim_units_result must be a mapping."
+        )
+
+    if (
+        logical_claim_units_result.get("schema_version")
+        != "logical_claim_units_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Discourse interpretation requires "
+            "logical_claim_units_v1."
+        )
+
+    if (
+        logical_claim_units_result.get("status")
+        != "LOGICAL_CLAIM_UNITS_BUILT"
+    ):
+        raise LogicalIntelligenceError(
+            "Logical Claim Unit construction is incomplete."
+        )
+
+    if (
+        logical_claim_units_result.get("phase")
+        != "4.6.6"
+    ):
+        raise LogicalIntelligenceError(
+            "Discourse interpretation requires Phase 4.6.6 input."
+        )
+
+    units = list(
+        logical_claim_units_result.get(
+            "logical_claim_units"
+        )
+        or []
+    )
+
+    if not units:
+        raise LogicalIntelligenceError(
+            "Logical Claim Units are missing."
+        )
+
+    signal_patterns = (
+        (
+            "CONDITION",
+            re.compile(
+                r"(?i)(?<!\w)"
+                r"(if|unless|provided that|as long as)"
+                r"(?!\w)"
+            ),
+        ),
+        (
+            "CONTRAST",
+            re.compile(
+                r"(?i)(?<!\w)"
+                r"(but|however|although|though|whereas|yet|despite)"
+                r"(?!\w)"
+            ),
+        ),
+        (
+            "EXCEPTION",
+            re.compile(
+                r"(?i)(?<!\w)"
+                r"(except|apart from|other than)"
+                r"(?!\w)"
+            ),
+        ),
+        (
+            "ALTERNATIVE",
+            re.compile(
+                r"(?i)(?<!\w)"
+                r"(instead|rather|otherwise|either|neither)"
+                r"(?!\w)"
+            ),
+        ),
+        (
+            "ELABORATION",
+            re.compile(
+                r"(?i)(?<!\w)"
+                r"(for example|for instance|such as|"
+                r"in other words|specifically)"
+                r"(?!\w)"
+            ),
+        ),
+        (
+            "QUALIFICATION",
+            re.compile(
+                r"(?i)(?<!\w)"
+                r"(usually|often|sometimes|generally|typically|"
+                r"may|might|probably|likely)"
+                r"(?!\w)"
+            ),
+        ),
+    )
+
+    conclusion_pattern = re.compile(
+        r"(?i)(?<!\w)"
+        r"(therefore|thus|hence|consequently)"
+        r"(?!\w)"
+    )
+
+    clause_so_pattern = re.compile(
+        r"(?i)"
+        r"(?:^|[.;:?-]\s+|,\s+)"
+        r"(so)"
+        r"\b"
+    )
+
+    because_pattern = re.compile(
+        r"(?i)(?<!\w)"
+        r"(because)"
+        r"(?!\w)"
+    )
+
+    interpreted_units = []
+    total_signal_count = 0
+    units_with_signals = 0
+
+    signal_type_counts = {}
+
+    for unit in units:
+        if not isinstance(unit, Mapping):
+            raise LogicalIntelligenceError(
+                "Invalid Logical Claim Unit."
+            )
+
+        text_value = str(
+            unit.get("text")
+            or ""
+        )
+
+        signals = []
+
+        def add_signal(
+            signal_type: str,
+            match: Any,
+            contextual_role: str,
+            confidence: float,
+        ) -> None:
+            nonlocal total_signal_count
+
+            matched_text = match.group(1)
+
+            signal = {
+                "signal_type":
+                    signal_type,
+
+                "matched_text":
+                    matched_text,
+
+                "start_char":
+                    match.start(1),
+
+                "end_char":
+                    match.end(1),
+
+                "contextual_role":
+                    contextual_role,
+
+                "confidence":
+                    confidence,
+
+                "accepted":
+                    True,
+
+                "logical_relation_inferred":
+                    False,
+            }
+
+            signals.append(
+                signal
+            )
+
+            total_signal_count += 1
+
+            signal_type_counts[
+                signal_type
+            ] = (
+                signal_type_counts.get(
+                    signal_type,
+                    0,
+                )
+                + 1
+            )
+
+        for signal_type, pattern in signal_patterns:
+            for match in pattern.finditer(
+                text_value
+            ):
+                contextual_role = {
+                    "CONDITION":
+                        "introduces_or_marks_condition",
+
+                    "CONTRAST":
+                        "marks_contrast_or_concession",
+
+                    "EXCEPTION":
+                        "marks_exception",
+
+                    "ALTERNATIVE":
+                        "marks_alternative",
+
+                    "ELABORATION":
+                        "marks_example_or_elaboration",
+
+                    "QUALIFICATION":
+                        "modifies_assertion_strength_or_scope",
+                }[
+                    signal_type
+                ]
+
+                confidence = {
+                    "CONDITION": 0.95,
+                    "CONTRAST": 0.95,
+                    "EXCEPTION": 0.95,
+                    "ALTERNATIVE": 0.85,
+                    "ELABORATION": 0.95,
+                    "QUALIFICATION": 0.80,
+                }[
+                    signal_type
+                ]
+
+                add_signal(
+                    signal_type,
+                    match,
+                    contextual_role,
+                    confidence,
+                )
+
+        for match in conclusion_pattern.finditer(
+            text_value
+        ):
+            add_signal(
+                "CONCLUSION",
+                match,
+                "marks_explicit_conclusion_or_result",
+                0.98,
+            )
+
+        for match in clause_so_pattern.finditer(
+            text_value
+        ):
+            start = match.start(1)
+
+            prefix = text_value[
+                max(
+                    0,
+                    start - 12,
+                ):
+                start
+            ].lower()
+
+            suffix = text_value[
+                match.end(1):
+                min(
+                    len(text_value),
+                    match.end(1) + 12,
+                )
+            ].lower()
+
+            false_positive = (
+                suffix.lstrip().startswith(
+                    "much"
+                )
+                or prefix.rstrip().endswith(
+                    "heard"
+                )
+            )
+
+            if not false_positive:
+                add_signal(
+                    "CONCLUSION",
+                    match,
+                    "marks_clause_level_result_or_conclusion",
+                    0.88,
+                )
+
+        for match in because_pattern.finditer(
+            text_value
+        ):
+            add_signal(
+                "REASON",
+                match,
+                "introduces_explicit_reason_or_basis",
+                0.95,
+            )
+
+        signals.sort(
+            key=lambda item: (
+                item["start_char"],
+                item["end_char"],
+                item["signal_type"],
+            )
+        )
+
+        updated_unit = dict(
+            unit
+        )
+
+        state = dict(
+            updated_unit.get(
+                "logical_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "discourse_signal_interpretation"
+            )
+            != "PENDING"
+        ):
+            raise LogicalIntelligenceError(
+                "Discourse signal state was not PENDING."
+            )
+
+        state[
+            "discourse_signal_interpretation"
+        ] = "COMPLETE"
+
+        updated_unit[
+            "logical_analysis_state"
+        ] = state
+
+        updated_unit[
+            "discourse_signal_analysis"
+        ] = {
+            "analysis_scope":
+                "CLAIM_LOCAL_EXPLICIT_DISCOURSE_SIGNALS",
+
+            "signal_count":
+                len(signals),
+
+            "signals":
+                signals,
+
+            "has_explicit_logical_signal":
+                bool(signals),
+
+            "context_aware_interpretation":
+                True,
+
+            "simple_keyword_classification_only":
+                False,
+
+            "logical_relation_inferred":
+                False,
+
+            "premise_conclusion_pair_mapped":
+                False,
+
+            "causal_relation_inferred":
+                False,
+
+            "truth_assessed":
+                False,
+        }
+
+        if signals:
+            units_with_signals += 1
+
+        interpreted_units.append(
+            updated_unit
+        )
+
+    sections = []
+
+    by_section = {}
+
+    for unit in interpreted_units:
+        by_section.setdefault(
+            unit.get("section_id"),
+            [],
+        ).append(
+            unit
+        )
+
+    for source_section in (
+        logical_claim_units_result.get(
+            "logical_sections"
+        )
+        or []
+    ):
+        section_id = source_section.get(
+            "section_id"
+        )
+
+        section_units = by_section.get(
+            section_id,
+            [],
+        )
+
+        sections.append({
+            "section_id":
+                section_id,
+
+            "section_evidence_unit_id":
+                source_section.get(
+                    "section_evidence_unit_id"
+                ),
+
+            "section_index":
+                source_section.get(
+                    "section_index"
+                ),
+
+            "section_title":
+                source_section.get(
+                    "section_title"
+                ),
+
+            "heading_level":
+                source_section.get(
+                    "heading_level"
+                ),
+
+            "logical_claim_count":
+                len(
+                    section_units
+                ),
+
+            "claims_with_explicit_signals":
+                sum(
+                    1
+                    for unit in section_units
+                    if (
+                        unit.get(
+                            "discourse_signal_analysis",
+                            {},
+                        ).get(
+                            "has_explicit_logical_signal"
+                        )
+                        is True
+                    )
+                ),
+
+            "logical_claim_units":
+                section_units,
+        })
+
+    boundaries = dict(
+        logical_claim_units_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "logical_signal_interpretation_performed"
+    ] = True
+
+    boundaries[
+        "logical_relation_detection_performed"
+    ] = False
+
+    boundaries[
+        "premise_conclusion_mapping_performed"
+    ] = False
+
+    boundaries[
+        "logical_chain_construction_performed"
+    ] = False
+
+    boundaries[
+        "logical_tension_detection_performed"
+    ] = False
+
+    boundaries[
+        "causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    return {
+        "schema_version":
+            "logical_discourse_signal_result_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6D",
+
+        "status":
+            "LOGICAL_DISCOURSE_SIGNALS_INTERPRETED",
+
+        "workspace_id":
+            logical_claim_units_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            logical_claim_units_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            logical_claim_units_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            logical_claim_units_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            logical_claim_units_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            logical_claim_units_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            logical_claim_units_result.get(
+                "article_id"
+            ),
+
+        "title":
+            logical_claim_units_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                logical_claim_units_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                interpreted_units
+            ),
+
+        "logical_sections":
+            sections,
+
+        "logical_claim_units":
+            interpreted_units,
+
+        "discourse_signal_summary": {
+            "logical_claim_unit_count":
+                len(
+                    interpreted_units
+                ),
+
+            "claims_with_explicit_signals":
+                units_with_signals,
+
+            "claims_without_explicit_signals":
+                (
+                    len(interpreted_units)
+                    - units_with_signals
+                ),
+
+            "total_signal_count":
+                total_signal_count,
+
+            "signal_type_counts":
+                dict(
+                    sorted(
+                        signal_type_counts.items()
+                    )
+                ),
+
+            "context_aware_interpretation":
+                True,
+
+            "logical_relations_inferred":
+                False,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "adjacent_claim_logical_relation_detection",
+    }
+
+
+def detect_adjacent_claim_relations_v1(
+    discourse_signal_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Detect conservative logical relations between immediately
+    adjacent claims inside the same canonical section.
+
+    This stage may detect an adjacent relation, but it does NOT:
+    - perform non-adjacent relation detection,
+    - finalize premise/conclusion roles,
+    - finalize qualification/exception structures,
+    - finalize conditional structures,
+    - perform causal reasoning,
+    - adjudicate contradictions,
+    - determine factual truth,
+    - select links, targets, URLs, or highlight colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        discourse_signal_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "discourse_signal_result must be a mapping."
+        )
+
+    if (
+        discourse_signal_result.get("schema_version")
+        != "logical_discourse_signal_result_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Adjacent relation detection requires "
+            "logical_discourse_signal_result_v1."
+        )
+
+    if (
+        discourse_signal_result.get("status")
+        != "LOGICAL_DISCOURSE_SIGNALS_INTERPRETED"
+    ):
+        raise LogicalIntelligenceError(
+            "Discourse-signal interpretation is incomplete."
+        )
+
+    if (
+        discourse_signal_result.get("phase")
+        != "4.6.6"
+    ):
+        raise LogicalIntelligenceError(
+            "Adjacent relation detection requires Phase 4.6.6 input."
+        )
+
+    source_sections = list(
+        discourse_signal_result.get(
+            "logical_sections"
+        )
+        or []
+    )
+
+    if not source_sections:
+        raise LogicalIntelligenceError(
+            "Logical sections are missing."
+        )
+
+    connector_relation_map = {
+        "CONTRAST":
+            (
+                "CONTRAST",
+                0.97,
+                "right_claim_initial_contrast_connector",
+            ),
+
+        "ELABORATION":
+            (
+                "ELABORATION",
+                0.96,
+                "right_claim_initial_elaboration_connector",
+            ),
+
+        "CONCLUSION":
+            (
+                "RESULT_OR_CONCLUSION",
+                0.95,
+                "right_claim_initial_conclusion_connector",
+            ),
+
+        "EXCEPTION":
+            (
+                "EXCEPTION",
+                0.94,
+                "right_claim_initial_exception_connector",
+            ),
+
+        "ALTERNATIVE":
+            (
+                "ALTERNATIVE",
+                0.90,
+                "right_claim_initial_alternative_connector",
+            ),
+    }
+
+    referential_pattern = re.compile(
+        r"(?i)^\s*"
+        r"(this|that|these|those|such)\b"
+    )
+
+    sequential_pattern = re.compile(
+        r"(?i)^\s*"
+        r"(then|next|afterward|afterwards)\b"
+    )
+
+    pair_evaluations = []
+    relations = []
+
+    updated_units_by_id = {}
+
+    total_pair_count = 0
+    detected_relation_count = 0
+    deferred_condition_pair_count = 0
+
+    relation_type_counts = {}
+
+    for section in source_sections:
+        section_id = section.get(
+            "section_id"
+        )
+
+        section_units = list(
+            section.get(
+                "logical_claim_units"
+            )
+            or []
+        )
+
+        for unit in section_units:
+            if not isinstance(unit, Mapping):
+                raise LogicalIntelligenceError(
+                    "Invalid Logical Claim Unit."
+                )
+
+            unit_id = unit.get(
+                "logical_claim_unit_id"
+            )
+
+            if not unit_id:
+                raise LogicalIntelligenceError(
+                    "Logical Claim Unit has no ID."
+                )
+
+            updated_unit = dict(
+                unit
+            )
+
+            state = dict(
+                updated_unit.get(
+                    "logical_analysis_state"
+                )
+                or {}
+            )
+
+            if (
+                state.get(
+                    "discourse_signal_interpretation"
+                )
+                != "COMPLETE"
+            ):
+                raise LogicalIntelligenceError(
+                    "Discourse interpretation must be COMPLETE "
+                    "before adjacent relation detection."
+                )
+
+            if (
+                state.get(
+                    "adjacent_relation_detection"
+                )
+                != "PENDING"
+            ):
+                raise LogicalIntelligenceError(
+                    "Adjacent relation state was not PENDING."
+                )
+
+            state[
+                "adjacent_relation_detection"
+            ] = "COMPLETE"
+
+            updated_unit[
+                "logical_analysis_state"
+            ] = state
+
+            updated_unit[
+                "adjacent_relation_context"
+            ] = {
+                "incoming_relation_ids": [],
+                "outgoing_relation_ids": [],
+                "detection_complete": True,
+            }
+
+            updated_units_by_id[
+                unit_id
+            ] = updated_unit
+
+        for index in range(
+            len(section_units) - 1
+        ):
+            left = section_units[index]
+            right = section_units[index + 1]
+
+            total_pair_count += 1
+
+            left_id = left.get(
+                "logical_claim_unit_id"
+            )
+
+            right_id = right.get(
+                "logical_claim_unit_id"
+            )
+
+            right_text = str(
+                right.get("text")
+                or ""
+            )
+
+            left_signals = list(
+                (
+                    left.get(
+                        "discourse_signal_analysis"
+                    )
+                    or {}
+                ).get(
+                    "signals",
+                    []
+                )
+            )
+
+            right_signals = list(
+                (
+                    right.get(
+                        "discourse_signal_analysis"
+                    )
+                    or {}
+                ).get(
+                    "signals",
+                    []
+                )
+            )
+
+            initial_right_signals = [
+                signal
+                for signal in right_signals
+                if (
+                    signal.get("accepted") is True
+                    and isinstance(
+                        signal.get("start_char"),
+                        int,
+                    )
+                    and signal.get("start_char") <= 5
+                )
+            ]
+
+            detected = False
+            relation_type = None
+            confidence = None
+            detection_basis = None
+            cue_text = None
+            cue_signal_type = None
+
+            priority = (
+                "CONTRAST",
+                "ELABORATION",
+                "CONCLUSION",
+                "EXCEPTION",
+                "ALTERNATIVE",
+            )
+
+            for wanted_type in priority:
+                matching_signal = next(
+                    (
+                        signal
+                        for signal in initial_right_signals
+                        if (
+                            signal.get("signal_type")
+                            == wanted_type
+                        )
+                    ),
+                    None,
+                )
+
+                if matching_signal is None:
+                    continue
+
+                (
+                    relation_type,
+                    confidence,
+                    detection_basis,
+                ) = connector_relation_map[
+                    wanted_type
+                ]
+
+                cue_text = matching_signal.get(
+                    "matched_text"
+                )
+
+                cue_signal_type = wanted_type
+
+                detected = True
+                break
+
+            referential_match = (
+                referential_pattern.search(
+                    right_text
+                )
+            )
+
+            if (
+                not detected
+                and referential_match is not None
+            ):
+                detected = True
+                relation_type = (
+                    "REFERENTIAL_CONTINUATION"
+                )
+                confidence = 0.90
+                detection_basis = (
+                    "right_claim_initial_referential_bridge"
+                )
+                cue_text = referential_match.group(1)
+                cue_signal_type = (
+                    "REFERENTIAL_BRIDGE"
+                )
+
+            sequential_match = (
+                sequential_pattern.search(
+                    right_text
+                )
+            )
+
+            if (
+                not detected
+                and sequential_match is not None
+            ):
+                detected = True
+                relation_type = (
+                    "SEQUENTIAL_CONTINUATION"
+                )
+                confidence = 0.90
+                detection_basis = (
+                    "right_claim_initial_sequence_bridge"
+                )
+                cue_text = sequential_match.group(1)
+                cue_signal_type = (
+                    "SEQUENCE_BRIDGE"
+                )
+
+            initial_condition_signals = [
+                signal
+                for signal in initial_right_signals
+                if (
+                    signal.get("signal_type")
+                    == "CONDITION"
+                )
+            ]
+
+            condition_deferred = bool(
+                initial_condition_signals
+                and not detected
+            )
+
+            if condition_deferred:
+                deferred_condition_pair_count += 1
+
+            initial_reason_signals = [
+                signal
+                for signal in initial_right_signals
+                if (
+                    signal.get("signal_type")
+                    == "REASON"
+                )
+            ]
+
+            reason_deferred = bool(
+                initial_reason_signals
+            )
+
+            deferred_reason_signal_text = (
+                initial_reason_signals[0].get(
+                    "matched_text"
+                )
+                if initial_reason_signals
+                else None
+            )
+
+            pair_material = (
+                str(
+                    discourse_signal_result.get(
+                        "article_id"
+                    )
+                    or ""
+                )
+                + "|"
+                + str(left_id)
+                + "|"
+                + str(right_id)
+            )
+
+            pair_id = (
+                "adjacent_pair_"
+                + hashlib.sha256(
+                    pair_material.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:16]
+            )
+
+            relation_id = None
+
+            if detected:
+                detected_relation_count += 1
+
+                relation_id = (
+                    "logical_relation_"
+                    + hashlib.sha256(
+                        (
+                            pair_material
+                            + "|"
+                            + str(relation_type)
+                        ).encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[:16]
+                )
+
+                relation = {
+                    "logical_relation_id":
+                        relation_id,
+
+                    "adjacent_pair_id":
+                        pair_id,
+
+                    "relation_scope":
+                        "ADJACENT_SAME_SECTION",
+
+                    "relation_type":
+                        relation_type,
+
+                    "confidence":
+                        confidence,
+
+                    "source_logical_claim_unit_id":
+                        left_id,
+
+                    "target_logical_claim_unit_id":
+                        right_id,
+
+                    "source_sentence_id":
+                        left.get(
+                            "sentence_id"
+                        ),
+
+                    "target_sentence_id":
+                        right.get(
+                            "sentence_id"
+                        ),
+
+                    "source_sentence_global_index":
+                        left.get(
+                            "sentence_global_index"
+                        ),
+
+                    "target_sentence_global_index":
+                        right.get(
+                            "sentence_global_index"
+                        ),
+
+                    "section_id":
+                        section_id,
+
+                    "detection_evidence": {
+                        "basis":
+                            detection_basis,
+
+                        "cue_text":
+                            cue_text,
+
+                        "cue_signal_type":
+                            cue_signal_type,
+
+                        "cue_belongs_to":
+                            "TARGET_CLAIM",
+
+                        "target_claim_initial":
+                            True,
+                    },
+
+                    "adjacency_verified":
+                        True,
+
+                    "logical_relation_detected":
+                        True,
+
+                    "premise_conclusion_roles_finalized":
+                        False,
+
+                    "conditional_structure_finalized":
+                        False,
+
+                    "causal_relation_inferred":
+                        False,
+
+                    "truth_assessed":
+                        False,
+                }
+
+                relations.append(
+                    relation
+                )
+
+                relation_type_counts[
+                    relation_type
+                ] = (
+                    relation_type_counts.get(
+                        relation_type,
+                        0,
+                    )
+                    + 1
+                )
+
+                updated_units_by_id[
+                    left_id
+                ][
+                    "adjacent_relation_context"
+                ][
+                    "outgoing_relation_ids"
+                ].append(
+                    relation_id
+                )
+
+                updated_units_by_id[
+                    right_id
+                ][
+                    "adjacent_relation_context"
+                ][
+                    "incoming_relation_ids"
+                ].append(
+                    relation_id
+                )
+
+            pair_evaluations.append({
+                "adjacent_pair_id":
+                    pair_id,
+
+                "section_id":
+                    section_id,
+
+                "source_logical_claim_unit_id":
+                    left_id,
+
+                "target_logical_claim_unit_id":
+                    right_id,
+
+                "source_sentence_global_index":
+                    left.get(
+                        "sentence_global_index"
+                    ),
+
+                "target_sentence_global_index":
+                    right.get(
+                        "sentence_global_index"
+                    ),
+
+                "source_text":
+                    left.get(
+                        "text"
+                    ),
+
+                "target_text":
+                    right.get(
+                        "text"
+                    ),
+
+                "left_signal_types":
+                    [
+                        signal.get(
+                            "signal_type"
+                        )
+                        for signal in left_signals
+                    ],
+
+                "right_initial_signal_types":
+                    [
+                        signal.get(
+                            "signal_type"
+                        )
+                        for signal in initial_right_signals
+                    ],
+
+                "relation_detected":
+                    detected,
+
+                "logical_relation_id":
+                    relation_id,
+
+                "relation_type":
+                    relation_type,
+
+                "confidence":
+                    confidence,
+
+                "detection_basis":
+                    detection_basis,
+
+                "condition_signal_deferred":
+                    condition_deferred,
+
+                "condition_mapping_stage":
+                    (
+                        "4.6.6I"
+                        if condition_deferred
+                        else None
+                    ),
+
+                "reason_signal_deferred":
+                    reason_deferred,
+
+                "reason_signal_text":
+                    deferred_reason_signal_text,
+
+                "reason_reasoning_stage":
+                    (
+                        "4.6.7"
+                        if reason_deferred
+                        else None
+                    ),
+
+                "left_internal_signal_does_not_bind_next_claim":
+                    True,
+            })
+
+    ordered_units = []
+
+    for unit in (
+        discourse_signal_result.get(
+            "logical_claim_units"
+        )
+        or []
+    ):
+        unit_id = unit.get(
+            "logical_claim_unit_id"
+        )
+
+        if unit_id not in updated_units_by_id:
+            raise LogicalIntelligenceError(
+                "Logical Claim Unit identity was lost "
+                "during adjacent relation detection."
+            )
+
+        ordered_units.append(
+            updated_units_by_id[
+                unit_id
+            ]
+        )
+
+    rebuilt_sections = []
+
+    for section in source_sections:
+        section_id = section.get(
+            "section_id"
+        )
+
+        section_claims = [
+            unit
+            for unit in ordered_units
+            if unit.get(
+                "section_id"
+            ) == section_id
+        ]
+
+        section_relations = [
+            relation
+            for relation in relations
+            if relation.get(
+                "section_id"
+            ) == section_id
+        ]
+
+        rebuilt_sections.append({
+            "section_id":
+                section_id,
+
+            "section_evidence_unit_id":
+                section.get(
+                    "section_evidence_unit_id"
+                ),
+
+            "section_index":
+                section.get(
+                    "section_index"
+                ),
+
+            "section_title":
+                section.get(
+                    "section_title"
+                ),
+
+            "heading_level":
+                section.get(
+                    "heading_level"
+                ),
+
+            "logical_claim_count":
+                len(
+                    section_claims
+                ),
+
+            "adjacent_relation_count":
+                len(
+                    section_relations
+                ),
+
+            "logical_claim_units":
+                section_claims,
+
+            "adjacent_relations":
+                section_relations,
+        })
+
+    boundaries = dict(
+        discourse_signal_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "logical_signal_interpretation_performed"
+    ] = True
+
+    boundaries[
+        "logical_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "adjacent_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "non_adjacent_relation_detection_performed"
+    ] = False
+
+    boundaries[
+        "premise_conclusion_mapping_performed"
+    ] = False
+
+    boundaries[
+        "logical_chain_construction_performed"
+    ] = False
+
+    boundaries[
+        "logical_tension_detection_performed"
+    ] = False
+
+    boundaries[
+        "causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    return {
+        "schema_version":
+            "adjacent_logical_relation_result_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6E",
+
+        "status":
+            "ADJACENT_LOGICAL_RELATIONS_DETECTED",
+
+        "workspace_id":
+            discourse_signal_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            discourse_signal_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            discourse_signal_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            discourse_signal_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            discourse_signal_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            discourse_signal_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            discourse_signal_result.get(
+                "article_id"
+            ),
+
+        "title":
+            discourse_signal_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                discourse_signal_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                rebuilt_sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                ordered_units
+            ),
+
+        "adjacent_pair_count":
+            total_pair_count,
+
+        "adjacent_relation_count":
+            detected_relation_count,
+
+        "logical_sections":
+            rebuilt_sections,
+
+        "logical_claim_units":
+            ordered_units,
+
+        "adjacent_pair_evaluations":
+            pair_evaluations,
+
+        "adjacent_relations":
+            relations,
+
+        "adjacent_relation_summary": {
+            "total_adjacent_pairs":
+                total_pair_count,
+
+            "detected_relation_count":
+                detected_relation_count,
+
+            "non_relation_pair_count":
+                (
+                    total_pair_count
+                    - detected_relation_count
+                ),
+
+            "deferred_initial_condition_pairs":
+                deferred_condition_pair_count,
+
+            "relation_type_counts":
+                dict(
+                    sorted(
+                        relation_type_counts.items()
+                    )
+                ),
+
+            "left_internal_signals_do_not_bind_next_claim":
+                True,
+
+            "bare_initial_condition_not_auto_linked":
+                True,
+
+            "article_local_only":
+                True,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "non_adjacent_same_section_relation_detection",
+    }
+
+
+def detect_non_adjacent_same_section_relations_v1(
+    adjacent_relation_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Detect high-confidence logical relations between non-adjacent
+    claims inside the same canonical section.
+
+    This stage is intentionally conservative.
+
+    It does NOT:
+    - connect claims merely because they share vocabulary,
+    - connect claims merely because they share a paragraph,
+    - construct multi-claim logical chains,
+    - finalize conditional semantics,
+    - finalize premise/conclusion roles,
+    - perform causal reasoning,
+    - determine factual truth,
+    - select links, targets, URLs, or highlight colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        adjacent_relation_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "adjacent_relation_result must be a mapping."
+        )
+
+    if (
+        adjacent_relation_result.get("schema_version")
+        != "adjacent_logical_relation_result_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Non-adjacent detection requires "
+            "adjacent_logical_relation_result_v1."
+        )
+
+    if (
+        adjacent_relation_result.get("status")
+        != "ADJACENT_LOGICAL_RELATIONS_DETECTED"
+    ):
+        raise LogicalIntelligenceError(
+            "Adjacent logical relation detection is incomplete."
+        )
+
+    if (
+        adjacent_relation_result.get("phase")
+        != "4.6.6"
+    ):
+        raise LogicalIntelligenceError(
+            "Non-adjacent detection requires Phase 4.6.6 input."
+        )
+
+    source_sections = list(
+        adjacent_relation_result.get(
+            "logical_sections"
+        )
+        or []
+    )
+
+    source_units = list(
+        adjacent_relation_result.get(
+            "logical_claim_units"
+        )
+        or []
+    )
+
+    if not source_sections or not source_units:
+        raise LogicalIntelligenceError(
+            "Canonical Logical Claim Units are missing."
+        )
+
+    stop_terms = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "be",
+        "been",
+        "but",
+        "by",
+        "can",
+        "do",
+        "does",
+        "for",
+        "from",
+        "has",
+        "have",
+        "her",
+        "his",
+        "if",
+        "in",
+        "into",
+        "is",
+        "it",
+        "its",
+        "may",
+        "might",
+        "of",
+        "on",
+        "or",
+        "our",
+        "she",
+        "that",
+        "the",
+        "their",
+        "them",
+        "there",
+        "these",
+        "they",
+        "this",
+        "those",
+        "to",
+        "was",
+        "were",
+        "will",
+        "with",
+        "your",
+        "you",
+        "baby",
+        "babies",
+        "child",
+        "children",
+    }
+
+    def substantive_terms(
+        value: str,
+    ) -> set[str]:
+        words = re.findall(
+            r"[A-Za-z][A-Za-z'-]+",
+            value.lower(),
+        )
+
+        return {
+            word
+            for word in words
+            if (
+                len(word) >= 4
+                and word not in stop_terms
+            )
+        }
+
+    updated_units = {}
+
+    for unit in source_units:
+        unit_id = unit.get(
+            "logical_claim_unit_id"
+        )
+
+        if not unit_id:
+            raise LogicalIntelligenceError(
+                "Logical Claim Unit has no ID."
+            )
+
+        updated = dict(
+            unit
+        )
+
+        state = dict(
+            updated.get(
+                "logical_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "adjacent_relation_detection"
+            )
+            != "COMPLETE"
+        ):
+            raise LogicalIntelligenceError(
+                "Adjacent relation detection must be COMPLETE "
+                "before non-adjacent detection."
+            )
+
+        if (
+            state.get(
+                "non_adjacent_relation_detection"
+            )
+            != "PENDING"
+        ):
+            raise LogicalIntelligenceError(
+                "Non-adjacent relation state was not PENDING."
+            )
+
+        state[
+            "non_adjacent_relation_detection"
+        ] = "COMPLETE"
+
+        updated[
+            "logical_analysis_state"
+        ] = state
+
+        updated[
+            "non_adjacent_relation_context"
+        ] = {
+            "incoming_relation_ids": [],
+            "outgoing_relation_ids": [],
+            "detection_complete": True,
+        }
+
+        updated_units[
+            unit_id
+        ] = updated
+
+    evaluations = []
+    relations = []
+
+    evaluated_pair_count = 0
+    structurally_strong_pair_count = 0
+    detected_relation_count = 0
+
+    existing_relation_pairs = {
+        (
+            relation.get(
+                "source_logical_claim_unit_id"
+            ),
+            relation.get(
+                "target_logical_claim_unit_id"
+            ),
+        )
+        for relation in (
+            adjacent_relation_result.get(
+                "adjacent_relations"
+            )
+            or []
+        )
+    }
+
+    for section in source_sections:
+        section_units = list(
+            section.get(
+                "logical_claim_units"
+            )
+            or []
+        )
+
+        for left_index in range(
+            len(section_units)
+        ):
+            for right_index in range(
+                left_index + 1,
+                len(section_units),
+            ):
+                left = section_units[
+                    left_index
+                ]
+                right = section_units[
+                    right_index
+                ]
+
+                source_global = left.get(
+                    "sentence_global_index"
+                )
+
+                target_global = right.get(
+                    "sentence_global_index"
+                )
+
+                if not (
+                    isinstance(
+                        source_global,
+                        int,
+                    )
+                    and isinstance(
+                        target_global,
+                        int,
+                    )
+                ):
+                    continue
+
+                distance = (
+                    target_global
+                    - source_global
+                )
+
+                if distance <= 1:
+                    continue
+
+                evaluated_pair_count += 1
+
+                source_id = left.get(
+                    "logical_claim_unit_id"
+                )
+
+                target_id = right.get(
+                    "logical_claim_unit_id"
+                )
+
+                if (
+                    source_id,
+                    target_id,
+                ) in existing_relation_pairs:
+                    continue
+
+                same_block = (
+                    left.get("block_id")
+                    == right.get("block_id")
+                )
+
+                same_paragraph = (
+                    left.get("paragraph_id")
+                    == right.get("paragraph_id")
+                )
+
+                short_distance = (
+                    2 <= distance <= 4
+                )
+
+                structurally_strong = (
+                    same_block
+                    and same_paragraph
+                    and short_distance
+                )
+
+                if structurally_strong:
+                    structurally_strong_pair_count += 1
+
+                right_signals = list(
+                    (
+                        right.get(
+                            "discourse_signal_analysis"
+                        )
+                        or {}
+                    ).get(
+                        "signals",
+                        [],
+                    )
+                )
+
+                initial_conditions = [
+                    signal
+                    for signal in right_signals
+                    if (
+                        signal.get("accepted") is True
+                        and signal.get("signal_type")
+                            == "CONDITION"
+                        and isinstance(
+                            signal.get("start_char"),
+                            int,
+                        )
+                        and signal.get("start_char") <= 5
+                    )
+                ]
+
+                left_terms = substantive_terms(
+                    str(
+                        left.get("text")
+                        or ""
+                    )
+                )
+
+                right_terms = substantive_terms(
+                    str(
+                        right.get("text")
+                        or ""
+                    )
+                )
+
+                shared_terms = sorted(
+                    left_terms.intersection(
+                        right_terms
+                    )
+                )
+
+                strong_shared_content = (
+                    len(shared_terms) >= 2
+                )
+
+                detected = (
+                    structurally_strong
+                    and bool(
+                        initial_conditions
+                    )
+                    and strong_shared_content
+                )
+
+                pair_material = (
+                    str(
+                        adjacent_relation_result.get(
+                            "article_id"
+                        )
+                        or ""
+                    )
+                    + "|"
+                    + str(source_id)
+                    + "|"
+                    + str(target_id)
+                )
+
+                pair_id = (
+                    "non_adjacent_pair_"
+                    + hashlib.sha256(
+                        pair_material.encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[:16]
+                )
+
+                relation_id = None
+
+                if detected:
+                    detected_relation_count += 1
+
+                    relation_id = (
+                        "logical_relation_"
+                        + hashlib.sha256(
+                            (
+                                pair_material
+                                + "|"
+                                + "CONDITIONAL_APPLICATION"
+                            ).encode(
+                                "utf-8"
+                            )
+                        ).hexdigest()[:16]
+                    )
+
+                    cue = (
+                        initial_conditions[0]
+                    )
+
+                    relation = {
+                        "logical_relation_id":
+                            relation_id,
+
+                        "non_adjacent_pair_id":
+                            pair_id,
+
+                        "relation_scope":
+                            "NON_ADJACENT_SAME_SECTION",
+
+                        "relation_type":
+                            "CONDITIONAL_APPLICATION",
+
+                        "confidence":
+                            0.91,
+
+                        "source_logical_claim_unit_id":
+                            source_id,
+
+                        "target_logical_claim_unit_id":
+                            target_id,
+
+                        "source_sentence_id":
+                            left.get(
+                                "sentence_id"
+                            ),
+
+                        "target_sentence_id":
+                            right.get(
+                                "sentence_id"
+                            ),
+
+                        "source_sentence_global_index":
+                            source_global,
+
+                        "target_sentence_global_index":
+                            target_global,
+
+                        "sentence_distance":
+                            distance,
+
+                        "section_id":
+                            section.get(
+                                "section_id"
+                            ),
+
+                        "shared_substantive_terms":
+                            shared_terms,
+
+                        "detection_evidence": {
+                            "same_block":
+                                True,
+
+                            "same_paragraph":
+                                True,
+
+                            "short_distance":
+                                True,
+
+                            "target_initial_condition":
+                                True,
+
+                            "cue_text":
+                                cue.get(
+                                    "matched_text"
+                                ),
+
+                            "shared_substantive_term_count":
+                                len(
+                                    shared_terms
+                                ),
+                        },
+
+                        "logical_relation_detected":
+                            True,
+
+                        "conditional_structure_finalized":
+                            False,
+
+                        "conditional_mapping_stage":
+                            "4.6.6I",
+
+                        "premise_conclusion_roles_finalized":
+                            False,
+
+                        "causal_relation_inferred":
+                            False,
+
+                        "truth_assessed":
+                            False,
+                    }
+
+                    relations.append(
+                        relation
+                    )
+
+                    updated_units[
+                        source_id
+                    ][
+                        "non_adjacent_relation_context"
+                    ][
+                        "outgoing_relation_ids"
+                    ].append(
+                        relation_id
+                    )
+
+                    updated_units[
+                        target_id
+                    ][
+                        "non_adjacent_relation_context"
+                    ][
+                        "incoming_relation_ids"
+                    ].append(
+                        relation_id
+                    )
+
+                evaluations.append({
+                    "non_adjacent_pair_id":
+                        pair_id,
+
+                    "section_id":
+                        section.get(
+                            "section_id"
+                        ),
+
+                    "source_logical_claim_unit_id":
+                        source_id,
+
+                    "target_logical_claim_unit_id":
+                        target_id,
+
+                    "source_sentence_global_index":
+                        source_global,
+
+                    "target_sentence_global_index":
+                        target_global,
+
+                    "sentence_distance":
+                        distance,
+
+                    "same_block":
+                        same_block,
+
+                    "same_paragraph":
+                        same_paragraph,
+
+                    "structurally_strong":
+                        structurally_strong,
+
+                    "target_initial_condition":
+                        bool(
+                            initial_conditions
+                        ),
+
+                    "shared_substantive_terms":
+                        shared_terms,
+
+                    "shared_substantive_term_count":
+                        len(
+                            shared_terms
+                        ),
+
+                    "relation_detected":
+                        detected,
+
+                    "logical_relation_id":
+                        relation_id,
+
+                    "relation_type":
+                        (
+                            "CONDITIONAL_APPLICATION"
+                            if detected
+                            else None
+                        ),
+
+                    "conditional_structure_finalized":
+                        False,
+
+                    "chain_construction_deferred":
+                        True,
+                })
+
+    ordered_units = [
+        updated_units[
+            unit.get(
+                "logical_claim_unit_id"
+            )
+        ]
+        for unit in source_units
+    ]
+
+    rebuilt_sections = []
+
+    for section in source_sections:
+        section_id = section.get(
+            "section_id"
+        )
+
+        section_claims = [
+            unit
+            for unit in ordered_units
+            if (
+                unit.get("section_id")
+                == section_id
+            )
+        ]
+
+        section_non_adjacent_relations = [
+            relation
+            for relation in relations
+            if (
+                relation.get("section_id")
+                == section_id
+            )
+        ]
+
+        rebuilt = dict(
+            section
+        )
+
+        rebuilt[
+            "logical_claim_units"
+        ] = section_claims
+
+        rebuilt[
+            "non_adjacent_relation_count"
+        ] = len(
+            section_non_adjacent_relations
+        )
+
+        rebuilt[
+            "non_adjacent_relations"
+        ] = section_non_adjacent_relations
+
+        rebuilt_sections.append(
+            rebuilt
+        )
+
+    boundaries = dict(
+        adjacent_relation_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "logical_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "adjacent_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "non_adjacent_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "premise_conclusion_mapping_performed"
+    ] = False
+
+    boundaries[
+        "logical_chain_construction_performed"
+    ] = False
+
+    boundaries[
+        "logical_tension_detection_performed"
+    ] = False
+
+    boundaries[
+        "causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    return {
+        "schema_version":
+            "non_adjacent_logical_relation_result_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6F",
+
+        "status":
+            "NON_ADJACENT_LOGICAL_RELATIONS_DETECTED",
+
+        "workspace_id":
+            adjacent_relation_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            adjacent_relation_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            adjacent_relation_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            adjacent_relation_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            adjacent_relation_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            adjacent_relation_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            adjacent_relation_result.get(
+                "article_id"
+            ),
+
+        "title":
+            adjacent_relation_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                adjacent_relation_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                rebuilt_sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                ordered_units
+            ),
+
+        "adjacent_pair_count":
+            adjacent_relation_result.get(
+                "adjacent_pair_count"
+            ),
+
+        "adjacent_relation_count":
+            adjacent_relation_result.get(
+                "adjacent_relation_count"
+            ),
+
+        "adjacent_pair_evaluations":
+            list(
+                adjacent_relation_result.get(
+                    "adjacent_pair_evaluations"
+                )
+                or []
+            ),
+
+        "adjacent_relations":
+            list(
+                adjacent_relation_result.get(
+                    "adjacent_relations"
+                )
+                or []
+            ),
+
+        "non_adjacent_pair_evaluations":
+            evaluations,
+
+        "non_adjacent_relation_count":
+            detected_relation_count,
+
+        "non_adjacent_relations":
+            relations,
+
+        "logical_sections":
+            rebuilt_sections,
+
+        "logical_claim_units":
+            ordered_units,
+
+        "non_adjacent_relation_summary": {
+            "evaluated_non_adjacent_pairs":
+                evaluated_pair_count,
+
+            "structurally_strong_pairs":
+                structurally_strong_pair_count,
+
+            "detected_relation_count":
+                detected_relation_count,
+
+            "accepted_relation_type":
+                "CONDITIONAL_APPLICATION",
+
+            "same_block_required":
+                True,
+
+            "same_paragraph_required":
+                True,
+
+            "maximum_sentence_distance":
+                4,
+
+            "target_initial_condition_required":
+                True,
+
+            "minimum_shared_substantive_terms":
+                2,
+
+            "conditional_semantics_finalized":
+                False,
+
+            "logical_chain_construction_performed":
+                False,
+
+            "article_local_only":
+                True,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "premise_conclusion_mapping",
+    }
+
+
+def map_premise_conclusion_v1(
+    non_adjacent_relation_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Map explicit article-local premise/conclusion structures.
+
+    This stage is deliberately conservative.
+
+    It maps only explicit intra-claim structures supported by
+    accepted REASON or CONCLUSION discourse signals.
+
+    It does NOT:
+    - force premise/conclusion roles onto every logical relation,
+    - infer unstated premises,
+    - perform causal reasoning,
+    - perform truth assessment,
+    - perform external authority checking,
+    - finalize conditional structures,
+    - build logical chains,
+    - adjudicate logical tension,
+    - select links, targets, URLs, or highlight colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        non_adjacent_relation_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "non_adjacent_relation_result must be a mapping."
+        )
+
+    if (
+        non_adjacent_relation_result.get("schema_version")
+        != "non_adjacent_logical_relation_result_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Premise/conclusion mapping requires "
+            "non_adjacent_logical_relation_result_v1."
+        )
+
+    if (
+        non_adjacent_relation_result.get("status")
+        != "NON_ADJACENT_LOGICAL_RELATIONS_DETECTED"
+    ):
+        raise LogicalIntelligenceError(
+            "Non-adjacent relation detection is incomplete."
+        )
+
+    if (
+        non_adjacent_relation_result.get("phase")
+        != "4.6.6"
+    ):
+        raise LogicalIntelligenceError(
+            "Premise/conclusion mapping requires Phase 4.6.6 input."
+        )
+
+    source_units = list(
+        non_adjacent_relation_result.get(
+            "logical_claim_units"
+        )
+        or []
+    )
+
+    if not source_units:
+        raise LogicalIntelligenceError(
+            "Logical Claim Units are missing."
+        )
+
+    mappings = []
+    updated_units = {}
+
+    for unit in source_units:
+        if not isinstance(
+            unit,
+            Mapping,
+        ):
+            raise LogicalIntelligenceError(
+                "Invalid Logical Claim Unit."
+            )
+
+        unit_id = unit.get(
+            "logical_claim_unit_id"
+        )
+
+        if not unit_id:
+            raise LogicalIntelligenceError(
+                "Logical Claim Unit has no ID."
+            )
+
+        updated = dict(
+            unit
+        )
+
+        state = dict(
+            updated.get(
+                "logical_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "non_adjacent_relation_detection"
+            )
+            != "COMPLETE"
+        ):
+            raise LogicalIntelligenceError(
+                "Non-adjacent relation detection must be COMPLETE "
+                "before premise/conclusion mapping."
+            )
+
+        if (
+            state.get(
+                "premise_conclusion_mapping"
+            )
+            != "PENDING"
+        ):
+            raise LogicalIntelligenceError(
+                "Premise/conclusion mapping state was not PENDING."
+            )
+
+        state[
+            "premise_conclusion_mapping"
+        ] = "COMPLETE"
+
+        updated[
+            "logical_analysis_state"
+        ] = state
+
+        updated[
+            "premise_conclusion_context"
+        ] = {
+            "mapping_ids": [],
+            "mapping_complete": True,
+            "explicit_mapping_count": 0,
+        }
+
+        text_value = str(
+            unit.get("text")
+            or ""
+        )
+
+        signals = list(
+            (
+                unit.get(
+                    "discourse_signal_analysis"
+                )
+                or {}
+            ).get(
+                "signals",
+                [],
+            )
+        )
+
+        selected_signals = [
+            signal
+            for signal in signals
+            if (
+                signal.get("accepted") is True
+                and signal.get("signal_type")
+                in (
+                    "REASON",
+                    "CONCLUSION",
+                )
+            )
+        ]
+
+        for signal in selected_signals:
+            signal_type = signal.get(
+                "signal_type"
+            )
+
+            start = signal.get(
+                "start_char"
+            )
+
+            end = signal.get(
+                "end_char"
+            )
+
+            if not (
+                isinstance(start, int)
+                and isinstance(end, int)
+                and 0 <= start < end <= len(text_value)
+            ):
+                raise LogicalIntelligenceError(
+                    "Invalid discourse-signal character span."
+                )
+
+            marker = text_value[
+                start:end
+            ]
+
+            before = text_value[
+                :start
+            ].strip(
+                " \t\r\n,;:"
+            )
+
+            after = text_value[
+                end:
+            ].strip(
+                " \t\r\n,;:"
+            )
+
+            premise_text = None
+            conclusion_text = None
+            mapping_pattern = None
+
+            if signal_type == "REASON":
+                if start <= 1:
+                    comma_index = after.find(
+                        ","
+                    )
+
+                    if comma_index <= 0:
+                        continue
+
+                    premise_text = after[
+                        :comma_index
+                    ].strip(
+                        " \t\r\n,;:"
+                    )
+
+                    conclusion_text = after[
+                        comma_index + 1:
+                    ].strip(
+                        " \t\r\n,;:"
+                    )
+
+                    mapping_pattern = (
+                        "INITIAL_REASON_CLAUSE_THEN_CONCLUSION"
+                    )
+
+                else:
+                    if not before or not after:
+                        continue
+
+                    conclusion_text = before
+                    premise_text = after
+
+                    mapping_pattern = (
+                        "CONCLUSION_THEN_REASON_CLAUSE"
+                    )
+
+            elif signal_type == "CONCLUSION":
+                if not before or not after:
+                    continue
+
+                premise_text = before
+                conclusion_text = after
+
+                mapping_pattern = (
+                    "PREMISE_THEN_CONCLUSION_MARKER"
+                )
+
+            if not premise_text or not conclusion_text:
+                continue
+
+            mapping_material = (
+                str(
+                    non_adjacent_relation_result.get(
+                        "article_id"
+                    )
+                    or ""
+                )
+                + "|"
+                + str(unit_id)
+                + "|"
+                + str(signal_type)
+                + "|"
+                + str(start)
+                + "|"
+                + premise_text
+                + "|"
+                + conclusion_text
+            )
+
+            mapping_id = (
+                "premise_conclusion_"
+                + hashlib.sha256(
+                    mapping_material.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:16]
+            )
+
+            mapping = {
+                "premise_conclusion_mapping_id":
+                    mapping_id,
+
+                "mapping_scope":
+                    "INTRA_CLAIM_EXPLICIT",
+
+                "logical_claim_unit_id":
+                    unit_id,
+
+                "section_id":
+                    unit.get(
+                        "section_id"
+                    ),
+
+                "sentence_id":
+                    unit.get(
+                        "sentence_id"
+                    ),
+
+                "sentence_global_index":
+                    unit.get(
+                        "sentence_global_index"
+                    ),
+
+                "discourse_signal_type":
+                    signal_type,
+
+                "discourse_marker":
+                    marker,
+
+                "mapping_pattern":
+                    mapping_pattern,
+
+                "premise": {
+                    "text":
+                        premise_text,
+
+                    "role":
+                        "PREMISE",
+
+                    "explicit":
+                        True,
+                },
+
+                "conclusion": {
+                    "text":
+                        conclusion_text,
+
+                    "role":
+                        "CONCLUSION",
+
+                    "explicit":
+                        True,
+                },
+
+                "mapping_confidence":
+                    (
+                        0.96
+                        if signal_type == "CONCLUSION"
+                        else 0.95
+                    ),
+
+                "premise_conclusion_roles_finalized":
+                    True,
+
+                "cross_claim_role_assignment":
+                    False,
+
+                "unstated_premise_inferred":
+                    False,
+
+                "causal_relation_inferred":
+                    False,
+
+                "truth_assessed":
+                    False,
+
+                "article_local_only":
+                    True,
+            }
+
+            mappings.append(
+                mapping
+            )
+
+            updated[
+                "premise_conclusion_context"
+            ][
+                "mapping_ids"
+            ].append(
+                mapping_id
+            )
+
+            updated[
+                "premise_conclusion_context"
+            ][
+                "explicit_mapping_count"
+            ] += 1
+
+        updated_units[
+            unit_id
+        ] = updated
+
+    ordered_units = [
+        updated_units[
+            unit.get(
+                "logical_claim_unit_id"
+            )
+        ]
+        for unit in source_units
+    ]
+
+    mapping_ids = [
+        mapping.get(
+            "premise_conclusion_mapping_id"
+        )
+        for mapping in mappings
+    ]
+
+    if (
+        len(mapping_ids)
+        != len(set(mapping_ids))
+    ):
+        raise LogicalIntelligenceError(
+            "Duplicate premise/conclusion mapping IDs detected."
+        )
+
+    rebuilt_sections = []
+
+    for section in (
+        non_adjacent_relation_result.get(
+            "logical_sections"
+        )
+        or []
+    ):
+        section_id = section.get(
+            "section_id"
+        )
+
+        section_claims = [
+            unit
+            for unit in ordered_units
+            if (
+                unit.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        section_mappings = [
+            mapping
+            for mapping in mappings
+            if (
+                mapping.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        rebuilt = dict(
+            section
+        )
+
+        rebuilt[
+            "logical_claim_units"
+        ] = section_claims
+
+        rebuilt[
+            "premise_conclusion_mapping_count"
+        ] = len(
+            section_mappings
+        )
+
+        rebuilt[
+            "premise_conclusion_mappings"
+        ] = section_mappings
+
+        rebuilt_sections.append(
+            rebuilt
+        )
+
+    adjacent_relations = []
+
+    for relation in (
+        non_adjacent_relation_result.get(
+            "adjacent_relations"
+        )
+        or []
+    ):
+        copied = dict(
+            relation
+        )
+
+        copied[
+            "premise_conclusion_roles_finalized"
+        ] = False
+
+        adjacent_relations.append(
+            copied
+        )
+
+    non_adjacent_relations = []
+
+    for relation in (
+        non_adjacent_relation_result.get(
+            "non_adjacent_relations"
+        )
+        or []
+    ):
+        copied = dict(
+            relation
+        )
+
+        copied[
+            "premise_conclusion_roles_finalized"
+        ] = False
+
+        non_adjacent_relations.append(
+            copied
+        )
+
+    boundaries = dict(
+        non_adjacent_relation_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "logical_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "adjacent_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "non_adjacent_relation_detection_performed"
+    ] = True
+
+    boundaries[
+        "premise_conclusion_mapping_performed"
+    ] = True
+
+    boundaries[
+        "qualification_exception_mapping_performed"
+    ] = False
+
+    boundaries[
+        "conditional_mapping_performed"
+    ] = False
+
+    boundaries[
+        "support_clarification_contrast_mapping_performed"
+    ] = False
+
+    boundaries[
+        "logical_chain_construction_performed"
+    ] = False
+
+    boundaries[
+        "logical_tension_detection_performed"
+    ] = False
+
+    boundaries[
+        "causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    return {
+        "schema_version":
+            "premise_conclusion_mapping_result_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6G",
+
+        "status":
+            "PREMISE_CONCLUSION_MAPPING_COMPLETE",
+
+        "workspace_id":
+            non_adjacent_relation_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            non_adjacent_relation_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            non_adjacent_relation_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            non_adjacent_relation_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            non_adjacent_relation_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            non_adjacent_relation_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            non_adjacent_relation_result.get(
+                "article_id"
+            ),
+
+        "title":
+            non_adjacent_relation_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                non_adjacent_relation_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                rebuilt_sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                ordered_units
+            ),
+
+        "adjacent_pair_count":
+            non_adjacent_relation_result.get(
+                "adjacent_pair_count"
+            ),
+
+        "adjacent_relation_count":
+            non_adjacent_relation_result.get(
+                "adjacent_relation_count"
+            ),
+
+        "adjacent_pair_evaluations":
+            list(
+                non_adjacent_relation_result.get(
+                    "adjacent_pair_evaluations"
+                )
+                or []
+            ),
+
+        "adjacent_relations":
+            adjacent_relations,
+
+        "non_adjacent_pair_evaluations":
+            list(
+                non_adjacent_relation_result.get(
+                    "non_adjacent_pair_evaluations"
+                )
+                or []
+            ),
+
+        "non_adjacent_relation_count":
+            non_adjacent_relation_result.get(
+                "non_adjacent_relation_count"
+            ),
+
+        "non_adjacent_relations":
+            non_adjacent_relations,
+
+        "premise_conclusion_mapping_count":
+            len(
+                mappings
+            ),
+
+        "premise_conclusion_mappings":
+            mappings,
+
+        "logical_sections":
+            rebuilt_sections,
+
+        "logical_claim_units":
+            ordered_units,
+
+        "premise_conclusion_summary": {
+            "explicit_mapping_count":
+                len(
+                    mappings
+                ),
+
+            "intra_claim_mapping_only":
+                True,
+
+            "cross_claim_role_assignment_performed":
+                False,
+
+            "unstated_premise_inference_performed":
+                False,
+
+            "causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+
+            "article_local_only":
+                True,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "qualification_exception_mapping",
+    }
+
+
+def map_qualification_exception_v1(
+    premise_conclusion_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Map explicit article-local qualification and exception structures.
+
+    Qualification mapping is scope-aware and conservative.
+
+    It does NOT:
+    - treat every lexical occurrence of often/usually/etc. as a
+      logical qualification,
+    - infer unstated qualifications or exceptions,
+    - perform conditional mapping,
+    - perform causal reasoning,
+    - assess factual truth,
+    - perform external authority checking,
+    - build logical chains,
+    - adjudicate logical tension,
+    - select links, targets, URLs, or highlight colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        premise_conclusion_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "premise_conclusion_result must be a mapping."
+        )
+
+    if (
+        premise_conclusion_result.get("schema_version")
+        != "premise_conclusion_mapping_result_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Qualification/exception mapping requires "
+            "premise_conclusion_mapping_result_v1."
+        )
+
+    if (
+        premise_conclusion_result.get("status")
+        != "PREMISE_CONCLUSION_MAPPING_COMPLETE"
+    ):
+        raise LogicalIntelligenceError(
+            "Premise/conclusion mapping is incomplete."
+        )
+
+    if (
+        premise_conclusion_result.get("phase")
+        != "4.6.6"
+    ):
+        raise LogicalIntelligenceError(
+            "Qualification/exception mapping requires Phase 4.6.6 input."
+        )
+
+    source_units = list(
+        premise_conclusion_result.get(
+            "logical_claim_units"
+        )
+        or []
+    )
+
+    if not source_units:
+        raise LogicalIntelligenceError(
+            "Logical Claim Units are missing."
+        )
+
+    qualification_mappings = []
+    exception_mappings = []
+    rejected_signal_records = []
+    updated_units = {}
+
+    qualification_kind_map = {
+        "may": "EPISTEMIC_POSSIBILITY",
+        "might": "EPISTEMIC_POSSIBILITY",
+        "probably": "EPISTEMIC_PROBABILITY",
+        "likely": "EPISTEMIC_LIKELIHOOD",
+        "usually": "FREQUENCY_TYPICALITY",
+        "sometimes": "FREQUENCY_OCCASIONALITY",
+        "often": "FREQUENCY_COMMONALITY",
+        "generally": "GENERALITY_QUALIFIER",
+        "typically": "TYPICALITY_QUALIFIER",
+    }
+
+    for unit in source_units:
+        if not isinstance(
+            unit,
+            Mapping,
+        ):
+            raise LogicalIntelligenceError(
+                "Invalid Logical Claim Unit."
+            )
+
+        unit_id = unit.get(
+            "logical_claim_unit_id"
+        )
+
+        if not unit_id:
+            raise LogicalIntelligenceError(
+                "Logical Claim Unit has no ID."
+            )
+
+        updated = dict(
+            unit
+        )
+
+        state = dict(
+            updated.get(
+                "logical_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "premise_conclusion_mapping"
+            )
+            != "COMPLETE"
+        ):
+            raise LogicalIntelligenceError(
+                "Premise/conclusion mapping must be COMPLETE "
+                "before qualification/exception mapping."
+            )
+
+        if (
+            state.get(
+                "qualification_exception_mapping"
+            )
+            != "PENDING"
+        ):
+            raise LogicalIntelligenceError(
+                "Qualification/exception mapping state was not PENDING."
+            )
+
+        state[
+            "qualification_exception_mapping"
+        ] = "COMPLETE"
+
+        updated[
+            "logical_analysis_state"
+        ] = state
+
+        updated[
+            "qualification_exception_context"
+        ] = {
+            "qualification_mapping_ids": [],
+            "exception_mapping_ids": [],
+            "rejected_signal_count": 0,
+            "mapping_complete": True,
+        }
+
+        text_value = str(
+            unit.get("text")
+            or ""
+        )
+
+        signals = list(
+            (
+                unit.get(
+                    "discourse_signal_analysis"
+                )
+                or {}
+            ).get(
+                "signals",
+                [],
+            )
+        )
+
+        selected = [
+            signal
+            for signal in signals
+            if (
+                signal.get("accepted") is True
+                and signal.get("signal_type")
+                in (
+                    "QUALIFICATION",
+                    "EXCEPTION",
+                )
+            )
+        ]
+
+        for signal in selected:
+            signal_type = signal.get(
+                "signal_type"
+            )
+
+            start = signal.get(
+                "start_char"
+            )
+
+            end = signal.get(
+                "end_char"
+            )
+
+            if not (
+                isinstance(start, int)
+                and isinstance(end, int)
+                and 0 <= start < end <= len(text_value)
+            ):
+                raise LogicalIntelligenceError(
+                    "Invalid qualification/exception signal span."
+                )
+
+            marker = text_value[
+                start:end
+            ]
+
+            marker_lower = marker.lower()
+
+            before = text_value[
+                :start
+            ]
+
+            after = text_value[
+                end:
+            ]
+
+            local_left = before[
+                max(0, len(before) - 12):
+            ].lower()
+
+            # "how often" is a frequency quantity/question phrase,
+            # not a proposition-level logical qualification.
+            how_often = (
+                marker_lower == "often"
+                and re.search(
+                    r"\bhow\s*$",
+                    local_left,
+                )
+                is not None
+            )
+
+            # "too often" is a degree/frequency expression rather
+            # than a logical hedge on the proposition.
+            too_often = (
+                marker_lower == "often"
+                and re.search(
+                    r"\btoo\s*$",
+                    local_left,
+                )
+                is not None
+            )
+
+            # "as often" is comparative event frequency, not
+            # proposition-level qualification.
+            as_often = (
+                marker_lower == "often"
+                and re.search(
+                    r"\bas\s*$",
+                    local_left,
+                )
+                is not None
+            )
+
+            # "probably heard..." qualifies assumed reader familiarity,
+            # not the substantive proposition being asserted.
+            probably_heard = (
+                marker_lower == "probably"
+                and re.match(
+                    r"\s*heard\b",
+                    after,
+                    flags=re.IGNORECASE,
+                )
+                is not None
+            )
+
+            if (
+                how_often
+                or too_often
+                or as_often
+                or probably_heard
+            ):
+                if how_often:
+                    rejection_reason = (
+                        "HOW_OFTEN_FREQUENCY_QUANTITY"
+                    )
+                elif too_often:
+                    rejection_reason = (
+                        "TOO_OFTEN_DEGREE_EXPRESSION"
+                    )
+                elif as_often:
+                    rejection_reason = (
+                        "AS_OFTEN_COMPARATIVE_FREQUENCY"
+                    )
+                else:
+                    rejection_reason = (
+                        "PROBABLY_HEARD_READER_FAMILIARITY"
+                    )
+
+                rejected_signal_records.append({
+                    "logical_claim_unit_id":
+                        unit_id,
+
+                    "sentence_global_index":
+                        unit.get(
+                            "sentence_global_index"
+                        ),
+
+                    "signal_type":
+                        signal_type,
+
+                    "marker":
+                        marker,
+
+                    "start_char":
+                        start,
+
+                    "rejection_reason":
+                        rejection_reason,
+
+                    "logical_qualification_created":
+                        False,
+                })
+
+                updated[
+                    "qualification_exception_context"
+                ][
+                    "rejected_signal_count"
+                ] += 1
+
+                continue
+
+            if signal_type == "QUALIFICATION":
+                qualification_kind = (
+                    qualification_kind_map.get(
+                        marker_lower,
+                        "QUALIFICATION",
+                    )
+                )
+
+                qualified_scope = None
+                scope_strategy = None
+
+                if marker_lower in {
+                    "may",
+                    "might",
+                    "probably",
+                    "likely",
+                    "usually",
+                }:
+                    qualified_scope = (
+                        before.strip(
+                            " \t\r\n,;:"
+                        )
+                        + " "
+                        + marker
+                        + " "
+                        + after.strip()
+                    ).strip()
+
+                    scope_strategy = (
+                        "CLAUSE_WITH_EXPLICIT_QUALIFIER"
+                    )
+
+                elif marker_lower in {
+                    "sometimes",
+                    "often",
+                    "generally",
+                    "typically",
+                }:
+                    qualified_scope = (
+                        text_value.strip()
+                    )
+
+                    scope_strategy = (
+                        "PROPOSITION_LEVEL_FREQUENCY_OR_TYPICALITY"
+                    )
+
+                if not qualified_scope:
+                    continue
+
+                mapping_material = (
+                    str(
+                        premise_conclusion_result.get(
+                            "article_id"
+                        )
+                        or ""
+                    )
+                    + "|"
+                    + str(unit_id)
+                    + "|QUALIFICATION|"
+                    + str(start)
+                    + "|"
+                    + marker_lower
+                    + "|"
+                    + qualified_scope
+                )
+
+                mapping_id = (
+                    "qualification_"
+                    + hashlib.sha256(
+                        mapping_material.encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[:16]
+                )
+
+                qualification = {
+                    "qualification_mapping_id":
+                        mapping_id,
+
+                    "mapping_scope":
+                        "INTRA_CLAIM_EXPLICIT",
+
+                    "logical_claim_unit_id":
+                        unit_id,
+
+                    "section_id":
+                        unit.get(
+                            "section_id"
+                        ),
+
+                    "sentence_id":
+                        unit.get(
+                            "sentence_id"
+                        ),
+
+                    "sentence_global_index":
+                        unit.get(
+                            "sentence_global_index"
+                        ),
+
+                    "discourse_marker":
+                        marker,
+
+                    "qualification_kind":
+                        qualification_kind,
+
+                    "scope_strategy":
+                        scope_strategy,
+
+                    "qualified_scope":
+                        qualified_scope,
+
+                    "signal_start_char":
+                        start,
+
+                    "explicit":
+                        True,
+
+                    "qualification_finalized":
+                        True,
+
+                    "exception_mapping":
+                        False,
+
+                    "conditional_structure_finalized":
+                        False,
+
+                    "causal_relation_inferred":
+                        False,
+
+                    "truth_assessed":
+                        False,
+
+                    "article_local_only":
+                        True,
+                }
+
+                qualification_mappings.append(
+                    qualification
+                )
+
+                updated[
+                    "qualification_exception_context"
+                ][
+                    "qualification_mapping_ids"
+                ].append(
+                    mapping_id
+                )
+
+            elif signal_type == "EXCEPTION":
+                exception_scope = text_value.strip()
+
+                if not exception_scope:
+                    continue
+
+                mapping_material = (
+                    str(
+                        premise_conclusion_result.get(
+                            "article_id"
+                        )
+                        or ""
+                    )
+                    + "|"
+                    + str(unit_id)
+                    + "|EXCEPTION|"
+                    + str(start)
+                    + "|"
+                    + marker_lower
+                )
+
+                mapping_id = (
+                    "exception_"
+                    + hashlib.sha256(
+                        mapping_material.encode(
+                            "utf-8"
+                        )
+                    ).hexdigest()[:16]
+                )
+
+                exception = {
+                    "exception_mapping_id":
+                        mapping_id,
+
+                    "mapping_scope":
+                        "INTRA_CLAIM_EXPLICIT",
+
+                    "logical_claim_unit_id":
+                        unit_id,
+
+                    "section_id":
+                        unit.get(
+                            "section_id"
+                        ),
+
+                    "sentence_id":
+                        unit.get(
+                            "sentence_id"
+                        ),
+
+                    "sentence_global_index":
+                        unit.get(
+                            "sentence_global_index"
+                        ),
+
+                    "discourse_marker":
+                        marker,
+
+                    "exception_scope":
+                        exception_scope,
+
+                    "explicit":
+                        True,
+
+                    "exception_finalized":
+                        True,
+
+                    "qualification_mapping":
+                        False,
+
+                    "conditional_structure_finalized":
+                        False,
+
+                    "causal_relation_inferred":
+                        False,
+
+                    "truth_assessed":
+                        False,
+
+                    "article_local_only":
+                        True,
+                }
+
+                exception_mappings.append(
+                    exception
+                )
+
+                updated[
+                    "qualification_exception_context"
+                ][
+                    "exception_mapping_ids"
+                ].append(
+                    mapping_id
+                )
+
+        updated_units[
+            unit_id
+        ] = updated
+
+    ordered_units = [
+        updated_units[
+            unit.get(
+                "logical_claim_unit_id"
+            )
+        ]
+        for unit in source_units
+    ]
+
+    all_mapping_ids = (
+        [
+            item.get(
+                "qualification_mapping_id"
+            )
+            for item in qualification_mappings
+        ]
+        + [
+            item.get(
+                "exception_mapping_id"
+            )
+            for item in exception_mappings
+        ]
+    )
+
+    if (
+        len(all_mapping_ids)
+        != len(set(all_mapping_ids))
+    ):
+        raise LogicalIntelligenceError(
+            "Duplicate qualification/exception mapping IDs detected."
+        )
+
+    rebuilt_sections = []
+
+    for section in (
+        premise_conclusion_result.get(
+            "logical_sections"
+        )
+        or []
+    ):
+        section_id = section.get(
+            "section_id"
+        )
+
+        section_claims = [
+            unit
+            for unit in ordered_units
+            if (
+                unit.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        section_qualifications = [
+            item
+            for item in qualification_mappings
+            if (
+                item.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        section_exceptions = [
+            item
+            for item in exception_mappings
+            if (
+                item.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        rebuilt = dict(
+            section
+        )
+
+        rebuilt[
+            "logical_claim_units"
+        ] = section_claims
+
+        rebuilt[
+            "qualification_mapping_count"
+        ] = len(
+            section_qualifications
+        )
+
+        rebuilt[
+            "qualification_mappings"
+        ] = section_qualifications
+
+        rebuilt[
+            "exception_mapping_count"
+        ] = len(
+            section_exceptions
+        )
+
+        rebuilt[
+            "exception_mappings"
+        ] = section_exceptions
+
+        rebuilt_sections.append(
+            rebuilt
+        )
+
+    boundaries = dict(
+        premise_conclusion_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "premise_conclusion_mapping_performed"
+    ] = True
+
+    boundaries[
+        "qualification_exception_mapping_performed"
+    ] = True
+
+    boundaries[
+        "conditional_mapping_performed"
+    ] = False
+
+    boundaries[
+        "support_clarification_contrast_mapping_performed"
+    ] = False
+
+    boundaries[
+        "logical_chain_construction_performed"
+    ] = False
+
+    boundaries[
+        "logical_tension_detection_performed"
+    ] = False
+
+    boundaries[
+        "causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    return {
+        "schema_version":
+            "qualification_exception_mapping_result_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6H",
+
+        "status":
+            "QUALIFICATION_EXCEPTION_MAPPING_COMPLETE",
+
+        "workspace_id":
+            premise_conclusion_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            premise_conclusion_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            premise_conclusion_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            premise_conclusion_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            premise_conclusion_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            premise_conclusion_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            premise_conclusion_result.get(
+                "article_id"
+            ),
+
+        "title":
+            premise_conclusion_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                premise_conclusion_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                rebuilt_sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                ordered_units
+            ),
+
+        "adjacent_pair_count":
+            premise_conclusion_result.get(
+                "adjacent_pair_count"
+            ),
+
+        "adjacent_relation_count":
+            premise_conclusion_result.get(
+                "adjacent_relation_count"
+            ),
+
+        "adjacent_pair_evaluations":
+            list(
+                premise_conclusion_result.get(
+                    "adjacent_pair_evaluations"
+                )
+                or []
+            ),
+
+        "adjacent_relations":
+            list(
+                premise_conclusion_result.get(
+                    "adjacent_relations"
+                )
+                or []
+            ),
+
+        "non_adjacent_pair_evaluations":
+            list(
+                premise_conclusion_result.get(
+                    "non_adjacent_pair_evaluations"
+                )
+                or []
+            ),
+
+        "non_adjacent_relation_count":
+            premise_conclusion_result.get(
+                "non_adjacent_relation_count"
+            ),
+
+        "non_adjacent_relations":
+            list(
+                premise_conclusion_result.get(
+                    "non_adjacent_relations"
+                )
+                or []
+            ),
+
+        "premise_conclusion_mapping_count":
+            premise_conclusion_result.get(
+                "premise_conclusion_mapping_count"
+            ),
+
+        "premise_conclusion_mappings":
+            list(
+                premise_conclusion_result.get(
+                    "premise_conclusion_mappings"
+                )
+                or []
+            ),
+
+        "qualification_mapping_count":
+            len(
+                qualification_mappings
+            ),
+
+        "qualification_mappings":
+            qualification_mappings,
+
+        "exception_mapping_count":
+            len(
+                exception_mappings
+            ),
+
+        "exception_mappings":
+            exception_mappings,
+
+        "rejected_qualification_exception_signal_count":
+            len(
+                rejected_signal_records
+            ),
+
+        "rejected_qualification_exception_signals":
+            rejected_signal_records,
+
+        "logical_sections":
+            rebuilt_sections,
+
+        "logical_claim_units":
+            ordered_units,
+
+        "qualification_exception_summary": {
+            "qualification_mapping_count":
+                len(
+                    qualification_mappings
+                ),
+
+            "exception_mapping_count":
+                len(
+                    exception_mappings
+                ),
+
+            "rejected_signal_count":
+                len(
+                    rejected_signal_records
+                ),
+
+            "contextual_false_positive_filtering":
+                True,
+
+            "how_often_rejected":
+                any(
+                    item.get(
+                        "rejection_reason"
+                    )
+                    == "HOW_OFTEN_FREQUENCY_QUANTITY"
+                    for item in rejected_signal_records
+                ),
+
+            "too_often_rejected":
+                any(
+                    item.get(
+                        "rejection_reason"
+                    )
+                    == "TOO_OFTEN_DEGREE_EXPRESSION"
+                    for item in rejected_signal_records
+                ),
+
+            "as_often_rejected":
+                any(
+                    item.get(
+                        "rejection_reason"
+                    )
+                    == "AS_OFTEN_COMPARATIVE_FREQUENCY"
+                    for item in rejected_signal_records
+                ),
+
+            "probably_heard_rejected":
+                any(
+                    item.get(
+                        "rejection_reason"
+                    )
+                    == "PROBABLY_HEARD_READER_FAMILIARITY"
+                    for item in rejected_signal_records
+                ),
+
+            "article_local_only":
+                True,
+
+            "causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "conditional_logical_mapping",
+    }
+
+
+def map_conditional_logic_v1(
+    qualification_exception_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Map explicit article-local logical condition/consequent structures.
+
+    This stage distinguishes genuine logical conditions from
+    embedded whether-like complements such as:
+    - determine if X
+    - let you know if X
+
+    It does NOT:
+    - infer causation,
+    - assess factual truth,
+    - infer unstated conditions,
+    - perform support/clarification/contrast mapping,
+    - build logical chains,
+    - adjudicate logical tension,
+    - perform external authority checking,
+    - select links, targets, URLs, or highlight colors,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    if not isinstance(
+        qualification_exception_result,
+        Mapping,
+    ):
+        raise LogicalIntelligenceError(
+            "qualification_exception_result must be a mapping."
+        )
+
+    if (
+        qualification_exception_result.get("schema_version")
+        != "qualification_exception_mapping_result_v1"
+    ):
+        raise LogicalIntelligenceError(
+            "Conditional mapping requires "
+            "qualification_exception_mapping_result_v1."
+        )
+
+    if (
+        qualification_exception_result.get("status")
+        != "QUALIFICATION_EXCEPTION_MAPPING_COMPLETE"
+    ):
+        raise LogicalIntelligenceError(
+            "Qualification/exception mapping is incomplete."
+        )
+
+    if (
+        qualification_exception_result.get("phase")
+        != "4.6.6"
+    ):
+        raise LogicalIntelligenceError(
+            "Conditional mapping requires Phase 4.6.6 input."
+        )
+
+    source_units = list(
+        qualification_exception_result.get(
+            "logical_claim_units"
+        )
+        or []
+    )
+
+    if not source_units:
+        raise LogicalIntelligenceError(
+            "Logical Claim Units are missing."
+        )
+
+    conditional_mappings = []
+    rejected_condition_signals = []
+    updated_units = {}
+
+    def clean_clause(value: str) -> str:
+        return value.strip(
+            " \t\r\n,;:"
+        )
+
+    def first_clause_boundary(value: str):
+        comma = value.find(",")
+        colon = value.find(":")
+
+        indexes = [
+            index
+            for index in (
+                comma,
+                colon,
+            )
+            if index >= 0
+        ]
+
+        if not indexes:
+            return None
+
+        return min(indexes)
+
+    for unit in source_units:
+        if not isinstance(
+            unit,
+            Mapping,
+        ):
+            raise LogicalIntelligenceError(
+                "Invalid Logical Claim Unit."
+            )
+
+        unit_id = unit.get(
+            "logical_claim_unit_id"
+        )
+
+        if not unit_id:
+            raise LogicalIntelligenceError(
+                "Logical Claim Unit has no ID."
+            )
+
+        updated = dict(
+            unit
+        )
+
+        state = dict(
+            updated.get(
+                "logical_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "qualification_exception_mapping"
+            )
+            != "COMPLETE"
+        ):
+            raise LogicalIntelligenceError(
+                "Qualification/exception mapping must be COMPLETE "
+                "before conditional mapping."
+            )
+
+        if (
+            state.get(
+                "conditional_mapping"
+            )
+            != "PENDING"
+        ):
+            raise LogicalIntelligenceError(
+                "Conditional mapping state was not PENDING."
+            )
+
+        state[
+            "conditional_mapping"
+        ] = "COMPLETE"
+
+        updated[
+            "logical_analysis_state"
+        ] = state
+
+        updated[
+            "conditional_mapping_context"
+        ] = {
+            "conditional_mapping_ids": [],
+            "rejected_condition_signal_count": 0,
+            "mapping_complete": True,
+        }
+
+        text_value = str(
+            unit.get("text")
+            or ""
+        )
+
+        signals = list(
+            (
+                unit.get(
+                    "discourse_signal_analysis"
+                )
+                or {}
+            ).get(
+                "signals",
+                [],
+            )
+        )
+
+        conditions = [
+            signal
+            for signal in signals
+            if (
+                signal.get("accepted") is True
+                and signal.get("signal_type")
+                    == "CONDITION"
+            )
+        ]
+
+        for signal in conditions:
+            start = signal.get(
+                "start_char"
+            )
+
+            end = signal.get(
+                "end_char"
+            )
+
+            if not (
+                isinstance(start, int)
+                and isinstance(end, int)
+                and 0 <= start < end <= len(text_value)
+            ):
+                raise LogicalIntelligenceError(
+                    "Invalid CONDITION signal span."
+                )
+
+            marker = text_value[
+                start:end
+            ]
+
+            marker_lower = marker.lower()
+
+            before = text_value[
+                :start
+            ]
+
+            after = text_value[
+                end:
+            ]
+
+            before_clean = clean_clause(
+                before
+            )
+
+            after_clean = clean_clause(
+                after
+            )
+
+            local_left = before[
+                max(
+                    0,
+                    len(before) - 45,
+                ):
+            ].lower()
+
+            embedded_question_complement = (
+                marker_lower == "if"
+                and (
+                    re.search(
+                        r"\bdetermine\s*$",
+                        local_left,
+                    )
+                    is not None
+                    or re.search(
+                        r"\blet\s+you\s+know\s*$",
+                        local_left,
+                    )
+                    is not None
+                )
+            )
+
+            if embedded_question_complement:
+                rejection_reason = (
+                    "EMBEDDED_WHETHER_COMPLEMENT"
+                )
+
+                rejected_condition_signals.append({
+                    "logical_claim_unit_id":
+                        unit_id,
+
+                    "sentence_global_index":
+                        unit.get(
+                            "sentence_global_index"
+                        ),
+
+                    "marker":
+                        marker,
+
+                    "start_char":
+                        start,
+
+                    "rejection_reason":
+                        rejection_reason,
+
+                    "conditional_mapping_created":
+                        False,
+                })
+
+                updated[
+                    "conditional_mapping_context"
+                ][
+                    "rejected_condition_signal_count"
+                ] += 1
+
+                continue
+
+            condition_text = None
+            consequent_text = None
+            mapping_pattern = None
+
+            boundary = first_clause_boundary(
+                after
+            )
+
+            if start <= 5:
+                if boundary is None:
+                    continue
+
+                condition_text = clean_clause(
+                    after[
+                        :boundary
+                    ]
+                )
+
+                consequent_text = clean_clause(
+                    after[
+                        boundary + 1:
+                    ]
+                )
+
+                mapping_pattern = (
+                    "INITIAL_CONDITION_THEN_CONSEQUENT"
+                )
+
+            else:
+                if boundary is not None:
+                    condition_text = clean_clause(
+                        after[
+                            :boundary
+                        ]
+                    )
+
+                    trailing = clean_clause(
+                        after[
+                            boundary + 1:
+                        ]
+                    )
+
+                    left_context = before_clean.lower()
+
+                    if (
+                        left_context.endswith("but")
+                        or left_context.endswith("so")
+                        or left_context.endswith("and")
+                        or left_context.endswith("or")
+                        or left_context.endswith("meaning")
+                        or left_context.endswith("example")
+                        or left_context.endswith("for example")
+                    ):
+                        consequent_text = trailing
+
+                        mapping_pattern = (
+                            "EMBEDDED_CONDITION_THEN_CONSEQUENT"
+                        )
+
+                    elif trailing:
+                        consequent_text = trailing
+
+                        mapping_pattern = (
+                            "EMBEDDED_CONDITION_THEN_CONSEQUENT"
+                        )
+
+                    else:
+                        consequent_text = before_clean
+
+                        mapping_pattern = (
+                            "CONSEQUENT_THEN_POSTPOSED_CONDITION"
+                        )
+
+                else:
+                    condition_text = after_clean
+                    consequent_text = before_clean
+
+                    mapping_pattern = (
+                        "CONSEQUENT_THEN_POSTPOSED_CONDITION"
+                    )
+
+            if (
+                not condition_text
+                or not consequent_text
+            ):
+                continue
+
+            mapping_material = (
+                str(
+                    qualification_exception_result.get(
+                        "article_id"
+                    )
+                    or ""
+                )
+                + "|"
+                + str(unit_id)
+                + "|CONDITION|"
+                + str(start)
+                + "|"
+                + condition_text
+                + "|"
+                + consequent_text
+            )
+
+            mapping_id = (
+                "conditional_"
+                + hashlib.sha256(
+                    mapping_material.encode(
+                        "utf-8"
+                    )
+                ).hexdigest()[:16]
+            )
+
+            mapping = {
+                "conditional_mapping_id":
+                    mapping_id,
+
+                "mapping_scope":
+                    "INTRA_CLAIM_EXPLICIT",
+
+                "logical_claim_unit_id":
+                    unit_id,
+
+                "section_id":
+                    unit.get(
+                        "section_id"
+                    ),
+
+                "sentence_id":
+                    unit.get(
+                        "sentence_id"
+                    ),
+
+                "sentence_global_index":
+                    unit.get(
+                        "sentence_global_index"
+                    ),
+
+                "discourse_marker":
+                    marker,
+
+                "mapping_pattern":
+                    mapping_pattern,
+
+                "condition": {
+                    "text":
+                        condition_text,
+
+                    "role":
+                        "CONDITION",
+
+                    "explicit":
+                        True,
+                },
+
+                "consequent": {
+                    "text":
+                        consequent_text,
+
+                    "role":
+                        "CONSEQUENT",
+
+                    "explicit":
+                        True,
+                },
+
+                "conditional_structure_finalized":
+                    True,
+
+                "causal_relation_inferred":
+                    False,
+
+                "truth_assessed":
+                    False,
+
+                "article_local_only":
+                    True,
+            }
+
+            conditional_mappings.append(
+                mapping
+            )
+
+            updated[
+                "conditional_mapping_context"
+            ][
+                "conditional_mapping_ids"
+            ].append(
+                mapping_id
+            )
+
+        updated_units[
+            unit_id
+        ] = updated
+
+    ordered_units = [
+        updated_units[
+            unit.get(
+                "logical_claim_unit_id"
+            )
+        ]
+        for unit in source_units
+    ]
+
+    mapping_ids = [
+        item.get(
+            "conditional_mapping_id"
+        )
+        for item in conditional_mappings
+    ]
+
+    if (
+        len(mapping_ids)
+        != len(set(mapping_ids))
+    ):
+        raise LogicalIntelligenceError(
+            "Duplicate conditional mapping IDs detected."
+        )
+
+    rebuilt_sections = []
+
+    for section in (
+        qualification_exception_result.get(
+            "logical_sections"
+        )
+        or []
+    ):
+        section_id = section.get(
+            "section_id"
+        )
+
+        section_claims = [
+            unit
+            for unit in ordered_units
+            if (
+                unit.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        section_conditionals = [
+            item
+            for item in conditional_mappings
+            if (
+                item.get(
+                    "section_id"
+                )
+                == section_id
+            )
+        ]
+
+        rebuilt = dict(
+            section
+        )
+
+        rebuilt[
+            "logical_claim_units"
+        ] = section_claims
+
+        rebuilt[
+            "conditional_mapping_count"
+        ] = len(
+            section_conditionals
+        )
+
+        rebuilt[
+            "conditional_mappings"
+        ] = section_conditionals
+
+        rebuilt_sections.append(
+            rebuilt
+        )
+
+    updated_adjacent_evaluations = []
+
+    for evaluation in (
+        qualification_exception_result.get(
+            "adjacent_pair_evaluations"
+        )
+        or []
+    ):
+        copied = dict(
+            evaluation
+        )
+
+        if copied.get(
+            "condition_signal_deferred"
+        ) is True:
+            target_index = copied.get(
+                "target_sentence_global_index"
+            )
+
+            target_has_mapping = any(
+                item.get(
+                    "sentence_global_index"
+                )
+                == target_index
+                for item in conditional_mappings
+            )
+
+            copied[
+                "condition_mapping_completed"
+            ] = target_has_mapping
+
+            copied[
+                "condition_mapping_stage"
+            ] = (
+                "4.6.6I"
+                if target_has_mapping
+                else copied.get(
+                    "condition_mapping_stage"
+                )
+            )
+
+        updated_adjacent_evaluations.append(
+            copied
+        )
+
+    updated_non_adjacent_relations = []
+
+    finalized_cross_claim_count = 0
+
+    for relation in (
+        qualification_exception_result.get(
+            "non_adjacent_relations"
+        )
+        or []
+    ):
+        copied = dict(
+            relation
+        )
+
+        if (
+            copied.get("relation_type")
+            == "CONDITIONAL_APPLICATION"
+        ):
+            target_index = copied.get(
+                "target_sentence_global_index"
+            )
+
+            target_mapping = next(
+                (
+                    item
+                    for item in conditional_mappings
+                    if (
+                        item.get(
+                            "sentence_global_index"
+                        )
+                        == target_index
+                    )
+                ),
+                None,
+            )
+
+            if target_mapping is not None:
+                copied[
+                    "conditional_structure_finalized"
+                ] = True
+
+                copied[
+                    "conditional_mapping_id"
+                ] = target_mapping.get(
+                    "conditional_mapping_id"
+                )
+
+                copied[
+                    "conditional_mapping_stage"
+                ] = "4.6.6I"
+
+                copied[
+                    "causal_relation_inferred"
+                ] = False
+
+                finalized_cross_claim_count += 1
+
+        updated_non_adjacent_relations.append(
+            copied
+        )
+
+    boundaries = dict(
+        qualification_exception_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "conditional_mapping_performed"
+    ] = True
+
+    boundaries[
+        "support_clarification_contrast_mapping_performed"
+    ] = False
+
+    boundaries[
+        "logical_chain_construction_performed"
+    ] = False
+
+    boundaries[
+        "logical_tension_detection_performed"
+    ] = False
+
+    boundaries[
+        "causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    return {
+        "schema_version":
+            "conditional_logical_mapping_result_v1",
+
+        "logical_intelligence_version":
+            LOGICAL_INTELLIGENCE_VERSION,
+
+        "phase":
+            "4.6.6",
+
+        "patch":
+            "4.6.6I",
+
+        "status":
+            "CONDITIONAL_LOGICAL_MAPPING_COMPLETE",
+
+        "workspace_id":
+            qualification_exception_result.get(
+                "workspace_id"
+            ),
+
+        "document_id":
+            qualification_exception_result.get(
+                "document_id"
+            ),
+
+        "source_type":
+            qualification_exception_result.get(
+                "source_type"
+            ),
+
+        "source_id":
+            qualification_exception_result.get(
+                "source_id"
+            ),
+
+        "content_hash":
+            qualification_exception_result.get(
+                "content_hash"
+            ),
+
+        "body_ref":
+            qualification_exception_result.get(
+                "body_ref"
+            ),
+
+        "article_id":
+            qualification_exception_result.get(
+                "article_id"
+            ),
+
+        "title":
+            qualification_exception_result.get(
+                "title"
+            ),
+
+        "canonical_section_order":
+            list(
+                qualification_exception_result.get(
+                    "canonical_section_order"
+                )
+                or []
+            ),
+
+        "section_count":
+            len(
+                rebuilt_sections
+            ),
+
+        "logical_claim_unit_count":
+            len(
+                ordered_units
+            ),
+
+        "adjacent_pair_count":
+            qualification_exception_result.get(
+                "adjacent_pair_count"
+            ),
+
+        "adjacent_relation_count":
+            qualification_exception_result.get(
+                "adjacent_relation_count"
+            ),
+
+        "adjacent_pair_evaluations":
+            updated_adjacent_evaluations,
+
+        "adjacent_relations":
+            list(
+                qualification_exception_result.get(
+                    "adjacent_relations"
+                )
+                or []
+            ),
+
+        "non_adjacent_pair_evaluations":
+            list(
+                qualification_exception_result.get(
+                    "non_adjacent_pair_evaluations"
+                )
+                or []
+            ),
+
+        "non_adjacent_relation_count":
+            qualification_exception_result.get(
+                "non_adjacent_relation_count"
+            ),
+
+        "non_adjacent_relations":
+            updated_non_adjacent_relations,
+
+        "premise_conclusion_mapping_count":
+            qualification_exception_result.get(
+                "premise_conclusion_mapping_count"
+            ),
+
+        "premise_conclusion_mappings":
+            list(
+                qualification_exception_result.get(
+                    "premise_conclusion_mappings"
+                )
+                or []
+            ),
+
+        "qualification_mapping_count":
+            qualification_exception_result.get(
+                "qualification_mapping_count"
+            ),
+
+        "qualification_mappings":
+            list(
+                qualification_exception_result.get(
+                    "qualification_mappings"
+                )
+                or []
+            ),
+
+        "exception_mapping_count":
+            qualification_exception_result.get(
+                "exception_mapping_count"
+            ),
+
+        "exception_mappings":
+            list(
+                qualification_exception_result.get(
+                    "exception_mappings"
+                )
+                or []
+            ),
+
+        "rejected_qualification_exception_signal_count":
+            qualification_exception_result.get(
+                "rejected_qualification_exception_signal_count"
+            ),
+
+        "rejected_qualification_exception_signals":
+            list(
+                qualification_exception_result.get(
+                    "rejected_qualification_exception_signals"
+                )
+                or []
+            ),
+
+        "conditional_mapping_count":
+            len(
+                conditional_mappings
+            ),
+
+        "conditional_mappings":
+            conditional_mappings,
+
+        "rejected_condition_signal_count":
+            len(
+                rejected_condition_signals
+            ),
+
+        "rejected_condition_signals":
+            rejected_condition_signals,
+
+        "cross_claim_conditional_application_finalized_count":
+            finalized_cross_claim_count,
+
+        "logical_sections":
+            rebuilt_sections,
+
+        "logical_claim_units":
+            ordered_units,
+
+        "conditional_mapping_summary": {
+            "conditional_mapping_count":
+                len(
+                    conditional_mappings
+                ),
+
+            "rejected_condition_signal_count":
+                len(
+                    rejected_condition_signals
+                ),
+
+            "embedded_question_complements_rejected":
+                len(
+                    [
+                        item
+                        for item in rejected_condition_signals
+                        if (
+                            item.get(
+                                "rejection_reason"
+                            )
+                            == "EMBEDDED_WHETHER_COMPLEMENT"
+                        )
+                    ]
+                ),
+
+            "cross_claim_conditional_application_finalized_count":
+                finalized_cross_claim_count,
+
+            "explicit_conditions_only":
+                True,
+
+            "causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+
+            "article_local_only":
+                True,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "support_clarification_contrast_mapping",
+    }
+
+
+__all__ = [
+    "LOGICAL_INTELLIGENCE_VERSION",
+    "LogicalIntelligenceError",
+    "validate_logical_intelligence_intake_v1",
+    "build_logical_claim_units_v1",
+    "interpret_discourse_signals_v1",
+    "detect_adjacent_claim_relations_v1",
+    "detect_non_adjacent_same_section_relations_v1",
+    "map_premise_conclusion_v1",
+    "map_qualification_exception_v1",
+    "map_conditional_logic_v1",
+]
