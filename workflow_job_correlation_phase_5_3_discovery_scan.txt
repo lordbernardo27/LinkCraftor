@@ -1,0 +1,2504 @@
+LINKCRAFTOR
+UNIVERSAL COORDINATION FRAMEWORK
+PHASE 5.3 — WORKFLOW/JOB CORRELATION
+DISCOVERY SCAN
+========================================================================================================================
+
+1. FROZEN UPSTREAM INTEGRITY
+========================================================================================================================
+5.1 SHA256: 2DD7AF262C879B4DD58A484AB7470D9EA9883A80DDE3C77F1DC1ACDFD35CD0E2
+5.1 exact frozen SHA: True
+5.2 SHA256: 49227B0686DED28418DE7DEF2110164318DDCA3858469A05F5A596388BA84E6A
+5.2 exact frozen SHA: True
+
+========================================================================================================================
+MODULE: backend.server.coordination.runtime_integration.runtime_job_mapping
+========================================================================================================================
+FILE: backend\server\coordination\runtime_integration\runtime_job_mapping.py
+SHA256: 49227B0686DED28418DE7DEF2110164318DDCA3858469A05F5A596388BA84E6A
+
+PUBLIC CLASSES
+
+RuntimeJobMappingError
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.coordination.runtime_integration.runtime_job_mapping.RuntimeJobMappingError'>")>
+
+RuntimeJobMappingValidationError
+  signature: (message: 'str', *, violations: 'tuple[str, ...]' = ()) -> 'None'
+
+RuntimeJobMapping
+  signature: (workflow_id: 'str', correlation_id: 'str', stage_id: 'str', wave_index: 'int', creation_request: 'UniversalJobCreationRequest', mapping_version: 'str' = 'runtime_job_mapping_entry_v5.2.0') -> None
+  dataclass fields:
+    - workflow_id
+    - correlation_id
+    - stage_id
+    - wave_index
+    - creation_request
+    - mapping_version
+
+RuntimeJobMappingResult
+  signature: (workflow_id: 'str', mapping_count: 'int', mappings: 'tuple[RuntimeJobMapping, ...]', stage_ids: 'tuple[str, ...]', mapper_version: 'str' = 'runtime_job_mapping_v5.2.0', schema_version: 'str' = 'runtime_job_mapping_schema_v1') -> None
+  dataclass fields:
+    - workflow_id
+    - mapping_count
+    - mappings
+    - stage_ids
+    - mapper_version
+    - schema_version
+
+IDENTITY / CORRELATION FUNCTIONS
+
+map_runtime_handoff_intent_to_creation_request
+  signature: (*, intent: 'RuntimeHandoffIntent') -> 'RuntimeJobMapping'
+  lines: 622-713
+  source:
+00620: 
+00621: 
+00622: def map_runtime_handoff_intent_to_creation_request(
+00623:     *,
+00624:     intent: RuntimeHandoffIntent,
+00625: ) -> RuntimeJobMapping:
+00626: 
+00627:     """
+00628:     Convert one frozen Phase 5.1 handoff intent into one immutable
+00629:     UniversalJobCreationRequest.
+00630: 
+00631:     No job creation, registration lookup, persistence, queue write,
+00632:     dispatch, execution, or workflow/job correlation occurs here.
+00633:     """
+00634: 
+00635:     if not isinstance(
+00636:         intent,
+00637:         RuntimeHandoffIntent,
+00638:     ):
+00639: 
+00640:         raise RuntimeJobMappingValidationError(
+00641:             (
+00642:                 "intent must be "
+00643:                 "RuntimeHandoffIntent."
+00644:             ),
+00645:             violations=(
+00646:                 (
+00647:                     "Phase 5.2 input must be "
+00648:                     "RuntimeHandoffIntent"
+00649:                 ),
+00650:             ),
+00651:         )
+00652: 
+00653:     workflow_id = _clean_required_text(
+00654:         intent.workflow_id,
+00655:         field_name="workflow_id",
+00656:     )
+00657: 
+00658:     workspace_id = _clean_required_text(
+00659:         intent.workspace_id,
+00660:         field_name="workspace_id",
+00661:     )
+00662: 
+00663:     correlation_id = _clean_required_text(
+00664:         intent.correlation_id,
+00665:         field_name="correlation_id",
+00666:     )
+00667: 
+00668:     stage_id = _clean_required_text(
+00669:         intent.stage_id,
+00670:         field_name="stage_id",
+00671:     )
+00672: 
+00673:     pipeline_id = _clean_required_text(
+00674:         intent.pipeline_id,
+00675:         field_name="pipeline_id",
+00676:     )
+00677: 
+00678:     job_type = _clean_required_text(
+00679:         intent.job_type,
+00680:         field_name="job_type",
+00681:     )
+00682: 
+00683:     runtime_stage = _clean_required_text(
+00684:         intent.runtime_stage,
+00685:         field_name="runtime_stage",
+00686:     )
+00687: 
+00688:     payload = _freeze_mapping(
+00689:         intent.payload,
+00690:         field_name="intent.payload",
+00691:     )
+00692: 
+00693:     metadata = _build_creation_metadata(
+00694:         intent
+00695:     )
+00696: 
+00697:     request = UniversalJobCreationRequest(
+00698:         workspace_id=workspace_id,
+00699:         job_type=job_type,
+00700:         payload=payload,
+00701:         metadata=metadata,
+00702:         pipeline=pipeline_id,
+00703:         stage=runtime_stage,
+00704:         enqueue=True,
+00705:     )
+00706: 
+00707:     return RuntimeJobMapping(
+00708:         workflow_id=workflow_id,
+00709:         correlation_id=correlation_id,
+00710:         stage_id=stage_id,
+00711:         wave_index=intent.wave_index,
+00712:         creation_request=request,
+00713:     )
+00714: 
+00715: 
+
+map_runtime_handoffs_to_job_requests
+  signature: (*, bridge_result: 'CoordinationRuntimeBridgeResult') -> 'RuntimeJobMappingResult'
+  lines: 716-816
+  source:
+00714: 
+00715: 
+00716: def map_runtime_handoffs_to_job_requests(
+00717:     *,
+00718:     bridge_result: CoordinationRuntimeBridgeResult,
+00719: ) -> RuntimeJobMappingResult:
+00720: 
+00721:     """
+00722:     Map one complete frozen Phase 5.1 bridge result.
+00723: 
+00724:     Intent ordering is preserved exactly.
+00725:     Empty bridge results produce zero mappings.
+00726:     """
+00727: 
+00728:     if not isinstance(
+00729:         bridge_result,
+00730:         CoordinationRuntimeBridgeResult,
+00731:     ):
+00732: 
+00733:         raise RuntimeJobMappingValidationError(
+00734:             (
+00735:                 "bridge_result must be "
+00736:                 "CoordinationRuntimeBridgeResult."
+00737:             ),
+00738:             violations=(
+00739:                 (
+00740:                     "Phase 5.2 input must be the "
+00741:                     "Phase 5.1 bridge result"
+00742:                 ),
+00743:             ),
+00744:         )
+00745: 
+00746:     workflow_id = _clean_required_text(
+00747:         bridge_result.workflow_id,
+00748:         field_name="bridge_result.workflow_id",
+00749:     )
+00750: 
+00751:     if (
+00752:         bridge_result.handoff_count
+00753:         != len(
+00754:             bridge_result.intents
+00755:         )
+00756:     ):
+00757: 
+00758:         raise RuntimeJobMappingValidationError(
+00759:             (
+00760:                 "Phase 5.1 handoff_count does not "
+00761:                 "match intents length."
+00762:             ),
+00763:             violations=(
+00764:                 (
+00765:                     "bridge_result.handoff_count must equal "
+00766:                     "len(bridge_result.intents)"
+00767:                 ),
+00768:             ),
+00769:         )
+00770: 
+00771:     if (
+00772:         tuple(
+00773:             bridge_result.planned_stage_ids
+00774:         )
+00775:         != tuple(
+00776:             intent.stage_id
+00777:             for intent
+00778:             in bridge_result.intents
+00779:         )
+00780:     ):
+00781: 
+00782:         raise RuntimeJobMappingValidationError(
+00783:             (
+00784:                 "Phase 5.1 planned_stage_ids do not "
+00785:                 "match intent ordering."
+00786:             ),
+00787:             violations=(
+00788:                 (
+00789:                     "Phase 5.2 requires certified Phase 5.1 "
+00790:                     "intent ordering"
+00791:                 ),
+00792:             ),
+00793:         )
+00794: 
+00795:     mappings = tuple(
+00796:         map_runtime_handoff_intent_to_creation_request(
+00797:             intent=intent
+00798:         )
+00799:         for intent
+00800:         in bridge_result.intents
+00801:     )
+00802: 
+00803:     stage_ids = tuple(
+00804:         mapping.stage_id
+00805:         for mapping
+00806:         in mappings
+00807:     )
+00808: 
+00809:     return RuntimeJobMappingResult(
+00810:         workflow_id=workflow_id,
+00811:         mapping_count=len(
+00812:             mappings
+00813:         ),
+00814:         mappings=mappings,
+00815:         stage_ids=stage_ids,
+00816:     )
+00817: 
+00818: 
+
+runtime_job_mapping_snapshot
+  signature: (result: 'RuntimeJobMappingResult') -> 'Mapping[str, Any]'
+  lines: 819-879
+  source:
+00817: 
+00818: 
+00819: def runtime_job_mapping_snapshot(
+00820:     result: RuntimeJobMappingResult,
+00821: ) -> Mapping[str, Any]:
+00822: 
+00823:     if not isinstance(
+00824:         result,
+00825:         RuntimeJobMappingResult,
+00826:     ):
+00827: 
+00828:         raise RuntimeJobMappingValidationError(
+00829:             (
+00830:                 "result must be "
+00831:                 "RuntimeJobMappingResult."
+00832:             ),
+00833:             violations=(
+00834:                 "snapshot input must be RuntimeJobMappingResult",
+00835:             ),
+00836:         )
+00837: 
+00838:     return MappingProxyType(
+00839:         {
+00840:             "workflow_id":
+00841:                 result.workflow_id,
+00842: 
+00843:             "mapping_count":
+00844:                 result.mapping_count,
+00845: 
+00846:             "stage_ids":
+00847:                 result.stage_ids,
+00848: 
+00849:             "mappings":
+00850:                 tuple(
+00851:                     MappingProxyType(
+00852:                         {
+00853:                             "workflow_id":
+00854:                                 item.workflow_id,
+00855: 
+00856:                             "correlation_id":
+00857:                                 item.correlation_id,
+00858: 
+00859:                             "stage_id":
+00860:                                 item.stage_id,
+00861: 
+00862:                             "wave_index":
+00863:                                 item.wave_index,
+00864: 
+00865:                             "creation_request":
+00866:                                 item.creation_request,
+00867:                         }
+00868:                     )
+00869:                     for item
+00870:                     in result.mappings
+00871:                 ),
+00872: 
+00873:             "mapper_version":
+00874:                 result.mapper_version,
+00875: 
+00876:             "schema_version":
+00877:                 result.schema_version,
+00878:         }
+00879:     )
+00880: 
+00881: 
+
+explain_runtime_job_mapping_v5_2
+  signature: () -> 'Mapping[str, Any]'
+  lines: 882-998
+  source:
+00880: 
+00881: 
+00882: def explain_runtime_job_mapping_v5_2(
+00883: ) -> Mapping[str, Any]:
+00884: 
+00885:     return MappingProxyType(
+00886:         {
+00887:             "phase":
+00888:                 "5.2",
+00889: 
+00890:             "component":
+00891:                 "Runtime Job Mapping",
+00892: 
+00893:             "version":
+00894:                 RUNTIME_JOB_MAPPING_VERSION,
+00895: 
+00896:             "schema_version":
+00897:                 RUNTIME_JOB_MAPPING_SCHEMA_VERSION,
+00898: 
+00899:             "upstream_authority":
+00900:                 "Phase 5.1 RuntimeHandoffIntent",
+00901: 
+00902:             "downstream_authority":
+00903:                 "Universal Job Creation Engine",
+00904: 
+00905:             "canonical_operation":
+00906:                 "map_runtime_handoffs_to_job_requests",
+00907: 
+00908:             "direct_mapping":
+00909:                 MappingProxyType(
+00910:                     {
+00911:                         "workspace_id":
+00912:                             "workspace_id",
+00913: 
+00914:                         "job_type":
+00915:                             "job_type",
+00916: 
+00917:                         "payload":
+00918:                             "payload",
+00919: 
+00920:                         "pipeline_id":
+00921:                             "pipeline",
+00922: 
+00923:                         "runtime_stage":
+00924:                             "stage",
+00925:                     }
+00926:                 ),
+00927: 
+00928:             "correlation_boundary":
+00929:                 MappingProxyType(
+00930:                     {
+00931:                         "workflow_id_to_pipeline_run_id":
+00932:                             False,
+00933: 
+00934:                         "correlation_id_to_pipeline_run_id":
+00935:                             False,
+00936: 
+00937:                         "pipeline_run_id":
+00938:                             None,
+00939: 
+00940:                         "phase_5_3_owns_correlation":
+00941:                             True,
+00942:                     }
+00943:                 ),
+00944: 
+00945:             "execution_properties":
+00946:                 MappingProxyType(
+00947:                     {
+00948:                         "read_only":
+00949:                             True,
+00950: 
+00951:                         "deterministic":
+00952:                             True,
+00953: 
+00954:                         "fail_closed":
+00955:                             True,
+00956: 
+00957:                         "universal_job_creation":
+00958:                             False,
+00959: 
+00960:                         "job_id_generation":
+00961:                             False,
+00962: 
+00963:                         "pipeline_run_id_generation":
+00964:                             False,
+00965: 
+00966:                         "idempotency_key_generation":
+00967:                             False,
+00968: 
+00969:                         "runtime_registration_lookup":
+00970:                             False,
+00971: 
+00972:                         "submission":
+00973:                             False,
+00974: 
+00975:                         "persistence":
+00976:                             False,
+00977: 
+00978:                         "queue_write":
+00979:                             False,
+00980: 
+00981:                         "dispatch":
+00982:                             False,
+00983: 
+00984:                         "business_execution":
+00985:                             False,
+00986: 
+00987:                         "completion_processing":
+00988:                             False,
+00989: 
+00990:                         "failure_processing":
+00991:                             False,
+00992: 
+00993:                         "workflow_job_correlation":
+00994:                             False,
+00995:                     }
+00996:                 ),
+00997:         }
+00998:     )
+00999: 
+01000: 
+
+IDENTITY FIELD COUNTS
+  workflow_id: 28
+  correlation_id: 13
+  stage_id: 35
+  job_id: 4
+  workspace_id: 7
+  pipeline_run_id: 7
+  batch_id: 0
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  -> backend.server.coordination.runtime_integration.coordination_runtime_bridge
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_jobs.creation_engine
+
+========================================================================================================================
+MODULE: backend.server.coordination.universal_stages.result_contract
+========================================================================================================================
+FILE: backend\server\coordination\universal_stages\result_contract.py
+SHA256: B3469B10BB2F8F9372E4336784D09A143C78FABE45BF039B61B76F4A2DC33B24
+
+PUBLIC CLASSES
+
+UniversalStageResultStatus
+  signature: (*values)
+
+UniversalStageResultContractError
+  signature: (message: 'str', *, violations: 'Tuple[str, ...]' = ()) -> 'None'
+
+UniversalStageResultValidationReport
+  signature: (is_valid: 'bool', violations: 'Tuple[str, ...]' = (), contract_version: 'str' = 'universal_stage_result_contract_v1.4.0', checked_field_count: 'int' = 0) -> None
+  dataclass fields:
+    - is_valid
+    - violations
+    - contract_version
+    - checked_field_count
+
+UniversalStageResult
+  signature: (result_id: 'str', workflow_id: 'str', correlation_id: 'str', stage_id: 'str', stage_version: 'str', pipeline_id: 'str', workflow_type: 'str', workspace_id: 'str', execution_target: 'StageExecutionTarget', job_id: 'str', job_type: 'str', status: 'UniversalStageResultStatus', output: 'Mapping[str, Any]', result_reference: 'str', artifact_references: 'Tuple[str, ...]', started_at: 'str', finished_at: 'str', failure_code: 'str', failure_message: 'str', failure_details: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', workflow_contract_version: 'str' = 'universal_workflow_contract_v1.1.0', stage_reference_contract_version: 'str' = 'universal_stage_reference_contract_v1.3.0', contract_version: 'str' = 'universal_stage_result_contract_v1.4.0') -> None
+  dataclass fields:
+    - result_id
+    - workflow_id
+    - correlation_id
+    - stage_id
+    - stage_version
+    - pipeline_id
+    - workflow_type
+    - workspace_id
+    - execution_target
+    - job_id
+    - job_type
+    - status
+    - output
+    - result_reference
+    - artifact_references
+    - started_at
+    - finished_at
+    - failure_code
+    - failure_message
+    - failure_details
+    - metadata
+    - workflow_contract_version
+    - stage_reference_contract_version
+    - contract_version
+
+IDENTITY / CORRELATION FUNCTIONS
+
+validate_universal_stage_result
+  signature: (candidate: 'Any') -> 'UniversalStageResultValidationReport'
+  lines: 1578-1646
+  source:
+01576: # ============================================================================
+01577: 
+01578: def validate_universal_stage_result(
+01579:     candidate: Any,
+01580: ) -> UniversalStageResultValidationReport:
+01581: 
+01582:     if isinstance(
+01583:         candidate,
+01584:         UniversalStageResult,
+01585:     ):
+01586: 
+01587:         return UniversalStageResultValidationReport(
+01588:             is_valid=True,
+01589:             violations=_EMPTY_TUPLE,
+01590:             contract_version=(
+01591:                 candidate.contract_version
+01592:             ),
+01593:             checked_field_count=len(
+01594:                 REQUIRED_UNIVERSAL_STAGE_RESULT_FIELDS
+01595:             ),
+01596:         )
+01597: 
+01598:     if not isinstance(
+01599:         candidate,
+01600:         Mapping,
+01601:     ):
+01602: 
+01603:         return UniversalStageResultValidationReport(
+01604:             is_valid=False,
+01605:             violations=(
+01606:                 "candidate must be a UniversalStageResult "
+01607:                 "or mapping",
+01608:             ),
+01609:             checked_field_count=0,
+01610:         )
+01611: 
+01612:     try:
+01613: 
+01614:         reconstructed = (
+01615:             UniversalStageResult.from_dict(
+01616:                 candidate
+01617:             )
+01618:         )
+01619: 
+01620:     except UniversalStageResultContractError as exc:
+01621: 
+01622:         return UniversalStageResultValidationReport(
+01623:             is_valid=False,
+01624:             violations=(
+01625:                 tuple(
+01626:                     exc.violations
+01627:                 )
+01628:                 or (
+01629:                     str(exc),
+01630:                 )
+01631:             ),
+01632:             checked_field_count=len(
+01633:                 REQUIRED_UNIVERSAL_STAGE_RESULT_FIELDS
+01634:             ),
+01635:         )
+01636: 
+01637:     return UniversalStageResultValidationReport(
+01638:         is_valid=True,
+01639:         violations=_EMPTY_TUPLE,
+01640:         contract_version=(
+01641:             reconstructed.contract_version
+01642:         ),
+01643:         checked_field_count=len(
+01644:             REQUIRED_UNIVERSAL_STAGE_RESULT_FIELDS
+01645:         ),
+01646:     )
+01647: 
+01648: 
+
+IDENTITY FIELD COUNTS
+  workflow_id: 11
+  correlation_id: 9
+  stage_id: 11
+  job_id: 15
+  workspace_id: 9
+  pipeline_run_id: 0
+  batch_id: 0
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  -> backend.server.coordination.universal_stages.contract
+  -> backend.server.coordination.universal_workflows.contract
+
+RUNTIME IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.coordination.universal_workflows.contract
+========================================================================================================================
+FILE: backend\server\coordination\universal_workflows\contract.py
+SHA256: 9094A98D2B9DBD9CCED73514648BF5D4115C5092E547D19446AB0FE18FBE7089
+
+PUBLIC CLASSES
+
+UniversalWorkflowContractError
+  signature: (message: 'str', *, violations: 'Tuple[str, ...]' = ()) -> 'None'
+
+UniversalWorkflowStatus
+  signature: (*values)
+
+UniversalWorkflowValidationReport
+  signature: (is_valid: 'bool', violations: 'Tuple[str, ...]' = (), contract_version: 'str' = 'universal_workflow_contract_v1.1.0', checked_field_count: 'int' = 0) -> None
+  dataclass fields:
+    - is_valid
+    - violations
+    - contract_version
+    - checked_field_count
+
+UniversalWorkflow
+  signature: (workflow_id: 'str', workflow_type: 'str', workflow_version: 'str', workspace_id: 'str', coordinator_id: 'str', coordinator_version: 'str', correlation_id: 'str', parent_workflow_id: 'Optional[str]', root_workflow_id: 'str', status: 'UniversalWorkflowStatus', input_reference: 'Optional[str]', context: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, current_stage: 'Optional[str]' = None, completed_stages: 'Tuple[str, ...]' = (), pending_stages: 'Tuple[str, ...]' = (), failed_stages: 'Tuple[str, ...]' = (), skipped_stages: 'Tuple[str, ...]' = (), result_reference: 'Optional[str]' = None, artifact_references: 'Tuple[str, ...]' = (), idempotency_key: 'Optional[str]' = None, created_at: 'str' = '', started_at: 'Optional[str]' = None, updated_at: 'str' = '', completed_at: 'Optional[str]' = None, failed_at: 'Optional[str]' = None, cancelled_at: 'Optional[str]' = None, failure_code: 'Optional[str]' = None, failure_message: 'Optional[str]' = None, failure_details: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_workflow_contract_v1.1.0') -> None
+  dataclass fields:
+    - workflow_id
+    - workflow_type
+    - workflow_version
+    - workspace_id
+    - coordinator_id
+    - coordinator_version
+    - correlation_id
+    - parent_workflow_id
+    - root_workflow_id
+    - status
+    - input_reference
+    - context
+    - metadata
+    - current_stage
+    - completed_stages
+    - pending_stages
+    - failed_stages
+    - skipped_stages
+    - result_reference
+    - artifact_references
+    - idempotency_key
+    - created_at
+    - started_at
+    - updated_at
+    - completed_at
+    - failed_at
+    - cancelled_at
+    - failure_code
+    - failure_message
+    - failure_details
+    - contract_version
+
+IDENTITY / CORRELATION FUNCTIONS
+  NONE
+
+IDENTITY FIELD COUNTS
+  workflow_id: 40
+  correlation_id: 11
+  stage_id: 0
+  job_id: 0
+  workspace_id: 11
+  pipeline_run_id: 0
+  batch_id: 0
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_jobs.contract
+========================================================================================================================
+FILE: backend\server\runtime\universal_jobs\contract.py
+SHA256: E5BE8421D72627AB5DEC93C3CD45E4A314E956ACDA751C8A93ECD160CDACEE13
+
+PUBLIC CLASSES
+
+UniversalJobContractError
+  signature: (message: 'str', *, violations: 'Optional[Sequence[str]]' = None) -> 'None'
+
+UniversalJobStatus
+  signature: (*values)
+
+UniversalJobPriority
+  signature: (*values)
+
+UniversalJobValidationReport
+  signature: (is_valid: 'bool', violations: 'Tuple[str, ...]' = (), contract_version: 'str' = 'universal_job_contract_v2.1.1-r1', checked_field_count: 'int' = 0) -> None
+  dataclass fields:
+    - is_valid
+    - violations
+    - contract_version
+    - checked_field_count
+
+UniversalJobProgress
+  signature: (percent: 'int' = 0, step: 'str' = '', message: 'str' = '', total_units: 'Optional[int]' = None, completed_units: 'Optional[int]' = None, updated_at: 'Optional[str]' = None) -> None
+  dataclass fields:
+    - percent
+    - step
+    - message
+    - total_units
+    - completed_units
+    - updated_at
+
+UniversalJobCostRecord
+  signature: (currency: 'str' = 'USD', estimated_micros: 'int' = 0, actual_micros: 'int' = 0, au_rate_micros: 'int' = 0, breakdown: 'Mapping[str, Any]' = mappingproxy({})) -> None
+  dataclass fields:
+    - currency
+    - estimated_micros
+    - actual_micros
+    - au_rate_micros
+    - breakdown
+
+UniversalJob
+  signature: (job_id: 'str', workspace_id: 'str', user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', job_type: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'UniversalJobPriority' = <UniversalJobPriority.NORMAL: 30>, status: 'UniversalJobStatus' = <UniversalJobStatus.CREATED: 'created'>, attempts: 'int' = 0, maximum_attempts: 'int' = 1, lease_owner: 'Optional[str]' = None, lease_id: 'Optional[str]' = None, lease_started_at: 'Optional[str]' = None, lease_expires_at: 'Optional[str]' = None, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Tuple[str, ...]' = (), batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, progress: 'UniversalJobProgress' = <factory>, checkpoint_reference: 'Optional[str]' = None, result_reference: 'Optional[str]' = None, artifact_references: 'Tuple[str, ...]' = (), idempotency_key: 'Optional[str]' = None, AU_reserved: 'int' = 0, AU_consumed: 'int' = 0, cost_record: 'UniversalJobCostRecord' = <factory>, created_at: 'Optional[str]' = None, scheduled_at: 'Optional[str]' = None, started_at: 'Optional[str]' = None, completed_at: 'Optional[str]' = None, failed_at: 'Optional[str]' = None, cancelled_at: 'Optional[str]' = None, error_code: 'Optional[str]' = None, error_message: 'Optional[str]' = None, error_details: 'Mapping[str, Any]' = mappingproxy({}), contract_version: 'str' = 'universal_job_contract_v2.1.1-r1') -> None
+  dataclass fields:
+    - job_id
+    - workspace_id
+    - user_id
+    - product_id
+    - pipeline
+    - stage
+    - job_type
+    - payload_reference
+    - priority
+    - status
+    - attempts
+    - maximum_attempts
+    - lease_owner
+    - lease_id
+    - lease_started_at
+    - lease_expires_at
+    - parent_job_id
+    - dependency_job_ids
+    - batch_id
+    - pipeline_run_id
+    - progress
+    - checkpoint_reference
+    - result_reference
+    - artifact_references
+    - idempotency_key
+    - AU_reserved
+    - AU_consumed
+    - cost_record
+    - created_at
+    - scheduled_at
+    - started_at
+    - completed_at
+    - failed_at
+    - cancelled_at
+    - error_code
+    - error_message
+    - error_details
+    - contract_version
+
+IDENTITY / CORRELATION FUNCTIONS
+  NONE
+
+IDENTITY FIELD COUNTS
+  workflow_id: 0
+  correlation_id: 0
+  stage_id: 0
+  job_id: 28
+  workspace_id: 9
+  pipeline_run_id: 7
+  batch_id: 7
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_jobs.creation_engine
+========================================================================================================================
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+SHA256: 7BFDC36731B7AD48885258BCBA8337186430EC1C6A7C2E876ACA223E6E05D63F
+
+PUBLIC CLASSES
+
+UniversalJobCreationError
+  signature: (message: 'str', *, code: 'str', violations: 'Sequence[str]' = ()) -> 'None'
+
+UniversalJobCreationRequest
+  signature: (workspace_id: 'str', job_type: 'str', payload: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Tuple[str, ...]' = (), batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None) -> None
+  dataclass fields:
+    - workspace_id
+    - job_type
+    - payload
+    - metadata
+    - user_id
+    - product_id
+    - pipeline
+    - stage
+    - payload_reference
+    - priority
+    - parent_job_id
+    - dependency_job_ids
+    - batch_id
+    - pipeline_run_id
+    - idempotency_key
+    - maximum_attempts
+    - enqueue
+    - job_id
+    - job_id_prefix
+    - created_at
+
+UniversalJobCreationResult
+  signature: (job: 'UniversalJob', payload: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', registration: 'Optional[Mapping[str, Any]]', enqueue_requested: 'bool', job_type_source: 'str', creation_engine_version: 'str' = 'universal_job_creation_engine_v2.1.2') -> None
+  dataclass fields:
+    - job
+    - payload
+    - metadata
+    - registration
+    - enqueue_requested
+    - job_type_source
+    - creation_engine_version
+
+IDENTITY / CORRELATION FUNCTIONS
+
+normalize_universal_job_creation_request
+  signature: (request: 'UniversalJobCreationRequest', *, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'tuple[UniversalJobCreationRequest, str, Optional[Mapping[str, Any]]]'
+  lines: 511-727
+  source:
+00509: 
+00510: 
+00511: def normalize_universal_job_creation_request(
+00512:     request: UniversalJobCreationRequest,
+00513:     *,
+00514:     supported_job_types: Optional[Iterable[Any]] = None,
+00515:     runtime_registration: Optional[Mapping[str, Any]] = None,
+00516: ) -> tuple[
+00517:     UniversalJobCreationRequest,
+00518:     str,
+00519:     Optional[Mapping[str, Any]],
+00520: ]:
+00521:     if not isinstance(request, UniversalJobCreationRequest):
+00522:         raise UniversalJobCreationError(
+00523:             "request must be UniversalJobCreationRequest.",
+00524:             code="invalid_creation_request",
+00525:             violations=("request must be UniversalJobCreationRequest",),
+00526:         )
+00527: 
+00528:     workspace_id = _clean_text(request.workspace_id)
+00529: 
+00530:     if not workspace_id:
+00531:         raise UniversalJobCreationError(
+00532:             "workspace_id is required.",
+00533:             code="missing_workspace_id",
+00534:             violations=("workspace_id is required",),
+00535:         )
+00536: 
+00537:     try:
+00538:         job_type = validate_universal_job_type(
+00539:             request.job_type
+00540:         )
+00541:     except UniversalJobIdentityError as exc:
+00542:         raise UniversalJobCreationError(
+00543:             str(exc),
+00544:             code=exc.code,
+00545:             violations=exc.violations or (str(exc),),
+00546:         ) from exc
+00547: 
+00548:     payload = _normalize_mapping(
+00549:         request.payload,
+00550:         field_name="payload",
+00551:     )
+00552:     try:
+00553:         metadata = normalize_universal_job_metadata(
+00554:             request.metadata
+00555:         )
+00556:     except UniversalJobMetadataError as exc:
+00557:         raise UniversalJobCreationError(
+00558:             str(exc),
+00559:             code=exc.code,
+00560:             violations=exc.violations or (str(exc),),
+00561:         ) from exc
+00562:     try:
+00563:         parent_job_id = normalize_parent_job_id(
+00564:             request.parent_job_id
+00565:         )
+00566:         dependencies = normalize_dependency_job_ids(
+00567:             request.dependency_job_ids
+00568:         )
+00569:         batch_id = normalize_batch_id(
+00570:             request.batch_id
+00571:         )
+00572:         pipeline_run_id = normalize_pipeline_run_id(
+00573:             request.pipeline_run_id
+00574:         )
+00575: 
+00576:     except UniversalJobLineageError as exc:
+00577:         raise UniversalJobCreationError(
+00578:             str(exc),
+00579:             code=exc.code,
+00580:             violations=(str(exc),),
+00581:         ) from exc
+00582:     static_job_types = _normalize_supported_job_types(
+00583:         supported_job_types,
+00584:     )
+00585:     source, registration = _resolve_registration(
+00586:         job_type=job_type,
+00587:         supported_job_types=static_job_types,
+00588:         runtime_registration=runtime_registration,
+00589:     )
+00590:     _validate_registered_payload(
+00591:         registration=registration,
+00592:         payload=payload,
+00593:     )
+00594: 
+00595:     registration_pipeline = (
+00596:         registration.get("pipeline")
+00597:         if registration is not None
+00598:         else ""
+00599:     )
+00600:     registration_stage = (
+00601:         registration.get("stage")
+00602:         if registration is not None
+00603:         else ""
+00604:     )
+00605: 
+00606:     pipeline = _first_text(
+00607:         request.pipeline,
+00608:         payload.get("pipeline"),
+00609:         payload.get("pipeline_name"),
+00610:         registration_pipeline,
+00611:         fallback="universal_knowledge",
+00612:     )
+00613:     stage = _first_text(
+00614:         request.stage,
+00615:         payload.get("stage"),
+00616:         payload.get("stage_name"),
+00617:         registration_stage,
+00618:         fallback=job_type,
+00619:     )
+00620:     user_id = _first_text(
+00621:         request.user_id,
+00622:         payload.get("user_id"),
+00623:         fallback="system",
+00624:     )
+00625:     product_id = _first_text(
+00626:         request.product_id,
+00627:         payload.get("product_id"),
+00628:         fallback="linkcraftor",
+00629:     )
+00630:     payload_reference = normalize_universal_job_payload_reference(
+00631:         request.payload_reference
+00632:     )
+00633:     priority = _resolve_priority(request.priority)
+00634:     maximum_attempts = _resolve_maximum_attempts(
+00635:         request.maximum_attempts,
+00636:         payload,
+00637:         registration,
+00638:     )
+00639: 
+00640:     if not isinstance(request.enqueue, bool):
+00641:         raise UniversalJobCreationError(
+00642:             "enqueue must be a boolean.",
+00643:             code="invalid_enqueue",
+00644:             violations=(
+00645:                 "enqueue must be either True or False",
+00646:             ),
+00647:         )
+00648: 
+00649:     if (
+00650:         not isinstance(request.job_id_prefix, str)
+00651:         or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+00652:     ):
+00653:         raise UniversalJobCreationError(
+00654:             "job_id_prefix is fixed by the Universal Job identity namespace.",
+00655:             code="invalid_job_id_prefix",
+00656:             violations=(
+00657:                 f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+00658:             ),
+00659:         )
+00660: 
+00661:     created_at = _clean_text(request.created_at) or _utc_now()
+00662: 
+00663:     try:
+00664:         job_id = resolve_universal_job_id(
+00665:             request.job_id
+00666:         )
+00667:     except UniversalJobIdentityError as exc:
+00668:         raise UniversalJobCreationError(
+00669:             str(exc),
+00670:             code=exc.code,
+00671:             violations=exc.violations or (str(exc),),
+00672:         ) from exc
+00673: 
+00674:     try:
+00675:         lineage = validate_universal_job_lineage(
+00676:             job_id=job_id,
+00677:             parent_job_id=parent_job_id,
+00678:             dependency_job_ids=dependencies,
+00679:             batch_id=batch_id,
+00680:             pipeline_run_id=pipeline_run_id,
+00681:         )
+00682: 
+00683:     except UniversalJobLineageError as exc:
+00684:         raise UniversalJobCreationError(
+00685:             str(exc),
+00686:             code=exc.code,
+00687:             violations=(str(exc),),
+00688:         ) from exc
+00689: 
+00690:     try:
+00691:         idempotency_key = (
+00692:             normalize_universal_job_idempotency_key(
+00693:                 request.idempotency_key
+00694:             )
+00695:         )
+00696: 
+00697:     except UniversalJobIdempotencyKeyError as exc:
+00698:         raise UniversalJobCreationError(
+00699:             str(exc),
+00700:             code=exc.code,
+00701:             violations=(str(exc),),
+00702:         ) from exc
+00703: 
+00704:     normalized = UniversalJobCreationRequest(
+00705:         workspace_id=workspace_id,
+00706:         job_type=job_type,
+00707:         payload=payload,
+00708:         metadata=metadata,
+00709:         user_id=user_id,
+00710:         product_id=product_id,
+00711:         pipeline=pipeline,
+00712:         stage=stage,
+00713:         payload_reference=payload_reference,
+00714:         priority=priority,
+00715:         parent_job_id=lineage.parent_job_id,
+00716:         dependency_job_ids=lineage.dependency_job_ids,
+00717:         batch_id=lineage.batch_id,
+00718:         pipeline_run_id=lineage.pipeline_run_id,
+00719:         idempotency_key=idempotency_key,
+00720:         maximum_attempts=maximum_attempts,
+00721:         enqueue=request.enqueue,
+00722:         job_id=job_id,
+00723:         job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+00724:         created_at=created_at,
+00725:     )
+00726: 
+00727:     return normalized, source, registration
+00728: 
+00729: 
+
+create_universal_job
+  signature: (*, workspace_id: 'str', job_type: 'str', payload: 'Optional[Mapping[str, Any]]' = None, metadata: 'Optional[Mapping[str, Any]]' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Optional[Iterable[Any]]' = None, batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'UniversalJobCreationResult'
+  lines: 730-868
+  source:
+00728: 
+00729: 
+00730: def create_universal_job(
+00731:     *,
+00732:     workspace_id: str,
+00733:     job_type: str,
+00734:     payload: Optional[Mapping[str, Any]] = None,
+00735:     metadata: Optional[Mapping[str, Any]] = None,
+00736:     user_id: str = "system",
+00737:     product_id: str = "linkcraftor",
+00738:     pipeline: str = "",
+00739:     stage: str = "",
+00740:     payload_reference: Optional[str] = None,
+00741:     priority: Any = UniversalJobPriority.NORMAL,
+00742:     parent_job_id: Optional[str] = None,
+00743:     dependency_job_ids: Optional[Iterable[Any]] = None,
+00744:     batch_id: Optional[str] = None,
+00745:     pipeline_run_id: Optional[str] = None,
+00746:     idempotency_key: Optional[str] = None,
+00747:     maximum_attempts: Optional[int] = None,
+00748:     enqueue: bool = True,
+00749:     job_id: Optional[str] = None,
+00750:     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+00751:     created_at: Optional[str] = None,
+00752:     supported_job_types: Optional[Iterable[Any]] = None,
+00753:     runtime_registration: Optional[Mapping[str, Any]] = None,
+00754: ) -> UniversalJobCreationResult:
+00755:     """Validate and construct one canonical Universal Job without I/O."""
+00756: 
+00757:     request = UniversalJobCreationRequest(
+00758:         workspace_id=workspace_id,
+00759:         job_type=job_type,
+00760:         payload={} if payload is None else payload,
+00761:         metadata={} if metadata is None else metadata,
+00762:         user_id=user_id,
+00763:         product_id=product_id,
+00764:         pipeline=pipeline,
+00765:         stage=stage,
+00766:         payload_reference=payload_reference,
+00767:         priority=priority,
+00768:         parent_job_id=parent_job_id,
+00769:         dependency_job_ids=(
+00770:             ()
+00771:             if dependency_job_ids is None
+00772:             else dependency_job_ids
+00773:         ),
+00774:         batch_id=batch_id,
+00775:         pipeline_run_id=pipeline_run_id,
+00776:         idempotency_key=idempotency_key,
+00777:         maximum_attempts=maximum_attempts,
+00778:         enqueue=enqueue,
+00779:         job_id=job_id,
+00780:         job_id_prefix=job_id_prefix,
+00781:         created_at=created_at,
+00782:     )
+00783: 
+00784:     normalized, source, registration = (
+00785:         normalize_universal_job_creation_request(
+00786:             request,
+00787:             supported_job_types=supported_job_types,
+00788:             runtime_registration=runtime_registration,
+00789:         )
+00790:     )
+00791: 
+00792:     status = initial_universal_job_status(
+00793:         enqueue=normalized.enqueue,
+00794:     )
+00795:     message = (
+00796:         "Job queued."
+00797:         if normalized.enqueue
+00798:         else "Job created without queue dispatch."
+00799:     )
+00800: 
+00801:     try:
+00802:         job = UniversalJob(
+00803:             job_id=normalized.job_id or "",
+00804:             workspace_id=normalized.workspace_id,
+00805:             user_id=normalized.user_id,
+00806:             product_id=normalized.product_id,
+00807:             pipeline=normalized.pipeline,
+00808:             stage=normalized.stage,
+00809:             job_type=normalized.job_type,
+00810:             payload_reference=normalized.payload_reference,
+00811:             priority=normalized.priority,
+00812:             status=status,
+00813:             attempts=initial_universal_job_attempts(),
+00814:             maximum_attempts=normalized.maximum_attempts,
+00815:             lease_owner=None,
+00816:             lease_id=None,
+00817:             lease_started_at=None,
+00818:             lease_expires_at=None,
+00819:             parent_job_id=normalized.parent_job_id,
+00820:             dependency_job_ids=normalized.dependency_job_ids,
+00821:             batch_id=normalized.batch_id,
+00822:             pipeline_run_id=normalized.pipeline_run_id,
+00823:             progress=UniversalJobProgress(
+00824:                 percent=0,
+00825:                 step=normalized.stage,
+00826:                 message=message,
+00827:                 updated_at=normalized.created_at,
+00828:             ),
+00829:             checkpoint_reference=None,
+00830:             result_reference=None,
+00831:             artifact_references=(),
+00832:             idempotency_key=normalized.idempotency_key,
+00833:             AU_reserved=0,
+00834:             AU_consumed=0,
+00835:             cost_record=UniversalJobCostRecord(),
+00836:             created_at=normalized.created_at,
+00837:             scheduled_at=None,
+00838:             started_at=None,
+00839:             completed_at=None,
+00840:             failed_at=None,
+00841:             cancelled_at=None,
+00842:             error_code=None,
+00843:             error_message=None,
+00844:             error_details={},
+00845:         )
+00846:     except UniversalJobContractError as exc:
+00847:         raise UniversalJobCreationError(
+00848:             "Universal Job Contract rejected the creation request.",
+00849:             code="contract_validation_failed",
+00850:             violations=exc.violations or (str(exc),),
+00851:         ) from exc
+00852: 
+00853:     validation = validate_universal_job(job)
+00854:     if not validation.is_valid:
+00855:         raise UniversalJobCreationError(
+00856:             "Created Universal Job failed final validation.",
+00857:             code="final_validation_failed",
+00858:             violations=validation.violations,
+00859:         )
+00860: 
+00861:     return UniversalJobCreationResult(
+00862:         job=job,
+00863:         payload=normalized.payload,
+00864:         metadata=normalized.metadata,
+00865:         registration=registration,
+00866:         enqueue_requested=normalized.enqueue,
+00867:         job_type_source=source,
+00868:     )
+00869: 
+00870: 
+
+IDENTITY FIELD COUNTS
+  workflow_id: 0
+  correlation_id: 0
+  stage_id: 0
+  job_id: 53
+  workspace_id: 14
+  pipeline_run_id: 14
+  batch_id: 14
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_jobs.attempts
+  -> backend.server.runtime.universal_jobs.contract
+  -> backend.server.runtime.universal_jobs.idempotency_key
+  -> backend.server.runtime.universal_jobs.identity
+  -> backend.server.runtime.universal_jobs.lineage
+  -> backend.server.runtime.universal_jobs.metadata
+  -> backend.server.runtime.universal_jobs.payload_reference
+  -> backend.server.runtime.universal_jobs.priority
+  -> backend.server.runtime.universal_jobs.status
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_jobs.lineage
+========================================================================================================================
+FILE: backend\server\runtime\universal_jobs\lineage.py
+SHA256: 6162DD73E4A043CEBF9AB5ADF2F993F1FAE7C6CA14CA20BC74A4C31A547BE36B
+
+PUBLIC CLASSES
+
+UniversalJobLineageError
+  signature: (message: 'str', *, code: 'str', value: 'Any' = None) -> 'None'
+
+UniversalJobLineageValue
+  signature: (job_id: 'str', parent_job_id: 'Optional[str]', dependency_job_ids: 'tuple[str, ...]', batch_id: 'Optional[str]', pipeline_run_id: 'Optional[str]') -> None
+  dataclass fields:
+    - job_id
+    - parent_job_id
+    - dependency_job_ids
+    - batch_id
+    - pipeline_run_id
+
+IDENTITY / CORRELATION FUNCTIONS
+
+normalize_parent_job_id
+  signature: (value: 'Any') -> 'Optional[str]'
+  lines: 66-74
+  source:
+00064: 
+00065: 
+00066: def normalize_parent_job_id(
+00067:     value: Any,
+00068: ) -> Optional[str]:
+00069:     """Normalize an optional parent Universal Job reference."""
+00070: 
+00071:     return _clean_optional_lineage_identifier(
+00072:         value,
+00073:         field_name="parent_job_id",
+00074:     )
+00075: 
+00076: 
+
+normalize_dependency_job_ids
+  signature: (value: 'Any') -> 'tuple[str, ...]'
+  lines: 77-157
+  source:
+00075: 
+00076: 
+00077: def normalize_dependency_job_ids(
+00078:     value: Any,
+00079: ) -> tuple[str, ...]:
+00080:     """
+00081:     Normalize dependency references.
+00082: 
+00083:     Duplicate identifiers are removed while preserving first-seen order.
+00084:     """
+00085: 
+00086:     if value is None:
+00087:         return ()
+00088: 
+00089:     if isinstance(
+00090:         value,
+00091:         (
+00092:             str,
+00093:             bytes,
+00094:             Mapping,
+00095:         ),
+00096:     ):
+00097:         raise UniversalJobLineageError(
+00098:             (
+00099:                 "dependency_job_ids must be an "
+00100:                 "iterable of identifiers."
+00101:             ),
+00102:             code="invalid_dependency_job_ids",
+00103:             value=value,
+00104:         )
+00105: 
+00106:     try:
+00107:         iterator = iter(
+00108:             value
+00109:         )
+00110: 
+00111:     except TypeError as exc:
+00112:         raise UniversalJobLineageError(
+00113:             (
+00114:                 "dependency_job_ids must be an "
+00115:                 "iterable of identifiers."
+00116:             ),
+00117:             code="invalid_dependency_job_ids",
+00118:             value=value,
+00119:         ) from exc
+00120: 
+00121:     normalized: dict[str, None] = {}
+00122: 
+00123:     for item in iterator:
+00124: 
+00125:         if not isinstance(
+00126:             item,
+00127:             str,
+00128:         ):
+00129:             raise UniversalJobLineageError(
+00130:                 (
+00131:                     "dependency_job_ids must contain "
+00132:                     "only strings."
+00133:                 ),
+00134:                 code="invalid_dependency_job_ids",
+00135:                 value=item,
+00136:             )
+00137: 
+00138:         identifier = item.strip()
+00139: 
+00140:         if not identifier:
+00141:             raise UniversalJobLineageError(
+00142:                 (
+00143:                     "dependency_job_ids must not "
+00144:                     "contain empty values."
+00145:                 ),
+00146:                 code="invalid_dependency_job_ids",
+00147:                 value=item,
+00148:             )
+00149: 
+00150:         normalized.setdefault(
+00151:             identifier,
+00152:             None,
+00153:         )
+00154: 
+00155:     return tuple(
+00156:         normalized
+00157:     )
+00158: 
+00159: 
+
+normalize_pipeline_run_id
+  signature: (value: 'Any') -> 'Optional[str]'
+  lines: 171-179
+  source:
+00169: 
+00170: 
+00171: def normalize_pipeline_run_id(
+00172:     value: Any,
+00173: ) -> Optional[str]:
+00174:     """Normalize an optional pipeline-run correlation identifier."""
+00175: 
+00176:     return _clean_optional_lineage_identifier(
+00177:         value,
+00178:         field_name="pipeline_run_id",
+00179:     )
+00180: 
+00181: 
+
+validate_universal_job_lineage
+  signature: (*, job_id: 'Any', parent_job_id: 'Any' = None, dependency_job_ids: 'Any' = (), batch_id: 'Any' = None, pipeline_run_id: 'Any' = None) -> 'UniversalJobLineageValue'
+  lines: 246-341
+  source:
+00244: 
+00245: 
+00246: def validate_universal_job_lineage(
+00247:     *,
+00248:     job_id: Any,
+00249:     parent_job_id: Any = None,
+00250:     dependency_job_ids: Any = (),
+00251:     batch_id: Any = None,
+00252:     pipeline_run_id: Any = None,
+00253: ) -> UniversalJobLineageValue:
+00254:     """
+00255:     Normalize and validate a job's direct lineage/correlation values.
+00256: 
+00257:     This performs no repository lookup and no cross-job graph traversal.
+00258:     """
+00259: 
+00260:     if not isinstance(
+00261:         job_id,
+00262:         str,
+00263:     ):
+00264:         raise UniversalJobLineageError(
+00265:             "job_id must be a non-empty string.",
+00266:             code="invalid_lineage_job_id",
+00267:             value=job_id,
+00268:         )
+00269: 
+00270:     normalized_job_id = (
+00271:         job_id.strip()
+00272:     )
+00273: 
+00274:     if not normalized_job_id:
+00275:         raise UniversalJobLineageError(
+00276:             "job_id must be a non-empty string.",
+00277:             code="invalid_lineage_job_id",
+00278:             value=job_id,
+00279:         )
+00280: 
+00281:     normalized_parent = (
+00282:         normalize_parent_job_id(
+00283:             parent_job_id
+00284:         )
+00285:     )
+00286: 
+00287:     normalized_dependencies = (
+00288:         normalize_dependency_job_ids(
+00289:             dependency_job_ids
+00290:         )
+00291:     )
+00292: 
+00293:     normalized_batch = (
+00294:         normalize_batch_id(
+00295:             batch_id
+00296:         )
+00297:     )
+00298: 
+00299:     normalized_pipeline_run = (
+00300:         normalize_pipeline_run_id(
+00301:             pipeline_run_id
+00302:         )
+00303:     )
+00304: 
+00305:     if (
+00306:         normalized_parent
+00307:         == normalized_job_id
+00308:     ):
+00309:         raise UniversalJobLineageError(
+00310:             (
+00311:                 "parent_job_id must not equal "
+00312:                 "job_id."
+00313:             ),
+00314:             code="self_parent_job",
+00315:             value=normalized_parent,
+00316:         )
+00317: 
+00318:     if (
+00319:         normalized_job_id
+00320:         in normalized_dependencies
+00321:     ):
+00322:         raise UniversalJobLineageError(
+00323:             (
+00324:                 "dependency_job_ids must not "
+00325:                 "contain job_id."
+00326:             ),
+00327:             code="self_dependency_job",
+00328:             value=normalized_job_id,
+00329:         )
+00330: 
+00331:     return UniversalJobLineageValue(
+00332:         job_id=normalized_job_id,
+00333:         parent_job_id=normalized_parent,
+00334:         dependency_job_ids=(
+00335:             normalized_dependencies
+00336:         ),
+00337:         batch_id=normalized_batch,
+00338:         pipeline_run_id=(
+00339:             normalized_pipeline_run
+00340:         ),
+00341:     )
+00342: 
+00343: 
+
+explain_universal_job_lineage_v1
+  signature: () -> 'Mapping[str, Any]'
+  lines: 344-393
+  source:
+00342: 
+00343: 
+00344: def explain_universal_job_lineage_v1(
+00345: ) -> Mapping[str, Any]:
+00346:     """Describe the Phase 2.1.9 authority boundary."""
+00347: 
+00348:     return MappingProxyType(
+00349:         {
+00350:             "phase": "2.1.9",
+00351:             "component":
+00352:                 "Universal Job Lineage",
+00353:             "version":
+00354:                 UNIVERSAL_JOB_LINEAGE_VERSION,
+00355:             "schema_version":
+00356:                 UNIVERSAL_JOB_LINEAGE_SCHEMA_VERSION,
+00357:             "fields": (
+00358:                 "parent_job_id",
+00359:                 "dependency_job_ids",
+00360:                 "batch_id",
+00361:                 "pipeline_run_id",
+00362:             ),
+00363:             "invariants": (
+00364:                 "parent_job_id is optional",
+00365:                 (
+00366:                     "dependency_job_ids are "
+00367:                     "deduplicated in first-seen order"
+00368:                 ),
+00369:                 (
+00370:                     "parent_job_id must not "
+00371:                     "equal job_id"
+00372:                 ),
+00373:                 (
+00374:                     "dependency_job_ids must not "
+00375:                     "contain job_id"
+00376:                 ),
+00377:                 "batch_id is optional",
+00378:                 "pipeline_run_id is optional",
+00379:             ),
+00380:             "prohibitions": (
+00381:                 "does not resolve referenced jobs",
+00382:                 "does not verify referenced-job existence",
+00383:                 "does not execute dependencies",
+00384:                 "does not wait for dependencies",
+00385:                 "does not perform cross-job cycle detection",
+00386:                 "does not schedule batches",
+00387:                 "does not orchestrate pipeline runs",
+00388:                 "does not execute retries",
+00389:                 "does not own retry_of or retry_attempt payload markers",
+00390:                 "does not perform I/O",
+00391:             ),
+00392:         }
+00393:     )
+00394: 
+00395: 
+
+IDENTITY FIELD COUNTS
+  workflow_id: 0
+  correlation_id: 0
+  stage_id: 0
+  job_id: 61
+  workspace_id: 0
+  pipeline_run_id: 12
+  batch_id: 12
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_job_submission
+========================================================================================================================
+FILE: backend\server\runtime\universal_job_submission.py
+SHA256: 07BA2DA8C0A2CFA899DE696D7892652A0AA6D56939B364C8C6B7F0B741B05704
+
+PUBLIC CLASSES
+
+UniversalJobSubmissionError
+  signature: (message: 'str', *, code: 'str') -> 'None'
+
+IDENTITY / CORRELATION FUNCTIONS
+
+submit_universal_job
+  signature: (*, workspace_id: 'str', job_type: 'str', payload: 'Optional[Mapping[str, Any]]' = None, metadata: 'Optional[Mapping[str, Any]]' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = 5, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Optional[Iterable[Any]]' = None, batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, job_id: 'Optional[str]' = None, created_at: 'Optional[str]' = None, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None, enqueue: 'bool' = True) -> 'dict[str, Any]'
+  lines: 183-485
+  source:
+00181: 
+00182: 
+00183: def submit_universal_job(
+00184:     *,
+00185:     workspace_id: str,
+00186:     job_type: str,
+00187:     payload: Optional[
+00188:         Mapping[str, Any]
+00189:     ] = None,
+00190:     metadata: Optional[
+00191:         Mapping[str, Any]
+00192:     ] = None,
+00193:     user_id: str = "system",
+00194:     product_id: str = "linkcraftor",
+00195:     pipeline: str = "",
+00196:     stage: str = "",
+00197:     payload_reference: Optional[str] = None,
+00198:     priority: Any = 5,
+00199:     parent_job_id: Optional[str] = None,
+00200:     dependency_job_ids: Optional[
+00201:         Iterable[Any]
+00202:     ] = None,
+00203:     batch_id: Optional[str] = None,
+00204:     pipeline_run_id: Optional[str] = None,
+00205:     idempotency_key: Optional[str] = None,
+00206:     maximum_attempts: Optional[int] = None,
+00207:     job_id: Optional[str] = None,
+00208:     created_at: Optional[str] = None,
+00209:     supported_job_types: Optional[
+00210:         Iterable[Any]
+00211:     ] = None,
+00212:     runtime_registration: Optional[
+00213:         Mapping[str, Any]
+00214:     ] = None,
+00215:     enqueue: bool = True,
+00216: ) -> dict[str, Any]:
+00217:     """
+00218:     Create one canonical Universal Job and submit that SAME identity
+00219:     into the LinkCraftor orchestration store.
+00220: 
+00221:     This is an I/O boundary.
+00222: 
+00223:     Creation authority:
+00224:         Universal Job Creation Engine
+00225: 
+00226:     Registration authority:
+00227:         Universal Runtime Registration
+00228: 
+00229:     Persistence / queue authority:
+00230:         orchestration.service -> orchestration.job_store
+00231: 
+00232:     The Creation Engine remains I/O-free.
+00233:     """
+00234: 
+00235:     if not enqueue:
+00236:         raise UniversalJobSubmissionError(
+00237:             (
+00238:                 "Universal job submission currently represents the "
+00239:                 "persisted queued ingress and therefore requires "
+00240:                 "enqueue=True."
+00241:             ),
+00242:             code="submission_requires_enqueue",
+00243:         )
+00244: 
+00245:     effective_registration = (
+00246:         runtime_registration
+00247:     )
+00248: 
+00249:     if effective_registration is None:
+00250:         effective_registration = (
+00251:             get_runtime_registration(
+00252:                 job_type
+00253:             )
+00254:         )
+00255: 
+00256:     creation_result = (
+00257:         create_universal_job(
+00258:             workspace_id=workspace_id,
+00259:             job_type=job_type,
+00260:             payload=payload,
+00261:             metadata=metadata,
+00262:             user_id=user_id,
+00263:             product_id=product_id,
+00264:             pipeline=pipeline,
+00265:             stage=stage,
+00266:             payload_reference=(
+00267:                 payload_reference
+00268:             ),
+00269:             priority=priority,
+00270:             parent_job_id=(
+00271:                 parent_job_id
+00272:             ),
+00273:             dependency_job_ids=(
+00274:                 dependency_job_ids
+00275:             ),
+00276:             batch_id=batch_id,
+00277:             pipeline_run_id=(
+00278:                 pipeline_run_id
+00279:             ),
+00280:             idempotency_key=(
+00281:                 idempotency_key
+00282:             ),
+00283:             maximum_attempts=(
+00284:                 maximum_attempts
+00285:             ),
+00286:             enqueue=True,
+00287:             job_id=job_id,
+00288:             created_at=created_at,
+00289:             supported_job_types=(
+00290:                 supported_job_types
+00291:             ),
+00292:             runtime_registration=(
+00293:                 effective_registration
+00294:             ),
+00295:         )
+00296:     )
+00297: 
+00298:     creation_document = (
+00299:         creation_result.to_dict()
+00300:     )
+00301: 
+00302:     canonical_job = dict(
+00303:         creation_document.get(
+00304:             "job"
+00305:         )
+00306:         or {}
+00307:     )
+00308: 
+00309:     canonical_job_id = str(
+00310:         canonical_job.get(
+00311:             "job_id"
+00312:         )
+00313:         or ""
+00314:     ).strip()
+00315: 
+00316:     if not canonical_job_id:
+00317:         raise UniversalJobSubmissionError(
+00318:             (
+00319:                 "Universal Job Creation Engine returned "
+00320:                 "no canonical job_id."
+00321:             ),
+00322:             code="missing_canonical_job_id",
+00323:         )
+00324: 
+00325:     canonical_workspace_id = str(
+00326:         canonical_job.get(
+00327:             "workspace_id"
+00328:         )
+00329:         or workspace_id
+00330:         or ""
+00331:     ).strip()
+00332: 
+00333:     canonical_job_type = str(
+00334:         canonical_job.get(
+00335:             "job_type"
+00336:         )
+00337:         or job_type
+00338:         or ""
+00339:     ).strip()
+00340: 
+00341:     orchestration_priority = (
+00342:         _canonical_orchestration_priority(
+00343:             canonical_job.get(
+00344:                 "priority",
+00345:                 priority,
+00346:             )
+00347:         )
+00348:     )
+00349: 
+00350:     orchestration_metadata = (
+00351:         _build_orchestration_metadata(
+00352:             creation_result=(
+00353:                 creation_result
+00354:             )
+00355:         )
+00356:     )
+00357: 
+00358:     orchestration_job = (
+00359:         create_orchestration_job(
+00360:             workspace_id=(
+00361:                 canonical_workspace_id
+00362:             ),
+00363:             job_type=(
+00364:                 canonical_job_type
+00365:             ),
+00366:             payload=dict(
+00367:                 creation_document.get(
+00368:                     "payload"
+00369:                 )
+00370:                 or {}
+00371:             ),
+00372:             metadata=(
+00373:                 orchestration_metadata
+00374:             ),
+00375:             priority=(
+00376:                 orchestration_priority
+00377:             ),
+00378:             job_id=(
+00379:                 canonical_job_id
+00380:             ),
+00381:         )
+00382:     )
+00383: 
+00384:     persisted_job_id = str(
+00385:         orchestration_job.job_id
+00386:         or ""
+00387:     ).strip()
+00388: 
+00389:     if (
+00390:         persisted_job_id
+00391:         != canonical_job_id
+00392:     ):
+00393:         raise UniversalJobSubmissionError(
+00394:             (
+00395:                 "Orchestration persisted a different job identity "
+00396:                 "than the canonical Universal Job identity."
+00397:             ),
+00398:             code="orchestration_identity_mismatch",
+00399:         )
+00400: 
+00401:     persisted_status = str(
+00402:         orchestration_job.status
+00403:         or ""
+00404:     ).strip()
+00405: 
+00406:     if (
+00407:         persisted_status
+00408:         != "queued"
+00409:     ):
+00410:         raise UniversalJobSubmissionError(
+00411:             (
+00412:                 "Submitted Universal Job was not persisted "
+00413:                 "with queued orchestration status."
+00414:             ),
+00415:             code="orchestration_not_queued",
+00416:         )
+00417: 
+00418:     result = dict(
+00419:         canonical_job
+00420:     )
+00421: 
+00422:     # Preserve the payload and creation metadata in the familiar
+00423:     # job-shaped result consumed by existing pipeline callers.
+00424:     result[
+00425:         "payload"
+00426:     ] = dict(
+00427:         creation_document.get(
+00428:             "payload"
+00429:         )
+00430:         or {}
+00431:     )
+00432: 
+00433:     result[
+00434:         "metadata"
+00435:     ] = dict(
+00436:         creation_document.get(
+00437:             "metadata"
+00438:         )
+00439:         or {}
+00440:     )
+00441: 
+00442:     result[
+00443:         "registration"
+00444:     ] = (
+00445:         creation_document.get(
+00446:             "registration"
+00447:         )
+00448:     )
+00449: 
+00450:     result[
+00451:         "identity_fingerprint"
+00452:     ] = creation_document.get(
+00453:         "identity_fingerprint"
+00454:     )
+00455: 
+00456:     result[
+00457:         "contract_fingerprint"
+00458:     ] = creation_document.get(
+00459:         "contract_fingerprint"
+00460:     )
+00461: 
+00462:     result[
+00463:         "content_fingerprint"
+00464:     ] = creation_document.get(
+00465:         "content_fingerprint"
+00466:     )
+00467: 
+00468:     result[
+00469:         "orchestration"
+00470:     ] = asdict(
+00471:         orchestration_job
+00472:     )
+00473: 
+00474:     result[
+00475:         "submission"
+00476:     ] = {
+00477:         "submission_version": (
+00478:             UNIVERSAL_JOB_SUBMISSION_VERSION
+00479:         ),
+00480:         "persisted": True,
+00481:         "queued": True,
+00482:         "canonical_identity_preserved": True,
+00483:     }
+00484: 
+00485:     return result
+00486: 
+00487: 
+
+explain_universal_job_submission_v1
+  signature: () -> 'dict[str, Any]'
+  lines: 488-534
+  source:
+00486: 
+00487: 
+00488: def explain_universal_job_submission_v1(
+00489: ) -> dict[str, Any]:
+00490:     return {
+00491:         "component": (
+00492:             "Universal Job Submission / Orchestration Ingress"
+00493:         ),
+00494:         "version": (
+00495:             UNIVERSAL_JOB_SUBMISSION_VERSION
+00496:         ),
+00497:         "scope": "LinkCraftor-wide",
+00498:         "canonical_operation": (
+00499:             "submit_universal_job"
+00500:         ),
+00501:         "creation_authority": (
+00502:             "Universal Job Creation Engine"
+00503:         ),
+00504:         "registration_authority": (
+00505:             "Universal Runtime Registration"
+00506:         ),
+00507:         "persistence_authority": (
+00508:             "orchestration.service / orchestration.job_store"
+00509:         ),
+00510:         "queue_authority": (
+00511:             "orchestration.queue"
+00512:         ),
+00513:         "identity_rule": (
+00514:             "The canonical Universal Job job_id is persisted "
+00515:             "unchanged into orchestration."
+00516:         ),
+00517:         "prohibitions": [
+00518:             (
+00519:                 "does not generate a second runtime job identity"
+00520:             ),
+00521:             (
+00522:                 "does not move persistence into the "
+00523:                 "Universal Job Creation Engine"
+00524:             ),
+00525:             (
+00526:                 "does not use the legacy "
+00527:                 "universal_knowledge_orchestrator"
+00528:             ),
+00529:             (
+00530:                 "does not define final Job Priority semantics; "
+00531:                 "Phase 2.1.6 remains authoritative"
+00532:             ),
+00533:         ],
+00534:     }
+00535: 
+00536: 
+
+IDENTITY FIELD COUNTS
+  workflow_id: 0
+  correlation_id: 0
+  stage_id: 0
+  job_id: 21
+  workspace_id: 8
+  pipeline_run_id: 3
+  batch_id: 3
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_jobs.creation_engine
+  -> backend.server.runtime.universal_runtime_registration
+
+========================================================================================================================
+MODULE: backend.server.runtime.runtime_state_store
+========================================================================================================================
+IMPORT FAILED: ModuleNotFoundError("No module named 'runtime_persistence'")
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_orchestration.run_identity
+========================================================================================================================
+FILE: backend\server\runtime\universal_orchestration\run_identity.py
+SHA256: B43C2C86B07F06FA3B89C4BF2B14E68DC82DEA1E23112AE44E35139266AA6626
+
+PUBLIC CLASSES
+
+UniversalOrchestrationRunIdentityError
+  signature: (message: 'str', *, code: 'str', value: 'Any' = None) -> 'None'
+
+UniversalOrchestrationRunIdentity
+  signature: (orchestration_run_id: 'str', contract: 'UniversalRuntimeOrchestrationContract', schema_version: 'str' = 'universal_orchestration_run_identity_schema_v1') -> None
+  dataclass fields:
+    - orchestration_run_id
+    - contract
+    - schema_version
+
+IDENTITY / CORRELATION FUNCTIONS
+
+calculate_universal_orchestration_contract_fingerprint
+  signature: (contract: 'Any') -> 'str'
+  lines: 126-160
+  source:
+00124: 
+00125: 
+00126: def calculate_universal_orchestration_contract_fingerprint(
+00127:     contract: Any,
+00128: ) -> str:
+00129: 
+00130:     canonical_contract = (
+00131:         _require_orchestration_contract(
+00132:             contract
+00133:         )
+00134:     )
+00135: 
+00136:     parts = (
+00137:         "universal_runtime_orchestration_contract_identity_v1",
+00138:         canonical_contract.schema_version,
+00139:         canonical_contract.workspace_id,
+00140:         canonical_contract.pipeline,
+00141:         str(
+00142:             canonical_contract.job_count
+00143:         ),
+00144:         *canonical_contract.job_ids,
+00145:     )
+00146: 
+00147:     material = "|".join(
+00148:         _length_prefixed(
+00149:             str(
+00150:                 part
+00151:             )
+00152:         )
+00153:         for part in parts
+00154:     )
+00155: 
+00156:     return hashlib.sha256(
+00157:         material.encode(
+00158:             "utf-8"
+00159:         )
+00160:     ).hexdigest().upper()
+00161: 
+00162: 
+
+explain_universal_orchestration_run_identity_v1
+  signature: () -> 'Mapping[str, Any]'
+  lines: 326-470
+  source:
+00324: 
+00325: 
+00326: def explain_universal_orchestration_run_identity_v1(
+00327: ) -> Mapping[str, Any]:
+00328: 
+00329:     return MappingProxyType(
+00330:         {
+00331:             "phase":
+00332:                 "5.1.2",
+00333: 
+00334:             "component":
+00335:                 "Universal Orchestration Run Identity",
+00336: 
+00337:             "version":
+00338:                 UNIVERSAL_ORCHESTRATION_RUN_IDENTITY_VERSION,
+00339: 
+00340:             "schema_version":
+00341:                 UNIVERSAL_ORCHESTRATION_RUN_IDENTITY_SCHEMA_VERSION,
+00342: 
+00343:             "hash_algorithm":
+00344:                 UNIVERSAL_ORCHESTRATION_IDENTITY_HASH_ALGORITHM,
+00345: 
+00346:             "stored_fields": (
+00347:                 "orchestration_run_id",
+00348:                 "contract",
+00349:                 "schema_version",
+00350:             ),
+00351: 
+00352:             "identity_rule": (
+00353:                 "One runtime orchestration run is identified by a "
+00354:                 "caller-supplied orchestration_run_id bound to one "
+00355:                 "immutable 5.1.1 Universal Runtime Orchestration Contract."
+00356:             ),
+00357: 
+00358:             "generation_rule": (
+00359:                 "5.1.2 validates caller-supplied orchestration_run_id "
+00360:                 "and does not generate identifiers using UUIDs, "
+00361:                 "randomness, timestamps, wall clock, counters, or storage."
+00362:             ),
+00363: 
+00364:             "contract_binding_rule": (
+00365:                 "The run identity stores the immutable 5.1.1 contract "
+00366:                 "rather than duplicating workspace_id, pipeline, or job_ids."
+00367:             ),
+00368: 
+00369:             "contract_fingerprint_rule": (
+00370:                 "contract_fingerprint is deterministically derived from "
+00371:                 "the exact canonical 5.1.1 contract and is not stored."
+00372:             ),
+00373: 
+00374:             "identity_fingerprint_rule": (
+00375:                 "identity_fingerprint is deterministically derived from "
+00376:                 "orchestration_run_id, contract_fingerprint, and the "
+00377:                 "5.1.2 identity schema version and is not stored."
+00378:             ),
+00379: 
+00380:             "multiple_run_rule": (
+00381:                 "The same 5.1.1 orchestration contract may participate "
+00382:                 "in multiple independently identified orchestration runs."
+00383:             ),
+00384: 
+00385:             "pipeline_run_boundary": (
+00386:                 "Universal Job pipeline_run_id remains optional "
+00387:                 "job-lineage/correlation evidence and is not the "
+00388:                 "5.1.2 orchestration_run_id."
+00389:             ),
+00390: 
+00391:             "batch_boundary": (
+00392:                 "Universal Job batch_id remains grouping/correlation "
+00393:                 "evidence and is not orchestration_run_id."
+00394:             ),
+00395: 
+00396:             "job_boundary": (
+00397:                 "Universal Job job_id identifies one job and is not "
+00398:                 "orchestration_run_id."
+00399:             ),
+00400: 
+00401:             "workflow_boundary": (
+00402:                 "Universal Coordination Framework workflow_id remains "
+00403:                 "a higher-layer coordination identity and is not "
+00404:                 "orchestration_run_id."
+00405:             ),
+00406: 
+00407:             "correlation_boundary": (
+00408:                 "Coordination correlation_id remains separate from "
+00409:                 "Runtime Orchestration run identity."
+00410:             ),
+00411: 
+00412:             "state_boundary": (
+00413:                 "Orchestration lifecycle state belongs to "
+00414:                 "5.1.3 Orchestration State Model."
+00415:             ),
+00416: 
+00417:             "persistence_boundary": (
+00418:                 "5.1.2 performs no persistence and does not access "
+00419:                 "Runtime State Store."
+00420:             ),
+00421: 
+00422:             "execution_boundary": (
+00423:                 "5.1.2 performs no queue, worker, Runtime Registration, "
+00424:                 "handler dispatch, or job execution activity."
+00425:             ),
+00426: 
+00427:             "prohibitions": (
+00428:                 "does not generate orchestration_run_id",
+00429:                 "does not use UUID generation",
+00430:                 "does not use randomness",
+00431:                 "does not use timestamps for identity",
+00432:                 "does not use wall clock",
+00433:                 "does not use counters for identity",
+00434:                 "does not use storage for identity generation",
+00435:                 "does not redefine Universal Job job_id",
+00436:                 "does not redefine Universal Job pipeline_run_id",
+00437:                 "does not redefine Universal Job batch_id",
+00438:                 "does not redefine Coordination workflow_id",
+00439:                 "does not redefine Coordination correlation_id",
+00440:                 "does not define orchestration lifecycle state",
+00441:                 "does not transition orchestration state",
+00442:                 "does not resolve dependencies",
+00443:                 "does not determine execution order",
+00444:                 "does not determine readiness",
+00445:                 "does not perform fan-out",
+00446:                 "does not perform fan-in",
+00447:                 "does not evaluate conditional branches",
+00448:                 "does not perform runtime handoffs",
+00449:                 "does not track orchestration progress",
+00450:                 "does not restore checkpoints",
+00451:                 "does not perform orchestration recovery",
+00452:                 "does not determine completion",
+00453:                 "does not determine cancellation",
+00454:                 "does not enqueue jobs",
+00455:                 "does not claim jobs",
+00456:                 "does not assign workers",
+00457:                 "does not acquire worker leases",
+00458:                 "does not register runtime handlers",
+00459:                 "does not dispatch runtime handlers",
+00460:                 "does not execute runtime handlers",
+00461:                 "does not execute jobs",
+00462:                 "does not import Universal Coordination Framework",
+00463:                 "does not invoke pipeline coordinators",
+00464:                 "does not persist orchestration identity",
+00465:                 "does not access Runtime State Store",
+00466:                 "does not perform filesystem I/O",
+00467:                 "does not perform network I/O",
+00468:             ),
+00469:         }
+00470:     )
+00471: 
+00472: 
+
+IDENTITY FIELD COUNTS
+  workflow_id: 2
+  correlation_id: 2
+  stage_id: 0
+  job_id: 6
+  workspace_id: 4
+  pipeline_run_id: 2
+  batch_id: 2
+  orchestration_run_id: 38
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_orchestration.contract
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_runtime_registration
+========================================================================================================================
+FILE: backend\server\runtime\universal_runtime_registration.py
+SHA256: 2D41F0DEEEA6875C3AAF1626613034BF2787A05E7C542CB87C9D4E71E4D86B46
+
+PUBLIC CLASSES
+
+RuntimeHandlerRegistration
+  signature: (job_type: 'str', pipeline: 'str', stage: 'str', handler_ref: 'str', handler: 'Callable[..., Any]', description: 'str' = '', required_payload_fields: 'tuple[str, ...]' = (), predecessor_stages: 'tuple[str, ...]' = (), successor_stages: 'tuple[str, ...]' = (), idempotency_fields: 'tuple[str, ...]' = (), retry_policy: 'dict[str, Any]' = <factory>, concurrency_policy: 'dict[str, Any]' = <factory>, metadata: 'dict[str, Any]' = <factory>, persistent: 'bool' = False, registered_at: 'str' = '') -> None
+  dataclass fields:
+    - job_type
+    - pipeline
+    - stage
+    - handler_ref
+    - handler
+    - description
+    - required_payload_fields
+    - predecessor_stages
+    - successor_stages
+    - idempotency_fields
+    - retry_policy
+    - concurrency_policy
+    - metadata
+    - persistent
+    - registered_at
+
+IDENTITY / CORRELATION FUNCTIONS
+
+execute_registered_runtime_job_v1
+  signature: (job: 'Mapping[str, Any]') -> 'dict[str, Any]'
+  lines: 1024-1134
+  source:
+01022: 
+01023: 
+01024: def execute_registered_runtime_job_v1(
+01025:     job: Mapping[str, Any],
+01026: ) -> dict[str, Any]:
+01027:     from backend.server.jobs.universal_knowledge_orchestrator import (
+01028:         record_job_failure,
+01029:         update_job_progress,
+01030:         update_job_status,
+01031:     )
+01032: 
+01033:     workspace_id = str(
+01034:         job.get("workspace_id")
+01035:         or "default"
+01036:     ).strip() or "default"
+01037: 
+01038:     job_id = str(
+01039:         job.get("job_id")
+01040:         or ""
+01041:     ).strip()
+01042: 
+01043:     job_type = str(
+01044:         job.get("job_type")
+01045:         or job.get("stage")
+01046:         or ""
+01047:     ).strip()
+01048: 
+01049:     payload = job.get(
+01050:         "payload",
+01051:         {},
+01052:     )
+01053: 
+01054:     if not isinstance(payload, Mapping):
+01055:         payload = {}
+01056: 
+01057:     try:
+01058:         update_job_status(
+01059:             workspace_id=workspace_id,
+01060:             job_id=job_id,
+01061:             status="running",
+01062:             message=(
+01063:                 f"Running registered runtime handler "
+01064:                 f"for {job_type}."
+01065:             ),
+01066:         )
+01067: 
+01068:         update_job_progress(
+01069:             workspace_id=workspace_id,
+01070:             job_id=job_id,
+01071:             percent=10,
+01072:             message=(
+01073:                 "Universal Runtime Registration "
+01074:                 "accepted the job."
+01075:             ),
+01076:             step="runtime_registration_dispatch",
+01077:         )
+01078: 
+01079:         result = (
+01080:             dispatch_registered_runtime_handler(
+01081:                 job
+01082:             )
+01083:         )
+01084: 
+01085:         update_job_progress(
+01086:             workspace_id=workspace_id,
+01087:             job_id=job_id,
+01088:             percent=100,
+01089:             message=(
+01090:                 "Registered runtime handler completed."
+01091:             ),
+01092:             step="runtime_registration_completed",
+01093:         )
+01094: 
+01095:         update_job_status(
+01096:             workspace_id=workspace_id,
+01097:             job_id=job_id,
+01098:             status="completed",
+01099:             message=(
+01100:                 "Registered runtime handler completed."
+01101:             ),
+01102:             result=result,
+01103:         )
+01104: 
+01105:         return {
+01106:             "ok": True,
+01107:             "job_id": job_id,
+01108:             "workspace_id": workspace_id,
+01109:             "job_type": job_type,
+01110:             "dispatch_mode": (
+01111:                 "universal_runtime_registration"
+01112:             ),
+01113:             "result": result,
+01114:         }
+01115: 
+01116:     except Exception as exc:
+01117:         failure = record_job_failure(
+01118:             workspace_id=workspace_id,
+01119:             job_id=job_id,
+01120:             job_type=job_type,
+01121:             error=str(exc),
+01122:             payload=dict(payload),
+01123:         )
+01124: 
+01125:         return {
+01126:             "ok": False,
+01127:             "job_id": job_id,
+01128:             "workspace_id": workspace_id,
+01129:             "job_type": job_type,
+01130:             "dispatch_mode": (
+01131:                 "universal_runtime_registration"
+01132:             ),
+01133:             "failure": failure,
+01134:         }
+
+IDENTITY FIELD COUNTS
+  workflow_id: 0
+  correlation_id: 0
+  stage_id: 0
+  job_id: 16
+  workspace_id: 16
+  pipeline_run_id: 0
+  batch_id: 0
+  orchestration_run_id: 0
+
+COORDINATION IMPORTS
+  NONE
+
+RUNTIME IMPORTS
+  NONE
+
+========================================================================================================================
+3. REPOSITORY CORRELATION CANDIDATES
+========================================================================================================================
+
+backend\server\coordination\dependency_planning\dependency_graph.py
+  matches: workflow_id, stage_id
+backend\server\coordination\dependency_planning\dependency_validation.py
+  matches: workflow_id, stage_id
+backend\server\coordination\dependency_planning\execution_planner.py
+  matches: workflow_id, stage_id
+backend\server\coordination\dependency_planning\planning_certification.py
+  matches: workflow_id, stage_id
+backend\server\coordination\dependency_planning\runnable_stage_resolver.py
+  matches: workflow_id, stage_id
+backend\server\coordination\runtime_integration\coordination_runtime_bridge.py
+  matches: workflow_id, correlation_id, stage_id
+backend\server\coordination\runtime_integration\runtime_job_mapping.py
+  matches: workflow_id, correlation_id, stage_id, job_id, pipeline_run_id, workflow_job, job_correlation
+backend\server\coordination\universal_stages\result_contract.py
+  matches: workflow_id, correlation_id, stage_id, job_id, StageResult, result_contract
+backend\server\coordination\universal_workflows\contract.py
+  matches: workflow_id, correlation_id
+backend\server\coordination\workflow_lifecycle\lifecycle_certification.py
+  matches: workflow_id, correlation_id
+backend\server\coordination\workflow_lifecycle\lifecycle_history.py
+  matches: workflow_id, correlation_id
+backend\server\runtime\udare_runtime_contract.py
+  matches: correlation_id, job_id
+backend\server\runtime\universal_orchestration\run_identity.py
+  matches: workflow_id, correlation_id, job_id, pipeline_run_id
+backend\server\runtime\website_article_integrity_automation.py
+  matches: correlation_id, job_id
+
+========================================================================================================================
+4. STAGE RESULT CORRELATION QUESTIONS
+========================================================================================================================
+
+Verify whether StageResult already carries:
+  workflow_id
+  correlation_id
+  stage_id
+  workspace_id
+  job_id
+  job_type
+  execution_target
+
+If yes:
+  Phase 5.3 should likely produce the authoritative
+  workflow/stage/job binding needed by 5.4 and 5.5.
+
+========================================================================================================================
+5. PHASE 5.3 ARCHITECTURE QUESTIONS
+========================================================================================================================
+
+A. CREATION POINT
+- At what exact point does canonical job_id first exist?
+- Is UniversalJobCreationResult the first trustworthy job identity?
+- Does submit_universal_job return the same canonical job_id?
+
+B. BINDING
+- Should Phase 5.3 bind:
+    workflow_id
+    correlation_id
+    stage_id
+    workspace_id
+    job_id
+    job_type
+    pipeline_id
+    runtime_stage
+?
+
+C. PIPELINE RUN ID
+- Should Phase 5.3 populate UniversalJob.pipeline_run_id?
+- Or should pipeline_run_id remain Runtime lineage only?
+- Is there an existing pipeline_run_id authority elsewhere?
+
+D. STORAGE
+- Is there an existing correlation registry/store?
+- Can runtime_state_store own this binding?
+- Or should UCF own a dedicated workflow/job correlation registry?
+
+E. RETURN PATH
+- How will 5.4 Runtime Completion Intake resolve:
+    job_id -> workflow_id/correlation_id/stage_id ?
+- How will 5.5 Runtime Failure Intake perform the same lookup?
+
+F. MULTIPLE JOBS
+- Can one workflow stage have more than one runtime job?
+- Can one workflow have many stage/job bindings?
+- Must duplicate correlation registration fail closed?
+
+========================================================================================================================
+6. PROVISIONAL PHASE 5.3 RESPONSIBILITY
+========================================================================================================================
+
+Likely responsibility:
+  Bind Coordination identity to an actual canonical Runtime job_id
+  after Universal Job creation and before completion/failure intake.
+
+Likely correlation tuple:
+  workflow_id
+  correlation_id
+  stage_id
+  workspace_id
+  job_id
+  job_type
+  pipeline_id
+  runtime_stage
+
+Likely NOT owned by Phase 5.3:
+  Universal Job creation
+  Runtime Registration lookup
+  queue persistence
+  handler dispatch
+  worker execution
+  workflow lifecycle transitions
+  completion processing
+  failure processing
+
+NOT YET FROZEN.
+
+========================================================================================================================
+7. DISCOVERY STATUS
+========================================================================================================================
+
+Discovery only.
+Production modified: False
+Architecture frozen: False
+Installation performed: False
+Next: Phase 5.3 Correlation Authority Resolution

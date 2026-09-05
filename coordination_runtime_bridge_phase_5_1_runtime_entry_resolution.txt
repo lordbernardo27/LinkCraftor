@@ -1,0 +1,1560 @@
+LINKCRAFTOR
+UNIVERSAL COORDINATION FRAMEWORK
+PHASE 5.1 — RUNTIME ENTRY-POINT RESOLUTION
+========================================================================================================================
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_jobs.creation_engine
+========================================================================================================================
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+SHA256: 7BFDC36731B7AD48885258BCBA8337186430EC1C6A7C2E876ACA223E6E05D63F
+
+PUBLIC / TARGET FUNCTION SIGNATURES
+
+normalize_universal_job_creation_request
+  exists: True
+  signature: (request: 'UniversalJobCreationRequest', *, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'tuple[UniversalJobCreationRequest, str, Optional[Mapping[str, Any]]]'
+  lines: 511-727
+  source:
+00509: 
+00510: 
+00511: def normalize_universal_job_creation_request(
+00512:     request: UniversalJobCreationRequest,
+00513:     *,
+00514:     supported_job_types: Optional[Iterable[Any]] = None,
+00515:     runtime_registration: Optional[Mapping[str, Any]] = None,
+00516: ) -> tuple[
+00517:     UniversalJobCreationRequest,
+00518:     str,
+00519:     Optional[Mapping[str, Any]],
+00520: ]:
+00521:     if not isinstance(request, UniversalJobCreationRequest):
+00522:         raise UniversalJobCreationError(
+00523:             "request must be UniversalJobCreationRequest.",
+00524:             code="invalid_creation_request",
+00525:             violations=("request must be UniversalJobCreationRequest",),
+00526:         )
+00527: 
+00528:     workspace_id = _clean_text(request.workspace_id)
+00529: 
+00530:     if not workspace_id:
+00531:         raise UniversalJobCreationError(
+00532:             "workspace_id is required.",
+00533:             code="missing_workspace_id",
+00534:             violations=("workspace_id is required",),
+00535:         )
+00536: 
+00537:     try:
+00538:         job_type = validate_universal_job_type(
+00539:             request.job_type
+00540:         )
+00541:     except UniversalJobIdentityError as exc:
+00542:         raise UniversalJobCreationError(
+00543:             str(exc),
+00544:             code=exc.code,
+00545:             violations=exc.violations or (str(exc),),
+00546:         ) from exc
+00547: 
+00548:     payload = _normalize_mapping(
+00549:         request.payload,
+00550:         field_name="payload",
+00551:     )
+00552:     try:
+00553:         metadata = normalize_universal_job_metadata(
+00554:             request.metadata
+00555:         )
+00556:     except UniversalJobMetadataError as exc:
+00557:         raise UniversalJobCreationError(
+00558:             str(exc),
+00559:             code=exc.code,
+00560:             violations=exc.violations or (str(exc),),
+00561:         ) from exc
+00562:     try:
+00563:         parent_job_id = normalize_parent_job_id(
+00564:             request.parent_job_id
+00565:         )
+00566:         dependencies = normalize_dependency_job_ids(
+00567:             request.dependency_job_ids
+00568:         )
+00569:         batch_id = normalize_batch_id(
+00570:             request.batch_id
+00571:         )
+00572:         pipeline_run_id = normalize_pipeline_run_id(
+00573:             request.pipeline_run_id
+00574:         )
+00575: 
+00576:     except UniversalJobLineageError as exc:
+00577:         raise UniversalJobCreationError(
+00578:             str(exc),
+00579:             code=exc.code,
+00580:             violations=(str(exc),),
+00581:         ) from exc
+00582:     static_job_types = _normalize_supported_job_types(
+00583:         supported_job_types,
+00584:     )
+00585:     source, registration = _resolve_registration(
+00586:         job_type=job_type,
+00587:         supported_job_types=static_job_types,
+00588:         runtime_registration=runtime_registration,
+00589:     )
+00590:     _validate_registered_payload(
+00591:         registration=registration,
+00592:         payload=payload,
+00593:     )
+00594: 
+00595:     registration_pipeline = (
+00596:         registration.get("pipeline")
+00597:         if registration is not None
+00598:         else ""
+00599:     )
+00600:     registration_stage = (
+00601:         registration.get("stage")
+00602:         if registration is not None
+00603:         else ""
+00604:     )
+00605: 
+00606:     pipeline = _first_text(
+00607:         request.pipeline,
+00608:         payload.get("pipeline"),
+00609:         payload.get("pipeline_name"),
+00610:         registration_pipeline,
+00611:         fallback="universal_knowledge",
+00612:     )
+00613:     stage = _first_text(
+00614:         request.stage,
+00615:         payload.get("stage"),
+00616:         payload.get("stage_name"),
+00617:         registration_stage,
+00618:         fallback=job_type,
+00619:     )
+00620:     user_id = _first_text(
+00621:         request.user_id,
+00622:         payload.get("user_id"),
+00623:         fallback="system",
+00624:     )
+00625:     product_id = _first_text(
+00626:         request.product_id,
+00627:         payload.get("product_id"),
+00628:         fallback="linkcraftor",
+00629:     )
+00630:     payload_reference = normalize_universal_job_payload_reference(
+00631:         request.payload_reference
+00632:     )
+00633:     priority = _resolve_priority(request.priority)
+00634:     maximum_attempts = _resolve_maximum_attempts(
+00635:         request.maximum_attempts,
+00636:         payload,
+00637:         registration,
+00638:     )
+00639: 
+00640:     if not isinstance(request.enqueue, bool):
+00641:         raise UniversalJobCreationError(
+00642:             "enqueue must be a boolean.",
+00643:             code="invalid_enqueue",
+00644:             violations=(
+00645:                 "enqueue must be either True or False",
+00646:             ),
+00647:         )
+00648: 
+00649:     if (
+00650:         not isinstance(request.job_id_prefix, str)
+00651:         or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+00652:     ):
+00653:         raise UniversalJobCreationError(
+00654:             "job_id_prefix is fixed by the Universal Job identity namespace.",
+00655:             code="invalid_job_id_prefix",
+00656:             violations=(
+00657:                 f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+00658:             ),
+00659:         )
+00660: 
+00661:     created_at = _clean_text(request.created_at) or _utc_now()
+00662: 
+00663:     try:
+00664:         job_id = resolve_universal_job_id(
+00665:             request.job_id
+00666:         )
+00667:     except UniversalJobIdentityError as exc:
+00668:         raise UniversalJobCreationError(
+00669:             str(exc),
+00670:             code=exc.code,
+00671:             violations=exc.violations or (str(exc),),
+00672:         ) from exc
+00673: 
+00674:     try:
+00675:         lineage = validate_universal_job_lineage(
+00676:             job_id=job_id,
+00677:             parent_job_id=parent_job_id,
+00678:             dependency_job_ids=dependencies,
+00679:             batch_id=batch_id,
+00680:             pipeline_run_id=pipeline_run_id,
+00681:         )
+00682: 
+00683:     except UniversalJobLineageError as exc:
+00684:         raise UniversalJobCreationError(
+00685:             str(exc),
+00686:             code=exc.code,
+00687:             violations=(str(exc),),
+00688:         ) from exc
+00689: 
+00690:     try:
+00691:         idempotency_key = (
+00692:             normalize_universal_job_idempotency_key(
+00693:                 request.idempotency_key
+00694:             )
+00695:         )
+00696: 
+00697:     except UniversalJobIdempotencyKeyError as exc:
+00698:         raise UniversalJobCreationError(
+00699:             str(exc),
+00700:             code=exc.code,
+00701:             violations=(str(exc),),
+00702:         ) from exc
+00703: 
+00704:     normalized = UniversalJobCreationRequest(
+00705:         workspace_id=workspace_id,
+00706:         job_type=job_type,
+00707:         payload=payload,
+00708:         metadata=metadata,
+00709:         user_id=user_id,
+00710:         product_id=product_id,
+00711:         pipeline=pipeline,
+00712:         stage=stage,
+00713:         payload_reference=payload_reference,
+00714:         priority=priority,
+00715:         parent_job_id=lineage.parent_job_id,
+00716:         dependency_job_ids=lineage.dependency_job_ids,
+00717:         batch_id=lineage.batch_id,
+00718:         pipeline_run_id=lineage.pipeline_run_id,
+00719:         idempotency_key=idempotency_key,
+00720:         maximum_attempts=maximum_attempts,
+00721:         enqueue=request.enqueue,
+00722:         job_id=job_id,
+00723:         job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+00724:         created_at=created_at,
+00725:     )
+00726: 
+00727:     return normalized, source, registration
+00728: 
+00729: 
+
+create_universal_job
+  exists: True
+  signature: (*, workspace_id: 'str', job_type: 'str', payload: 'Optional[Mapping[str, Any]]' = None, metadata: 'Optional[Mapping[str, Any]]' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Optional[Iterable[Any]]' = None, batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'UniversalJobCreationResult'
+  lines: 730-868
+  source:
+00728: 
+00729: 
+00730: def create_universal_job(
+00731:     *,
+00732:     workspace_id: str,
+00733:     job_type: str,
+00734:     payload: Optional[Mapping[str, Any]] = None,
+00735:     metadata: Optional[Mapping[str, Any]] = None,
+00736:     user_id: str = "system",
+00737:     product_id: str = "linkcraftor",
+00738:     pipeline: str = "",
+00739:     stage: str = "",
+00740:     payload_reference: Optional[str] = None,
+00741:     priority: Any = UniversalJobPriority.NORMAL,
+00742:     parent_job_id: Optional[str] = None,
+00743:     dependency_job_ids: Optional[Iterable[Any]] = None,
+00744:     batch_id: Optional[str] = None,
+00745:     pipeline_run_id: Optional[str] = None,
+00746:     idempotency_key: Optional[str] = None,
+00747:     maximum_attempts: Optional[int] = None,
+00748:     enqueue: bool = True,
+00749:     job_id: Optional[str] = None,
+00750:     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+00751:     created_at: Optional[str] = None,
+00752:     supported_job_types: Optional[Iterable[Any]] = None,
+00753:     runtime_registration: Optional[Mapping[str, Any]] = None,
+00754: ) -> UniversalJobCreationResult:
+00755:     """Validate and construct one canonical Universal Job without I/O."""
+00756: 
+00757:     request = UniversalJobCreationRequest(
+00758:         workspace_id=workspace_id,
+00759:         job_type=job_type,
+00760:         payload={} if payload is None else payload,
+00761:         metadata={} if metadata is None else metadata,
+00762:         user_id=user_id,
+00763:         product_id=product_id,
+00764:         pipeline=pipeline,
+00765:         stage=stage,
+00766:         payload_reference=payload_reference,
+00767:         priority=priority,
+00768:         parent_job_id=parent_job_id,
+00769:         dependency_job_ids=(
+00770:             ()
+00771:             if dependency_job_ids is None
+00772:             else dependency_job_ids
+00773:         ),
+00774:         batch_id=batch_id,
+00775:         pipeline_run_id=pipeline_run_id,
+00776:         idempotency_key=idempotency_key,
+00777:         maximum_attempts=maximum_attempts,
+00778:         enqueue=enqueue,
+00779:         job_id=job_id,
+00780:         job_id_prefix=job_id_prefix,
+00781:         created_at=created_at,
+00782:     )
+00783: 
+00784:     normalized, source, registration = (
+00785:         normalize_universal_job_creation_request(
+00786:             request,
+00787:             supported_job_types=supported_job_types,
+00788:             runtime_registration=runtime_registration,
+00789:         )
+00790:     )
+00791: 
+00792:     status = initial_universal_job_status(
+00793:         enqueue=normalized.enqueue,
+00794:     )
+00795:     message = (
+00796:         "Job queued."
+00797:         if normalized.enqueue
+00798:         else "Job created without queue dispatch."
+00799:     )
+00800: 
+00801:     try:
+00802:         job = UniversalJob(
+00803:             job_id=normalized.job_id or "",
+00804:             workspace_id=normalized.workspace_id,
+00805:             user_id=normalized.user_id,
+00806:             product_id=normalized.product_id,
+00807:             pipeline=normalized.pipeline,
+00808:             stage=normalized.stage,
+00809:             job_type=normalized.job_type,
+00810:             payload_reference=normalized.payload_reference,
+00811:             priority=normalized.priority,
+00812:             status=status,
+00813:             attempts=initial_universal_job_attempts(),
+00814:             maximum_attempts=normalized.maximum_attempts,
+00815:             lease_owner=None,
+00816:             lease_id=None,
+00817:             lease_started_at=None,
+00818:             lease_expires_at=None,
+00819:             parent_job_id=normalized.parent_job_id,
+00820:             dependency_job_ids=normalized.dependency_job_ids,
+00821:             batch_id=normalized.batch_id,
+00822:             pipeline_run_id=normalized.pipeline_run_id,
+00823:             progress=UniversalJobProgress(
+00824:                 percent=0,
+00825:                 step=normalized.stage,
+00826:                 message=message,
+00827:                 updated_at=normalized.created_at,
+00828:             ),
+00829:             checkpoint_reference=None,
+00830:             result_reference=None,
+00831:             artifact_references=(),
+00832:             idempotency_key=normalized.idempotency_key,
+00833:             AU_reserved=0,
+00834:             AU_consumed=0,
+00835:             cost_record=UniversalJobCostRecord(),
+00836:             created_at=normalized.created_at,
+00837:             scheduled_at=None,
+00838:             started_at=None,
+00839:             completed_at=None,
+00840:             failed_at=None,
+00841:             cancelled_at=None,
+00842:             error_code=None,
+00843:             error_message=None,
+00844:             error_details={},
+00845:         )
+00846:     except UniversalJobContractError as exc:
+00847:         raise UniversalJobCreationError(
+00848:             "Universal Job Contract rejected the creation request.",
+00849:             code="contract_validation_failed",
+00850:             violations=exc.violations or (str(exc),),
+00851:         ) from exc
+00852: 
+00853:     validation = validate_universal_job(job)
+00854:     if not validation.is_valid:
+00855:         raise UniversalJobCreationError(
+00856:             "Created Universal Job failed final validation.",
+00857:             code="final_validation_failed",
+00858:             violations=validation.violations,
+00859:         )
+00860: 
+00861:     return UniversalJobCreationResult(
+00862:         job=job,
+00863:         payload=normalized.payload,
+00864:         metadata=normalized.metadata,
+00865:         registration=registration,
+00866:         enqueue_requested=normalized.enqueue,
+00867:         job_type_source=source,
+00868:     )
+00869: 
+00870: 
+
+explain_universal_job_creation_engine_v1
+  exists: True
+  signature: () -> 'dict[str, Any]'
+  lines: 871-896
+  source:
+00869: 
+00870: 
+00871: def explain_universal_job_creation_engine_v1() -> dict[str, Any]:
+00872:     return {
+00873:         "phase": "2.1.2",
+00874:         "component": "Universal Job Creation Engine",
+00875:         "creation_engine_version": UNIVERSAL_JOB_CREATION_ENGINE_VERSION,
+00876:         "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+00877:         "canonical_operation": "create_universal_job",
+00878:         "responsibilities": [
+00879:             "validate creation inputs",
+00880:             "resolve static job types or caller-supplied Runtime Registration metadata",
+00881:             "validate registered required payload fields",
+00882:             "normalize creation identity and classification",
+00883:             "construct the certified Universal Job Contract",
+00884:             "return a normalized creation result",
+00885:         ],
+00886:         "prohibitions": [
+00887:             "no queue writes",
+00888:             "no persistence writes",
+00889:             "no worker execution",
+00890:             "no handler dispatch",
+00891:             "no ledger writes",
+00892:             "no progress-file writes",
+00893:             "no persistent Runtime Registration loading",
+00894:             "no state transitions beyond initial creation status",
+00895:         ],
+00896:     }
+00897: 
+00898: 
+
+PUBLIC CLASSES
+
+UniversalJobCreationError
+  lines: 80-101
+  signature: (message: 'str', *, code: 'str', violations: 'Sequence[str]' = ()) -> 'None'
+
+UniversalJobCreationRequest
+  lines: 456-476
+  signature: (workspace_id: 'str', job_type: 'str', payload: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Tuple[str, ...]' = (), batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None) -> None
+
+UniversalJobCreationResult
+  lines: 480-508
+  signature: (job: 'UniversalJob', payload: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', registration: 'Optional[Mapping[str, Any]]', enqueue_requested: 'bool', job_type_source: 'str', creation_engine_version: 'str' = 'universal_job_creation_engine_v2.1.2') -> None
+
+RUNTIME-RELATED CALL SITES
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_runtime_registration
+========================================================================================================================
+FILE: backend\server\runtime\universal_runtime_registration.py
+SHA256: 2D41F0DEEEA6875C3AAF1626613034BF2787A05E7C542CB87C9D4E71E4D86B46
+
+PUBLIC / TARGET FUNCTION SIGNATURES
+
+register_runtime_handler
+  exists: True
+  signature: (*, job_type: 'str', handler: 'Callable[..., Any] | str', pipeline: 'str' = '', stage: 'str' = '', description: 'str' = '', required_payload_fields: 'Iterable[Any] | None' = None, predecessor_stages: 'Iterable[Any] | None' = None, successor_stages: 'Iterable[Any] | None' = None, idempotency_fields: 'Iterable[Any] | None' = None, retry_policy: 'Mapping[str, Any] | None' = None, concurrency_policy: 'Mapping[str, Any] | None' = None, metadata: 'Mapping[str, Any] | None' = None, replace: 'bool' = False, persist: 'bool' = False, _loaded_from_persistence: 'bool' = False) -> 'dict[str, Any]'
+  lines: 391-517
+  source:
+00389: 
+00390: 
+00391: def register_runtime_handler(
+00392:     *,
+00393:     job_type: str,
+00394:     handler: Callable[..., Any] | str,
+00395:     pipeline: str = "",
+00396:     stage: str = "",
+00397:     description: str = "",
+00398:     required_payload_fields: Iterable[Any] | None = None,
+00399:     predecessor_stages: Iterable[Any] | None = None,
+00400:     successor_stages: Iterable[Any] | None = None,
+00401:     idempotency_fields: Iterable[Any] | None = None,
+00402:     retry_policy: Mapping[str, Any] | None = None,
+00403:     concurrency_policy: Mapping[str, Any] | None = None,
+00404:     metadata: Mapping[str, Any] | None = None,
+00405:     replace: bool = False,
+00406:     persist: bool = False,
+00407:     _loaded_from_persistence: bool = False,
+00408: ) -> dict[str, Any]:
+00409:     canonical_job_type = _normalize_name(
+00410:         job_type,
+00411:         field_name="job_type",
+00412:     )
+00413: 
+00414:     canonical_pipeline = (
+00415:         _normalize_optional_name(
+00416:             pipeline,
+00417:             fallback="universal_knowledge",
+00418:             field_name="pipeline",
+00419:         )
+00420:     )
+00421: 
+00422:     canonical_stage = (
+00423:         _normalize_optional_name(
+00424:             stage,
+00425:             fallback=canonical_job_type,
+00426:             field_name="stage",
+00427:         )
+00428:     )
+00429: 
+00430:     resolved_handler, handler_ref = (
+00431:         _resolve_handler(
+00432:             handler
+00433:         )
+00434:     )
+00435: 
+00436:     if (
+00437:         persist
+00438:         and "<locals>" in handler_ref
+00439:     ):
+00440:         raise ValueError(
+00441:             "Persistent handlers must be importable top-level "
+00442:             "functions."
+00443:         )
+00444: 
+00445:     persistent = bool(
+00446:         persist
+00447:         or _loaded_from_persistence
+00448:     )
+00449: 
+00450:     registration = RuntimeHandlerRegistration(
+00451:         job_type=canonical_job_type,
+00452:         pipeline=canonical_pipeline,
+00453:         stage=canonical_stage,
+00454:         handler_ref=handler_ref,
+00455:         handler=resolved_handler,
+00456:         description=str(
+00457:             description or ""
+00458:         ).strip(),
+00459:         required_payload_fields=(
+00460:             _normalize_string_tuple(
+00461:                 required_payload_fields
+00462:             )
+00463:         ),
+00464:         predecessor_stages=(
+00465:             _normalize_string_tuple(
+00466:                 predecessor_stages
+00467:             )
+00468:         ),
+00469:         successor_stages=(
+00470:             _normalize_string_tuple(
+00471:                 successor_stages
+00472:             )
+00473:         ),
+00474:         idempotency_fields=(
+00475:             _normalize_string_tuple(
+00476:                 idempotency_fields
+00477:             )
+00478:         ),
+00479:         retry_policy=_normalize_mapping(
+00480:             retry_policy
+00481:         ),
+00482:         concurrency_policy=(
+00483:             _normalize_mapping(
+00484:                 concurrency_policy
+00485:             )
+00486:         ),
+00487:         metadata=_normalize_mapping(
+00488:             metadata
+00489:         ),
+00490:         persistent=persistent,
+00491:         registered_at=utc_now(),
+00492:     )
+00493: 
+00494:     with _REGISTRY_LOCK:
+00495:         existing = (
+00496:             _RUNTIME_HANDLER_REGISTRY.get(
+00497:                 canonical_job_type
+00498:             )
+00499:         )
+00500: 
+00501:         if (
+00502:             existing is not None
+00503:             and not replace
+00504:         ):
+00505:             raise ValueError(
+00506:                 "Runtime handler already registered for "
+00507:                 f"job_type: {canonical_job_type}"
+00508:             )
+00509: 
+00510:         _RUNTIME_HANDLER_REGISTRY[
+00511:             canonical_job_type
+00512:         ] = registration
+00513: 
+00514:         if persist:
+00515:             _persist_registry_snapshot()
+00516: 
+00517:     return registration.to_public_dict()
+00518: 
+00519: 
+
+has_runtime_handler
+  exists: True
+  signature: (job_type: 'Any') -> 'bool'
+  lines: 773-789
+  source:
+00771: 
+00772: 
+00773: def has_runtime_handler(
+00774:     job_type: Any,
+00775: ) -> bool:
+00776:     ensure_persisted_runtime_registrations_loaded()
+00777: 
+00778:     normalized = str(
+00779:         job_type or ""
+00780:     ).strip()
+00781: 
+00782:     if not normalized:
+00783:         return False
+00784: 
+00785:     with _REGISTRY_LOCK:
+00786:         return (
+00787:             normalized
+00788:             in _RUNTIME_HANDLER_REGISTRY
+00789:         )
+00790: 
+00791: 
+
+is_runtime_job_type_registered
+  exists: True
+  signature: (job_type: 'Any') -> 'bool'
+  lines: 792-797
+  source:
+00790: 
+00791: 
+00792: def is_runtime_job_type_registered(
+00793:     job_type: Any,
+00794: ) -> bool:
+00795:     return has_runtime_handler(
+00796:         job_type
+00797:     )
+00798: 
+00799: 
+
+get_runtime_registration
+  exists: True
+  signature: (job_type: 'str') -> 'dict[str, Any] | None'
+  lines: 800-820
+  source:
+00798: 
+00799: 
+00800: def get_runtime_registration(
+00801:     job_type: str,
+00802: ) -> dict[str, Any] | None:
+00803:     ensure_persisted_runtime_registrations_loaded()
+00804: 
+00805:     canonical_job_type = _normalize_name(
+00806:         job_type,
+00807:         field_name="job_type",
+00808:     )
+00809: 
+00810:     with _REGISTRY_LOCK:
+00811:         registration = (
+00812:             _RUNTIME_HANDLER_REGISTRY.get(
+00813:                 canonical_job_type
+00814:             )
+00815:         )
+00816: 
+00817:     if registration is None:
+00818:         return None
+00819: 
+00820:     return registration.to_public_dict()
+00821: 
+00822: 
+
+dispatch_registered_runtime_handler
+  exists: True
+  signature: (job: 'Mapping[str, Any]') -> 'dict[str, Any]'
+  lines: 945-1021
+  source:
+00943: 
+00944: 
+00945: def dispatch_registered_runtime_handler(
+00946:     job: Mapping[str, Any],
+00947: ) -> dict[str, Any]:
+00948:     ensure_persisted_runtime_registrations_loaded()
+00949: 
+00950:     if not isinstance(job, Mapping):
+00951:         raise TypeError(
+00952:             "Universal runtime job must be a mapping."
+00953:         )
+00954: 
+00955:     job_type = str(
+00956:         job.get("job_type")
+00957:         or job.get("stage")
+00958:         or ""
+00959:     ).strip()
+00960: 
+00961:     if not job_type:
+00962:         raise ValueError(
+00963:             "Universal runtime job has no job_type."
+00964:         )
+00965: 
+00966:     with _REGISTRY_LOCK:
+00967:         registration = (
+00968:             _RUNTIME_HANDLER_REGISTRY.get(
+00969:                 job_type
+00970:             )
+00971:         )
+00972: 
+00973:     if registration is None:
+00974:         raise ValueError(
+00975:             f"No runtime handler registered for: {job_type}"
+00976:         )
+00977: 
+00978:     payload = job.get(
+00979:         "payload",
+00980:         {},
+00981:     )
+00982: 
+00983:     if not isinstance(payload, Mapping):
+00984:         raise TypeError(
+00985:             "Universal runtime job payload must be a mapping."
+00986:         )
+00987: 
+00988:     _validate_required_payload_fields(
+00989:         registration=registration,
+00990:         payload=payload,
+00991:     )
+00992: 
+00993:     handler_result = _invoke_handler(
+00994:         registration.handler,
+00995:         job,
+00996:     )
+00997: 
+00998:     if handler_result is None:
+00999:         handler_result = {}
+01000: 
+01001:     if not isinstance(
+01002:         handler_result,
+01003:         dict,
+01004:     ):
+01005:         handler_result = {
+01006:             "value": handler_result,
+01007:         }
+01008: 
+01009:     return {
+01010:         "handled": True,
+01011:         "dispatch_mode": (
+01012:             "universal_runtime_registration"
+01013:         ),
+01014:         "job_type": job_type,
+01015:         "pipeline": registration.pipeline,
+01016:         "stage": registration.stage,
+01017:         "handler_ref": (
+01018:             registration.handler_ref
+01019:         ),
+01020:         "handler_result": handler_result,
+01021:     }
+01022: 
+01023: 
+
+execute_registered_runtime_job_v1
+  exists: True
+  signature: (job: 'Mapping[str, Any]') -> 'dict[str, Any]'
+  lines: 1024-1134
+  source:
+01022: 
+01023: 
+01024: def execute_registered_runtime_job_v1(
+01025:     job: Mapping[str, Any],
+01026: ) -> dict[str, Any]:
+01027:     from backend.server.jobs.universal_knowledge_orchestrator import (
+01028:         record_job_failure,
+01029:         update_job_progress,
+01030:         update_job_status,
+01031:     )
+01032: 
+01033:     workspace_id = str(
+01034:         job.get("workspace_id")
+01035:         or "default"
+01036:     ).strip() or "default"
+01037: 
+01038:     job_id = str(
+01039:         job.get("job_id")
+01040:         or ""
+01041:     ).strip()
+01042: 
+01043:     job_type = str(
+01044:         job.get("job_type")
+01045:         or job.get("stage")
+01046:         or ""
+01047:     ).strip()
+01048: 
+01049:     payload = job.get(
+01050:         "payload",
+01051:         {},
+01052:     )
+01053: 
+01054:     if not isinstance(payload, Mapping):
+01055:         payload = {}
+01056: 
+01057:     try:
+01058:         update_job_status(
+01059:             workspace_id=workspace_id,
+01060:             job_id=job_id,
+01061:             status="running",
+01062:             message=(
+01063:                 f"Running registered runtime handler "
+01064:                 f"for {job_type}."
+01065:             ),
+01066:         )
+01067: 
+01068:         update_job_progress(
+01069:             workspace_id=workspace_id,
+01070:             job_id=job_id,
+01071:             percent=10,
+01072:             message=(
+01073:                 "Universal Runtime Registration "
+01074:                 "accepted the job."
+01075:             ),
+01076:             step="runtime_registration_dispatch",
+01077:         )
+01078: 
+01079:         result = (
+01080:             dispatch_registered_runtime_handler(
+01081:                 job
+01082:             )
+01083:         )
+01084: 
+01085:         update_job_progress(
+01086:             workspace_id=workspace_id,
+01087:             job_id=job_id,
+01088:             percent=100,
+01089:             message=(
+01090:                 "Registered runtime handler completed."
+01091:             ),
+01092:             step="runtime_registration_completed",
+01093:         )
+01094: 
+01095:         update_job_status(
+01096:             workspace_id=workspace_id,
+01097:             job_id=job_id,
+01098:             status="completed",
+01099:             message=(
+01100:                 "Registered runtime handler completed."
+01101:             ),
+01102:             result=result,
+01103:         )
+01104: 
+01105:         return {
+01106:             "ok": True,
+01107:             "job_id": job_id,
+01108:             "workspace_id": workspace_id,
+01109:             "job_type": job_type,
+01110:             "dispatch_mode": (
+01111:                 "universal_runtime_registration"
+01112:             ),
+01113:             "result": result,
+01114:         }
+01115: 
+01116:     except Exception as exc:
+01117:         failure = record_job_failure(
+01118:             workspace_id=workspace_id,
+01119:             job_id=job_id,
+01120:             job_type=job_type,
+01121:             error=str(exc),
+01122:             payload=dict(payload),
+01123:         )
+01124: 
+01125:         return {
+01126:             "ok": False,
+01127:             "job_id": job_id,
+01128:             "workspace_id": workspace_id,
+01129:             "job_type": job_type,
+01130:             "dispatch_mode": (
+01131:                 "universal_runtime_registration"
+01132:             ),
+01133:             "failure": failure,
+01134:         }
+
+PUBLIC CLASSES
+
+RuntimeHandlerRegistration
+  lines: 294-355
+  signature: (job_type: 'str', pipeline: 'str', stage: 'str', handler_ref: 'str', handler: 'Callable[..., Any]', description: 'str' = '', required_payload_fields: 'tuple[str, ...]' = (), predecessor_stages: 'tuple[str, ...]' = (), successor_stages: 'tuple[str, ...]' = (), idempotency_fields: 'tuple[str, ...]' = (), retry_policy: 'dict[str, Any]' = <factory>, concurrency_policy: 'dict[str, Any]' = <factory>, metadata: 'dict[str, Any]' = <factory>, persistent: 'bool' = False, registered_at: 'str' = '') -> None
+
+RUNTIME-RELATED CALL SITES
+  line 542: register_runtime_handler(...)
+  line 684: register_runtime_handler(...)
+  line 1080: dispatch_registered_runtime_handler(...)
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_runtime_infrastructure
+========================================================================================================================
+FILE: backend\server\runtime\universal_runtime_infrastructure.py
+SHA256: 96EC7BA572D8F58F9CA055C716F1CA7B7E293EB5400F892D5D057C1A77750469
+
+PUBLIC / TARGET FUNCTION SIGNATURES
+
+now_iso
+  exists: True
+  signature: () -> 'str'
+  lines: 27-28
+  source:
+00025: 
+00026: 
+00027: def now_iso() -> str:
+00028:     return datetime.now(timezone.utc).isoformat()
+00029: 
+00030: 
+
+read_json
+  exists: True
+  signature: (path: 'Path', default: 'Any') -> 'Any'
+  lines: 31-37
+  source:
+00029: 
+00030: 
+00031: def read_json(path: Path, default: Any) -> Any:
+00032:     if not path.exists():
+00033:         return default
+00034:     try:
+00035:         return json.loads(path.read_text(encoding="utf-8"))
+00036:     except Exception:
+00037:         return default
+00038: 
+00039: 
+
+write_json
+  exists: True
+  signature: (path: 'Path', payload: 'Any') -> 'Path'
+  lines: 40-45
+  source:
+00038: 
+00039: 
+00040: def write_json(path: Path, payload: Any) -> Path:
+00041:     path.parent.mkdir(parents=True, exist_ok=True)
+00042:     tmp = path.with_suffix(path.suffix + ".tmp")
+00043:     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+00044:     tmp.replace(path)
+00045:     return path
+00046: 
+00047: 
+
+runtime_job_summary
+  exists: True
+  signature: (workspace_id: 'str') -> 'Dict[str, Any]'
+  lines: 48-63
+  source:
+00046: 
+00047: 
+00048: def runtime_job_summary(workspace_id: str) -> Dict[str, Any]:
+00049:     queue = read_queue(workspace_id, limit=10000)
+00050:     statuses = [read_job_status(workspace_id, j.get("job_id", "")) for j in queue]
+00051:     statuses = [s for s in statuses if s]
+00052: 
+00053:     by_status = Counter(s.get("status", "unknown") for s in statuses)
+00054:     by_type = Counter(s.get("job_type", "unknown") for s in statuses)
+00055: 
+00056:     return {
+00057:         "workspace_id": safe_id(workspace_id),
+00058:         "total_jobs": len(statuses),
+00059:         "by_status": dict(by_status),
+00060:         "by_type": dict(by_type),
+00061:         "latest_job": statuses[-1] if statuses else {},
+00062:         "generated_at": now_iso(),
+00063:     }
+00064: 
+00065: 
+
+runtime_progress_summary
+  exists: True
+  signature: (workspace_id: 'str', job_id: 'str') -> 'Dict[str, Any]'
+  lines: 66-80
+  source:
+00064: 
+00065: 
+00066: def runtime_progress_summary(workspace_id: str, job_id: str) -> Dict[str, Any]:
+00067:     status = read_job_status(workspace_id, job_id)
+00068:     progress = read_job_progress(workspace_id, job_id)
+00069: 
+00070:     return {
+00071:         "workspace_id": safe_id(workspace_id),
+00072:         "job_id": job_id,
+00073:         "status": status.get("status"),
+00074:         "job_type": status.get("job_type"),
+00075:         "percent": progress.get("percent", 0),
+00076:         "message": progress.get("message", ""),
+00077:         "steps": progress.get("steps", []),
+00078:         "eta_seconds": None,
+00079:         "generated_at": now_iso(),
+00080:     }
+00081: 
+00082: 
+
+inspect_queue
+  exists: True
+  signature: (workspace_id: 'str') -> 'Dict[str, Any]'
+  lines: 83-96
+  source:
+00081: 
+00082: 
+00083: def inspect_queue(workspace_id: str) -> Dict[str, Any]:
+00084:     queue = read_queue(workspace_id, limit=10000)
+00085:     job_ids = [j.get("job_id") for j in queue if j.get("job_id")]
+00086:     duplicate_job_ids = [j for j, c in Counter(job_ids).items() if c > 1]
+00087: 
+00088:     return {
+00089:         "workspace_id": safe_id(workspace_id),
+00090:         "queue_size": len(queue),
+00091:         "oldest_job": queue[0] if queue else {},
+00092:         "newest_job": queue[-1] if queue else {},
+00093:         "duplicate_job_ids": duplicate_job_ids,
+00094:         "healthy": len(duplicate_job_ids) == 0,
+00095:         "generated_at": now_iso(),
+00096:     }
+00097: 
+00098: 
+
+worker_heartbeat
+  exists: True
+  signature: (workspace_id: 'str', worker_id: 'str', state: 'str' = 'idle', current_job_id: 'str' = '') -> 'Dict[str, Any]'
+  lines: 99-109
+  source:
+00097: 
+00098: 
+00099: def worker_heartbeat(workspace_id: str, worker_id: str, state: str = "idle", current_job_id: str = "") -> Dict[str, Any]:
+00100:     ws = safe_id(workspace_id)
+00101:     payload = {
+00102:         "workspace_id": ws,
+00103:         "worker_id": safe_id(worker_id),
+00104:         "state": state,
+00105:         "current_job_id": current_job_id,
+00106:         "heartbeat_at": now_iso(),
+00107:     }
+00108:     write_json(WORKER_DIR / ws / f"{safe_id(worker_id)}.json", payload)
+00109:     return payload
+00110: 
+00111: 
+
+inspect_workers
+  exists: True
+  signature: (workspace_id: 'str') -> 'Dict[str, Any]'
+  lines: 112-130
+  source:
+00110: 
+00111: 
+00112: def inspect_workers(workspace_id: str) -> Dict[str, Any]:
+00113:     ws = safe_id(workspace_id)
+00114:     root = WORKER_DIR / ws
+00115:     workers = []
+00116: 
+00117:     if root.exists():
+00118:         for p in root.glob("*.json"):
+00119:             workers.append(read_json(p, {}))
+00120: 
+00121:     states = Counter(w.get("state", "unknown") for w in workers)
+00122: 
+00123:     return {
+00124:         "workspace_id": ws,
+00125:         "worker_count": len(workers),
+00126:         "idle_workers": states.get("idle", 0),
+00127:         "busy_workers": states.get("busy", 0),
+00128:         "workers": workers,
+00129:         "generated_at": now_iso(),
+00130:     }
+00131: 
+00132: 
+
+move_to_dead_letter
+  exists: True
+  signature: (workspace_id: 'str', job: 'Dict[str, Any]', reason: 'str') -> 'Dict[str, Any]'
+  lines: 133-150
+  source:
+00131: 
+00132: 
+00133: def move_to_dead_letter(workspace_id: str, job: Dict[str, Any], reason: str) -> Dict[str, Any]:
+00134:     ws = safe_id(workspace_id)
+00135:     row = {
+00136:         "workspace_id": ws,
+00137:         "job": job,
+00138:         "reason": reason,
+00139:         "moved_at": now_iso(),
+00140:     }
+00141:     path = DEAD_LETTER_DIR / ws / f"{safe_id(job.get('job_id'))}.json"
+00142:     write_json(path, row)
+00143:     update_job_status(
+00144:         workspace_id=ws,
+00145:         job_id=job.get("job_id", ""),
+00146:         status="dead_letter",
+00147:         message="Job moved to dead letter queue.",
+00148:         error=reason,
+00149:     )
+00150:     return row
+00151: 
+00152: 
+
+retry_job
+  exists: True
+  signature: (workspace_id: 'str', job: 'Dict[str, Any]') -> 'Dict[str, Any]'
+  lines: 153-178
+  source:
+00151: 
+00152: 
+00153: def retry_job(workspace_id: str, job: Dict[str, Any]) -> Dict[str, Any]:
+00154:     attempts = int(job.get("attempts") or 0) + 1
+00155:     max_attempts = int(job.get("max_attempts") or 3)
+00156: 
+00157:     if attempts > max_attempts:
+00158:         return {
+00159:             "ok": False,
+00160:             "dead_letter": move_to_dead_letter(workspace_id, job, "Retry ceiling reached."),
+00161:         }
+00162: 
+00163:     payload = dict(job.get("payload") or {})
+00164:     payload["retry_of"] = job.get("job_id")
+00165:     payload["retry_attempt"] = attempts
+00166: 
+00167:     retry = create_universal_knowledge_job(
+00168:         workspace_id=workspace_id,
+00169:         job_type=job.get("job_type"),
+00170:         payload=payload,
+00171:         priority=job.get("priority", 5),
+00172:         parent_job_id=job.get("job_id", ""),
+00173:         batch_id=job.get("batch_id", ""),
+00174:     )
+00175: 
+00176:     retry["attempts"] = attempts
+00177: 
+00178:     return {"ok": True, "retry_job": retry}
+00179: 
+00180: 
+
+create_batch
+  exists: True
+  signature: (workspace_id: 'str', batch_id: 'str', jobs: 'List[Dict[str, Any]]') -> 'Dict[str, Any]'
+  lines: 181-193
+  source:
+00179: 
+00180: 
+00181: def create_batch(workspace_id: str, batch_id: str, jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+00182:     ws = safe_id(workspace_id)
+00183:     payload = {
+00184:         "workspace_id": ws,
+00185:         "batch_id": safe_id(batch_id),
+00186:         "job_ids": [j.get("job_id") for j in jobs],
+00187:         "job_count": len(jobs),
+00188:         "status": "created",
+00189:         "created_at": now_iso(),
+00190:         "updated_at": now_iso(),
+00191:     }
+00192:     write_json(BATCH_DIR / ws / f"{safe_id(batch_id)}.json", payload)
+00193:     return payload
+00194: 
+00195: 
+
+inspect_batch
+  exists: True
+  signature: (workspace_id: 'str', batch_id: 'str') -> 'Dict[str, Any]'
+  lines: 196-206
+  source:
+00194: 
+00195: 
+00196: def inspect_batch(workspace_id: str, batch_id: str) -> Dict[str, Any]:
+00197:     ws = safe_id(workspace_id)
+00198:     batch = read_json(BATCH_DIR / ws / f"{safe_id(batch_id)}.json", {})
+00199:     statuses = [read_job_status(ws, j) for j in batch.get("job_ids", [])]
+00200:     counts = Counter(s.get("status", "unknown") for s in statuses if s)
+00201: 
+00202:     batch["status_counts"] = dict(counts)
+00203:     batch["completed"] = counts.get("completed", 0)
+00204:     batch["failed"] = counts.get("failed", 0)
+00205:     batch["generated_at"] = now_iso()
+00206:     return batch
+00207: 
+00208: 
+
+workspace_concurrency_decision
+  exists: True
+  signature: (workspace_id: 'str', max_running: 'int' = 5) -> 'Dict[str, Any]'
+  lines: 209-221
+  source:
+00207: 
+00208: 
+00209: def workspace_concurrency_decision(workspace_id: str, max_running: int = 5) -> Dict[str, Any]:
+00210:     summary = runtime_job_summary(workspace_id)
+00211:     running = int(summary.get("by_status", {}).get("running", 0))
+00212:     allowed = running < max_running
+00213: 
+00214:     return {
+00215:         "workspace_id": safe_id(workspace_id),
+00216:         "running_jobs": running,
+00217:         "max_running": max_running,
+00218:         "can_start_new_job": allowed,
+00219:         "decision": "allow" if allowed else "throttle",
+00220:         "generated_at": now_iso(),
+00221:     }
+00222: 
+00223: 
+
+runtime_metrics
+  exists: True
+  signature: (workspace_id: 'str') -> 'Dict[str, Any]'
+  lines: 224-243
+  source:
+00222: 
+00223: 
+00224: def runtime_metrics(workspace_id: str) -> Dict[str, Any]:
+00225:     summary = runtime_job_summary(workspace_id)
+00226:     total = summary.get("total_jobs", 0)
+00227:     completed = summary.get("by_status", {}).get("completed", 0)
+00228:     failed = summary.get("by_status", {}).get("failed", 0)
+00229:     dead = summary.get("by_status", {}).get("dead_letter", 0)
+00230: 
+00231:     payload = {
+00232:         "workspace_id": safe_id(workspace_id),
+00233:         "total_jobs": total,
+00234:         "completed_jobs": completed,
+00235:         "failed_jobs": failed,
+00236:         "dead_letter_jobs": dead,
+00237:         "success_rate_percent": round((completed / total) * 100, 2) if total else 0,
+00238:         "failure_rate_percent": round((failed / total) * 100, 2) if total else 0,
+00239:         "generated_at": now_iso(),
+00240:     }
+00241: 
+00242:     write_json(METRICS_DIR / safe_id(workspace_id) / "runtime_metrics.json", payload)
+00243:     return payload
+00244: 
+00245: 
+
+certify_runtime_infrastructure
+  exists: True
+  signature: (workspace_id: 'str') -> 'Dict[str, Any]'
+  lines: 246-285
+  source:
+00244: 
+00245: 
+00246: def certify_runtime_infrastructure(workspace_id: str) -> Dict[str, Any]:
+00247:     ws = safe_id(workspace_id)
+00248: 
+00249:     job_summary = runtime_job_summary(ws)
+00250:     queue = inspect_queue(ws)
+00251:     workers = inspect_workers(ws)
+00252:     metrics = runtime_metrics(ws)
+00253:     concurrency = workspace_concurrency_decision(ws)
+00254: 
+00255:     checks = {
+00256:         "job_status_api_ready": True,
+00257:         "progress_api_ready": True,
+00258:         "queue_inspector_ready": queue.get("healthy") is True,
+00259:         "worker_manager_ready": "worker_count" in workers,
+00260:         "retry_manager_ready": True,
+00261:         "dead_letter_ready": True,
+00262:         "batch_scheduler_ready": True,
+00263:         "workspace_concurrency_ready": concurrency.get("decision") in {"allow", "throttle"},
+00264:         "metrics_ready": "success_rate_percent" in metrics,
+00265:     }
+00266: 
+00267:     certified = all(checks.values())
+00268: 
+00269:     cert = {
+00270:         "schema_version": "runtime_infrastructure_certification_v1",
+00271:         "workspace_id": ws,
+00272:         "certified": certified,
+00273:         "runtime_ready": certified,
+00274:         "checks": checks,
+00275:         "job_summary": job_summary,
+00276:         "queue": queue,
+00277:         "workers": workers,
+00278:         "metrics": metrics,
+00279:         "concurrency": concurrency,
+00280:         "next_stage": "Phase 4.6.1 Semantic Article Reader" if certified else "Resolve runtime blockers",
+00281:         "certified_at": now_iso(),
+00282:     }
+00283: 
+00284:     write_json(CERT_DIR / ws / f"runtime_certification_{ws}.json", cert)
+00285:     return cert
+00286: 
+00287: 
+
+website_completion_gate
+  exists: True
+  signature: (*, workspace_id: 'str', website_id: 'str', page_jobs: 'List[Dict[str, Any]]') -> 'Dict[str, Any]'
+  lines: 289-380
+  source:
+00287: 
+00288: 
+00289: def website_completion_gate(
+00290:     *,
+00291:     workspace_id: str,
+00292:     website_id: str,
+00293:     page_jobs: List[Dict[str, Any]],
+00294: ) -> Dict[str, Any]:
+00295:     """
+00296:     Website-level completion gate.
+00297: 
+00298:     A website is complete only after all discovered page jobs have reached
+00299:     terminal states and no required page remains pending/running.
+00300:     """
+00301: 
+00302:     ws = safe_id(workspace_id)
+00303:     site = safe_id(website_id, "website")
+00304: 
+00305:     page_count = len(page_jobs)
+00306:     status_counts = Counter()
+00307: 
+00308:     failed_pages: List[Dict[str, Any]] = []
+00309:     pending_pages: List[Dict[str, Any]] = []
+00310:     completed_pages: List[Dict[str, Any]] = []
+00311: 
+00312:     terminal_statuses = {"completed", "failed", "dead_letter"}
+00313: 
+00314:     for job in page_jobs:
+00315:         job_id = job.get("job_id", "")
+00316:         status = read_job_status(ws, job_id)
+00317:         state = status.get("status") or job.get("status") or "unknown"
+00318: 
+00319:         status_counts[state] += 1
+00320: 
+00321:         row = {
+00322:             "job_id": job_id,
+00323:             "job_type": job.get("job_type"),
+00324:             "status": state,
+00325:             "url": (job.get("payload") or {}).get("url") or (job.get("payload") or {}).get("canonical_url") or "",
+00326:         }
+00327: 
+00328:         if state == "completed":
+00329:             completed_pages.append(row)
+00330:         elif state in {"failed", "dead_letter"}:
+00331:             failed_pages.append(row)
+00332:         else:
+00333:             pending_pages.append(row)
+00334: 
+00335:     all_terminal = all(
+00336:         (read_job_status(ws, j.get("job_id", "")).get("status") or j.get("status")) in terminal_statuses
+00337:         for j in page_jobs
+00338:     ) if page_jobs else False
+00339: 
+00340:     all_completed = page_count > 0 and len(completed_pages) == page_count
+00341:     has_failures = len(failed_pages) > 0
+00342:     has_pending = len(pending_pages) > 0
+00343: 
+00344:     if all_completed:
+00345:         decision = "complete"
+00346:         website_ready_for_certification = True
+00347:     elif all_terminal and has_failures:
+00348:         decision = "partial_complete_with_failures"
+00349:         website_ready_for_certification = len(completed_pages) > 0
+00350:     elif has_pending:
+00351:         decision = "in_progress"
+00352:         website_ready_for_certification = False
+00353:     else:
+00354:         decision = "blocked"
+00355:         website_ready_for_certification = False
+00356: 
+00357:     gate = {
+00358:         "schema_version": "website_completion_gate_v1",
+00359:         "workspace_id": ws,
+00360:         "website_id": site,
+00361:         "page_count": page_count,
+00362:         "completed_count": len(completed_pages),
+00363:         "failed_count": len(failed_pages),
+00364:         "pending_count": len(pending_pages),
+00365:         "status_counts": dict(status_counts),
+00366:         "completed_pages": completed_pages,
+00367:         "failed_pages": failed_pages,
+00368:         "pending_pages": pending_pages,
+00369:         "all_terminal": all_terminal,
+00370:         "all_completed": all_completed,
+00371:         "decision": decision,
+00372:         "website_ready_for_certification": website_ready_for_certification,
+00373:         "created_at": now_iso(),
+00374:     }
+00375: 
+00376:     path = RUNTIME_ROOT / "website_completion_gates" / ws / f"website_completion_gate_{site}.json"
+00377:     write_json(path, gate)
+00378:     gate["gate_path"] = str(path)
+00379: 
+00380:     return gate
+00381: 
+00382: 
+
+upload_batch_completion_gate
+  exists: True
+  signature: (*, workspace_id: 'str', upload_batch_id: 'str', document_jobs: 'List[Dict[str, Any]]') -> 'Dict[str, Any]'
+  lines: 384-476
+  source:
+00382: 
+00383: 
+00384: def upload_batch_completion_gate(
+00385:     *,
+00386:     workspace_id: str,
+00387:     upload_batch_id: str,
+00388:     document_jobs: List[Dict[str, Any]],
+00389: ) -> Dict[str, Any]:
+00390:     """
+00391:     Upload-batch completion gate.
+00392: 
+00393:     A document upload batch is complete only after all uploaded document jobs
+00394:     have reached terminal states.
+00395:     """
+00396: 
+00397:     ws = safe_id(workspace_id)
+00398:     batch = safe_id(upload_batch_id, "upload_batch")
+00399: 
+00400:     document_count = len(document_jobs)
+00401:     status_counts = Counter()
+00402: 
+00403:     failed_documents: List[Dict[str, Any]] = []
+00404:     pending_documents: List[Dict[str, Any]] = []
+00405:     completed_documents: List[Dict[str, Any]] = []
+00406: 
+00407:     terminal_statuses = {"completed", "failed", "dead_letter"}
+00408: 
+00409:     for job in document_jobs:
+00410:         job_id = job.get("job_id", "")
+00411:         status = read_job_status(ws, job_id)
+00412:         state = status.get("status") or job.get("status") or "unknown"
+00413: 
+00414:         status_counts[state] += 1
+00415: 
+00416:         row = {
+00417:             "job_id": job_id,
+00418:             "job_type": job.get("job_type"),
+00419:             "status": state,
+00420:             "document_id": (job.get("payload") or {}).get("document_id") or "",
+00421:             "filename": (job.get("payload") or {}).get("filename") or "",
+00422:         }
+00423: 
+00424:         if state == "completed":
+00425:             completed_documents.append(row)
+00426:         elif state in {"failed", "dead_letter"}:
+00427:             failed_documents.append(row)
+00428:         else:
+00429:             pending_documents.append(row)
+00430: 
+00431:     all_terminal = all(
+00432:         (read_job_status(ws, j.get("job_id", "")).get("status") or j.get("status")) in terminal_statuses
+00433:         for j in document_jobs
+00434:     ) if document_jobs else False
+00435: 
+00436:     all_completed = document_count > 0 and len(completed_documents) == document_count
+00437:     has_failures = len(failed_documents) > 0
+00438:     has_pending = len(pending_documents) > 0
+00439: 
+00440:     if all_completed:
+00441:         decision = "complete"
+00442:         upload_ready_for_certification = True
+00443:     elif all_terminal and has_failures:
+00444:         decision = "partial_complete_with_failures"
+00445:         upload_ready_for_certification = len(completed_documents) > 0
+00446:     elif has_pending:
+00447:         decision = "in_progress"
+00448:         upload_ready_for_certification = False
+00449:     else:
+00450:         decision = "blocked"
+00451:         upload_ready_for_certification = False
+00452: 
+00453:     gate = {
+00454:         "schema_version": "upload_batch_completion_gate_v1",
+00455:         "workspace_id": ws,
+00456:         "upload_batch_id": batch,
+00457:         "document_count": document_count,
+00458:         "completed_count": len(completed_documents),
+00459:         "failed_count": len(failed_documents),
+00460:         "pending_count": len(pending_documents),
+00461:         "status_counts": dict(status_counts),
+00462:         "completed_documents": completed_documents,
+00463:         "failed_documents": failed_documents,
+00464:         "pending_documents": pending_documents,
+00465:         "all_terminal": all_terminal,
+00466:         "all_completed": all_completed,
+00467:         "decision": decision,
+00468:         "upload_ready_for_certification": upload_ready_for_certification,
+00469:         "created_at": now_iso(),
+00470:     }
+00471: 
+00472:     path = RUNTIME_ROOT / "upload_batch_completion_gates" / ws / f"upload_batch_completion_gate_{batch}.json"
+00473:     write_json(path, gate)
+00474:     gate["gate_path"] = str(path)
+00475: 
+00476:     return gate
+
+PUBLIC CLASSES
+
+RUNTIME-RELATED CALL SITES
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_runtime_kernel
+========================================================================================================================
+FILE: backend\server\runtime\universal_runtime_kernel.py
+SHA256: ED1D9C898FA32D98BAE1FB4931ECFA8E9076162E45ACD7336CA415CB3E139083
+
+PUBLIC / TARGET FUNCTION SIGNATURES
+
+PUBLIC CLASSES
+
+RuntimeKernelError
+  lines: 51-52
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.universal_runtime_kernel.RuntimeKernelError'>")>
+
+RuntimeKernelBindingError
+  lines: 55-56
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.universal_runtime_kernel.RuntimeKernelBindingError'>")>
+
+RuntimeKernelMissingComponentError
+  lines: 59-60
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.universal_runtime_kernel.RuntimeKernelMissingComponentError'>")>
+
+RuntimeKernelStateError
+  lines: 63-64
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.universal_runtime_kernel.RuntimeKernelStateError'>")>
+
+RuntimeKernelState
+  lines: 67-83
+  signature: (*values)
+
+KernelComponentBinding
+  lines: 163-174
+  signature: (key: 'str', component_type: 'str', bound_at: 'datetime', generation: 'int') -> None
+
+RuntimeKernelSnapshot
+  lines: 178-190
+  signature: (runtime_id: 'str', product_name: 'str', state: 'RuntimeKernelState', generation: 'int', created_at: 'datetime', updated_at: 'datetime', component_count: 'int', components: 'tuple[KernelComponentBinding, ...]', missing_foundation_components: 'tuple[str, ...]', failure_reason: 'str | None') -> None
+
+UniversalRuntimeKernel
+  lines: 193-625
+  signature: (*, runtime_id: 'str', product_name: 'str') -> 'None'
+
+RUNTIME-RELATED CALL SITES
+  NONE
+
+========================================================================================================================
+CROSS-MODULE RUNTIME DEPENDENCY DIRECTION
+========================================================================================================================
+
+backend.server.runtime.universal_jobs.creation_engine
+  -> backend.server.runtime.universal_jobs.attempts
+  -> backend.server.runtime.universal_jobs.contract
+  -> backend.server.runtime.universal_jobs.idempotency_key
+  -> backend.server.runtime.universal_jobs.identity
+  -> backend.server.runtime.universal_jobs.lineage
+  -> backend.server.runtime.universal_jobs.metadata
+  -> backend.server.runtime.universal_jobs.payload_reference
+  -> backend.server.runtime.universal_jobs.priority
+  -> backend.server.runtime.universal_jobs.status
+
+backend.server.runtime.universal_runtime_registration
+  -> NONE
+
+backend.server.runtime.universal_runtime_infrastructure
+  -> NONE
+
+backend.server.runtime.universal_runtime_kernel
+  -> NONE
+
+========================================================================================================================
+PHASE 5.1 ENTRY-POINT RESOLUTION QUESTIONS
+========================================================================================================================
+
+- Which function is the canonical top-level Runtime submission boundary?
+- Does the top-level Runtime accept UniversalJob or a creation request?
+- Is create_universal_job() creation-only, or does it also enqueue/dispatch?
+- Does execute_registered_runtime_job_v1() expect an existing UniversalJob?
+- Does universal_runtime_infrastructure.py call Runtime Registration internally?
+- Does universal_runtime_kernel.py own execution lifecycle beyond registration dispatch?
+- Which component owns job persistence/queue insertion?
+- Which component owns handler lookup?
+- Which component owns actual handler execution?
+- Can 5.1 hand directly to Runtime without importing Runtime Registration?
+- Should 5.1 know nothing about handlers?
+- Should 5.1 expose intent only and leave UniversalJob creation to 5.2?

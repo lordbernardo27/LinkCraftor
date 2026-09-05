@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import re
@@ -2646,7 +2646,7 @@ def detect_adjacent_claim_relations_v1(
 
                 "reason_reasoning_stage":
                     (
-                        "4.6.7"
+                        "4.6.8"
                         if reason_deferred
                         else None
                     ),
@@ -11300,7 +11300,7 @@ def certify_logical_intelligence_v1(
             "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
 
         "next_stage":
-            "causal_intelligence",
+            "relational_intelligence",
     })
 
     return certified_result
@@ -11324,3 +11324,4 @@ __all__ = [
     "build_final_logical_intelligence_result_v1",
     "certify_logical_intelligence_v1",
 ]
+

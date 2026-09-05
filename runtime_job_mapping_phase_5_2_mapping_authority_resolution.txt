@@ -1,0 +1,2080 @@
+LINKCRAFTOR
+UNIVERSAL COORDINATION FRAMEWORK
+PHASE 5.2 — RUNTIME JOB MAPPING
+MAPPING AUTHORITY RESOLUTION
+========================================================================================================================
+
+1. FROZEN PHASE 5.1 INTEGRITY
+========================================================================================================================
+Current SHA256: 2DD7AF262C879B4DD58A484AB7470D9EA9883A80DDE3C77F1DC1ACDFD35CD0E2
+Exact frozen SHA: True
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_job_submission
+========================================================================================================================
+FILE: backend\server\runtime\universal_job_submission.py
+SHA256: 07BA2DA8C0A2CFA899DE696D7892652A0AA6D56939B364C8C6B7F0B741B05704
+
+PUBLIC FUNCTIONS
+
+submit_universal_job
+  signature: (*, workspace_id: 'str', job_type: 'str', payload: 'Optional[Mapping[str, Any]]' = None, metadata: 'Optional[Mapping[str, Any]]' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = 5, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Optional[Iterable[Any]]' = None, batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, job_id: 'Optional[str]' = None, created_at: 'Optional[str]' = None, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None, enqueue: 'bool' = True) -> 'dict[str, Any]'
+  lines: 183-485
+  source:
+00181: 
+00182: 
+00183: def submit_universal_job(
+00184:     *,
+00185:     workspace_id: str,
+00186:     job_type: str,
+00187:     payload: Optional[
+00188:         Mapping[str, Any]
+00189:     ] = None,
+00190:     metadata: Optional[
+00191:         Mapping[str, Any]
+00192:     ] = None,
+00193:     user_id: str = "system",
+00194:     product_id: str = "linkcraftor",
+00195:     pipeline: str = "",
+00196:     stage: str = "",
+00197:     payload_reference: Optional[str] = None,
+00198:     priority: Any = 5,
+00199:     parent_job_id: Optional[str] = None,
+00200:     dependency_job_ids: Optional[
+00201:         Iterable[Any]
+00202:     ] = None,
+00203:     batch_id: Optional[str] = None,
+00204:     pipeline_run_id: Optional[str] = None,
+00205:     idempotency_key: Optional[str] = None,
+00206:     maximum_attempts: Optional[int] = None,
+00207:     job_id: Optional[str] = None,
+00208:     created_at: Optional[str] = None,
+00209:     supported_job_types: Optional[
+00210:         Iterable[Any]
+00211:     ] = None,
+00212:     runtime_registration: Optional[
+00213:         Mapping[str, Any]
+00214:     ] = None,
+00215:     enqueue: bool = True,
+00216: ) -> dict[str, Any]:
+00217:     """
+00218:     Create one canonical Universal Job and submit that SAME identity
+00219:     into the LinkCraftor orchestration store.
+00220: 
+00221:     This is an I/O boundary.
+00222: 
+00223:     Creation authority:
+00224:         Universal Job Creation Engine
+00225: 
+00226:     Registration authority:
+00227:         Universal Runtime Registration
+00228: 
+00229:     Persistence / queue authority:
+00230:         orchestration.service -> orchestration.job_store
+00231: 
+00232:     The Creation Engine remains I/O-free.
+00233:     """
+00234: 
+00235:     if not enqueue:
+00236:         raise UniversalJobSubmissionError(
+00237:             (
+00238:                 "Universal job submission currently represents the "
+00239:                 "persisted queued ingress and therefore requires "
+00240:                 "enqueue=True."
+00241:             ),
+00242:             code="submission_requires_enqueue",
+00243:         )
+00244: 
+00245:     effective_registration = (
+00246:         runtime_registration
+00247:     )
+00248: 
+00249:     if effective_registration is None:
+00250:         effective_registration = (
+00251:             get_runtime_registration(
+00252:                 job_type
+00253:             )
+00254:         )
+00255: 
+00256:     creation_result = (
+00257:         create_universal_job(
+00258:             workspace_id=workspace_id,
+00259:             job_type=job_type,
+00260:             payload=payload,
+00261:             metadata=metadata,
+00262:             user_id=user_id,
+00263:             product_id=product_id,
+00264:             pipeline=pipeline,
+00265:             stage=stage,
+00266:             payload_reference=(
+00267:                 payload_reference
+00268:             ),
+00269:             priority=priority,
+00270:             parent_job_id=(
+00271:                 parent_job_id
+00272:             ),
+00273:             dependency_job_ids=(
+00274:                 dependency_job_ids
+00275:             ),
+00276:             batch_id=batch_id,
+00277:             pipeline_run_id=(
+00278:                 pipeline_run_id
+00279:             ),
+00280:             idempotency_key=(
+00281:                 idempotency_key
+00282:             ),
+00283:             maximum_attempts=(
+00284:                 maximum_attempts
+00285:             ),
+00286:             enqueue=True,
+00287:             job_id=job_id,
+00288:             created_at=created_at,
+00289:             supported_job_types=(
+00290:                 supported_job_types
+00291:             ),
+00292:             runtime_registration=(
+00293:                 effective_registration
+00294:             ),
+00295:         )
+00296:     )
+00297: 
+00298:     creation_document = (
+00299:         creation_result.to_dict()
+00300:     )
+00301: 
+00302:     canonical_job = dict(
+00303:         creation_document.get(
+00304:             "job"
+00305:         )
+00306:         or {}
+00307:     )
+00308: 
+00309:     canonical_job_id = str(
+00310:         canonical_job.get(
+00311:             "job_id"
+00312:         )
+00313:         or ""
+00314:     ).strip()
+00315: 
+00316:     if not canonical_job_id:
+00317:         raise UniversalJobSubmissionError(
+00318:             (
+00319:                 "Universal Job Creation Engine returned "
+00320:                 "no canonical job_id."
+00321:             ),
+00322:             code="missing_canonical_job_id",
+00323:         )
+00324: 
+00325:     canonical_workspace_id = str(
+00326:         canonical_job.get(
+00327:             "workspace_id"
+00328:         )
+00329:         or workspace_id
+00330:         or ""
+00331:     ).strip()
+00332: 
+00333:     canonical_job_type = str(
+00334:         canonical_job.get(
+00335:             "job_type"
+00336:         )
+00337:         or job_type
+00338:         or ""
+00339:     ).strip()
+00340: 
+00341:     orchestration_priority = (
+00342:         _canonical_orchestration_priority(
+00343:             canonical_job.get(
+00344:                 "priority",
+00345:                 priority,
+00346:             )
+00347:         )
+00348:     )
+00349: 
+00350:     orchestration_metadata = (
+00351:         _build_orchestration_metadata(
+00352:             creation_result=(
+00353:                 creation_result
+00354:             )
+00355:         )
+00356:     )
+00357: 
+00358:     orchestration_job = (
+00359:         create_orchestration_job(
+00360:             workspace_id=(
+00361:                 canonical_workspace_id
+00362:             ),
+00363:             job_type=(
+00364:                 canonical_job_type
+00365:             ),
+00366:             payload=dict(
+00367:                 creation_document.get(
+00368:                     "payload"
+00369:                 )
+00370:                 or {}
+00371:             ),
+00372:             metadata=(
+00373:                 orchestration_metadata
+00374:             ),
+00375:             priority=(
+00376:                 orchestration_priority
+00377:             ),
+00378:             job_id=(
+00379:                 canonical_job_id
+00380:             ),
+00381:         )
+00382:     )
+00383: 
+00384:     persisted_job_id = str(
+00385:         orchestration_job.job_id
+00386:         or ""
+00387:     ).strip()
+00388: 
+00389:     if (
+00390:         persisted_job_id
+00391:         != canonical_job_id
+00392:     ):
+00393:         raise UniversalJobSubmissionError(
+00394:             (
+00395:                 "Orchestration persisted a different job identity "
+00396:                 "than the canonical Universal Job identity."
+00397:             ),
+00398:             code="orchestration_identity_mismatch",
+00399:         )
+00400: 
+00401:     persisted_status = str(
+00402:         orchestration_job.status
+00403:         or ""
+00404:     ).strip()
+00405: 
+00406:     if (
+00407:         persisted_status
+00408:         != "queued"
+00409:     ):
+00410:         raise UniversalJobSubmissionError(
+00411:             (
+00412:                 "Submitted Universal Job was not persisted "
+00413:                 "with queued orchestration status."
+00414:             ),
+00415:             code="orchestration_not_queued",
+00416:         )
+00417: 
+00418:     result = dict(
+00419:         canonical_job
+00420:     )
+00421: 
+00422:     # Preserve the payload and creation metadata in the familiar
+00423:     # job-shaped result consumed by existing pipeline callers.
+00424:     result[
+00425:         "payload"
+00426:     ] = dict(
+00427:         creation_document.get(
+00428:             "payload"
+00429:         )
+00430:         or {}
+00431:     )
+00432: 
+00433:     result[
+00434:         "metadata"
+00435:     ] = dict(
+00436:         creation_document.get(
+00437:             "metadata"
+00438:         )
+00439:         or {}
+00440:     )
+00441: 
+00442:     result[
+00443:         "registration"
+00444:     ] = (
+00445:         creation_document.get(
+00446:             "registration"
+00447:         )
+00448:     )
+00449: 
+00450:     result[
+00451:         "identity_fingerprint"
+00452:     ] = creation_document.get(
+00453:         "identity_fingerprint"
+00454:     )
+00455: 
+00456:     result[
+00457:         "contract_fingerprint"
+00458:     ] = creation_document.get(
+00459:         "contract_fingerprint"
+00460:     )
+00461: 
+00462:     result[
+00463:         "content_fingerprint"
+00464:     ] = creation_document.get(
+00465:         "content_fingerprint"
+00466:     )
+00467: 
+00468:     result[
+00469:         "orchestration"
+00470:     ] = asdict(
+00471:         orchestration_job
+00472:     )
+00473: 
+00474:     result[
+00475:         "submission"
+00476:     ] = {
+00477:         "submission_version": (
+00478:             UNIVERSAL_JOB_SUBMISSION_VERSION
+00479:         ),
+00480:         "persisted": True,
+00481:         "queued": True,
+00482:         "canonical_identity_preserved": True,
+00483:     }
+00484: 
+00485:     return result
+00486: 
+00487: 
+
+explain_universal_job_submission_v1
+  signature: () -> 'dict[str, Any]'
+  lines: 488-534
+  source:
+00486: 
+00487: 
+00488: def explain_universal_job_submission_v1(
+00489: ) -> dict[str, Any]:
+00490:     return {
+00491:         "component": (
+00492:             "Universal Job Submission / Orchestration Ingress"
+00493:         ),
+00494:         "version": (
+00495:             UNIVERSAL_JOB_SUBMISSION_VERSION
+00496:         ),
+00497:         "scope": "LinkCraftor-wide",
+00498:         "canonical_operation": (
+00499:             "submit_universal_job"
+00500:         ),
+00501:         "creation_authority": (
+00502:             "Universal Job Creation Engine"
+00503:         ),
+00504:         "registration_authority": (
+00505:             "Universal Runtime Registration"
+00506:         ),
+00507:         "persistence_authority": (
+00508:             "orchestration.service / orchestration.job_store"
+00509:         ),
+00510:         "queue_authority": (
+00511:             "orchestration.queue"
+00512:         ),
+00513:         "identity_rule": (
+00514:             "The canonical Universal Job job_id is persisted "
+00515:             "unchanged into orchestration."
+00516:         ),
+00517:         "prohibitions": [
+00518:             (
+00519:                 "does not generate a second runtime job identity"
+00520:             ),
+00521:             (
+00522:                 "does not move persistence into the "
+00523:                 "Universal Job Creation Engine"
+00524:             ),
+00525:             (
+00526:                 "does not use the legacy "
+00527:                 "universal_knowledge_orchestrator"
+00528:             ),
+00529:             (
+00530:                 "does not define final Job Priority semantics; "
+00531:                 "Phase 2.1.6 remains authoritative"
+00532:             ),
+00533:         ],
+00534:     }
+00535: 
+00536: 
+
+PUBLIC CLASSES
+
+UniversalJobSubmissionError
+  signature: (message: 'str', *, code: 'str') -> 'None'
+
+IMPORTANT CALLS
+  line 257: create_universal_job(...)
+  line 251: get_runtime_registration(...)
+
+SEMANTIC FIELD MARKERS
+  pipeline_run_id: 3
+  correlation_id: 0
+  workflow_id: 0
+  stage_id: 0
+  runtime_stage: 0
+  job_type: 12
+  enqueue: 5
+  priority: 20
+  maximum_attempts: 3
+  idempotency_key: 3
+  parent_job_id: 3
+  dependency_job_ids: 3
+  batch_id: 3
+  metadata: 19
+  payload: 11
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_jobs.creation_engine
+  -> backend.server.runtime.universal_runtime_registration
+
+COORDINATION IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_orchestration.run_identity
+========================================================================================================================
+FILE: backend\server\runtime\universal_orchestration\run_identity.py
+SHA256: B43C2C86B07F06FA3B89C4BF2B14E68DC82DEA1E23112AE44E35139266AA6626
+
+PUBLIC FUNCTIONS
+
+normalize_universal_orchestration_run_id
+  signature: (value: 'Any') -> 'str'
+  lines: 49-87
+  source:
+00047: 
+00048: 
+00049: def normalize_universal_orchestration_run_id(
+00050:     value: Any,
+00051: ) -> str:
+00052: 
+00053:     try:
+00054: 
+00055:         return normalize_universal_orchestration_identifier(
+00056:             value,
+00057:             field_name="orchestration_run_id",
+00058:         )
+00059: 
+00060:     except Exception as exc:
+00061: 
+00062:         if isinstance(
+00063:             exc,
+00064:             UniversalOrchestrationRunIdentityError,
+00065:         ):
+00066: 
+00067:             raise
+00068: 
+00069:         code = getattr(
+00070:             exc,
+00071:             "code",
+00072:             "invalid_orchestration_run_id",
+00073:         )
+00074: 
+00075:         if code == "orchestration_identifier_too_long":
+00076: 
+00077:             code = "orchestration_run_id_too_long"
+00078: 
+00079:         else:
+00080: 
+00081:             code = "invalid_orchestration_run_id"
+00082: 
+00083:         raise UniversalOrchestrationRunIdentityError(
+00084:             "Invalid orchestration_run_id.",
+00085:             code=code,
+00086:             value=value,
+00087:         ) from exc
+00088: 
+00089: 
+
+calculate_universal_orchestration_contract_fingerprint
+  signature: (contract: 'Any') -> 'str'
+  lines: 126-160
+  source:
+00124: 
+00125: 
+00126: def calculate_universal_orchestration_contract_fingerprint(
+00127:     contract: Any,
+00128: ) -> str:
+00129: 
+00130:     canonical_contract = (
+00131:         _require_orchestration_contract(
+00132:             contract
+00133:         )
+00134:     )
+00135: 
+00136:     parts = (
+00137:         "universal_runtime_orchestration_contract_identity_v1",
+00138:         canonical_contract.schema_version,
+00139:         canonical_contract.workspace_id,
+00140:         canonical_contract.pipeline,
+00141:         str(
+00142:             canonical_contract.job_count
+00143:         ),
+00144:         *canonical_contract.job_ids,
+00145:     )
+00146: 
+00147:     material = "|".join(
+00148:         _length_prefixed(
+00149:             str(
+00150:                 part
+00151:             )
+00152:         )
+00153:         for part in parts
+00154:     )
+00155: 
+00156:     return hashlib.sha256(
+00157:         material.encode(
+00158:             "utf-8"
+00159:         )
+00160:     ).hexdigest().upper()
+00161: 
+00162: 
+
+calculate_universal_orchestration_run_identity_fingerprint
+  signature: (*, orchestration_run_id: 'Any', contract: 'Any') -> 'str'
+  lines: 163-206
+  source:
+00161: 
+00162: 
+00163: def calculate_universal_orchestration_run_identity_fingerprint(
+00164:     *,
+00165:     orchestration_run_id: Any,
+00166:     contract: Any,
+00167: ) -> str:
+00168: 
+00169:     normalized_run_id = (
+00170:         normalize_universal_orchestration_run_id(
+00171:             orchestration_run_id
+00172:         )
+00173:     )
+00174: 
+00175:     canonical_contract = (
+00176:         _require_orchestration_contract(
+00177:             contract
+00178:         )
+00179:     )
+00180: 
+00181:     contract_fingerprint = (
+00182:         calculate_universal_orchestration_contract_fingerprint(
+00183:             canonical_contract
+00184:         )
+00185:     )
+00186: 
+00187:     parts = (
+00188:         UNIVERSAL_ORCHESTRATION_RUN_IDENTITY_SCHEMA_VERSION,
+00189:         normalized_run_id,
+00190:         contract_fingerprint,
+00191:     )
+00192: 
+00193:     material = "|".join(
+00194:         _length_prefixed(
+00195:             str(
+00196:                 part
+00197:             )
+00198:         )
+00199:         for part in parts
+00200:     )
+00201: 
+00202:     return hashlib.sha256(
+00203:         material.encode(
+00204:             "utf-8"
+00205:         )
+00206:     ).hexdigest().upper()
+00207: 
+00208: 
+
+create_universal_orchestration_run_identity
+  signature: (*, orchestration_run_id: 'Any', contract: 'Any') -> 'UniversalOrchestrationRunIdentity'
+  lines: 314-323
+  source:
+00312: 
+00313: 
+00314: def create_universal_orchestration_run_identity(
+00315:     *,
+00316:     orchestration_run_id: Any,
+00317:     contract: Any,
+00318: ) -> UniversalOrchestrationRunIdentity:
+00319: 
+00320:     return UniversalOrchestrationRunIdentity(
+00321:         orchestration_run_id=orchestration_run_id,
+00322:         contract=contract,
+00323:     )
+00324: 
+00325: 
+
+explain_universal_orchestration_run_identity_v1
+  signature: () -> 'Mapping[str, Any]'
+  lines: 326-470
+  source:
+00324: 
+00325: 
+00326: def explain_universal_orchestration_run_identity_v1(
+00327: ) -> Mapping[str, Any]:
+00328: 
+00329:     return MappingProxyType(
+00330:         {
+00331:             "phase":
+00332:                 "5.1.2",
+00333: 
+00334:             "component":
+00335:                 "Universal Orchestration Run Identity",
+00336: 
+00337:             "version":
+00338:                 UNIVERSAL_ORCHESTRATION_RUN_IDENTITY_VERSION,
+00339: 
+00340:             "schema_version":
+00341:                 UNIVERSAL_ORCHESTRATION_RUN_IDENTITY_SCHEMA_VERSION,
+00342: 
+00343:             "hash_algorithm":
+00344:                 UNIVERSAL_ORCHESTRATION_IDENTITY_HASH_ALGORITHM,
+00345: 
+00346:             "stored_fields": (
+00347:                 "orchestration_run_id",
+00348:                 "contract",
+00349:                 "schema_version",
+00350:             ),
+00351: 
+00352:             "identity_rule": (
+00353:                 "One runtime orchestration run is identified by a "
+00354:                 "caller-supplied orchestration_run_id bound to one "
+00355:                 "immutable 5.1.1 Universal Runtime Orchestration Contract."
+00356:             ),
+00357: 
+00358:             "generation_rule": (
+00359:                 "5.1.2 validates caller-supplied orchestration_run_id "
+00360:                 "and does not generate identifiers using UUIDs, "
+00361:                 "randomness, timestamps, wall clock, counters, or storage."
+00362:             ),
+00363: 
+00364:             "contract_binding_rule": (
+00365:                 "The run identity stores the immutable 5.1.1 contract "
+00366:                 "rather than duplicating workspace_id, pipeline, or job_ids."
+00367:             ),
+00368: 
+00369:             "contract_fingerprint_rule": (
+00370:                 "contract_fingerprint is deterministically derived from "
+00371:                 "the exact canonical 5.1.1 contract and is not stored."
+00372:             ),
+00373: 
+00374:             "identity_fingerprint_rule": (
+00375:                 "identity_fingerprint is deterministically derived from "
+00376:                 "orchestration_run_id, contract_fingerprint, and the "
+00377:                 "5.1.2 identity schema version and is not stored."
+00378:             ),
+00379: 
+00380:             "multiple_run_rule": (
+00381:                 "The same 5.1.1 orchestration contract may participate "
+00382:                 "in multiple independently identified orchestration runs."
+00383:             ),
+00384: 
+00385:             "pipeline_run_boundary": (
+00386:                 "Universal Job pipeline_run_id remains optional "
+00387:                 "job-lineage/correlation evidence and is not the "
+00388:                 "5.1.2 orchestration_run_id."
+00389:             ),
+00390: 
+00391:             "batch_boundary": (
+00392:                 "Universal Job batch_id remains grouping/correlation "
+00393:                 "evidence and is not orchestration_run_id."
+00394:             ),
+00395: 
+00396:             "job_boundary": (
+00397:                 "Universal Job job_id identifies one job and is not "
+00398:                 "orchestration_run_id."
+00399:             ),
+00400: 
+00401:             "workflow_boundary": (
+00402:                 "Universal Coordination Framework workflow_id remains "
+00403:                 "a higher-layer coordination identity and is not "
+00404:                 "orchestration_run_id."
+00405:             ),
+00406: 
+00407:             "correlation_boundary": (
+00408:                 "Coordination correlation_id remains separate from "
+00409:                 "Runtime Orchestration run identity."
+00410:             ),
+00411: 
+00412:             "state_boundary": (
+00413:                 "Orchestration lifecycle state belongs to "
+00414:                 "5.1.3 Orchestration State Model."
+00415:             ),
+00416: 
+00417:             "persistence_boundary": (
+00418:                 "5.1.2 performs no persistence and does not access "
+00419:                 "Runtime State Store."
+00420:             ),
+00421: 
+00422:             "execution_boundary": (
+00423:                 "5.1.2 performs no queue, worker, Runtime Registration, "
+00424:                 "handler dispatch, or job execution activity."
+00425:             ),
+00426: 
+00427:             "prohibitions": (
+00428:                 "does not generate orchestration_run_id",
+00429:                 "does not use UUID generation",
+00430:                 "does not use randomness",
+00431:                 "does not use timestamps for identity",
+00432:                 "does not use wall clock",
+00433:                 "does not use counters for identity",
+00434:                 "does not use storage for identity generation",
+00435:                 "does not redefine Universal Job job_id",
+00436:                 "does not redefine Universal Job pipeline_run_id",
+00437:                 "does not redefine Universal Job batch_id",
+00438:                 "does not redefine Coordination workflow_id",
+00439:                 "does not redefine Coordination correlation_id",
+00440:                 "does not define orchestration lifecycle state",
+00441:                 "does not transition orchestration state",
+00442:                 "does not resolve dependencies",
+00443:                 "does not determine execution order",
+00444:                 "does not determine readiness",
+00445:                 "does not perform fan-out",
+00446:                 "does not perform fan-in",
+00447:                 "does not evaluate conditional branches",
+00448:                 "does not perform runtime handoffs",
+00449:                 "does not track orchestration progress",
+00450:                 "does not restore checkpoints",
+00451:                 "does not perform orchestration recovery",
+00452:                 "does not determine completion",
+00453:                 "does not determine cancellation",
+00454:                 "does not enqueue jobs",
+00455:                 "does not claim jobs",
+00456:                 "does not assign workers",
+00457:                 "does not acquire worker leases",
+00458:                 "does not register runtime handlers",
+00459:                 "does not dispatch runtime handlers",
+00460:                 "does not execute runtime handlers",
+00461:                 "does not execute jobs",
+00462:                 "does not import Universal Coordination Framework",
+00463:                 "does not invoke pipeline coordinators",
+00464:                 "does not persist orchestration identity",
+00465:                 "does not access Runtime State Store",
+00466:                 "does not perform filesystem I/O",
+00467:                 "does not perform network I/O",
+00468:             ),
+00469:         }
+00470:     )
+00471: 
+00472: 
+
+PUBLIC CLASSES
+
+UniversalOrchestrationRunIdentityError
+  signature: (message: 'str', *, code: 'str', value: 'Any' = None) -> 'None'
+
+UniversalOrchestrationRunIdentity
+  signature: (orchestration_run_id: 'str', contract: 'UniversalRuntimeOrchestrationContract', schema_version: 'str' = 'universal_orchestration_run_identity_schema_v1') -> None
+  dataclass fields:
+    - orchestration_run_id
+    - contract
+    - schema_version
+
+IMPORTANT CALLS
+  NONE
+
+SEMANTIC FIELD MARKERS
+  pipeline_run_id: 2
+  correlation_id: 2
+  workflow_id: 2
+  stage_id: 0
+  runtime_stage: 0
+  job_type: 0
+  enqueue: 1
+  priority: 0
+  maximum_attempts: 0
+  idempotency_key: 0
+  parent_job_id: 0
+  dependency_job_ids: 0
+  batch_id: 2
+  metadata: 0
+  payload: 0
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_orchestration.contract
+
+COORDINATION IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.uucd_runtime_handoff_v1
+========================================================================================================================
+FILE: backend\server\runtime\uucd_runtime_handoff_v1.py
+SHA256: F05461120C36CF68BEBA006F4CEB194741AB93052BD1ABDFE7FFE9060BE928F3
+
+PUBLIC FUNCTIONS
+
+build_uucd_runtime_idempotency_key_v1
+  signature: (*, workspace_id: 'str', document_id: 'str', content_hash: 'str', persistence_fingerprint: 'str', job_type: 'str' = 'uucd_runtime_handoff') -> 'str'
+  lines: 391-441
+  source:
+00389: 
+00390: 
+00391: def build_uucd_runtime_idempotency_key_v1(
+00392:     *,
+00393:     workspace_id: str,
+00394:     document_id: str,
+00395:     content_hash: str,
+00396:     persistence_fingerprint: str,
+00397:     job_type: str = UUCD_RUNTIME_JOB_TYPE,
+00398: ) -> str:
+00399:     """
+00400:     Build deterministic logical identity for one UUCD runtime handoff.
+00401: 
+00402:     This is deliberately separate from the Universal Job's job_id.
+00403:     """
+00404: 
+00405:     material = {
+00406:         "workspace_id":
+00407:             workspace_id,
+00408: 
+00409:         "document_id":
+00410:             document_id,
+00411: 
+00412:         "content_hash":
+00413:             content_hash,
+00414: 
+00415:         "persistence_fingerprint":
+00416:             persistence_fingerprint,
+00417: 
+00418:         "job_type":
+00419:             job_type,
+00420:     }
+00421: 
+00422:     canonical = json.dumps(
+00423:         material,
+00424:         ensure_ascii=False,
+00425:         sort_keys=True,
+00426:         separators=(
+00427:             ",",
+00428:             ":",
+00429:         ),
+00430:     )
+00431: 
+00432:     digest = hashlib.sha256(
+00433:         canonical.encode(
+00434:             "utf-8"
+00435:         )
+00436:     ).hexdigest()
+00437: 
+00438:     return (
+00439:         "uucd_runtime_handoff_"
+00440:         + digest
+00441:     )
+00442: 
+00443: 
+
+build_uucd_runtime_payload_v1
+  signature: (persisted_uucd_record: 'Mapping[str, Any]') -> 'dict[str, Any]'
+  lines: 444-494
+  source:
+00442: 
+00443: 
+00444: def build_uucd_runtime_payload_v1(
+00445:     persisted_uucd_record: Mapping[str, Any],
+00446: ) -> dict[str, Any]:
+00447:     """
+00448:     Build the canonical metadata/reference-only runtime payload.
+00449: 
+00450:     Article body bytes are never included here.
+00451:     """
+00452: 
+00453:     validated = _validate_persisted_uucd(
+00454:         persisted_uucd_record
+00455:     )
+00456: 
+00457:     payload = {
+00458:         "document_id":
+00459:             validated[
+00460:                 "document_id"
+00461:             ],
+00462: 
+00463:         "content_ref":
+00464:             validated[
+00465:                 "content_ref"
+00466:             ],
+00467: 
+00468:         "body_ref":
+00469:             validated[
+00470:                 "body_ref"
+00471:             ],
+00472: 
+00473:         "source_type":
+00474:             validated[
+00475:                 "source_type"
+00476:             ],
+00477: 
+00478:         "content_hash":
+00479:             validated[
+00480:                 "content_hash"
+00481:             ],
+00482: 
+00483:         "persistence_fingerprint":
+00484:             validated[
+00485:                 "persistence_fingerprint"
+00486:             ],
+00487:     }
+00488: 
+00489:     if "content_body" in payload:
+00490:         raise UUCDRuntimeHandoffContractError(
+00491:             "Runtime payload unexpectedly contains content_body."
+00492:         )
+00493: 
+00494:     return payload
+00495: 
+00496: 
+
+handoff_persisted_uucd_to_runtime_v1
+  signature: (persisted_uucd_record: 'Mapping[str, Any]', *, runtime_registration: 'Mapping[str, Any] | None' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', priority: 'int' = 5) -> 'dict[str, Any]'
+  lines: 610-1091
+  source:
+00608: 
+00609: 
+00610: def handoff_persisted_uucd_to_runtime_v1(
+00611:     persisted_uucd_record: Mapping[str, Any],
+00612:     *,
+00613:     runtime_registration: Mapping[str, Any] | None = None,
+00614:     user_id: str = "system",
+00615:     product_id: str = "linkcraftor",
+00616:     priority: int = 5,
+00617: ) -> dict[str, Any]:
+00618:     """
+00619:     Create and persist one canonical Universal Job for a persisted UUCD.
+00620: 
+00621:     The Universal Job Creation Engine remains I/O-free.
+00622: 
+00623:     The resulting canonical Universal Job job_id is then supplied to the
+00624:     orchestration store through Stage 10.5's caller-owned identity ingress.
+00625:     """
+00626: 
+00627:     validated = _validate_persisted_uucd(
+00628:         persisted_uucd_record
+00629:     )
+00630: 
+00631:     payload = build_uucd_runtime_payload_v1(
+00632:         persisted_uucd_record
+00633:     )
+00634: 
+00635:     idempotency_key = (
+00636:         build_uucd_runtime_idempotency_key_v1(
+00637:             workspace_id=validated[
+00638:                 "workspace_id"
+00639:             ],
+00640:             document_id=validated[
+00641:                 "document_id"
+00642:             ],
+00643:             content_hash=validated[
+00644:                 "content_hash"
+00645:             ],
+00646:             persistence_fingerprint=validated[
+00647:                 "persistence_fingerprint"
+00648:             ],
+00649:             job_type=UUCD_RUNTIME_JOB_TYPE,
+00650:         )
+00651:     )
+00652: 
+00653:     registration = (
+00654:         _resolve_runtime_registration(
+00655:             job_type=UUCD_RUNTIME_JOB_TYPE,
+00656:             runtime_registration=runtime_registration,
+00657:         )
+00658:     )
+00659: 
+00660:     existing_orchestration_job = (
+00661:         _find_existing_orchestration_job_by_idempotency_key_v1(
+00662:             workspace_id=validated[
+00663:                 "workspace_id"
+00664:             ],
+00665:             job_type=UUCD_RUNTIME_JOB_TYPE,
+00666:             idempotency_key=idempotency_key,
+00667:         )
+00668:     )
+00669: 
+00670:     if existing_orchestration_job is not None:
+00671: 
+00672:         existing_metadata = (
+00673:             existing_orchestration_job.metadata
+00674:             if isinstance(
+00675:                 existing_orchestration_job.metadata,
+00676:                 dict,
+00677:             )
+00678:             else {}
+00679:         )
+00680: 
+00681:         existing_canonical_job = (
+00682:             existing_metadata.get(
+00683:                 "canonical_universal_job"
+00684:             )
+00685:         )
+00686: 
+00687:         if not isinstance(
+00688:             existing_canonical_job,
+00689:             Mapping,
+00690:         ):
+00691:             raise UUCDRuntimeHandoffPersistenceError(
+00692:                 "Existing idempotent orchestration job does not "
+00693:                 "contain canonical_universal_job metadata."
+00694:             )
+00695: 
+00696:         existing_job_id = (
+00697:             _require_non_empty_string(
+00698:                 existing_orchestration_job.job_id,
+00699:                 field_name="existing_orchestration_job.job_id",
+00700:             )
+00701:         )
+00702: 
+00703:         if (
+00704:             existing_canonical_job.get(
+00705:                 "job_id"
+00706:             )
+00707:             != existing_job_id
+00708:         ):
+00709:             raise UUCDRuntimeHandoffPersistenceError(
+00710:                 "Existing idempotent job violates canonical "
+00711:                 "job identity preservation."
+00712:             )
+00713: 
+00714:         if (
+00715:             existing_canonical_job.get(
+00716:                 "idempotency_key"
+00717:             )
+00718:             != idempotency_key
+00719:         ):
+00720:             raise UUCDRuntimeHandoffPersistenceError(
+00721:                 "Existing canonical Universal Job idempotency_key "
+00722:                 "does not match orchestration metadata."
+00723:             )
+00724: 
+00725:         return {
+00726:             "schema_version":
+00727:                 UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+00728: 
+00729:             "handoff_version":
+00730:                 UUCD_RUNTIME_HANDOFF_VERSION,
+00731: 
+00732:             "handoff_status":
+00733:                 "IDEMPOTENT_REUSE",
+00734: 
+00735:             "job_id":
+00736:                 existing_job_id,
+00737: 
+00738:             "canonical_universal_job":
+00739:                 deepcopy(
+00740:                     dict(
+00741:                         existing_canonical_job
+00742:                     )
+00743:                 ),
+00744: 
+00745:             "orchestration_job": {
+00746:                 "job_id":
+00747:                     existing_orchestration_job.job_id,
+00748: 
+00749:                 "workspace_id":
+00750:                     existing_orchestration_job.workspace_id,
+00751: 
+00752:                 "job_type":
+00753:                     existing_orchestration_job.job_type,
+00754: 
+00755:                 "status":
+00756:                     existing_orchestration_job.status,
+00757: 
+00758:                 "priority":
+00759:                     existing_orchestration_job.priority,
+00760: 
+00761:                 "payload":
+00762:                     deepcopy(
+00763:                         existing_orchestration_job.payload
+00764:                     ),
+00765: 
+00766:                 "metadata":
+00767:                     deepcopy(
+00768:                         existing_orchestration_job.metadata
+00769:                     ),
+00770: 
+00771:                 "assigned_worker_id":
+00772:                     existing_orchestration_job.assigned_worker_id,
+00773:             },
+00774: 
+00775:             "idempotency_key":
+00776:                 idempotency_key,
+00777: 
+00778:             "idempotent_reuse":
+00779:                 True,
+00780: 
+00781:             "new_universal_job_created":
+00782:                 False,
+00783: 
+00784:             "new_orchestration_job_created":
+00785:                 False,
+00786: 
+00787:             "body_content_in_job":
+00788:                 False,
+00789: 
+00790:             "old_universal_knowledge_jsonl_used":
+00791:                 False,
+00792: 
+00793:             "worker_executed":
+00794:                 False,
+00795: 
+00796:             "handler_dispatched":
+00797:                 False,
+00798: 
+00799:             "semantic_processing_performed":
+00800:                 False,
+00801: 
+00802:             "next_stage":
+00803:                 "universal_runtime_worker",
+00804:         }
+00805: 
+00806:     creation_result = create_universal_job(
+00807:         workspace_id=validated[
+00808:             "workspace_id"
+00809:         ],
+00810:         job_type=UUCD_RUNTIME_JOB_TYPE,
+00811:         payload=payload,
+00812:         metadata={
+00813:             "source_component":
+00814:                 "Canonical UUCD Persistence",
+00815: 
+00816:             "handoff_adapter":
+00817:                 UUCD_RUNTIME_HANDOFF_VERSION,
+00818: 
+00819:             "document_id":
+00820:                 validated[
+00821:                     "document_id"
+00822:                 ],
+00823: 
+00824:             "persistence_fingerprint":
+00825:                 validated[
+00826:                     "persistence_fingerprint"
+00827:                 ],
+00828: 
+00829:             "body_content_in_job":
+00830:                 False,
+00831:         },
+00832:         user_id=user_id,
+00833:         product_id=product_id,
+00834:         pipeline=UUCD_RUNTIME_PIPELINE,
+00835:         stage=UUCD_RUNTIME_STAGE,
+00836:         payload_reference=validated[
+00837:             "content_ref"
+00838:         ],
+00839:         idempotency_key=idempotency_key,
+00840:         enqueue=True,
+00841:         runtime_registration=registration,
+00842:     )
+00843: 
+00844:     universal_job = (
+00845:         creation_result.job
+00846:     )
+00847: 
+00848:     canonical_job = (
+00849:         universal_job.to_canonical_dict()
+00850:     )
+00851: 
+00852:     canonical_job_id = (
+00853:         _require_non_empty_string(
+00854:             canonical_job.get(
+00855:                 "job_id"
+00856:             ),
+00857:             field_name="canonical_job.job_id",
+00858:         )
+00859:     )
+00860: 
+00861:     if (
+00862:         canonical_job.get(
+00863:             "workspace_id"
+00864:         )
+00865:         != validated[
+00866:             "workspace_id"
+00867:         ]
+00868:     ):
+00869:         raise UUCDRuntimeHandoffContractError(
+00870:             "Universal Job workspace_id drifted "
+00871:             "from the persisted UUCD."
+00872:         )
+00873: 
+00874:     if (
+00875:         canonical_job.get(
+00876:             "payload_reference"
+00877:         )
+00878:         != validated[
+00879:             "content_ref"
+00880:         ]
+00881:     ):
+00882:         raise UUCDRuntimeHandoffContractError(
+00883:             "Universal Job payload_reference drifted "
+00884:             "from canonical UUCD content_ref."
+00885:         )
+00886: 
+00887:     if (
+00888:         canonical_job.get(
+00889:             "idempotency_key"
+00890:         )
+00891:         != idempotency_key
+00892:     ):
+00893:         raise UUCDRuntimeHandoffContractError(
+00894:             "Universal Job idempotency_key drifted."
+00895:         )
+00896: 
+00897:     try:
+00898: 
+00899:         orchestration_job = (
+00900:             create_orchestration_job(
+00901:                 workspace_id=validated[
+00902:                     "workspace_id"
+00903:                 ],
+00904:                 job_type=UUCD_RUNTIME_JOB_TYPE,
+00905:                 payload=deepcopy(
+00906:                     payload
+00907:                 ),
+00908:                 metadata={
+00909:                     "canonical_universal_job":
+00910:                         canonical_job,
+00911: 
+00912:                     "universal_job_contract_version":
+00913:                         canonical_job.get(
+00914:                             "contract_version"
+00915:                         ),
+00916: 
+00917:                     "payload_reference":
+00918:                         validated[
+00919:                             "content_ref"
+00920:                         ],
+00921: 
+00922:                     "idempotency_key":
+00923:                         idempotency_key,
+00924: 
+00925:                     "persistence_fingerprint":
+00926:                         validated[
+00927:                             "persistence_fingerprint"
+00928:                         ],
+00929: 
+00930:                     "handoff_adapter":
+00931:                         UUCD_RUNTIME_HANDOFF_VERSION,
+00932: 
+00933:                     "body_content_in_job":
+00934:                         False,
+00935:                 },
+00936:                 priority=priority,
+00937:                 job_id=canonical_job_id,
+00938:             )
+00939:         )
+00940: 
+00941:     except Exception as exc:
+00942:         raise UUCDRuntimeHandoffPersistenceError(
+00943:             "Canonical orchestration ingress failed."
+00944:         ) from exc
+00945: 
+00946:     if (
+00947:         orchestration_job.job_id
+00948:         != canonical_job_id
+00949:     ):
+00950:         raise UUCDRuntimeHandoffPersistenceError(
+00951:             "Orchestration layer changed the "
+00952:             "canonical Universal Job identity."
+00953:         )
+00954: 
+00955:     if (
+00956:         orchestration_job.status
+00957:         != "queued"
+00958:     ):
+00959:         raise UUCDRuntimeHandoffPersistenceError(
+00960:             "New orchestration job must enter "
+00961:             "the canonical queue as status=queued."
+00962:         )
+00963: 
+00964:     certificate = {
+00965:         "certificate_schema_version":
+00966:             UUCD_RUNTIME_HANDOFF_CERTIFICATE_SCHEMA_VERSION,
+00967: 
+00968:         "certificate_status":
+00969:             "CERTIFIED",
+00970: 
+00971:         "handoff_version":
+00972:             UUCD_RUNTIME_HANDOFF_VERSION,
+00973: 
+00974:         "workspace_id":
+00975:             validated[
+00976:                 "workspace_id"
+00977:             ],
+00978: 
+00979:         "document_id":
+00980:             validated[
+00981:                 "document_id"
+00982:             ],
+00983: 
+00984:         "job_id":
+00985:             canonical_job_id,
+00986: 
+00987:         "job_type":
+00988:             UUCD_RUNTIME_JOB_TYPE,
+00989: 
+00990:         "pipeline":
+00991:             UUCD_RUNTIME_PIPELINE,
+00992: 
+00993:         "stage":
+00994:             UUCD_RUNTIME_STAGE,
+00995: 
+00996:         "payload_reference":
+00997:             validated[
+00998:                 "content_ref"
+00999:             ],
+01000: 
+01001:         "body_ref":
+01002:             validated[
+01003:                 "body_ref"
+01004:             ],
+01005: 
+01006:         "content_hash":
+01007:             validated[
+01008:                 "content_hash"
+01009:             ],
+01010: 
+01011:         "persistence_fingerprint":
+01012:             validated[
+01013:                 "persistence_fingerprint"
+01014:             ],
+01015: 
+01016:         "idempotency_key":
+01017:             idempotency_key,
+01018: 
+01019:         "job_identity_preserved":
+01020:             True,
+01021: 
+01022:         "orchestration_status":
+01023:             orchestration_job.status,
+01024: 
+01025:         "body_content_in_job":
+01026:             False,
+01027: 
+01028:         "old_universal_knowledge_jsonl_used":
+01029:             False,
+01030: 
+01031:         "runtime_registration_modified":
+01032:             False,
+01033: 
+01034:         "worker_executed":
+01035:             False,
+01036: 
+01037:         "handler_dispatched":
+01038:             False,
+01039: 
+01040:         "semantic_processing_performed":
+01041:             False,
+01042: 
+01043:         "certified_at":
+01044:             _utc_now_iso(),
+01045:     }
+01046: 
+01047:     return {
+01048:         "schema_version":
+01049:             UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+01050: 
+01051:         "handoff_status":
+01052:             "QUEUED",
+01053: 
+01054:         "job_id":
+01055:             canonical_job_id,
+01056: 
+01057:         "job_type":
+01058:             UUCD_RUNTIME_JOB_TYPE,
+01059: 
+01060:         "payload":
+01061:             deepcopy(
+01062:                 payload
+01063:             ),
+01064: 
+01065:         "canonical_universal_job":
+01066:             canonical_job,
+01067: 
+01068:         "orchestration_job":
+01069:             {
+01070:                 "job_id":
+01071:                     orchestration_job.job_id,
+01072: 
+01073:                 "workspace_id":
+01074:                     orchestration_job.workspace_id,
+01075: 
+01076:                 "job_type":
+01077:                     orchestration_job.job_type,
+01078: 
+01079:                 "status":
+01080:                     orchestration_job.status,
+01081: 
+01082:                 "priority":
+01083:                     orchestration_job.priority,
+01084:             },
+01085: 
+01086:         "handoff_certificate":
+01087:             certificate,
+01088: 
+01089:         "next_stage":
+01090:             "universal_runtime_worker",
+01091:     }
+01092: 
+01093: 
+
+explain_uucd_runtime_handoff_v1
+  signature: () -> 'dict[str, Any]'
+  lines: 1094-1159
+  source:
+01092: 
+01093: 
+01094: def explain_uucd_runtime_handoff_v1() -> dict[str, Any]:
+01095:     """Return the canonical Stage 10.7 handoff contract."""
+01096: 
+01097:     return {
+01098:         "component":
+01099:             "Canonical UUCD Runtime Handoff Adapter",
+01100: 
+01101:         "version":
+01102:             UUCD_RUNTIME_HANDOFF_VERSION,
+01103: 
+01104:         "job_type":
+01105:             UUCD_RUNTIME_JOB_TYPE,
+01106: 
+01107:         "pipeline":
+01108:             UUCD_RUNTIME_PIPELINE,
+01109: 
+01110:         "stage":
+01111:             UUCD_RUNTIME_STAGE,
+01112: 
+01113:         "required_payload_fields":
+01114:             list(
+01115:                 UUCD_RUNTIME_REQUIRED_PAYLOAD_FIELDS
+01116:             ),
+01117: 
+01118:         "payload_reference_rule":
+01119:             "persisted_uucd.content_ref",
+01120: 
+01121:         "body_reference_rule":
+01122:             "payload.body_ref only; body bytes excluded",
+01123: 
+01124:         "idempotency_material": [
+01125:             "workspace_id",
+01126:             "document_id",
+01127:             "content_hash",
+01128:             "persistence_fingerprint",
+01129:             "job_type",
+01130:         ],
+01131: 
+01132:         "job_identity_rule":
+01133:             (
+01134:                 "Universal Job Creation Engine creates one "
+01135:                 "canonical job_id; orchestration persists "
+01136:                 "that exact same job_id."
+01137:             ),
+01138: 
+01139:         "runtime_registration_required":
+01140:             True,
+01141: 
+01142:         "runtime_registration_mutated":
+01143:             False,
+01144: 
+01145:         "old_jsonl_queue_used":
+01146:             False,
+01147: 
+01148:         "worker_executed":
+01149:             False,
+01150: 
+01151:         "handler_dispatched":
+01152:             False,
+01153: 
+01154:         "semantic_processing_performed":
+01155:             False,
+01156: 
+01157:         "next_stage":
+01158:             "universal_runtime_worker",
+01159:     }
+01160: 
+01161: 
+
+PUBLIC CLASSES
+
+UUCDRuntimeHandoffError
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.uucd_runtime_handoff_v1.UUCDRuntimeHandoffError'>")>
+
+UUCDRuntimeHandoffContractError
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.uucd_runtime_handoff_v1.UUCDRuntimeHandoffContractError'>")>
+
+UUCDRuntimeHandoffRegistrationError
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.uucd_runtime_handoff_v1.UUCDRuntimeHandoffRegistrationError'>")>
+
+UUCDRuntimeHandoffPersistenceError
+  signature: <SIGNATURE ERROR: ValueError("no signature found for builtin type <class 'backend.server.runtime.uucd_runtime_handoff_v1.UUCDRuntimeHandoffPersistenceError'>")>
+
+IMPORTANT CALLS
+  line 806: create_universal_job(...)
+  line 515: get_runtime_registration(...)
+
+SEMANTIC FIELD MARKERS
+  pipeline_run_id: 0
+  correlation_id: 0
+  workflow_id: 0
+  stage_id: 0
+  runtime_stage: 0
+  job_type: 29
+  enqueue: 1
+  priority: 7
+  maximum_attempts: 0
+  idempotency_key: 26
+  parent_job_id: 0
+  dependency_job_ids: 0
+  batch_id: 0
+  metadata: 22
+  payload: 27
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_jobs.creation_engine
+  -> backend.server.runtime.universal_runtime_registration
+
+COORDINATION IMPORTS
+  NONE
+
+========================================================================================================================
+MODULE: backend.server.runtime.universal_jobs.creation_engine
+========================================================================================================================
+FILE: backend\server\runtime\universal_jobs\creation_engine.py
+SHA256: 7BFDC36731B7AD48885258BCBA8337186430EC1C6A7C2E876ACA223E6E05D63F
+
+PUBLIC FUNCTIONS
+
+normalize_universal_job_creation_request
+  signature: (request: 'UniversalJobCreationRequest', *, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'tuple[UniversalJobCreationRequest, str, Optional[Mapping[str, Any]]]'
+  lines: 511-727
+  source:
+00509: 
+00510: 
+00511: def normalize_universal_job_creation_request(
+00512:     request: UniversalJobCreationRequest,
+00513:     *,
+00514:     supported_job_types: Optional[Iterable[Any]] = None,
+00515:     runtime_registration: Optional[Mapping[str, Any]] = None,
+00516: ) -> tuple[
+00517:     UniversalJobCreationRequest,
+00518:     str,
+00519:     Optional[Mapping[str, Any]],
+00520: ]:
+00521:     if not isinstance(request, UniversalJobCreationRequest):
+00522:         raise UniversalJobCreationError(
+00523:             "request must be UniversalJobCreationRequest.",
+00524:             code="invalid_creation_request",
+00525:             violations=("request must be UniversalJobCreationRequest",),
+00526:         )
+00527: 
+00528:     workspace_id = _clean_text(request.workspace_id)
+00529: 
+00530:     if not workspace_id:
+00531:         raise UniversalJobCreationError(
+00532:             "workspace_id is required.",
+00533:             code="missing_workspace_id",
+00534:             violations=("workspace_id is required",),
+00535:         )
+00536: 
+00537:     try:
+00538:         job_type = validate_universal_job_type(
+00539:             request.job_type
+00540:         )
+00541:     except UniversalJobIdentityError as exc:
+00542:         raise UniversalJobCreationError(
+00543:             str(exc),
+00544:             code=exc.code,
+00545:             violations=exc.violations or (str(exc),),
+00546:         ) from exc
+00547: 
+00548:     payload = _normalize_mapping(
+00549:         request.payload,
+00550:         field_name="payload",
+00551:     )
+00552:     try:
+00553:         metadata = normalize_universal_job_metadata(
+00554:             request.metadata
+00555:         )
+00556:     except UniversalJobMetadataError as exc:
+00557:         raise UniversalJobCreationError(
+00558:             str(exc),
+00559:             code=exc.code,
+00560:             violations=exc.violations or (str(exc),),
+00561:         ) from exc
+00562:     try:
+00563:         parent_job_id = normalize_parent_job_id(
+00564:             request.parent_job_id
+00565:         )
+00566:         dependencies = normalize_dependency_job_ids(
+00567:             request.dependency_job_ids
+00568:         )
+00569:         batch_id = normalize_batch_id(
+00570:             request.batch_id
+00571:         )
+00572:         pipeline_run_id = normalize_pipeline_run_id(
+00573:             request.pipeline_run_id
+00574:         )
+00575: 
+00576:     except UniversalJobLineageError as exc:
+00577:         raise UniversalJobCreationError(
+00578:             str(exc),
+00579:             code=exc.code,
+00580:             violations=(str(exc),),
+00581:         ) from exc
+00582:     static_job_types = _normalize_supported_job_types(
+00583:         supported_job_types,
+00584:     )
+00585:     source, registration = _resolve_registration(
+00586:         job_type=job_type,
+00587:         supported_job_types=static_job_types,
+00588:         runtime_registration=runtime_registration,
+00589:     )
+00590:     _validate_registered_payload(
+00591:         registration=registration,
+00592:         payload=payload,
+00593:     )
+00594: 
+00595:     registration_pipeline = (
+00596:         registration.get("pipeline")
+00597:         if registration is not None
+00598:         else ""
+00599:     )
+00600:     registration_stage = (
+00601:         registration.get("stage")
+00602:         if registration is not None
+00603:         else ""
+00604:     )
+00605: 
+00606:     pipeline = _first_text(
+00607:         request.pipeline,
+00608:         payload.get("pipeline"),
+00609:         payload.get("pipeline_name"),
+00610:         registration_pipeline,
+00611:         fallback="universal_knowledge",
+00612:     )
+00613:     stage = _first_text(
+00614:         request.stage,
+00615:         payload.get("stage"),
+00616:         payload.get("stage_name"),
+00617:         registration_stage,
+00618:         fallback=job_type,
+00619:     )
+00620:     user_id = _first_text(
+00621:         request.user_id,
+00622:         payload.get("user_id"),
+00623:         fallback="system",
+00624:     )
+00625:     product_id = _first_text(
+00626:         request.product_id,
+00627:         payload.get("product_id"),
+00628:         fallback="linkcraftor",
+00629:     )
+00630:     payload_reference = normalize_universal_job_payload_reference(
+00631:         request.payload_reference
+00632:     )
+00633:     priority = _resolve_priority(request.priority)
+00634:     maximum_attempts = _resolve_maximum_attempts(
+00635:         request.maximum_attempts,
+00636:         payload,
+00637:         registration,
+00638:     )
+00639: 
+00640:     if not isinstance(request.enqueue, bool):
+00641:         raise UniversalJobCreationError(
+00642:             "enqueue must be a boolean.",
+00643:             code="invalid_enqueue",
+00644:             violations=(
+00645:                 "enqueue must be either True or False",
+00646:             ),
+00647:         )
+00648: 
+00649:     if (
+00650:         not isinstance(request.job_id_prefix, str)
+00651:         or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+00652:     ):
+00653:         raise UniversalJobCreationError(
+00654:             "job_id_prefix is fixed by the Universal Job identity namespace.",
+00655:             code="invalid_job_id_prefix",
+00656:             violations=(
+00657:                 f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+00658:             ),
+00659:         )
+00660: 
+00661:     created_at = _clean_text(request.created_at) or _utc_now()
+00662: 
+00663:     try:
+00664:         job_id = resolve_universal_job_id(
+00665:             request.job_id
+00666:         )
+00667:     except UniversalJobIdentityError as exc:
+00668:         raise UniversalJobCreationError(
+00669:             str(exc),
+00670:             code=exc.code,
+00671:             violations=exc.violations or (str(exc),),
+00672:         ) from exc
+00673: 
+00674:     try:
+00675:         lineage = validate_universal_job_lineage(
+00676:             job_id=job_id,
+00677:             parent_job_id=parent_job_id,
+00678:             dependency_job_ids=dependencies,
+00679:             batch_id=batch_id,
+00680:             pipeline_run_id=pipeline_run_id,
+00681:         )
+00682: 
+00683:     except UniversalJobLineageError as exc:
+00684:         raise UniversalJobCreationError(
+00685:             str(exc),
+00686:             code=exc.code,
+00687:             violations=(str(exc),),
+00688:         ) from exc
+00689: 
+00690:     try:
+00691:         idempotency_key = (
+00692:             normalize_universal_job_idempotency_key(
+00693:                 request.idempotency_key
+00694:             )
+00695:         )
+00696: 
+00697:     except UniversalJobIdempotencyKeyError as exc:
+00698:         raise UniversalJobCreationError(
+00699:             str(exc),
+00700:             code=exc.code,
+00701:             violations=(str(exc),),
+00702:         ) from exc
+00703: 
+00704:     normalized = UniversalJobCreationRequest(
+00705:         workspace_id=workspace_id,
+00706:         job_type=job_type,
+00707:         payload=payload,
+00708:         metadata=metadata,
+00709:         user_id=user_id,
+00710:         product_id=product_id,
+00711:         pipeline=pipeline,
+00712:         stage=stage,
+00713:         payload_reference=payload_reference,
+00714:         priority=priority,
+00715:         parent_job_id=lineage.parent_job_id,
+00716:         dependency_job_ids=lineage.dependency_job_ids,
+00717:         batch_id=lineage.batch_id,
+00718:         pipeline_run_id=lineage.pipeline_run_id,
+00719:         idempotency_key=idempotency_key,
+00720:         maximum_attempts=maximum_attempts,
+00721:         enqueue=request.enqueue,
+00722:         job_id=job_id,
+00723:         job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+00724:         created_at=created_at,
+00725:     )
+00726: 
+00727:     return normalized, source, registration
+00728: 
+00729: 
+
+create_universal_job
+  signature: (*, workspace_id: 'str', job_type: 'str', payload: 'Optional[Mapping[str, Any]]' = None, metadata: 'Optional[Mapping[str, Any]]' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Optional[Iterable[Any]]' = None, batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'UniversalJobCreationResult'
+  lines: 730-868
+  source:
+00728: 
+00729: 
+00730: def create_universal_job(
+00731:     *,
+00732:     workspace_id: str,
+00733:     job_type: str,
+00734:     payload: Optional[Mapping[str, Any]] = None,
+00735:     metadata: Optional[Mapping[str, Any]] = None,
+00736:     user_id: str = "system",
+00737:     product_id: str = "linkcraftor",
+00738:     pipeline: str = "",
+00739:     stage: str = "",
+00740:     payload_reference: Optional[str] = None,
+00741:     priority: Any = UniversalJobPriority.NORMAL,
+00742:     parent_job_id: Optional[str] = None,
+00743:     dependency_job_ids: Optional[Iterable[Any]] = None,
+00744:     batch_id: Optional[str] = None,
+00745:     pipeline_run_id: Optional[str] = None,
+00746:     idempotency_key: Optional[str] = None,
+00747:     maximum_attempts: Optional[int] = None,
+00748:     enqueue: bool = True,
+00749:     job_id: Optional[str] = None,
+00750:     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+00751:     created_at: Optional[str] = None,
+00752:     supported_job_types: Optional[Iterable[Any]] = None,
+00753:     runtime_registration: Optional[Mapping[str, Any]] = None,
+00754: ) -> UniversalJobCreationResult:
+00755:     """Validate and construct one canonical Universal Job without I/O."""
+00756: 
+00757:     request = UniversalJobCreationRequest(
+00758:         workspace_id=workspace_id,
+00759:         job_type=job_type,
+00760:         payload={} if payload is None else payload,
+00761:         metadata={} if metadata is None else metadata,
+00762:         user_id=user_id,
+00763:         product_id=product_id,
+00764:         pipeline=pipeline,
+00765:         stage=stage,
+00766:         payload_reference=payload_reference,
+00767:         priority=priority,
+00768:         parent_job_id=parent_job_id,
+00769:         dependency_job_ids=(
+00770:             ()
+00771:             if dependency_job_ids is None
+00772:             else dependency_job_ids
+00773:         ),
+00774:         batch_id=batch_id,
+00775:         pipeline_run_id=pipeline_run_id,
+00776:         idempotency_key=idempotency_key,
+00777:         maximum_attempts=maximum_attempts,
+00778:         enqueue=enqueue,
+00779:         job_id=job_id,
+00780:         job_id_prefix=job_id_prefix,
+00781:         created_at=created_at,
+00782:     )
+00783: 
+00784:     normalized, source, registration = (
+00785:         normalize_universal_job_creation_request(
+00786:             request,
+00787:             supported_job_types=supported_job_types,
+00788:             runtime_registration=runtime_registration,
+00789:         )
+00790:     )
+00791: 
+00792:     status = initial_universal_job_status(
+00793:         enqueue=normalized.enqueue,
+00794:     )
+00795:     message = (
+00796:         "Job queued."
+00797:         if normalized.enqueue
+00798:         else "Job created without queue dispatch."
+00799:     )
+00800: 
+00801:     try:
+00802:         job = UniversalJob(
+00803:             job_id=normalized.job_id or "",
+00804:             workspace_id=normalized.workspace_id,
+00805:             user_id=normalized.user_id,
+00806:             product_id=normalized.product_id,
+00807:             pipeline=normalized.pipeline,
+00808:             stage=normalized.stage,
+00809:             job_type=normalized.job_type,
+00810:             payload_reference=normalized.payload_reference,
+00811:             priority=normalized.priority,
+00812:             status=status,
+00813:             attempts=initial_universal_job_attempts(),
+00814:             maximum_attempts=normalized.maximum_attempts,
+00815:             lease_owner=None,
+00816:             lease_id=None,
+00817:             lease_started_at=None,
+00818:             lease_expires_at=None,
+00819:             parent_job_id=normalized.parent_job_id,
+00820:             dependency_job_ids=normalized.dependency_job_ids,
+00821:             batch_id=normalized.batch_id,
+00822:             pipeline_run_id=normalized.pipeline_run_id,
+00823:             progress=UniversalJobProgress(
+00824:                 percent=0,
+00825:                 step=normalized.stage,
+00826:                 message=message,
+00827:                 updated_at=normalized.created_at,
+00828:             ),
+00829:             checkpoint_reference=None,
+00830:             result_reference=None,
+00831:             artifact_references=(),
+00832:             idempotency_key=normalized.idempotency_key,
+00833:             AU_reserved=0,
+00834:             AU_consumed=0,
+00835:             cost_record=UniversalJobCostRecord(),
+00836:             created_at=normalized.created_at,
+00837:             scheduled_at=None,
+00838:             started_at=None,
+00839:             completed_at=None,
+00840:             failed_at=None,
+00841:             cancelled_at=None,
+00842:             error_code=None,
+00843:             error_message=None,
+00844:             error_details={},
+00845:         )
+00846:     except UniversalJobContractError as exc:
+00847:         raise UniversalJobCreationError(
+00848:             "Universal Job Contract rejected the creation request.",
+00849:             code="contract_validation_failed",
+00850:             violations=exc.violations or (str(exc),),
+00851:         ) from exc
+00852: 
+00853:     validation = validate_universal_job(job)
+00854:     if not validation.is_valid:
+00855:         raise UniversalJobCreationError(
+00856:             "Created Universal Job failed final validation.",
+00857:             code="final_validation_failed",
+00858:             violations=validation.violations,
+00859:         )
+00860: 
+00861:     return UniversalJobCreationResult(
+00862:         job=job,
+00863:         payload=normalized.payload,
+00864:         metadata=normalized.metadata,
+00865:         registration=registration,
+00866:         enqueue_requested=normalized.enqueue,
+00867:         job_type_source=source,
+00868:     )
+00869: 
+00870: 
+
+explain_universal_job_creation_engine_v1
+  signature: () -> 'dict[str, Any]'
+  lines: 871-896
+  source:
+00869: 
+00870: 
+00871: def explain_universal_job_creation_engine_v1() -> dict[str, Any]:
+00872:     return {
+00873:         "phase": "2.1.2",
+00874:         "component": "Universal Job Creation Engine",
+00875:         "creation_engine_version": UNIVERSAL_JOB_CREATION_ENGINE_VERSION,
+00876:         "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+00877:         "canonical_operation": "create_universal_job",
+00878:         "responsibilities": [
+00879:             "validate creation inputs",
+00880:             "resolve static job types or caller-supplied Runtime Registration metadata",
+00881:             "validate registered required payload fields",
+00882:             "normalize creation identity and classification",
+00883:             "construct the certified Universal Job Contract",
+00884:             "return a normalized creation result",
+00885:         ],
+00886:         "prohibitions": [
+00887:             "no queue writes",
+00888:             "no persistence writes",
+00889:             "no worker execution",
+00890:             "no handler dispatch",
+00891:             "no ledger writes",
+00892:             "no progress-file writes",
+00893:             "no persistent Runtime Registration loading",
+00894:             "no state transitions beyond initial creation status",
+00895:         ],
+00896:     }
+00897: 
+00898: 
+
+PUBLIC CLASSES
+
+UniversalJobCreationError
+  signature: (message: 'str', *, code: 'str', violations: 'Sequence[str]' = ()) -> 'None'
+
+UniversalJobCreationRequest
+  signature: (workspace_id: 'str', job_type: 'str', payload: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Tuple[str, ...]' = (), batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None) -> None
+  dataclass fields:
+    - workspace_id
+    - job_type
+    - payload
+    - metadata
+    - user_id
+    - product_id
+    - pipeline
+    - stage
+    - payload_reference
+    - priority
+    - parent_job_id
+    - dependency_job_ids
+    - batch_id
+    - pipeline_run_id
+    - idempotency_key
+    - maximum_attempts
+    - enqueue
+    - job_id
+    - job_id_prefix
+    - created_at
+
+UniversalJobCreationResult
+  signature: (job: 'UniversalJob', payload: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', registration: 'Optional[Mapping[str, Any]]', enqueue_requested: 'bool', job_type_source: 'str', creation_engine_version: 'str' = 'universal_job_creation_engine_v2.1.2') -> None
+  dataclass fields:
+    - job
+    - payload
+    - metadata
+    - registration
+    - enqueue_requested
+    - job_type_source
+    - creation_engine_version
+
+IMPORTANT CALLS
+  line 785: normalize_universal_job_creation_request(...)
+
+SEMANTIC FIELD MARKERS
+  pipeline_run_id: 14
+  correlation_id: 0
+  workflow_id: 0
+  stage_id: 0
+  runtime_stage: 0
+  job_type: 55
+  enqueue: 18
+  priority: 17
+  maximum_attempts: 18
+  idempotency_key: 13
+  parent_job_id: 14
+  dependency_job_ids: 13
+  batch_id: 14
+  metadata: 23
+  payload: 58
+
+RUNTIME IMPORTS
+  -> backend.server.runtime.universal_jobs.attempts
+  -> backend.server.runtime.universal_jobs.contract
+  -> backend.server.runtime.universal_jobs.idempotency_key
+  -> backend.server.runtime.universal_jobs.identity
+  -> backend.server.runtime.universal_jobs.lineage
+  -> backend.server.runtime.universal_jobs.metadata
+  -> backend.server.runtime.universal_jobs.payload_reference
+  -> backend.server.runtime.universal_jobs.priority
+  -> backend.server.runtime.universal_jobs.status
+
+COORDINATION IMPORTS
+  NONE
+
+========================================================================================================================
+3. PHASE 5.2 AUTHORITY QUESTIONS
+========================================================================================================================
+
+A. UNIVERSAL JOB CREATION
+- Does universal_job_submission.py call create_universal_job()?
+- Does it own queue/persistence/submission after creation?
+- Is create_universal_job() itself still I/O-free?
+
+B. 5.2 OUTPUT TYPE
+- Should Phase 5.2 construct UniversalJobCreationRequest only?
+- Should Phase 5.2 call create_universal_job() and return UniversalJobCreationResult?
+- Should Phase 5.2 hand to universal_job_submission.py instead?
+
+C. CORRELATION OWNERSHIP
+- Is pipeline_run_id a Runtime run identity rather than Coordination workflow identity?
+- Does run_identity.py already own generation/resolution of pipeline_run_id?
+- Does correlation_id belong in Runtime metadata until Phase 5.3?
+- Should workflow_id remain metadata until Phase 5.3?
+
+D. STAGE IDENTITY
+- Should request.pipeline = RuntimeHandoffIntent.pipeline_id?
+- Should request.stage = RuntimeHandoffIntent.runtime_stage?
+- Should coordination stage_id remain metadata?
+
+E. DEFAULT / RUNTIME-OWNED FIELDS
+- Should user_id remain Universal Job default unless separately supplied?
+- Should product_id remain Universal Job default unless separately supplied?
+- Should priority remain Universal Job default?
+- Should maximum_attempts remain Creation Engine/registration default?
+- Should idempotency_key remain unset here?
+- Should parent/dependency IDs remain unset until Runtime lineage exists?
+- Should enqueue remain default or be forced False?
+
+========================================================================================================================
+4. PROVISIONAL SAFE FIELD MAPPING
+========================================================================================================================
+
+Likely direct mapping:
+  intent.workspace_id -> request.workspace_id
+  intent.job_type -> request.job_type
+  intent.payload -> request.payload
+  intent.metadata -> request.metadata base
+  intent.pipeline_id -> request.pipeline
+  intent.runtime_stage -> request.stage
+
+Likely metadata preservation:
+  intent.workflow_id -> metadata['coordination_workflow_id']
+  intent.correlation_id -> metadata['coordination_correlation_id']
+  intent.stage_id -> metadata['coordination_stage_id']
+  intent.stage_version -> metadata['coordination_stage_version']
+  intent.workflow_type -> metadata['coordination_workflow_type']
+  intent.wave_index -> metadata['coordination_wave_index']
+  intent.execution_semantics -> metadata['coordination_execution_semantics']
+  intent.stage_reference_contract_version -> metadata[...]
+  intent.intent_version -> metadata[...]
+
+Likely NOT assigned by 5.2 unless existing authority proves otherwise:
+  pipeline_run_id
+  parent_job_id
+  dependency_job_ids
+  batch_id
+  idempotency_key
+  job_id
+  created_at
+  maximum_attempts
+  priority
+
+NOT YET FROZEN.
