@@ -1,9 +1,9 @@
 ﻿# Service Registry
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.2
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-09-05
 
 ---
 
@@ -34,6 +34,7 @@ Every platform service shall be uniquely registered before it can participate in
 - Core Platform Services
 - Internal Linking Services
 - Semantic Linking Services
+- External Linking Services
 - AI Processing Services
 - Batch Processing Services
 - API Services
@@ -99,4 +100,5 @@ Executable registry loaders, validators, activation controls and entitlement ser
 
 ---
 End of Service Registry
+
 

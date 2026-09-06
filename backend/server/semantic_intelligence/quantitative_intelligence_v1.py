@@ -2932,3 +2932,2519 @@ def extract_quantitative_candidates_v1(
     })
 
     return result
+
+
+
+def ground_quantitative_candidates_v1(
+    quantitative_candidates_result: Mapping[str, Any],
+    entity_concept_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Ground quantitative candidates against canonical article-local
+    Phase 4.6.2 Entity & Concept Intelligence objects.
+
+    This stage identifies semantic objects present in each candidate's
+    source sentence.
+
+    It does NOT:
+    - assign the final measured subject or quantitative role,
+    - create new entities or concepts,
+    - perform fuzzy semantic similarity,
+    - normalize units or measurements,
+    - perform derived calculations,
+    - infer missing quantities,
+    - resolve comparison orientation,
+    - perform full temporal reasoning,
+    - perform new causal reasoning,
+    - establish factual or scientific truth,
+    - use external authority,
+    - make linking decisions,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    import hashlib
+    import re
+
+    if not isinstance(
+        quantitative_candidates_result,
+        Mapping,
+    ):
+        raise QuantitativeIntelligenceError(
+            "quantitative_candidates_result must be a mapping."
+        )
+
+    if not isinstance(
+        entity_concept_result,
+        Mapping,
+    ):
+        raise QuantitativeIntelligenceError(
+            "entity_concept_result must be a mapping."
+        )
+
+    if (
+        quantitative_candidates_result.get(
+            "schema_version"
+        )
+        != "quantitative_candidates_v1"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage F requires quantitative_candidates_v1."
+        )
+
+    if (
+        quantitative_candidates_result.get(
+            "status"
+        )
+        != "QUANTITATIVE_CANDIDATE_EXTRACTION_COMPLETE"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Quantitative candidate extraction must be complete."
+        )
+
+    if (
+        quantitative_candidates_result.get(
+            "phase"
+        )
+        != "4.6.9"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage F requires Phase 4.6.9 input."
+        )
+
+    if (
+        quantitative_candidates_result.get(
+            "patch"
+        )
+        != "4.6.9E"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage F requires canonical 4.6.9E input."
+        )
+
+    if (
+        quantitative_candidates_result.get(
+            "next_stage"
+        )
+        != "entity_concept_grounding"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage E must hand off to entity_concept_grounding."
+        )
+
+    if (
+        quantitative_candidates_result.get(
+            "persistence_policy"
+        )
+        != "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Quantitative Intelligence must remain transient."
+        )
+
+    if (
+        entity_concept_result.get(
+            "schema_version"
+        )
+        != "entity_concept_intelligence_result_v1"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage F requires canonical entity_concept_intelligence_result_v1."
+        )
+
+    if (
+        entity_concept_result.get(
+            "status"
+        )
+        != "ENTITY_CONCEPT_INTELLIGENCE_COMPLETE"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Entity & Concept Intelligence must be complete."
+        )
+
+    if (
+        entity_concept_result.get(
+            "phase"
+        )
+        != "4.6.2"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage F requires Phase 4.6.2 Entity & Concept Intelligence."
+        )
+
+    semantic_objects = list(
+        entity_concept_result.get(
+            "semantic_objects"
+        )
+        or []
+    )
+
+    if not semantic_objects:
+        raise QuantitativeIntelligenceError(
+            "Canonical semantic_objects are required for grounding."
+        )
+
+    entity_boundaries = dict(
+        entity_concept_result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    if (
+        entity_boundaries.get(
+            "article_local_only"
+        )
+        is not True
+    ):
+        raise QuantitativeIntelligenceError(
+            "Entity & Concept Intelligence must be article-local."
+        )
+
+    if (
+        entity_boundaries.get(
+            "semantic_memory_write_performed"
+        )
+        is not False
+    ):
+        raise QuantitativeIntelligenceError(
+            "Unexpected Semantic Memory write detected upstream."
+        )
+
+    if (
+        entity_boundaries.get(
+            "reasoning_performed"
+        )
+        is not False
+    ):
+        raise QuantitativeIntelligenceError(
+            "Unexpected reasoning detected in Phase 4.6.2."
+        )
+
+    def normalize(
+        value: str,
+    ) -> str:
+        value = str(
+            value
+            or ""
+        ).lower()
+
+        value = value.replace(
+            "?",
+            "'",
+        )
+
+        value = re.sub(
+            r"[^a-z0-9']+",
+            " ",
+            value,
+        )
+
+        return re.sub(
+            r"\s+",
+            " ",
+            value,
+        ).strip()
+
+    article_identity = dict(
+        quantitative_candidates_result.get(
+            "article_identity"
+        )
+        or {}
+    )
+
+    article_id = str(
+        article_identity.get(
+            "article_id"
+        )
+        or ""
+    )
+
+    prepared_objects = []
+
+    for semantic_object in semantic_objects:
+        if not isinstance(
+            semantic_object,
+            Mapping,
+        ):
+            raise QuantitativeIntelligenceError(
+                "Every semantic object must be a mapping."
+            )
+
+        canonical_text = str(
+            semantic_object.get(
+                "canonical_text"
+            )
+            or ""
+        ).strip()
+
+        semantic_kind = semantic_object.get(
+            "semantic_kind"
+        )
+
+        confidence = semantic_object.get(
+            "extraction_confidence"
+        )
+
+        if not canonical_text:
+            raise QuantitativeIntelligenceError(
+                "Semantic object is missing canonical_text."
+            )
+
+        if semantic_kind not in {
+            "entity",
+            "concept",
+        }:
+            raise QuantitativeIntelligenceError(
+                "Semantic object has invalid semantic_kind."
+            )
+
+        if (
+            not isinstance(
+                confidence,
+                (int, float),
+            )
+            or confidence < 0.0
+            or confidence > 1.0
+        ):
+            raise QuantitativeIntelligenceError(
+                "Semantic object has invalid extraction_confidence."
+            )
+
+        variants = {
+            canonical_text,
+        }
+
+        for surface in (
+            semantic_object.get(
+                "surface_forms"
+            )
+            or []
+        ):
+            if (
+                isinstance(
+                    surface,
+                    str,
+                )
+                and surface.strip()
+            ):
+                variants.add(
+                    surface.strip()
+                )
+
+        normalized_variants = {
+            normalize(
+                variant
+            ):
+                variant
+            for variant in variants
+            if normalize(
+                variant
+            )
+        }
+
+        stable_material = (
+            article_id
+            + "|"
+            + str(
+                semantic_kind
+            )
+            + "|"
+            + normalize(
+                canonical_text
+            )
+        )
+
+        grounding_ref = (
+            "article_semantic_object_"
+            + hashlib.sha256(
+                stable_material.encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:16]
+        )
+
+        prepared_objects.append({
+            "grounding_ref":
+                grounding_ref,
+
+            "semantic_object":
+                semantic_object,
+
+            "canonical_text":
+                canonical_text,
+
+            "semantic_kind":
+                semantic_kind,
+
+            "extraction_confidence":
+                confidence,
+
+            "normalized_variants":
+                normalized_variants,
+        })
+
+    def collect_context_groundings(
+        source_text: str,
+    ) -> list[dict[str, Any]]:
+        normalized_source = normalize(
+            source_text
+        )
+
+        if not normalized_source:
+            return []
+
+        matches_by_ref = {}
+
+        for prepared in prepared_objects:
+            for (
+                normalized_variant,
+                original_variant,
+            ) in prepared[
+                "normalized_variants"
+            ].items():
+
+                if not normalized_variant:
+                    continue
+
+                bounded_pattern = (
+                    r"(?<![a-z0-9'])"
+                    + re.escape(
+                        normalized_variant
+                    )
+                    + r"(?![a-z0-9'])"
+                )
+
+                match = re.search(
+                    bounded_pattern,
+                    normalized_source,
+                )
+
+                if match is None:
+                    continue
+
+                if (
+                    normalized_source
+                    == normalized_variant
+                ):
+                    strategy = (
+                        "EXACT_CANONICAL_OR_SURFACE_MATCH"
+                    )
+                else:
+                    strategy = (
+                        "BOUNDED_CANONICAL_OR_SURFACE_MATCH"
+                    )
+
+                candidate_match = {
+                    "grounding_ref":
+                        prepared[
+                            "grounding_ref"
+                        ],
+
+                    "canonical_text":
+                        prepared[
+                            "canonical_text"
+                        ],
+
+                    "semantic_kind":
+                        prepared[
+                            "semantic_kind"
+                        ],
+
+                    "extraction_confidence":
+                        prepared[
+                            "extraction_confidence"
+                        ],
+
+                    "matched_surface_form":
+                        original_variant,
+
+                    "normalized_match":
+                        normalized_variant,
+
+                    "match_strategy":
+                        strategy,
+
+                    "match_token_count":
+                        len(
+                            normalized_variant.split()
+                        ),
+
+                    "final_quantitative_role_assigned":
+                        False,
+                }
+
+                existing = matches_by_ref.get(
+                    prepared[
+                        "grounding_ref"
+                    ]
+                )
+
+                if existing is None:
+                    matches_by_ref[
+                        prepared[
+                            "grounding_ref"
+                        ]
+                    ] = candidate_match
+                    continue
+
+                existing_rank = (
+                    0
+                    if existing[
+                        "match_strategy"
+                    ]
+                    == "EXACT_CANONICAL_OR_SURFACE_MATCH"
+                    else 1,
+                    -existing[
+                        "match_token_count"
+                    ],
+                    -existing[
+                        "extraction_confidence"
+                    ],
+                )
+
+                candidate_rank = (
+                    0
+                    if strategy
+                    == "EXACT_CANONICAL_OR_SURFACE_MATCH"
+                    else 1,
+                    -candidate_match[
+                        "match_token_count"
+                    ],
+                    -candidate_match[
+                        "extraction_confidence"
+                    ],
+                )
+
+                if candidate_rank < existing_rank:
+                    matches_by_ref[
+                        prepared[
+                            "grounding_ref"
+                        ]
+                    ] = candidate_match
+
+        matches = list(
+            matches_by_ref.values()
+        )
+
+        matches.sort(
+            key=lambda item: (
+                0
+                if item[
+                    "match_strategy"
+                ]
+                == "EXACT_CANONICAL_OR_SURFACE_MATCH"
+                else 1,
+
+                -item[
+                    "match_token_count"
+                ],
+
+                -item[
+                    "extraction_confidence"
+                ],
+
+                item[
+                    "canonical_text"
+                ],
+            )
+        )
+
+        return matches
+
+    source_candidates = list(
+        quantitative_candidates_result.get(
+            "quantitative_candidates"
+        )
+        or []
+    )
+
+    grounded_candidates = []
+
+    for candidate in source_candidates:
+        if not isinstance(
+            candidate,
+            Mapping,
+        ):
+            raise QuantitativeIntelligenceError(
+                "Every quantitative candidate must be a mapping."
+            )
+
+        candidate_id = str(
+            candidate.get(
+                "quantitative_candidate_id"
+            )
+            or ""
+        )
+
+        if not candidate_id:
+            raise QuantitativeIntelligenceError(
+                "Quantitative candidate ID is required."
+            )
+
+        if (
+            candidate.get(
+                "entity_concept_grounded"
+            )
+            is not False
+        ):
+            raise QuantitativeIntelligenceError(
+                "Candidate must not already be entity/concept grounded."
+            )
+
+        source_text = str(
+            candidate.get(
+                "source_text"
+            )
+            or ""
+        )
+
+        grounding_matches = (
+            collect_context_groundings(
+                source_text
+            )
+        )
+
+        grounding_match_count = len(
+            grounding_matches
+        )
+
+        if grounding_match_count == 0:
+            grounding_status = (
+                "UNGROUNDED"
+            )
+
+        elif grounding_match_count == 1:
+            grounding_status = (
+                "GROUNDED_SINGLE_MATCH"
+            )
+
+        else:
+            grounding_status = (
+                "GROUNDED_MULTIPLE_MATCHES"
+            )
+
+        grounded_candidate = dict(
+            candidate
+        )
+
+        grounded_candidate.update({
+            "entity_concept_grounding_matches":
+                grounding_matches,
+
+            "entity_concept_grounding_match_count":
+                grounding_match_count,
+
+            "grounding_status":
+                grounding_status,
+
+            "entity_concept_grounded":
+                grounding_match_count > 0,
+
+            "final_quantitative_referent_selected":
+                False,
+
+            "unit_measurement_normalized":
+                False,
+
+            "quantity_role_orientation_resolved":
+                False,
+
+            "same_sentence_quantitative_validated":
+                False,
+
+            "cross_sentence_quantitative_validated":
+                False,
+
+            "quantitative_evidence_assessed":
+                False,
+
+            "duplicate_resolution_performed":
+                False,
+
+            "derived_calculation_performed":
+                False,
+
+            "quantitative_inference_performed":
+                False,
+
+            "temporal_reasoning_performed":
+                False,
+
+            "new_causal_reasoning_performed":
+                False,
+
+            "truth_assessed":
+                False,
+
+            "external_authority_checked":
+                False,
+        })
+
+        grounded_candidates.append(
+            grounded_candidate
+        )
+
+    grounded_by_id = {
+        candidate.get(
+            "quantitative_candidate_id"
+        ):
+            candidate
+        for candidate in grounded_candidates
+    }
+
+    grounded_units = []
+
+    for unit in (
+        quantitative_candidates_result.get(
+            "quantitative_claim_units"
+        )
+        or []
+    ):
+        if not isinstance(
+            unit,
+            Mapping,
+        ):
+            raise QuantitativeIntelligenceError(
+                "Every Quantitative Claim Unit must be a mapping."
+            )
+
+        state = dict(
+            unit.get(
+                "quantitative_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "quantitative_candidate_extraction"
+            )
+            != "COMPLETE"
+        ):
+            raise QuantitativeIntelligenceError(
+                "Quantitative candidate extraction must be COMPLETE before grounding."
+            )
+
+        if (
+            state.get(
+                "entity_concept_grounding"
+            )
+            != "PENDING"
+        ):
+            raise QuantitativeIntelligenceError(
+                "Entity/concept grounding must be PENDING."
+            )
+
+        unit_candidates = []
+
+        for old_candidate in (
+            unit.get(
+                "quantitative_candidates"
+            )
+            or []
+        ):
+            candidate_id = old_candidate.get(
+                "quantitative_candidate_id"
+            )
+
+            grounded = grounded_by_id.get(
+                candidate_id
+            )
+
+            if grounded is None:
+                raise QuantitativeIntelligenceError(
+                    "Quantitative candidate/unit identity mismatch."
+                )
+
+            unit_candidates.append(
+                grounded
+            )
+
+        updated_state = dict(
+            state
+        )
+
+        updated_state[
+            "entity_concept_grounding"
+        ] = "COMPLETE"
+
+        updated_boundaries = dict(
+            unit.get(
+                "processing_boundaries"
+            )
+            or {}
+        )
+
+        if (
+            updated_boundaries.get(
+                "quantitative_candidate_extraction_performed"
+            )
+            is not True
+        ):
+            raise QuantitativeIntelligenceError(
+                "Stage-E extraction boundary is incomplete."
+            )
+
+        required_false_boundaries = (
+            "unit_normalization_performed",
+            "derived_calculation_performed",
+            "quantitative_inference_performed",
+            "temporal_reasoning_performed",
+            "new_causal_reasoning_performed",
+            "truth_assessment_performed",
+            "external_authority_check_performed",
+            "semantic_memory_write_performed",
+            "persistence_performed",
+        )
+
+        for boundary_name in required_false_boundaries:
+            if (
+                updated_boundaries.get(
+                    boundary_name
+                )
+                is not False
+            ):
+                raise QuantitativeIntelligenceError(
+                    boundary_name
+                    + " must be False before Stage F."
+                )
+
+        updated_boundaries[
+            "entity_concept_grounding_performed"
+        ] = True
+
+        updated_boundaries[
+            "unit_normalization_performed"
+        ] = False
+
+        updated_boundaries[
+            "derived_calculation_performed"
+        ] = False
+
+        updated_boundaries[
+            "quantitative_inference_performed"
+        ] = False
+
+        updated_boundaries[
+            "temporal_reasoning_performed"
+        ] = False
+
+        updated_boundaries[
+            "new_causal_reasoning_performed"
+        ] = False
+
+        updated_boundaries[
+            "truth_assessment_performed"
+        ] = False
+
+        updated_boundaries[
+            "external_authority_check_performed"
+        ] = False
+
+        updated_unit = dict(
+            unit
+        )
+
+        updated_unit.update({
+            "quantitative_candidates":
+                unit_candidates,
+
+            "grounded_candidate_count":
+                sum(
+                    1
+                    for candidate in unit_candidates
+                    if candidate.get(
+                        "entity_concept_grounded"
+                    )
+                    is True
+                ),
+
+            "single_match_grounded_candidate_count":
+                sum(
+                    1
+                    for candidate in unit_candidates
+                    if candidate.get(
+                        "grounding_status"
+                    )
+                    == "GROUNDED_SINGLE_MATCH"
+                ),
+
+            "multiple_match_grounded_candidate_count":
+                sum(
+                    1
+                    for candidate in unit_candidates
+                    if candidate.get(
+                        "grounding_status"
+                    )
+                    == "GROUNDED_MULTIPLE_MATCHES"
+                ),
+
+            "ungrounded_candidate_count":
+                sum(
+                    1
+                    for candidate in unit_candidates
+                    if candidate.get(
+                        "grounding_status"
+                    )
+                    == "UNGROUNDED"
+                ),
+
+            "quantitative_analysis_state":
+                updated_state,
+
+            "processing_boundaries":
+                updated_boundaries,
+        })
+
+        grounded_units.append(
+            updated_unit
+        )
+
+    grounded_units_by_id = {
+        unit.get(
+            "quantitative_claim_unit_id"
+        ):
+            unit
+        for unit in grounded_units
+    }
+
+    grounded_sections = []
+
+    for section in (
+        quantitative_candidates_result.get(
+            "quantitative_sections"
+        )
+        or []
+    ):
+        if not isinstance(
+            section,
+            Mapping,
+        ):
+            raise QuantitativeIntelligenceError(
+                "Every quantitative section must be a mapping."
+            )
+
+        section_units = []
+
+        for old_unit in (
+            section.get(
+                "quantitative_claim_units"
+            )
+            or []
+        ):
+            unit_id = old_unit.get(
+                "quantitative_claim_unit_id"
+            )
+
+            grounded_unit = (
+                grounded_units_by_id.get(
+                    unit_id
+                )
+            )
+
+            if grounded_unit is None:
+                raise QuantitativeIntelligenceError(
+                    "Quantitative section/unit grounding mismatch."
+                )
+
+            section_units.append(
+                grounded_unit
+            )
+
+        section_candidates = [
+            candidate
+            for unit in section_units
+            for candidate in (
+                unit.get(
+                    "quantitative_candidates"
+                )
+                or []
+            )
+        ]
+
+        grounded_sections.append({
+            **dict(
+                section
+            ),
+
+            "quantitative_claim_units":
+                section_units,
+
+            "quantitative_candidates":
+                section_candidates,
+
+            "quantitative_candidate_count":
+                len(
+                    section_candidates
+                ),
+
+            "grounded_candidate_count":
+                sum(
+                    1
+                    for candidate in section_candidates
+                    if candidate.get(
+                        "entity_concept_grounded"
+                    )
+                    is True
+                ),
+
+            "ungrounded_candidate_count":
+                sum(
+                    1
+                    for candidate in section_candidates
+                    if candidate.get(
+                        "entity_concept_grounded"
+                    )
+                    is False
+                ),
+
+            "entity_concept_grounding_complete":
+                True,
+        })
+
+    grounded_count = sum(
+        1
+        for candidate in grounded_candidates
+        if candidate.get(
+            "entity_concept_grounded"
+        )
+        is True
+    )
+
+    single_match_count = sum(
+        1
+        for candidate in grounded_candidates
+        if candidate.get(
+            "grounding_status"
+        )
+        == "GROUNDED_SINGLE_MATCH"
+    )
+
+    multiple_match_count = sum(
+        1
+        for candidate in grounded_candidates
+        if candidate.get(
+            "grounding_status"
+        )
+        == "GROUNDED_MULTIPLE_MATCHES"
+    )
+
+    ungrounded_count = sum(
+        1
+        for candidate in grounded_candidates
+        if candidate.get(
+            "grounding_status"
+        )
+        == "UNGROUNDED"
+    )
+
+    total_grounding_matches = sum(
+        int(
+            candidate.get(
+                "entity_concept_grounding_match_count"
+            )
+            or 0
+        )
+        for candidate in grounded_candidates
+    )
+
+    result = dict(
+        quantitative_candidates_result
+    )
+
+    boundaries = dict(
+        result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "entity_concept_grounding_performed"
+    ] = True
+
+    boundaries[
+        "unit_normalization_performed"
+    ] = False
+
+    boundaries[
+        "derived_calculation_performed"
+    ] = False
+
+    boundaries[
+        "quantitative_inference_performed"
+    ] = False
+
+    boundaries[
+        "temporal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "new_causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    result.update({
+        "schema_version":
+            "quantitative_entity_concept_grounding_v1",
+
+        "patch":
+            "4.6.9F",
+
+        "status":
+            "QUANTITATIVE_ENTITY_CONCEPT_GROUNDING_COMPLETE",
+
+        "quantitative_sections":
+            grounded_sections,
+
+        "quantitative_claim_units":
+            grounded_units,
+
+        "quantitative_candidates":
+            grounded_candidates,
+
+        "entity_concept_grounding_summary": {
+            "semantic_object_count":
+                len(
+                    semantic_objects
+                ),
+
+            "quantitative_candidate_count":
+                len(
+                    grounded_candidates
+                ),
+
+            "grounded_candidate_count":
+                grounded_count,
+
+            "single_match_grounded_candidate_count":
+                single_match_count,
+
+            "multiple_match_grounded_candidate_count":
+                multiple_match_count,
+
+            "ungrounded_candidate_count":
+                ungrounded_count,
+
+            "total_grounding_match_count":
+                total_grounding_matches,
+
+            "candidate_count_accounted_for":
+                (
+                    grounded_count
+                    + ungrounded_count
+                    == len(
+                        grounded_candidates
+                    )
+                ),
+
+            "canonical_entity_concept_objects_reused":
+                True,
+
+            "new_entity_concept_objects_created":
+                False,
+
+            "fuzzy_similarity_performed":
+                False,
+
+            "final_quantitative_referent_selection_performed":
+                False,
+
+            "unit_measurement_normalization_performed":
+                False,
+
+            "quantity_role_orientation_performed":
+                False,
+
+            "derived_calculation_performed":
+                False,
+
+            "quantitative_inference_performed":
+                False,
+
+            "temporal_reasoning_performed":
+                False,
+
+            "new_causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+
+            "article_local_only":
+                True,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "unit_measurement_normalization",
+    })
+
+    return result
+
+
+
+def normalize_quantitative_units_v1(
+    entity_concept_grounding_result: Mapping[str, Any],
+) -> dict[str, Any]:
+    """
+    Normalize article-expressed quantitative values, units, ranges,
+    rates, percentages, percentiles, durations, and multiplicative
+    forms into canonical quantitative representations.
+
+    This stage normalizes only what is explicitly licensed by the
+    candidate signal text.
+
+    It does NOT:
+    - derive new quantities,
+    - calculate unstated rates,
+    - convert measurements into another unit system,
+    - select the final quantitative referent,
+    - resolve quantity/comparison orientation,
+    - perform same-sentence validation,
+    - perform cross-sentence validation,
+    - perform quantitative inference,
+    - perform full temporal reasoning,
+    - perform new causal reasoning,
+    - establish factual or scientific truth,
+    - use external authority,
+    - make linking decisions,
+    - write Semantic Memory,
+    - persist intelligence.
+    """
+
+    import re
+    from fractions import Fraction
+
+    if not isinstance(
+        entity_concept_grounding_result,
+        Mapping,
+    ):
+        raise QuantitativeIntelligenceError(
+            "entity_concept_grounding_result must be a mapping."
+        )
+
+    if (
+        entity_concept_grounding_result.get(
+            "schema_version"
+        )
+        != "quantitative_entity_concept_grounding_v1"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage G requires quantitative_entity_concept_grounding_v1."
+        )
+
+    if (
+        entity_concept_grounding_result.get(
+            "status"
+        )
+        != "QUANTITATIVE_ENTITY_CONCEPT_GROUNDING_COMPLETE"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Entity/concept grounding must be complete before quantitative normalization."
+        )
+
+    if (
+        entity_concept_grounding_result.get(
+            "phase"
+        )
+        != "4.6.9"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage G requires Phase 4.6.9 input."
+        )
+
+    if (
+        entity_concept_grounding_result.get(
+            "patch"
+        )
+        != "4.6.9F"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage G requires canonical 4.6.9F input."
+        )
+
+    if (
+        entity_concept_grounding_result.get(
+            "next_stage"
+        )
+        != "unit_measurement_normalization"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Stage F must hand off to unit_measurement_normalization."
+        )
+
+    if (
+        entity_concept_grounding_result.get(
+            "persistence_policy"
+        )
+        != "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE"
+    ):
+        raise QuantitativeIntelligenceError(
+            "Quantitative Intelligence must remain transient."
+        )
+
+    unit_registry = {
+        "pound": {
+            "family": "MASS_WEIGHT",
+            "symbol": "lb",
+            "aliases": {
+                "pound",
+                "pounds",
+                "lb",
+                "lbs",
+            },
+        },
+
+        "ounce": {
+            "family": "MASS_WEIGHT",
+            "symbol": "oz",
+            "aliases": {
+                "ounce",
+                "ounces",
+                "oz",
+            },
+        },
+
+        "inch": {
+            "family": "LENGTH_DISTANCE",
+            "symbol": "in",
+            "aliases": {
+                "inch",
+                "inches",
+                "in",
+            },
+        },
+
+        "foot": {
+            "family": "LENGTH_DISTANCE",
+            "symbol": "ft",
+            "aliases": {
+                "foot",
+                "feet",
+                "ft",
+            },
+        },
+
+        "centimeter": {
+            "family": "LENGTH_DISTANCE",
+            "symbol": "cm",
+            "aliases": {
+                "centimeter",
+                "centimeters",
+                "centimetre",
+                "centimetres",
+                "cm",
+            },
+        },
+
+        "millimeter": {
+            "family": "LENGTH_DISTANCE",
+            "symbol": "mm",
+            "aliases": {
+                "millimeter",
+                "millimeters",
+                "millimetre",
+                "millimetres",
+                "mm",
+            },
+        },
+
+        "meter": {
+            "family": "LENGTH_DISTANCE",
+            "symbol": "m",
+            "aliases": {
+                "meter",
+                "meters",
+                "metre",
+                "metres",
+            },
+        },
+
+        "day": {
+            "family": "TIME_DURATION",
+            "symbol": "day",
+            "aliases": {
+                "day",
+                "days",
+            },
+        },
+
+        "week": {
+            "family": "TIME_DURATION",
+            "symbol": "week",
+            "aliases": {
+                "week",
+                "weeks",
+            },
+        },
+
+        "month": {
+            "family": "TIME_DURATION",
+            "symbol": "month",
+            "aliases": {
+                "month",
+                "months",
+            },
+        },
+
+        "year": {
+            "family": "TIME_DURATION",
+            "symbol": "year",
+            "aliases": {
+                "year",
+                "years",
+            },
+        },
+    }
+
+    alias_registry = {}
+
+    for canonical_unit, spec in unit_registry.items():
+        for alias in spec[
+            "aliases"
+        ]:
+            normalized_alias = str(
+                alias
+            ).lower().strip()
+
+            if normalized_alias in alias_registry:
+                raise QuantitativeIntelligenceError(
+                    "Duplicate unit alias detected: "
+                    + normalized_alias
+                )
+
+            alias_registry[
+                normalized_alias
+            ] = canonical_unit
+
+    multiplicative_registry = {
+        "double": 2.0,
+        "doubles": 2.0,
+        "doubled": 2.0,
+        "twice": 2.0,
+        "triple": 3.0,
+        "triples": 3.0,
+        "tripled": 3.0,
+    }
+
+    def parse_number(
+        value: str,
+    ):
+        raw = str(
+            value
+            or ""
+        ).strip()
+
+        if not raw:
+            return None
+
+        raw = raw.replace(
+            ",",
+            "",
+        )
+
+        mixed_match = re.fullmatch(
+            r"(?P<whole>\d+)\s+"
+            r"(?P<num>\d+)\s*/\s*"
+            r"(?P<den>\d+)",
+            raw,
+        )
+
+        if mixed_match:
+            whole = int(
+                mixed_match.group(
+                    "whole"
+                )
+            )
+
+            numerator = int(
+                mixed_match.group(
+                    "num"
+                )
+            )
+
+            denominator = int(
+                mixed_match.group(
+                    "den"
+                )
+            )
+
+            if denominator == 0:
+                return None
+
+            return float(
+                whole
+                + Fraction(
+                    numerator,
+                    denominator,
+                )
+            )
+
+        fraction_match = re.fullmatch(
+            r"(?P<num>\d+)\s*/\s*(?P<den>\d+)",
+            raw,
+        )
+
+        if fraction_match:
+            numerator = int(
+                fraction_match.group(
+                    "num"
+                )
+            )
+
+            denominator = int(
+                fraction_match.group(
+                    "den"
+                )
+            )
+
+            if denominator == 0:
+                return None
+
+            return float(
+                Fraction(
+                    numerator,
+                    denominator,
+                )
+            )
+
+        try:
+            numeric = float(
+                raw
+            )
+        except ValueError:
+            return None
+
+        if numeric.is_integer():
+            return int(
+                numeric
+            )
+
+        return numeric
+
+    def extract_leading_number(
+        text_value: str,
+    ):
+        match = re.search(
+            r"\b("
+            r"\d+\s+\d+\s*/\s*\d+"
+            r"|"
+            r"\d+\s*/\s*\d+"
+            r"|"
+            r"\d+(?:\.\d+)?"
+            r")\b",
+            str(
+                text_value
+                or ""
+            ),
+        )
+
+        if match is None:
+            return None
+
+        return parse_number(
+            match.group(
+                1
+            )
+        )
+
+    def resolve_unit(
+        text_value: str,
+    ):
+        lowered = str(
+            text_value
+            or ""
+        ).lower()
+
+        tokens = re.findall(
+            r"[a-z]+",
+            lowered,
+        )
+
+        for token in tokens:
+            canonical = alias_registry.get(
+                token
+            )
+
+            if canonical is not None:
+                spec = unit_registry[
+                    canonical
+                ]
+
+                return {
+                    "canonical_unit":
+                        canonical,
+
+                    "unit_symbol":
+                        spec[
+                            "symbol"
+                        ],
+
+                    "measurement_family":
+                        spec[
+                            "family"
+                        ],
+
+                    "matched_unit_alias":
+                        token,
+                }
+
+        return {
+            "canonical_unit":
+                None,
+
+            "unit_symbol":
+                None,
+
+            "measurement_family":
+                None,
+
+            "matched_unit_alias":
+                None,
+        }
+
+    def normalize_candidate(
+        candidate: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        candidate_id = str(
+            candidate.get(
+                "quantitative_candidate_id"
+            )
+            or ""
+        )
+
+        if not candidate_id:
+            raise QuantitativeIntelligenceError(
+                "Quantitative candidate ID is required."
+            )
+
+        if (
+            candidate.get(
+                "unit_measurement_normalized"
+            )
+            is not False
+        ):
+            raise QuantitativeIntelligenceError(
+                "Candidate must not already be unit/measurement normalized."
+            )
+
+        signal_type = str(
+            candidate.get(
+                "signal_type"
+            )
+            or ""
+        )
+
+        matched_text = str(
+            candidate.get(
+                "signal_matched_text"
+            )
+            or ""
+        ).strip()
+
+        if not signal_type:
+            raise QuantitativeIntelligenceError(
+                "Quantitative candidate signal_type is required."
+            )
+
+        if not matched_text:
+            raise QuantitativeIntelligenceError(
+                "Quantitative candidate signal text is required."
+            )
+
+        normalized = dict(
+            candidate
+        )
+
+        payload = {
+            "normalization_status":
+                "UNSUPPORTED",
+
+            "raw_quantitative_text":
+                matched_text,
+
+            "normalized_value":
+                None,
+
+            "normalized_values":
+                [],
+
+            "canonical_unit":
+                None,
+
+            "unit_symbol":
+                None,
+
+            "measurement_family":
+                None,
+
+            "rate_denominator_unit":
+                None,
+
+            "rate_denominator_symbol":
+                None,
+
+            "quantitative_scale":
+                None,
+
+            "multiplicative_factor":
+                None,
+
+            "normalization_reason":
+                None,
+        }
+
+        if signal_type == "PERCENTILE":
+            percentile_match = re.search(
+                r"\b(?P<value>\d+(?:\.\d+)?)"
+                r"(?:st|nd|rd|th)\s+percentile\b",
+                matched_text,
+                re.IGNORECASE,
+            )
+
+            value = (
+                parse_number(
+                    percentile_match.group(
+                        "value"
+                    )
+                )
+                if percentile_match
+                else None
+            )
+
+            if value is not None:
+                payload.update({
+                    "normalization_status":
+                        "NORMALIZED",
+
+                    "normalized_value":
+                        value,
+
+                    "quantitative_scale":
+                        "PERCENTILE",
+
+                    "normalization_reason":
+                        "ARTICLE_EXPRESSED_PERCENTILE",
+                })
+
+        elif signal_type == "PERCENTAGE":
+            value = extract_leading_number(
+                matched_text
+            )
+
+            if value is not None:
+                payload.update({
+                    "normalization_status":
+                        "NORMALIZED",
+
+                    "normalized_value":
+                        value,
+
+                    "canonical_unit":
+                        "percent",
+
+                    "unit_symbol":
+                        "%",
+
+                    "measurement_family":
+                        "PROPORTION_PERCENTAGE",
+
+                    "quantitative_scale":
+                        "PERCENTAGE",
+
+                    "normalization_reason":
+                        "ARTICLE_EXPRESSED_PERCENTAGE",
+                })
+
+        elif signal_type in {
+            "WEIGHT_MEASUREMENT",
+            "LENGTH_HEIGHT_MEASUREMENT",
+            "AGE_DURATION",
+        }:
+            value = extract_leading_number(
+                matched_text
+            )
+
+            unit_info = resolve_unit(
+                matched_text
+            )
+
+            if (
+                value is not None
+                and unit_info[
+                    "canonical_unit"
+                ]
+                is not None
+            ):
+                payload.update({
+                    "normalization_status":
+                        "NORMALIZED",
+
+                    "normalized_value":
+                        value,
+
+                    "canonical_unit":
+                        unit_info[
+                            "canonical_unit"
+                        ],
+
+                    "unit_symbol":
+                        unit_info[
+                            "unit_symbol"
+                        ],
+
+                    "measurement_family":
+                        unit_info[
+                            "measurement_family"
+                        ],
+
+                    "normalization_reason":
+                        "ARTICLE_EXPRESSED_MEASUREMENT",
+                })
+
+        elif signal_type == "NUMERIC_RANGE":
+            values = [
+                parse_number(
+                    item
+                )
+                for item in re.findall(
+                    r"\d+\s+\d+\s*/\s*\d+"
+                    r"|"
+                    r"\d+\s*/\s*\d+"
+                    r"|"
+                    r"\d+(?:\.\d+)?",
+                    matched_text,
+                )
+            ]
+
+            values = [
+                value
+                for value in values
+                if value is not None
+            ]
+
+            if len(
+                values
+            ) == 2:
+                payload.update({
+                    "normalization_status":
+                        "NORMALIZED",
+
+                    "normalized_values":
+                        values,
+
+                    "quantitative_scale":
+                        "RANGE",
+
+                    "normalization_reason":
+                        "ARTICLE_EXPRESSED_NUMERIC_RANGE",
+                })
+
+        elif signal_type == "MEASUREMENT_RATE":
+            rate_match = re.search(
+                r"(?P<number>"
+                r"\d+\s+\d+\s*/\s*\d+"
+                r"|"
+                r"\d+\s*/\s*\d+"
+                r"|"
+                r"\d+(?:\.\d+)?"
+                r")"
+                r"\s+"
+                r"(?P<numerator>[a-zA-Z]+)"
+                r"\s+per\s+"
+                r"(?P<denominator>[a-zA-Z]+)",
+                matched_text,
+                re.IGNORECASE,
+            )
+
+            if rate_match:
+                value = parse_number(
+                    rate_match.group(
+                        "number"
+                    )
+                )
+
+                numerator_alias = (
+                    rate_match.group(
+                        "numerator"
+                    )
+                    .lower()
+                )
+
+                denominator_alias = (
+                    rate_match.group(
+                        "denominator"
+                    )
+                    .lower()
+                )
+
+                numerator_unit = (
+                    alias_registry.get(
+                        numerator_alias
+                    )
+                )
+
+                denominator_unit = (
+                    alias_registry.get(
+                        denominator_alias
+                    )
+                )
+
+                if (
+                    value is not None
+                    and numerator_unit is not None
+                    and denominator_unit is not None
+                ):
+                    numerator_spec = (
+                        unit_registry[
+                            numerator_unit
+                        ]
+                    )
+
+                    denominator_spec = (
+                        unit_registry[
+                            denominator_unit
+                        ]
+                    )
+
+                    payload.update({
+                        "normalization_status":
+                            "NORMALIZED",
+
+                        "normalized_value":
+                            value,
+
+                        "canonical_unit":
+                            numerator_unit,
+
+                        "unit_symbol":
+                            numerator_spec[
+                                "symbol"
+                            ],
+
+                        "measurement_family":
+                            "RATE",
+
+                        "rate_denominator_unit":
+                            denominator_unit,
+
+                        "rate_denominator_symbol":
+                            denominator_spec[
+                                "symbol"
+                            ],
+
+                        "quantitative_scale":
+                            "ARTICLE_EXPRESSED_RATE",
+
+                        "normalization_reason":
+                            "ARTICLE_EXPRESSED_MEASUREMENT_RATE",
+                    })
+
+        elif signal_type == "MULTIPLICATIVE_CHANGE":
+            factor = multiplicative_registry.get(
+                matched_text.lower()
+            )
+
+            if factor is not None:
+                payload.update({
+                    "normalization_status":
+                        "NORMALIZED",
+
+                    "normalized_value":
+                        factor,
+
+                    "multiplicative_factor":
+                        factor,
+
+                    "quantitative_scale":
+                        "MULTIPLICATIVE_FACTOR",
+
+                    "normalization_reason":
+                        "ARTICLE_EXPRESSED_MULTIPLICATIVE_FORM",
+                })
+
+        elif signal_type == "GENERIC_NUMBER":
+            value = parse_number(
+                matched_text
+            )
+
+            if value is not None:
+                payload.update({
+                    "normalization_status":
+                        "NORMALIZED",
+
+                    "normalized_value":
+                        value,
+
+                    "quantitative_scale":
+                        "UNCLASSIFIED_NUMERIC_VALUE",
+
+                    "normalization_reason":
+                        "ARTICLE_EXPRESSED_GENERIC_NUMBER",
+                })
+
+        if (
+            payload[
+                "normalization_status"
+            ]
+            != "NORMALIZED"
+        ):
+            payload[
+                "normalization_reason"
+            ] = (
+                "QUANTITATIVE_FORM_NOT_NORMALIZABLE_WITH_CURRENT_CANONICAL_REGISTRY"
+            )
+
+        normalized.update({
+            **payload,
+
+            "unit_measurement_normalized":
+                (
+                    payload[
+                        "normalization_status"
+                    ]
+                    == "NORMALIZED"
+                ),
+
+            "final_quantitative_referent_selected":
+                False,
+
+            "quantity_role_orientation_resolved":
+                False,
+
+            "same_sentence_quantitative_validated":
+                False,
+
+            "cross_sentence_quantitative_validated":
+                False,
+
+            "quantitative_evidence_assessed":
+                False,
+
+            "duplicate_resolution_performed":
+                False,
+
+            "derived_calculation_performed":
+                False,
+
+            "quantitative_inference_performed":
+                False,
+
+            "temporal_reasoning_performed":
+                False,
+
+            "new_causal_reasoning_performed":
+                False,
+
+            "truth_assessed":
+                False,
+
+            "external_authority_checked":
+                False,
+        })
+
+        return normalized
+
+    source_candidates = list(
+        entity_concept_grounding_result.get(
+            "quantitative_candidates"
+        )
+        or []
+    )
+
+    normalized_candidates = [
+        normalize_candidate(
+            candidate
+        )
+        for candidate in source_candidates
+    ]
+
+    normalized_by_id = {
+        candidate.get(
+            "quantitative_candidate_id"
+        ):
+            candidate
+        for candidate in normalized_candidates
+    }
+
+    normalized_units = []
+
+    for unit in (
+        entity_concept_grounding_result.get(
+            "quantitative_claim_units"
+        )
+        or []
+    ):
+        if not isinstance(
+            unit,
+            Mapping,
+        ):
+            raise QuantitativeIntelligenceError(
+                "Every Quantitative Claim Unit must be a mapping."
+            )
+
+        state = dict(
+            unit.get(
+                "quantitative_analysis_state"
+            )
+            or {}
+        )
+
+        if (
+            state.get(
+                "entity_concept_grounding"
+            )
+            != "COMPLETE"
+        ):
+            raise QuantitativeIntelligenceError(
+                "Entity/concept grounding must be COMPLETE before normalization."
+            )
+
+        if (
+            state.get(
+                "unit_measurement_normalization"
+            )
+            != "PENDING"
+        ):
+            raise QuantitativeIntelligenceError(
+                "Unit/measurement normalization must be PENDING."
+            )
+
+        updated_candidates = []
+
+        for old_candidate in (
+            unit.get(
+                "quantitative_candidates"
+            )
+            or []
+        ):
+            candidate_id = old_candidate.get(
+                "quantitative_candidate_id"
+            )
+
+            normalized_candidate = (
+                normalized_by_id.get(
+                    candidate_id
+                )
+            )
+
+            if normalized_candidate is None:
+                raise QuantitativeIntelligenceError(
+                    "Quantitative candidate/unit normalization mismatch."
+                )
+
+            updated_candidates.append(
+                normalized_candidate
+            )
+
+        updated_state = dict(
+            state
+        )
+
+        updated_state[
+            "unit_measurement_normalization"
+        ] = "COMPLETE"
+
+        updated_boundaries = dict(
+            unit.get(
+                "processing_boundaries"
+            )
+            or {}
+        )
+
+        if (
+            updated_boundaries.get(
+                "entity_concept_grounding_performed"
+            )
+            is not True
+        ):
+            raise QuantitativeIntelligenceError(
+                "Stage-F grounding boundary is incomplete."
+            )
+
+        required_false_boundaries = (
+            "unit_normalization_performed",
+            "derived_calculation_performed",
+            "quantitative_inference_performed",
+            "temporal_reasoning_performed",
+            "new_causal_reasoning_performed",
+            "truth_assessment_performed",
+            "external_authority_check_performed",
+            "semantic_memory_write_performed",
+            "persistence_performed",
+        )
+
+        for boundary_name in required_false_boundaries:
+            if (
+                updated_boundaries.get(
+                    boundary_name
+                )
+                is not False
+            ):
+                raise QuantitativeIntelligenceError(
+                    boundary_name
+                    + " must be False before Stage G."
+                )
+
+        updated_boundaries[
+            "unit_normalization_performed"
+        ] = True
+
+        updated_boundaries[
+            "derived_calculation_performed"
+        ] = False
+
+        updated_boundaries[
+            "quantitative_inference_performed"
+        ] = False
+
+        updated_boundaries[
+            "temporal_reasoning_performed"
+        ] = False
+
+        updated_boundaries[
+            "new_causal_reasoning_performed"
+        ] = False
+
+        updated_boundaries[
+            "truth_assessment_performed"
+        ] = False
+
+        updated_boundaries[
+            "external_authority_check_performed"
+        ] = False
+
+        updated_unit = dict(
+            unit
+        )
+
+        updated_unit.update({
+            "quantitative_candidates":
+                updated_candidates,
+
+            "normalized_quantitative_candidate_count":
+                sum(
+                    1
+                    for candidate in updated_candidates
+                    if candidate.get(
+                        "normalization_status"
+                    )
+                    == "NORMALIZED"
+                ),
+
+            "unsupported_quantitative_candidate_count":
+                sum(
+                    1
+                    for candidate in updated_candidates
+                    if candidate.get(
+                        "normalization_status"
+                    )
+                    == "UNSUPPORTED"
+                ),
+
+            "quantitative_analysis_state":
+                updated_state,
+
+            "processing_boundaries":
+                updated_boundaries,
+        })
+
+        normalized_units.append(
+            updated_unit
+        )
+
+    normalized_units_by_id = {
+        unit.get(
+            "quantitative_claim_unit_id"
+        ):
+            unit
+        for unit in normalized_units
+    }
+
+    normalized_sections = []
+
+    for section in (
+        entity_concept_grounding_result.get(
+            "quantitative_sections"
+        )
+        or []
+    ):
+        if not isinstance(
+            section,
+            Mapping,
+        ):
+            raise QuantitativeIntelligenceError(
+                "Every quantitative section must be a mapping."
+            )
+
+        section_units = []
+
+        for old_unit in (
+            section.get(
+                "quantitative_claim_units"
+            )
+            or []
+        ):
+            unit_id = old_unit.get(
+                "quantitative_claim_unit_id"
+            )
+
+            normalized_unit = (
+                normalized_units_by_id.get(
+                    unit_id
+                )
+            )
+
+            if normalized_unit is None:
+                raise QuantitativeIntelligenceError(
+                    "Quantitative section/unit normalization mismatch."
+                )
+
+            section_units.append(
+                normalized_unit
+            )
+
+        section_candidates = [
+            candidate
+            for unit in section_units
+            for candidate in (
+                unit.get(
+                    "quantitative_candidates"
+                )
+                or []
+            )
+        ]
+
+        normalized_sections.append({
+            **dict(
+                section
+            ),
+
+            "quantitative_claim_units":
+                section_units,
+
+            "quantitative_candidates":
+                section_candidates,
+
+            "quantitative_candidate_count":
+                len(
+                    section_candidates
+                ),
+
+            "normalized_quantitative_candidate_count":
+                sum(
+                    1
+                    for candidate in section_candidates
+                    if candidate.get(
+                        "normalization_status"
+                    )
+                    == "NORMALIZED"
+                ),
+
+            "unsupported_quantitative_candidate_count":
+                sum(
+                    1
+                    for candidate in section_candidates
+                    if candidate.get(
+                        "normalization_status"
+                    )
+                    == "UNSUPPORTED"
+                ),
+
+            "unit_measurement_normalization_complete":
+                True,
+        })
+
+    normalized_count = sum(
+        1
+        for candidate in normalized_candidates
+        if candidate.get(
+            "normalization_status"
+        )
+        == "NORMALIZED"
+    )
+
+    unsupported_count = sum(
+        1
+        for candidate in normalized_candidates
+        if candidate.get(
+            "normalization_status"
+        )
+        == "UNSUPPORTED"
+    )
+
+    result = dict(
+        entity_concept_grounding_result
+    )
+
+    boundaries = dict(
+        result.get(
+            "processing_boundaries"
+        )
+        or {}
+    )
+
+    boundaries[
+        "unit_normalization_performed"
+    ] = True
+
+    boundaries[
+        "derived_calculation_performed"
+    ] = False
+
+    boundaries[
+        "quantitative_inference_performed"
+    ] = False
+
+    boundaries[
+        "temporal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "new_causal_reasoning_performed"
+    ] = False
+
+    boundaries[
+        "truth_assessment_performed"
+    ] = False
+
+    boundaries[
+        "external_authority_check_performed"
+    ] = False
+
+    boundaries[
+        "semantic_memory_write_performed"
+    ] = False
+
+    boundaries[
+        "persistence_performed"
+    ] = False
+
+    result.update({
+        "schema_version":
+            "quantitative_unit_measurement_normalization_v1",
+
+        "patch":
+            "4.6.9G",
+
+        "status":
+            "QUANTITATIVE_UNIT_MEASUREMENT_NORMALIZATION_COMPLETE",
+
+        "quantitative_sections":
+            normalized_sections,
+
+        "quantitative_claim_units":
+            normalized_units,
+
+        "quantitative_candidates":
+            normalized_candidates,
+
+        "unsupported_quantitative_candidates":
+            [
+                candidate
+                for candidate in normalized_candidates
+                if candidate.get(
+                    "normalization_status"
+                )
+                == "UNSUPPORTED"
+            ],
+
+        "unit_measurement_normalization_summary": {
+            "candidate_count":
+                len(
+                    normalized_candidates
+                ),
+
+            "normalized_candidate_count":
+                normalized_count,
+
+            "unsupported_candidate_count":
+                unsupported_count,
+
+            "candidate_count_accounted_for":
+                (
+                    normalized_count
+                    + unsupported_count
+                    == len(
+                        normalized_candidates
+                    )
+                ),
+
+            "canonical_unit_registry_applied":
+                True,
+
+            "unit_registry_entry_count":
+                len(
+                    unit_registry
+                ),
+
+            "article_expressed_values_only":
+                True,
+
+            "unit_conversion_performed":
+                False,
+
+            "derived_calculation_performed":
+                False,
+
+            "final_quantitative_referent_selection_performed":
+                False,
+
+            "quantity_role_orientation_performed":
+                False,
+
+            "same_sentence_quantitative_validation_performed":
+                False,
+
+            "cross_sentence_quantitative_validation_performed":
+                False,
+
+            "quantitative_inference_performed":
+                False,
+
+            "temporal_reasoning_performed":
+                False,
+
+            "new_causal_reasoning_performed":
+                False,
+
+            "truth_assessment_performed":
+                False,
+
+            "article_local_only":
+                True,
+        },
+
+        "processing_boundaries":
+            boundaries,
+
+        "persistence_policy":
+            "ARTICLE_LOCAL_TRANSIENT_INTELLIGENCE",
+
+        "next_stage":
+            "quantity_role_comparison_orientation",
+    })
+
+    return result
