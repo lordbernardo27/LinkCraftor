@@ -1,0 +1,2617 @@
+LINKCRAFTOR
+UNIVERSAL COORDINATION FRAMEWORK
+PHASE 5.4 — RUNTIME COMPLETION INTAKE
+TIMESTAMP + RESULT_ID AUTHORITY RESOLUTION
+========================================================================================================================
+
+========================================================================================================================
+FILE: backend\server\orchestration\queue.py
+========================================================================================================================
+EXISTS: True
+SHA256: 3590DE4CA38A2252ACB8944B39B0AF82EBCB67F2563A7E751E14AA6B00DE9F2F
+
+TERM COUNTS
+  started_at: 0
+  completed_at: 0
+  updated_at: 0
+  result_id: 0
+  uuid: 0
+  uuid4: 0
+  fingerprint: 0
+  runtime_dispatch_result: 0
+  mark_job_completed: 0
+  dequeue_job: 3
+  JOB_STATUS_RUNNING: 4
+  JOB_STATUS_COMPLETED: 0
+
+RELEVANT FUNCTIONS
+
+dequeue_job
+  lines: 118-145
+00115:     return job is not None and job.status == JOB_STATUS_QUEUED
+00116: 
+00117: 
+00118: def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+00119:     """Atomically claim and return the highest-priority queued job.
+00120: 
+00121:     The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+00122:     (with claim metadata) under a cross-process lock, so no other worker
+00123:     can receive the same job. Returns None when nothing is queued.
+00124: 
+00125:     Workers may still call mark_job_running() afterwards; with the
+00126:     corrected service.py that call is idempotent.
+00127:     """
+00128:     with _dequeue_lock():
+00129:         for candidate in _queued_jobs():
+00130:             metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+00131:             if worker_id:
+00132:                 metadata["worker_id"] = worker_id
+00133:             try:
+00134:                 claimed = update_job_status(
+00135:                     candidate.job_id,
+00136:                     JOB_STATUS_RUNNING,
+00137:                     metadata=metadata,
+00138:                 )
+00139:             except Exception:
+00140:                 # Job vanished or store hiccuped between read and write —
+00141:                 # skip it and try the next candidate rather than failing
+00142:                 # the whole dequeue.
+00143:                 continue
+00144:             return claimed
+00145:         return None
+00146: 
+00147: 
+00148: def queue_length() -> int:
+
+========================================================================================================================
+FILE: backend\server\orchestration\job_store.py
+========================================================================================================================
+EXISTS: True
+SHA256: AE88C201C1A1A4740A50F607DA067212EEAC2ABA4DE5416E75DD38043B8D487E
+
+TERM COUNTS
+  started_at: 2
+  completed_at: 2
+  updated_at: 4
+  result_id: 0
+  uuid: 4
+  uuid4: 3
+  fingerprint: 0
+  runtime_dispatch_result: 0
+  mark_job_completed: 0
+  dequeue_job: 0
+  JOB_STATUS_RUNNING: 0
+  JOB_STATUS_COMPLETED: 0
+
+RELEVANT FUNCTIONS
+
+_job_from_dict
+  lines: 63-94
+00060:         return None
+00061: 
+00062: 
+00063: def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+00064:     return OrchestrationJob(
+00065:         job_id=str(data.get("job_id", "")),
+00066:         workspace_id=str(data.get("workspace_id", "")),
+00067:         job_type=str(data.get("job_type", "")),
+00068:         status=str(data.get("status", "queued")),
+00069:         priority=int(data.get("priority", 5)),
+00070:         created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+00071:         updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+00072:         payload=data.get("payload") or {},
+00073:         metadata=data.get("metadata") or {},
+00074:         assigned_worker_id=data.get("assigned_worker_id"),
+00075:         progress_percent=float(data.get("progress_percent", 0.0)),
+00076:         current_step=str(data.get("current_step", "")),
+00077:         total_steps=int(data.get("total_steps", 0)),
+00078:         processed_count=int(data.get("processed_count", 0)),
+00079:         failed_count=int(data.get("failed_count", 0)),
+00080:         warning_count=int(data.get("warning_count", 0)),
+00081: 
+00082:         total_documents=int(data.get("total_documents", 0)),
+00083:         processed_documents=int(data.get("processed_documents", 0)),
+00084:         failed_documents=int(data.get("failed_documents", 0)),
+00085:         skipped_documents=int(data.get("skipped_documents", 0)),
+00086: 
+00087:         current_document_id=str(data.get("current_document_id", "")),
+00088:         current_document_name=str(data.get("current_document_name", "")),
+00089: 
+00090:         progress_message=str(data.get("progress_message", "")),
+00091:         started_at=_parse_datetime(data.get("started_at")),
+00092:         completed_at=_parse_datetime(data.get("completed_at")),
+00093:         error_message=data.get("error_message"),
+00094:     )
+00095: 
+00096: 
+00097: def load_jobs() -> Dict[str, OrchestrationJob]:
+
+create_job
+  lines: 116-188
+00113:     return load_jobs().get(job_id)
+00114: 
+00115: 
+00116: def create_job(
+00117:     workspace_id: str,
+00118:     job_type: str,
+00119:     payload: Optional[Dict[str, Any]] = None,
+00120:     metadata: Optional[Dict[str, Any]] = None,
+00121:     priority: int = 5,
+00122:     *,
+00123:     job_id: Optional[str] = None,
+00124: ) -> OrchestrationJob:
+00125:     """Persist one orchestration job.
+00126: 
+00127:     ``job_id`` is optional for backward compatibility.
+00128: 
+00129:     When omitted, this function preserves the historical orchestration
+00130:     behaviour and allocates a local ``job_*`` identity.
+00131: 
+00132:     When supplied, the caller owns the canonical job identity.  This is the
+00133:     ingress required by Universal Job / Runtime Registration integrations:
+00134:     the orchestration layer MUST persist that exact identity rather than
+00135:     minting a second job ID.
+00136:     """
+00137:     jobs = load_jobs()
+00138: 
+00139:     canonical_job_id = str(
+00140:         job_id
+00141:         or f"job_{uuid4().hex[:16]}"
+00142:     ).strip()
+00143: 
+00144:     if not canonical_job_id:
+00145:         raise ValueError(
+00146:             "job_id must be a non-empty string when supplied"
+00147:         )
+00148: 
+00149:     existing = jobs.get(
+00150:         canonical_job_id
+00151:     )
+00152: 
+00153:     if existing is not None:
+00154:         raise ValueError(
+00155:             "Job already exists: "
+00156:             + canonical_job_id
+00157:         )
+00158: 
+00159:     job = OrchestrationJob(
+00160:         job_id=canonical_job_id,
+00161:         workspace_id=workspace_id,
+00162:         job_type=job_type,
+00163:         payload=payload or {},
+00164:         metadata=metadata or {},
+00165:         priority=priority,
+00166:     )
+00167: 
+00168:     jobs[
+00169:         canonical_job_id
+00170:     ] = job
+00171: 
+00172:     save_jobs(
+00173:         jobs
+00174:     )
+00175: 
+00176:     append_job_event(
+00177:         canonical_job_id,
+00178:         "none",
+00179:         job.status,
+00180:         {
+00181:             "reason": "job_created",
+00182:             "caller_supplied_job_id": (
+00183:                 job_id is not None
+00184:             ),
+00185:         },
+00186:     )
+00187: 
+00188:     return job
+00189: 
+00190: 
+00191: def update_job_status(
+
+update_job_status
+  lines: 191-256
+00188:     return job
+00189: 
+00190: 
+00191: def update_job_status(
+00192:     job_id: str,
+00193:     new_status: str,
+00194:     metadata: Optional[Dict[str, Any]] = None,
+00195:     error_message: Optional[str] = None,
+00196: ) -> OrchestrationJob:
+00197:     if new_status not in VALID_JOB_STATUSES:
+00198:         raise ValueError(f"Invalid job status: {new_status}")
+00199: 
+00200:     jobs = load_jobs()
+00201:     if job_id not in jobs:
+00202:         raise KeyError(f"Job not found: {job_id}")
+00203: 
+00204:     job = jobs[job_id]
+00205:     old_status = job.status
+00206:     job.status = new_status
+00207:     job.updated_at = utc_now()
+00208: 
+00209:     normalized_metadata = (
+00210:         dict(metadata)
+00211:         if isinstance(
+00212:             metadata,
+00213:             dict,
+00214:         )
+00215:         else {}
+00216:     )
+00217: 
+00218:     if normalized_metadata:
+00219: 
+00220:         existing_metadata = (
+00221:             job.metadata
+00222:             if isinstance(
+00223:                 job.metadata,
+00224:                 dict,
+00225:             )
+00226:             else {}
+00227:         )
+00228: 
+00229:         job.metadata = {
+00230:             **existing_metadata,
+00231:             **normalized_metadata,
+00232:         }
+00233: 
+00234:     if error_message:
+00235:         job.error_message = error_message
+00236: 
+00237:         if new_status == JOB_STATUS_FAILED:
+00238:             job.progress_percent = min(
+00239:                 job.progress_percent,
+00240:                 99.0,
+00241:             )
+00242: 
+00243:     jobs[job_id] = job
+00244: 
+00245:     save_jobs(
+00246:         jobs
+00247:     )
+00248: 
+00249:     append_job_event(
+00250:         job_id,
+00251:         old_status,
+00252:         new_status,
+00253:         normalized_metadata,
+00254:     )
+00255: 
+00256:     return job
+00257: 
+00258: 
+00259: def update_job_progress(
+
+update_job_progress
+  lines: 259-325
+00256:     return job
+00257: 
+00258: 
+00259: def update_job_progress(
+00260:     job_id: str,
+00261:     progress_percent: float,
+00262:     metadata: Optional[Dict[str, Any]] = None,
+00263:     current_step: Optional[str] = None,
+00264:     progress_message: Optional[str] = None,
+00265:     total_steps: Optional[int] = None,
+00266:     processed_count: Optional[int] = None,
+00267:     failed_count: Optional[int] = None,
+00268:     warning_count: Optional[int] = None,
+00269:     total_documents: Optional[int] = None,
+00270:     processed_documents: Optional[int] = None,
+00271:     failed_documents: Optional[int] = None,
+00272:     skipped_documents: Optional[int] = None,
+00273:     current_document_id: Optional[str] = None,
+00274:     current_document_name: Optional[str] = None,
+00275: ) -> OrchestrationJob:
+00276:     jobs = load_jobs()
+00277:     if job_id not in jobs:
+00278:         raise KeyError(f"Job not found: {job_id}")
+00279: 
+00280:     job = jobs[job_id]
+00281:     job.progress_percent = max(0.0, min(100.0, float(progress_percent)))
+00282:     job.updated_at = utc_now()
+00283: 
+00284:     if current_step is not None:
+00285:         job.current_step = str(current_step)
+00286: 
+00287:     if progress_message is not None:
+00288:         job.progress_message = str(progress_message)
+00289: 
+00290:     if total_steps is not None:
+00291:         job.total_steps = max(0, int(total_steps))
+00292: 
+00293:     if processed_count is not None:
+00294:         job.processed_count = max(0, int(processed_count))
+00295: 
+00296:     if failed_count is not None:
+00297:         job.failed_count = max(0, int(failed_count))
+00298: 
+00299:     if warning_count is not None:
+00300:         job.warning_count = max(0, int(warning_count))
+00301: 
+00302:     if total_documents is not None:
+00303:         job.total_documents = max(0, int(total_documents))
+00304: 
+00305:     if processed_documents is not None:
+00306:         job.processed_documents = max(0, int(processed_documents))
+00307: 
+00308:     if failed_documents is not None:
+00309:         job.failed_documents = max(0, int(failed_documents))
+00310: 
+00311:     if skipped_documents is not None:
+00312:         job.skipped_documents = max(0, int(skipped_documents))
+00313: 
+00314:     if current_document_id is not None:
+00315:         job.current_document_id = str(current_document_id)
+00316: 
+00317:     if current_document_name is not None:
+00318:         job.current_document_name = str(current_document_name)
+00319: 
+00320:     if metadata:
+00321:         job.metadata.update(metadata)
+00322: 
+00323:     jobs[job_id] = job
+00324:     save_jobs(jobs)
+00325:     return job
+00326: 
+00327: 
+00328: def append_job_event(
+
+append_job_event
+  lines: 328-349
+00325:     return job
+00326: 
+00327: 
+00328: def append_job_event(
+00329:     job_id: str,
+00330:     old_status: str,
+00331:     new_status: str,
+00332:     metadata: Optional[Dict[str, Any]] = None,
+00333: ) -> JobStatusEvent:
+00334:     events = _read_json(EVENTS_FILE, {})
+00335:     if not isinstance(events, dict):
+00336:         events = {}
+00337: 
+00338:     event = JobStatusEvent(
+00339:         event_id=f"evt_{uuid4().hex[:16]}",
+00340:         job_id=job_id,
+00341:         old_status=old_status,
+00342:         new_status=new_status,
+00343:         metadata=metadata or {},
+00344:     )
+00345: 
+00346:     events.setdefault(job_id, [])
+00347:     events[job_id].append(asdict(event))
+00348:     _write_json(EVENTS_FILE, events)
+00349:     return event
+00350: 
+00351: 
+00352: def list_job_events(job_id: str) -> List[Dict[str, Any]]:
+
+========================================================================================================================
+FILE: backend\server\orchestration\models.py
+========================================================================================================================
+EXISTS: True
+SHA256: C2D014CF071D34F478F7E4B108F6192A21F4D7AD7958F394D3443BD59C884923
+
+TERM COUNTS
+  started_at: 2
+  completed_at: 2
+  updated_at: 1
+  result_id: 1
+  uuid: 0
+  uuid4: 0
+  fingerprint: 0
+  runtime_dispatch_result: 0
+  mark_job_completed: 0
+  dequeue_job: 0
+  JOB_STATUS_RUNNING: 2
+  JOB_STATUS_COMPLETED: 2
+
+RELEVANT FUNCTIONS
+  NONE
+
+========================================================================================================================
+FILE: backend\server\orchestration\service.py
+========================================================================================================================
+EXISTS: True
+SHA256: A14CF668B20EECF5D90F675E8DC5DDE35DC866D183C303A5B59C33100C72BEC4
+
+TERM COUNTS
+  started_at: 0
+  completed_at: 0
+  updated_at: 0
+  result_id: 0
+  uuid: 0
+  uuid4: 0
+  fingerprint: 0
+  runtime_dispatch_result: 0
+  mark_job_completed: 1
+  dequeue_job: 1
+  JOB_STATUS_RUNNING: 5
+  JOB_STATUS_COMPLETED: 3
+
+RELEVANT FUNCTIONS
+
+mark_job_running
+  lines: 82-107
+00079:     }
+00080: 
+00081: 
+00082: def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+00083:     """Transition a job to RUNNING.
+00084: 
+00085:     FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+00086:     RUNNING atomically, so by the time the worker calls this the job is
+00087:     usually already running. Re-issuing the transition would be harmless in
+00088:     most stores but is wasteful and can clobber claim metadata; if the job is
+00089:     already RUNNING we just return it (merging in the worker_id if it wasn't
+00090:     recorded yet).
+00091:     """
+00092:     job = get_job(job_id)
+00093:     if job is None:
+00094:         raise KeyError(f"unknown job: {job_id}")
+00095: 
+00096:     if job.status == JOB_STATUS_RUNNING:
+00097:         if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+00098:             # Record the worker identity without re-transitioning status.
+00099:             return update_job_status(
+00100:                 job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+00101:             )
+00102:         return job
+00103: 
+00104:     metadata: Dict[str, Any] = {}
+00105:     if worker_id:
+00106:         metadata["worker_id"] = worker_id
+00107:     return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+00108: 
+00109: 
+00110: def mark_job_completed(
+
+mark_job_completed
+  lines: 110-118
+00107:     return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+00108: 
+00109: 
+00110: def mark_job_completed(
+00111:     job_id: str,
+00112:     metadata: Optional[Dict[str, Any]] = None,
+00113: ) -> OrchestrationJob:
+00114:     # FIX: metadata was previously passed to BOTH the progress update and the
+00115:     # status update, merging the same dict twice. Progress just records 100%;
+00116:     # metadata rides on the terminal status change.
+00117:     update_job_progress(job_id, 100.0)
+00118:     return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+00119: 
+00120: 
+00121: def mark_job_failed(
+
+service_health
+  lines: 177-196
+00174:     )
+00175: 
+00176: 
+00177: def service_health() -> Dict[str, Any]:
+00178:     jobs = load_jobs()
+00179: 
+00180:     counts = {
+00181:         JOB_STATUS_QUEUED: 0,
+00182:         JOB_STATUS_RUNNING: 0,
+00183:         JOB_STATUS_COMPLETED: 0,
+00184:         JOB_STATUS_FAILED: 0,
+00185:         JOB_STATUS_CANCELLED: 0,
+00186:     }
+00187: 
+00188:     for job in jobs.values():
+00189:         counts[job.status] = counts.get(job.status, 0) + 1
+00190: 
+00191:     return {
+00192:         "ok": True,
+00193:         "total_jobs": len(jobs),
+00194:         "status_counts": counts,
+00195:         "queue": queue_snapshot(),
+00196:     }
+
+========================================================================================================================
+FILE: backend\server\runtime\universal_runtime_worker_v1.py
+========================================================================================================================
+EXISTS: True
+SHA256: ED6B415C5FEDF3F4CB62451F3E23D182F9DA937D9CB09FD33262C506B9BEF699
+
+TERM COUNTS
+  started_at: 2
+  completed_at: 0
+  updated_at: 2
+  result_id: 0
+  uuid: 0
+  uuid4: 0
+  fingerprint: 0
+  runtime_dispatch_result: 1
+  mark_job_completed: 3
+  dequeue_job: 7
+  JOB_STATUS_RUNNING: 6
+  JOB_STATUS_COMPLETED: 2
+
+RELEVANT FUNCTIONS
+
+orchestration_job_to_runtime_mapping_v1
+  lines: 109-227
+00106:     return value
+00107: 
+00108: 
+00109: def orchestration_job_to_runtime_mapping_v1(
+00110:     job: OrchestrationJob,
+00111: ) -> dict[str, Any]:
+00112:     """
+00113:     Convert one claimed OrchestrationJob into the canonical Runtime
+00114:     Registration dispatch mapping.
+00115: 
+00116:     This preserves job identity and does not reconstruct a new job.
+00117:     """
+00118: 
+00119:     if not isinstance(
+00120:         job,
+00121:         OrchestrationJob,
+00122:     ):
+00123:         raise UniversalRuntimeWorkerContractError(
+00124:             "job must be an OrchestrationJob."
+00125:         )
+00126: 
+00127:     job_id = str(
+00128:         job.job_id
+00129:         or ""
+00130:     ).strip()
+00131: 
+00132:     if not job_id:
+00133:         raise UniversalRuntimeWorkerContractError(
+00134:             "Claimed orchestration job has no job_id."
+00135:         )
+00136: 
+00137:     workspace_id = str(
+00138:         job.workspace_id
+00139:         or ""
+00140:     ).strip()
+00141: 
+00142:     if not workspace_id:
+00143:         raise UniversalRuntimeWorkerContractError(
+00144:             "Claimed orchestration job has no workspace_id."
+00145:         )
+00146: 
+00147:     job_type = str(
+00148:         job.job_type
+00149:         or ""
+00150:     ).strip()
+00151: 
+00152:     if not job_type:
+00153:         raise UniversalRuntimeWorkerContractError(
+00154:             "Claimed orchestration job has no job_type."
+00155:         )
+00156: 
+00157:     if job.status != JOB_STATUS_RUNNING:
+00158:         raise UniversalRuntimeWorkerContractError(
+00159:             "Worker may execute only a job already atomically "
+00160:             "claimed as RUNNING."
+00161:         )
+00162: 
+00163:     payload = job.payload
+00164: 
+00165:     if not isinstance(
+00166:         payload,
+00167:         Mapping,
+00168:     ):
+00169:         raise UniversalRuntimeWorkerContractError(
+00170:             "Claimed orchestration job payload must be a mapping."
+00171:         )
+00172: 
+00173:     metadata = job.metadata
+00174: 
+00175:     if not isinstance(
+00176:         metadata,
+00177:         Mapping,
+00178:     ):
+00179:         raise UniversalRuntimeWorkerContractError(
+00180:             "Claimed orchestration job metadata must be a mapping."
+00181:         )
+00182: 
+00183:     return {
+00184:         "job_id":
+00185:             job_id,
+00186: 
+00187:         "workspace_id":
+00188:             workspace_id,
+00189: 
+00190:         "job_type":
+00191:             job_type,
+00192: 
+00193:         "status":
+00194:             job.status,
+00195: 
+00196:         "priority":
+00197:             job.priority,
+00198: 
+00199:         "created_at":
+00200:             _datetime_value(
+00201:                 job.created_at
+00202:             ),
+00203: 
+00204:         "updated_at":
+00205:             _datetime_value(
+00206:                 job.updated_at
+00207:             ),
+00208: 
+00209:         "started_at":
+00210:             _datetime_value(
+00211:                 job.started_at
+00212:             ),
+00213: 
+00214:         "payload":
+00215:             deepcopy(
+00216:                 dict(
+00217:                     payload
+00218:                 )
+00219:             ),
+00220: 
+00221:         "metadata":
+00222:             deepcopy(
+00223:                 dict(
+00224:                     metadata
+00225:                 )
+00226:             ),
+00227:     }
+00228: 
+00229: 
+00230: def _runtime_retry_policy_v1(
+
+run_one_universal_runtime_job_v1
+  lines: 449-977
+00446:     return requeued
+00447: 
+00448: 
+00449: def run_one_universal_runtime_job_v1(
+00450:     *,
+00451:     worker_id: str = "universal_runtime_worker_v1",
+00452:     dispatcher: Callable[
+00453:         [Mapping[str, Any]],
+00454:         dict[str, Any],
+00455:     ] = dispatch_registered_runtime_handler,
+00456: ) -> dict[str, Any]:
+00457:     """
+00458:     Claim and execute at most one canonical orchestration job.
+00459: 
+00460:     Returns IDLE when no queued work exists.
+00461: 
+00462:     The dequeue operation itself owns QUEUED -> RUNNING.
+00463:     """
+00464: 
+00465:     canonical_worker_id = str(
+00466:         worker_id
+00467:         or ""
+00468:     ).strip()
+00469: 
+00470:     if not canonical_worker_id:
+00471:         raise UniversalRuntimeWorkerContractError(
+00472:             "worker_id must not be empty."
+00473:         )
+00474: 
+00475:     if not callable(
+00476:         dispatcher
+00477:     ):
+00478:         raise UniversalRuntimeWorkerContractError(
+00479:             "dispatcher must be callable."
+00480:         )
+00481: 
+00482:     claimed_job = dequeue_job(
+00483:         worker_id=canonical_worker_id
+00484:     )
+00485: 
+00486:     if claimed_job is None:
+00487:         return {
+00488:             "schema_version":
+00489:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00490: 
+00491:             "worker_version":
+00492:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+00493: 
+00494:             "worker_id":
+00495:                 canonical_worker_id,
+00496: 
+00497:             "worker_status":
+00498:                 "IDLE",
+00499: 
+00500:             "job_claimed":
+00501:                 False,
+00502: 
+00503:             "job_id":
+00504:                 None,
+00505: 
+00506:             "dispatch_performed":
+00507:                 False,
+00508: 
+00509:             "terminal_status":
+00510:                 None,
+00511:         }
+00512: 
+00513:     job_id = str(
+00514:         claimed_job.job_id
+00515:         or ""
+00516:     ).strip()
+00517: 
+00518:     if not job_id:
+00519:         raise UniversalRuntimeWorkerContractError(
+00520:             "dequeue_job returned a claimed job without job_id."
+00521:         )
+00522: 
+00523:     if claimed_job.status != JOB_STATUS_RUNNING:
+00524:         raise UniversalRuntimeWorkerContractError(
+00525:             "dequeue_job returned a job that is not RUNNING."
+00526:         )
+00527: 
+00528:     runtime_job = (
+00529:         orchestration_job_to_runtime_mapping_v1(
+00530:             claimed_job
+00531:         )
+00532:     )
+00533: 
+00534:     if runtime_job[
+00535:         "job_id"
+00536:     ] != job_id:
+00537:         raise UniversalRuntimeWorkerContractError(
+00538:             "Runtime mapping changed canonical job identity."
+00539:         )
+00540: 
+00541:     try:
+00542:         dispatch_result = dispatcher(
+00543:             runtime_job
+00544:         )
+00545: 
+00546:         if dispatch_result is None:
+00547:             dispatch_result = {}
+00548: 
+00549:         if not isinstance(
+00550:             dispatch_result,
+00551:             Mapping,
+00552:         ):
+00553:             dispatch_result = {
+00554:                 "value":
+00555:                     dispatch_result,
+00556:             }
+00557: 
+00558:         completed_job = mark_job_completed(
+00559:             job_id,
+00560:             metadata={
+00561:                 "worker_id":
+00562:                     canonical_worker_id,
+00563: 
+00564:                 "runtime_worker_version":
+00565:                     UNIVERSAL_RUNTIME_WORKER_VERSION,
+00566: 
+00567:                 "runtime_dispatch_completed":
+00568:                     True,
+00569: 
+00570:                 "runtime_dispatch_result":
+00571:                     deepcopy(
+00572:                         dict(
+00573:                             dispatch_result
+00574:                         )
+00575:                     ),
+00576: 
+00577:                 "canonical_job_id_preserved":
+00578:                     True,
+00579: 
+00580:                 "old_universal_knowledge_jsonl_used":
+00581:                     False,
+00582:             },
+00583:         )
+00584: 
+00585:         if (
+00586:             completed_job.job_id
+00587:             != job_id
+00588:         ):
+00589:             raise UniversalRuntimeWorkerFinalizationError(
+00590:                 "Completion changed canonical job identity."
+00591:             )
+00592: 
+00593:         if (
+00594:             completed_job.status
+00595:             != JOB_STATUS_COMPLETED
+00596:         ):
+00597:             raise UniversalRuntimeWorkerFinalizationError(
+00598:                 "Completion did not persist COMPLETED status."
+00599:             )
+00600: 
+00601:         return {
+00602:             "schema_version":
+00603:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00604: 
+00605:             "worker_version":
+00606:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+00607: 
+00608:             "worker_id":
+00609:                 canonical_worker_id,
+00610: 
+00611:             "worker_status":
+00612:                 "COMPLETED",
+00613: 
+00614:             "job_claimed":
+00615:                 True,
+00616: 
+00617:             "job_id":
+00618:                 job_id,
+00619: 
+00620:             "job_type":
+00621:                 claimed_job.job_type,
+00622: 
+00623:             "claimed_status":
+00624:                 JOB_STATUS_RUNNING,
+00625: 
+00626:             "dispatch_performed":
+00627:                 True,
+00628: 
+00629:             "dispatch_result":
+00630:                 deepcopy(
+00631:                     dict(
+00632:                         dispatch_result
+00633:                     )
+00634:                 ),
+00635: 
+00636:             "terminal_status":
+00637:                 completed_job.status,
+00638: 
+00639:             "canonical_job_id_preserved":
+00640:                 True,
+00641: 
+00642:             "old_universal_knowledge_jsonl_used":
+00643:                 False,
+00644:         }
+00645: 
+00646:     except UniversalRuntimeWorkerFinalizationError:
+00647:         raise
+00648: 
+00649:     except Exception as exc:
+00650: 
+00651:         error_message = (
+00652:             f"{type(exc).__name__}: {exc}"
+00653:         )
+00654: 
+00655:         claimed_metadata = (
+00656:             claimed_job.metadata
+00657:             if isinstance(
+00658:                 claimed_job.metadata,
+00659:                 Mapping,
+00660:             )
+00661:             else {}
+00662:         )
+00663: 
+00664:         attempt_number = (
+00665:             _runtime_failure_attempt_number_v1(
+00666:                 claimed_metadata
+00667:             )
+00668:         )
+00669: 
+00670:         retry_policy = (
+00671:             _runtime_retry_policy_v1(
+00672:                 job_type=
+00673:                     claimed_job.job_type
+00674:             )
+00675:         )
+00676: 
+00677:         maximum_attempts = int(
+00678:             retry_policy[
+00679:                 "maximum_attempts"
+00680:             ]
+00681:         )
+00682: 
+00683:         contract_error = (
+00684:             _runtime_failure_is_contract_error_v1(
+00685:                 exc
+00686:             )
+00687:         )
+00688: 
+00689:         if contract_error:
+00690:             retry_type_allowed = bool(
+00691:                 retry_policy[
+00692:                     "retry_on_contract_error"
+00693:                 ]
+00694:             )
+00695:         else:
+00696:             retry_type_allowed = bool(
+00697:                 retry_policy[
+00698:                     "retry_on_handler_error"
+00699:                 ]
+00700:             )
+00701: 
+00702:         retry_ceiling_allows = (
+00703:             attempt_number
+00704:             < maximum_attempts
+00705:         )
+00706: 
+00707:         retry_allowed = (
+00708:             retry_type_allowed
+00709:             and retry_ceiling_allows
+00710:         )
+00711: 
+00712:         # ====================================================
+00713:         # RETRY PATH
+00714:         # SAME canonical job_id -> QUEUED
+00715:         # ====================================================
+00716: 
+00717:         if retry_allowed:
+00718: 
+00719:             try:
+00720:                 requeued_job = (
+00721:                     _requeue_same_runtime_job_v1(
+00722:                         job_id=
+00723:                             job_id,
+00724: 
+00725:                         worker_id=
+00726:                             canonical_worker_id,
+00727: 
+00728:                         error=
+00729:                             exc,
+00730: 
+00731:                         attempt_number=
+00732:                             attempt_number,
+00733: 
+00734:                         maximum_attempts=
+00735:                             maximum_attempts,
+00736:                     )
+00737:                 )
+00738: 
+00739:             except Exception as finalization_exc:
+00740:                 raise UniversalRuntimeWorkerFinalizationError(
+00741:                     "Runtime dispatch failed and same-job retry "
+00742:                     "could not be persisted."
+00743:                 ) from finalization_exc
+00744: 
+00745:             return {
+00746:                 "schema_version":
+00747:                     UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00748: 
+00749:                 "worker_version":
+00750:                     UNIVERSAL_RUNTIME_WORKER_VERSION,
+00751: 
+00752:                 "worker_id":
+00753:                     canonical_worker_id,
+00754: 
+00755:                 "worker_status":
+00756:                     "RETRY_QUEUED",
+00757: 
+00758:                 "job_claimed":
+00759:                     True,
+00760: 
+00761:                 "job_id":
+00762:                     job_id,
+00763: 
+00764:                 "job_type":
+00765:                     claimed_job.job_type,
+00766: 
+00767:                 "claimed_status":
+00768:                     JOB_STATUS_RUNNING,
+00769: 
+00770:                 "dispatch_performed":
+00771:                     True,
+00772: 
+00773:                 "dispatch_succeeded":
+00774:                     False,
+00775: 
+00776:                 "dispatch_error_type":
+00777:                     type(
+00778:                         exc
+00779:                     ).__name__,
+00780: 
+00781:                 "dispatch_error":
+00782:                     str(
+00783:                         exc
+00784:                     ),
+00785: 
+00786:                 "contract_error":
+00787:                     contract_error,
+00788: 
+00789:                 "retry_type_allowed":
+00790:                     retry_type_allowed,
+00791: 
+00792:                 "retry_ceiling_allows":
+00793:                     retry_ceiling_allows,
+00794: 
+00795:                 "retry_allowed":
+00796:                     True,
+00797: 
+00798:                 "retry_scheduled":
+00799:                     True,
+00800: 
+00801:                 "attempt_number":
+00802:                     attempt_number,
+00803: 
+00804:                 "maximum_attempts":
+00805:                     maximum_attempts,
+00806: 
+00807:                 "queue_status":
+00808:                     requeued_job.status,
+00809: 
+00810:                 "terminal_status":
+00811:                     None,
+00812: 
+00813:                 "canonical_job_id_preserved":
+00814:                     True,
+00815: 
+00816:                 "retry_created_new_job":
+00817:                     False,
+00818: 
+00819:                 "old_universal_knowledge_jsonl_used":
+00820:                     False,
+00821:             }
+00822: 
+00823:         # ====================================================
+00824:         # TERMINAL FAILURE PATH
+00825:         # SAME canonical job_id -> FAILED
+00826:         # ====================================================
+00827: 
+00828:         try:
+00829:             failed_job = mark_job_failed(
+00830:                 job_id,
+00831:                 error_message,
+00832:                 metadata={
+00833:                     "worker_id":
+00834:                         canonical_worker_id,
+00835: 
+00836:                     "runtime_worker_version":
+00837:                         UNIVERSAL_RUNTIME_WORKER_VERSION,
+00838: 
+00839:                     "runtime_dispatch_completed":
+00840:                         False,
+00841: 
+00842:                     "runtime_dispatch_failed":
+00843:                         True,
+00844: 
+00845:                     "runtime_retry_scheduled":
+00846:                         False,
+00847: 
+00848:                     "runtime_failure_attempt_count":
+00849:                         attempt_number,
+00850: 
+00851:                     "runtime_maximum_attempts":
+00852:                         maximum_attempts,
+00853: 
+00854:                     "runtime_retry_type_allowed":
+00855:                         retry_type_allowed,
+00856: 
+00857:                     "runtime_retry_exhausted":
+00858:                         (
+00859:                             retry_type_allowed
+00860:                             and not retry_ceiling_allows
+00861:                         ),
+00862: 
+00863:                     "runtime_contract_error":
+00864:                         contract_error,
+00865: 
+00866:                     "runtime_dispatch_error_type":
+00867:                         type(
+00868:                             exc
+00869:                         ).__name__,
+00870: 
+00871:                     "canonical_job_id_preserved":
+00872:                         True,
+00873: 
+00874:                     "retry_created_new_job":
+00875:                         False,
+00876: 
+00877:                     "old_universal_knowledge_jsonl_used":
+00878:                         False,
+00879:                 },
+00880:             )
+00881: 
+00882:         except Exception as finalization_exc:
+00883:             raise UniversalRuntimeWorkerFinalizationError(
+00884:                 "Runtime dispatch failed and FAILED status "
+00885:                 "could not be persisted."
+00886:             ) from finalization_exc
+00887: 
+00888:         if failed_job.job_id != job_id:
+00889:             raise UniversalRuntimeWorkerFinalizationError(
+00890:                 "Failure finalization changed canonical job identity."
+00891:             )
+00892: 
+00893:         if failed_job.status != JOB_STATUS_FAILED:
+00894:             raise UniversalRuntimeWorkerFinalizationError(
+00895:                 "Failure finalization did not persist FAILED status."
+00896:             )
+00897: 
+00898:         return {
+00899:             "schema_version":
+00900:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00901: 
+00902:             "worker_version":
+00903:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+00904: 
+00905:             "worker_id":
+00906:                 canonical_worker_id,
+00907: 
+00908:             "worker_status":
+00909:                 "FAILED",
+00910: 
+00911:             "job_claimed":
+00912:                 True,
+00913: 
+00914:             "job_id":
+00915:                 job_id,
+00916: 
+00917:             "job_type":
+00918:                 claimed_job.job_type,
+00919: 
+00920:             "claimed_status":
+00921:                 JOB_STATUS_RUNNING,
+00922: 
+00923:             "dispatch_performed":
+00924:                 True,
+00925: 
+00926:             "dispatch_succeeded":
+00927:                 False,
+00928: 
+00929:             "dispatch_error_type":
+00930:                 type(
+00931:                     exc
+00932:                 ).__name__,
+00933: 
+00934:             "dispatch_error":
+00935:                 str(
+00936:                     exc
+00937:                 ),
+00938: 
+00939:             "contract_error":
+00940:                 contract_error,
+00941: 
+00942:             "retry_type_allowed":
+00943:                 retry_type_allowed,
+00944: 
+00945:             "retry_ceiling_allows":
+00946:                 retry_ceiling_allows,
+00947: 
+00948:             "retry_allowed":
+00949:                 False,
+00950: 
+00951:             "retry_scheduled":
+00952:                 False,
+00953: 
+00954:             "attempt_number":
+00955:                 attempt_number,
+00956: 
+00957:             "maximum_attempts":
+00958:                 maximum_attempts,
+00959: 
+00960:             "retry_exhausted":
+00961:                 (
+00962:                     retry_type_allowed
+00963:                     and not retry_ceiling_allows
+00964:                 ),
+00965: 
+00966:             "terminal_status":
+00967:                 failed_job.status,
+00968: 
+00969:             "canonical_job_id_preserved":
+00970:                 True,
+00971: 
+00972:             "retry_created_new_job":
+00973:                 False,
+00974: 
+00975:             "old_universal_knowledge_jsonl_used":
+00976:                 False,
+00977:         }
+00978: 
+00979: 
+00980: 
+
+explain_universal_runtime_worker_v1
+  lines: 981-1033
+00978: 
+00979: 
+00980: 
+00981: def explain_universal_runtime_worker_v1() -> dict[str, Any]:
+00982:     """Return the canonical Stage 10.8 worker contract."""
+00983: 
+00984:     return {
+00985:         "component":
+00986:             "Universal Runtime Worker",
+00987: 
+00988:         "version":
+00989:             UNIVERSAL_RUNTIME_WORKER_VERSION,
+00990: 
+00991:         "execution_model":
+00992:             "one-shot",
+00993: 
+00994:         "queue_source":
+00995:             "canonical orchestration persisted job store",
+00996: 
+00997:         "claim_operation":
+00998:             "dequeue_job(worker_id=...)",
+00999: 
+01000:         "claim_transition":
+01001:             "QUEUED -> RUNNING owned by dequeue_job",
+01002: 
+01003:         "dispatcher":
+01004:             "dispatch_registered_runtime_handler",
+01005: 
+01006:         "success_transition":
+01007:             "RUNNING -> COMPLETED via mark_job_completed",
+01008: 
+01009:         "failure_transition":
+01010:             (
+01011:                 "RUNNING -> QUEUED for permitted retry; "
+01012:                 "RUNNING -> FAILED when retry is disallowed "
+01013:                 "or exhausted"
+01014:             ),
+01015: 
+01016:         "retry_policy_source":
+01017:             "Runtime Registration retry_policy",
+01018: 
+01019:         "retry_job_identity_rule":
+01020:             "same canonical job_id; no replacement job",
+01021: 
+01022:         "canonical_job_id_preserved":
+01023:             True,
+01024: 
+01025:         "old_universal_knowledge_jsonl_used":
+01026:             False,
+01027: 
+01028:         "older_execute_registered_runtime_job_v1_used":
+01029:             False,
+01030: 
+01031:         "infinite_loop":
+01032:             False,
+01033:     }
+01034: 
+01035: 
+01036: __all__ = [
+
+========================================================================================================================
+FILE: backend\server\runtime\universal_jobs\contract.py
+========================================================================================================================
+EXISTS: True
+SHA256: E5BE8421D72627AB5DEC93C3CD45E4A314E956ACDA751C8A93ECD160CDACEE13
+
+TERM COUNTS
+  started_at: 15
+  completed_at: 5
+  updated_at: 6
+  result_id: 0
+  uuid: 0
+  uuid4: 0
+  fingerprint: 7
+  runtime_dispatch_result: 0
+  mark_job_completed: 0
+  dequeue_job: 0
+  JOB_STATUS_RUNNING: 0
+  JOB_STATUS_COMPLETED: 0
+
+RELEVANT FUNCTIONS
+
+_fingerprint
+  lines: 275-276
+00272:     )
+00273: 
+00274: 
+00275: def _fingerprint(text: str) -> str:
+00276:     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+00277: 
+00278: 
+00279: def _normalize_optional_text(
+
+========================================================================================================================
+FILE: backend\server\coordination\universal_stages\result_contract.py
+========================================================================================================================
+EXISTS: True
+SHA256: B3469B10BB2F8F9372E4336784D09A143C78FABE45BF039B61B76F4A2DC33B24
+
+TERM COUNTS
+  started_at: 12
+  completed_at: 0
+  updated_at: 0
+  result_id: 11
+  uuid: 0
+  uuid4: 0
+  fingerprint: 5
+  runtime_dispatch_result: 0
+  mark_job_completed: 0
+  dequeue_job: 0
+  JOB_STATUS_RUNNING: 0
+  JOB_STATUS_COMPLETED: 0
+
+RELEVANT FUNCTIONS
+
+_fingerprint
+  lines: 550-558
+00547:     )
+00548: 
+00549: 
+00550: def _fingerprint(
+00551:     text: str,
+00552: ) -> str:
+00553: 
+00554:     return hashlib.sha256(
+00555:         text.encode(
+00556:             "utf-8"
+00557:         )
+00558:     ).hexdigest()
+00559: 
+00560: 
+00561: # ============================================================================
+
+========================================================================================================================
+2. TIMESTAMP ASSIGNMENT SCAN
+========================================================================================================================
+
+backend\server\orchestration\queue.py
+  NO TARGET ASSIGNMENTS
+
+backend\server\orchestration\job_store.py
+  updated_at assignment at line 207
+  updated_at assignment at line 282
+
+backend\server\orchestration\models.py
+  updated_at assignment at line 37
+  started_at assignment at line 57
+  completed_at assignment at line 58
+  started_at assignment at line 71
+  completed_at assignment at line 72
+  result_id assignment at line 98
+
+backend\server\orchestration\service.py
+  NO TARGET ASSIGNMENTS
+
+backend\server\runtime\universal_runtime_worker_v1.py
+  NO TARGET ASSIGNMENTS
+
+backend\server\runtime\universal_jobs\contract.py
+  updated_at assignment at line 527
+  started_at assignment at line 751
+  completed_at assignment at line 752
+
+backend\server\coordination\universal_stages\result_contract.py
+  result_id assignment at line 624
+  started_at assignment at line 655
+  result_id assignment at line 689
+  started_at assignment at line 809
+
+========================================================================================================================
+3. STAGERESULT TIMESTAMP / RESULT_ID RULES
+========================================================================================================================
+
+__post_init__
+lines: 683-1160
+00680:         UNIVERSAL_STAGE_RESULT_CONTRACT_VERSION
+00681:     )
+00682: 
+00683:     def __post_init__(
+00684:         self,
+00685:     ) -> None:
+00686: 
+00687:         violations: list[str] = []
+00688: 
+00689:         result_id = _require_name(
+00690:             self.result_id,
+00691:             name="result_id",
+00692:             violations=violations,
+00693:         )
+00694: 
+00695:         workflow_id = _require_name(
+00696:             self.workflow_id,
+00697:             name="workflow_id",
+00698:             violations=violations,
+00699:         )
+00700: 
+00701:         correlation_id = _require_name(
+00702:             self.correlation_id,
+00703:             name="correlation_id",
+00704:             violations=violations,
+00705:         )
+00706: 
+00707:         stage_id = _require_name(
+00708:             self.stage_id,
+00709:             name="stage_id",
+00710:             violations=violations,
+00711:         )
+00712: 
+00713:         stage_version = _require_name(
+00714:             self.stage_version,
+00715:             name="stage_version",
+00716:             violations=violations,
+00717:         )
+00718: 
+00719:         pipeline_id = _require_name(
+00720:             self.pipeline_id,
+00721:             name="pipeline_id",
+00722:             violations=violations,
+00723:         )
+00724: 
+00725:         workflow_type = _require_name(
+00726:             self.workflow_type,
+00727:             name="workflow_type",
+00728:             violations=violations,
+00729:         )
+00730: 
+00731:         workspace_id = _require_name(
+00732:             self.workspace_id,
+00733:             name="workspace_id",
+00734:             violations=violations,
+00735:         )
+00736: 
+00737:         try:
+00738:             execution_target = (
+00739:                 StageExecutionTarget.coerce(
+00740:                     self.execution_target
+00741:                 )
+00742:             )
+00743: 
+00744:         except Exception as exc:
+00745: 
+00746:             violations.append(
+00747:                 str(exc)
+00748:             )
+00749: 
+00750:             execution_target = (
+00751:                 StageExecutionTarget.UNIVERSAL_RUNTIME
+00752:             )
+00753: 
+00754:         job_id = _require_name(
+00755:             self.job_id,
+00756:             name="job_id",
+00757:             violations=violations,
+00758:             allow_empty=True,
+00759:         )
+00760: 
+00761:         job_type = _require_name(
+00762:             self.job_type,
+00763:             name="job_type",
+00764:             violations=violations,
+00765:             allow_empty=True,
+00766:         )
+00767: 
+00768:         try:
+00769:             status = (
+00770:                 UniversalStageResultStatus.coerce(
+00771:                     self.status
+00772:                 )
+00773:             )
+00774: 
+00775:         except UniversalStageResultContractError as exc:
+00776: 
+00777:             violations.extend(
+00778:                 exc.violations
+00779:                 or (
+00780:                     str(exc),
+00781:                 )
+00782:             )
+00783: 
+00784:             status = (
+00785:                 UniversalStageResultStatus.FAILED
+00786:             )
+00787: 
+00788:         output = _normalize_mapping(
+00789:             self.output,
+00790:             name="output",
+00791:             violations=violations,
+00792:         )
+00793: 
+00794:         result_reference = _require_text(
+00795:             self.result_reference,
+00796:             name="result_reference",
+00797:             violations=violations,
+00798:             allow_empty=True,
+00799:         )
+00800: 
+00801:         artifact_references = (
+00802:             _normalize_reference_tuple(
+00803:                 self.artifact_references,
+00804:                 name="artifact_references",
+00805:                 violations=violations,
+00806:             )
+00807:         )
+00808: 
+00809:         started_at = _require_timestamp(
+00810:             self.started_at,
+00811:             name="started_at",
+00812:             violations=violations,
+00813:         )
+00814: 
+00815:         finished_at = _require_timestamp(
+00816:             self.finished_at,
+00817:             name="finished_at",
+00818:             violations=violations,
+00819:         )
+00820: 
+00821:         failure_code = _require_name(
+00822:             self.failure_code,
+00823:             name="failure_code",
+00824:             violations=violations,
+00825:             allow_empty=True,
+00826:         )
+00827: 
+00828:         failure_message = _require_text(
+00829:             self.failure_message,
+00830:             name="failure_message",
+00831:             violations=violations,
+00832:             allow_empty=True,
+00833:         )
+00834: 
+00835:         failure_details = _normalize_mapping(
+00836:             self.failure_details,
+00837:             name="failure_details",
+00838:             violations=violations,
+00839:         )
+00840: 
+00841:         metadata = _normalize_mapping(
+00842:             self.metadata,
+00843:             name="metadata",
+00844:             violations=violations,
+00845:         )
+00846: 
+00847:         workflow_contract_version = _require_name(
+00848:             self.workflow_contract_version,
+00849:             name="workflow_contract_version",
+00850:             violations=violations,
+00851:         )
+00852: 
+00853:         stage_reference_contract_version = (
+00854:             _require_name(
+00855:                 self.stage_reference_contract_version,
+00856:                 name="stage_reference_contract_version",
+00857:                 violations=violations,
+00858:             )
+00859:         )
+00860: 
+00861:         contract_version = _require_name(
+00862:             self.contract_version,
+00863:             name="contract_version",
+00864:             violations=violations,
+00865:         )
+00866: 
+00867: 
+00868:         # ------------------------------------------------------------------
+00869:         # Contract compatibility
+00870:         # ------------------------------------------------------------------
+00871: 
+00872:         if (
+00873:             workflow_contract_version
+00874:             != UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+00875:         ):
+00876:             violations.append(
+00877:                 "workflow_contract_version must be "
+00878:                 + UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+00879:             )
+00880: 
+00881:         if (
+00882:             stage_reference_contract_version
+00883:             != UNIVERSAL_STAGE_REFERENCE_CONTRACT_VERSION
+00884:         ):
+00885:             violations.append(
+00886:                 "stage_reference_contract_version must be "
+00887:                 + UNIVERSAL_STAGE_REFERENCE_CONTRACT_VERSION
+00888:             )
+00889: 
+00890:         if (
+00891:             contract_version
+00892:             != UNIVERSAL_STAGE_RESULT_CONTRACT_VERSION
+00893:         ):
+00894:             violations.append(
+00895:                 "contract_version must be "
+00896:                 + UNIVERSAL_STAGE_RESULT_CONTRACT_VERSION
+00897:             )
+00898: 
+00899: 
+00900:         # ------------------------------------------------------------------
+00901:         # Runtime correlation invariants
+00902:         # ------------------------------------------------------------------
+00903: 
+00904:         if (
+00905:             execution_target
+00906:             == StageExecutionTarget.UNIVERSAL_RUNTIME
+00907:         ):
+00908: 
+00909:             if not job_id:
+00910:                 violations.append(
+00911:                     "job_id is required when "
+00912:                     "execution_target is universal_runtime"
+00913:                 )
+00914: 
+00915:             if not job_type:
+00916:                 violations.append(
+00917:                     "job_type is required when "
+00918:                     "execution_target is universal_runtime"
+00919:                 )
+00920: 
+00921:         if (
+00922:             execution_target
+00923:             == StageExecutionTarget.COORDINATION_ONLY
+00924:         ):
+00925: 
+00926:             if job_id:
+00927:                 violations.append(
+00928:                     "job_id must be empty when "
+00929:                     "execution_target is coordination_only"
+00930:                 )
+00931: 
+00932:             if job_type:
+00933:                 violations.append(
+00934:                     "job_type must be empty when "
+00935:                     "execution_target is coordination_only"
+00936:                 )
+00937: 
+00938: 
+00939:         # ------------------------------------------------------------------
+00940:         # Failure invariants
+00941:         # ------------------------------------------------------------------
+00942: 
+00943:         if (
+00944:             status
+00945:             == UniversalStageResultStatus.FAILED
+00946:         ):
+00947: 
+00948:             if not failure_code:
+00949:                 violations.append(
+00950:                     "failure_code is required when status is failed"
+00951:                 )
+00952: 
+00953:             if not failure_message:
+00954:                 violations.append(
+00955:                     "failure_message is required when status is failed"
+00956:                 )
+00957: 
+00958:         else:
+00959: 
+00960:             if failure_code:
+00961:                 violations.append(
+00962:                     "failure_code must be empty when status is not failed"
+00963:                 )
+00964: 
+00965:             if failure_message:
+00966:                 violations.append(
+00967:                     "failure_message must be empty when status is not failed"
+00968:                 )
+00969: 
+00970:             if failure_details:
+00971:                 violations.append(
+00972:                     "failure_details must be empty when status is not failed"
+00973:                 )
+00974: 
+00975: 
+00976:         # ------------------------------------------------------------------
+00977:         # Timestamp ordering
+00978:         # ------------------------------------------------------------------
+00979: 
+00980:         if (
+00981:             started_at
+00982:             and finished_at
+00983:         ):
+00984: 
+00985:             try:
+00986: 
+00987:                 started_dt = _timestamp_value(
+00988:                     started_at
+00989:                 )
+00990: 
+00991:                 finished_dt = _timestamp_value(
+00992:                     finished_at
+00993:                 )
+00994: 
+00995:                 if (
+00996:                     started_dt.tzinfo is not None
+00997:                     and finished_dt.tzinfo is not None
+00998:                     and finished_dt < started_dt
+00999:                 ):
+01000:                     violations.append(
+01001:                         "finished_at cannot be earlier than started_at"
+01002:                     )
+01003: 
+01004:             except ValueError:
+01005:                 pass
+01006: 
+01007: 
+01008:         if violations:
+01009: 
+01010:             raise UniversalStageResultContractError(
+01011:                 "Universal Stage Result validation failed",
+01012:                 violations=tuple(
+01013:                     violations
+01014:                 ),
+01015:             )
+01016: 
+01017: 
+01018:         object.__setattr__(
+01019:             self,
+01020:             "result_id",
+01021:             result_id,
+01022:         )
+01023: 
+01024:         object.__setattr__(
+01025:             self,
+01026:             "workflow_id",
+01027:             workflow_id,
+01028:         )
+01029: 
+01030:         object.__setattr__(
+01031:             self,
+01032:             "correlation_id",
+01033:             correlation_id,
+01034:         )
+01035: 
+01036:         object.__setattr__(
+01037:             self,
+01038:             "stage_id",
+01039:             stage_id,
+01040:         )
+01041: 
+01042:         object.__setattr__(
+01043:             self,
+01044:             "stage_version",
+01045:             stage_version,
+01046:         )
+01047: 
+01048:         object.__setattr__(
+01049:             self,
+01050:             "pipeline_id",
+01051:             pipeline_id,
+01052:         )
+01053: 
+01054:         object.__setattr__(
+01055:             self,
+01056:             "workflow_type",
+01057:             workflow_type,
+01058:         )
+01059: 
+01060:         object.__setattr__(
+01061:             self,
+01062:             "workspace_id",
+01063:             workspace_id,
+01064:         )
+01065: 
+01066:         object.__setattr__(
+01067:             self,
+01068:             "execution_target",
+01069:             execution_target,
+01070:         )
+01071: 
+01072:         object.__setattr__(
+01073:             self,
+01074:             "job_id",
+01075:             job_id,
+01076:         )
+01077: 
+01078:         object.__setattr__(
+01079:             self,
+01080:             "job_type",
+01081:             job_type,
+01082:         )
+01083: 
+01084:         object.__setattr__(
+01085:             self,
+01086:             "status",
+01087:             status,
+01088:         )
+01089: 
+01090:         object.__setattr__(
+01091:             self,
+01092:             "output",
+01093:             output,
+01094:         )
+01095: 
+01096:         object.__setattr__(
+01097:             self,
+01098:             "result_reference",
+01099:             result_reference,
+01100:         )
+01101: 
+01102:         object.__setattr__(
+01103:             self,
+01104:             "artifact_references",
+01105:             artifact_references,
+01106:         )
+01107: 
+01108:         object.__setattr__(
+01109:             self,
+01110:             "started_at",
+01111:             started_at,
+01112:         )
+01113: 
+01114:         object.__setattr__(
+01115:             self,
+01116:             "finished_at",
+01117:             finished_at,
+01118:         )
+01119: 
+01120:         object.__setattr__(
+01121:             self,
+01122:             "failure_code",
+01123:             failure_code,
+01124:         )
+01125: 
+01126:         object.__setattr__(
+01127:             self,
+01128:             "failure_message",
+01129:             failure_message,
+01130:         )
+01131: 
+01132:         object.__setattr__(
+01133:             self,
+01134:             "failure_details",
+01135:             failure_details,
+01136:         )
+01137: 
+01138:         object.__setattr__(
+01139:             self,
+01140:             "metadata",
+01141:             metadata,
+01142:         )
+01143: 
+01144:         object.__setattr__(
+01145:             self,
+01146:             "workflow_contract_version",
+01147:             workflow_contract_version,
+01148:         )
+01149: 
+01150:         object.__setattr__(
+01151:             self,
+01152:             "stage_reference_contract_version",
+01153:             stage_reference_contract_version,
+01154:         )
+01155: 
+01156:         object.__setattr__(
+01157:             self,
+01158:             "contract_version",
+01159:             contract_version,
+01160:         )
+01161: 
+01162: 
+01163:     # ======================================================================
+
+to_canonical_dict
+lines: 1226-1310
+01223:     # Serialization
+01224:     # ======================================================================
+01225: 
+01226:     def to_canonical_dict(
+01227:         self,
+01228:     ) -> dict[str, Any]:
+01229: 
+01230:         return {
+01231:             "result_id":
+01232:                 self.result_id,
+01233: 
+01234:             "workflow_id":
+01235:                 self.workflow_id,
+01236: 
+01237:             "correlation_id":
+01238:                 self.correlation_id,
+01239: 
+01240:             "stage_id":
+01241:                 self.stage_id,
+01242: 
+01243:             "stage_version":
+01244:                 self.stage_version,
+01245: 
+01246:             "pipeline_id":
+01247:                 self.pipeline_id,
+01248: 
+01249:             "workflow_type":
+01250:                 self.workflow_type,
+01251: 
+01252:             "workspace_id":
+01253:                 self.workspace_id,
+01254: 
+01255:             "execution_target":
+01256:                 self.execution_target.value,
+01257: 
+01258:             "job_id":
+01259:                 self.job_id,
+01260: 
+01261:             "job_type":
+01262:                 self.job_type,
+01263: 
+01264:             "status":
+01265:                 self.status.value,
+01266: 
+01267:             "output":
+01268:                 _thaw(
+01269:                     self.output
+01270:                 ),
+01271: 
+01272:             "result_reference":
+01273:                 self.result_reference,
+01274: 
+01275:             "artifact_references":
+01276:                 list(
+01277:                     self.artifact_references
+01278:                 ),
+01279: 
+01280:             "started_at":
+01281:                 self.started_at,
+01282: 
+01283:             "finished_at":
+01284:                 self.finished_at,
+01285: 
+01286:             "failure_code":
+01287:                 self.failure_code,
+01288: 
+01289:             "failure_message":
+01290:                 self.failure_message,
+01291: 
+01292:             "failure_details":
+01293:                 _thaw(
+01294:                     self.failure_details
+01295:                 ),
+01296: 
+01297:             "metadata":
+01298:                 _thaw(
+01299:                     self.metadata
+01300:                 ),
+01301: 
+01302:             "workflow_contract_version":
+01303:                 self.workflow_contract_version,
+01304: 
+01305:             "stage_reference_contract_version":
+01306:                 self.stage_reference_contract_version,
+01307: 
+01308:             "contract_version":
+01309:                 self.contract_version,
+01310:         }
+01311: 
+01312: 
+01313:     def to_dict(
+
+identity_fingerprint
+lines: 1502-1542
+01499:     # Fingerprints
+01500:     # ======================================================================
+01501: 
+01502:     def identity_fingerprint(
+01503:         self,
+01504:     ) -> str:
+01505: 
+01506:         material = {
+01507:             "contract_id":
+01508:                 UNIVERSAL_STAGE_RESULT_CONTRACT_ID,
+01509: 
+01510:             "contract_version":
+01511:                 self.contract_version,
+01512: 
+01513:             "result_id":
+01514:                 self.result_id,
+01515: 
+01516:             "workflow_id":
+01517:                 self.workflow_id,
+01518: 
+01519:             "stage_id":
+01520:                 self.stage_id,
+01521: 
+01522:             "stage_version":
+01523:                 self.stage_version,
+01524: 
+01525:             "pipeline_id":
+01526:                 self.pipeline_id,
+01527: 
+01528:             "execution_target":
+01529:                 self.execution_target.value,
+01530: 
+01531:             "job_id":
+01532:                 self.job_id,
+01533: 
+01534:             "job_type":
+01535:                 self.job_type,
+01536:         }
+01537: 
+01538:         return _fingerprint(
+01539:             _canonical_json(
+01540:                 material
+01541:             )
+01542:         )
+01543: 
+01544: 
+01545:     def content_fingerprint(
+
+========================================================================================================================
+4. RESULT_ID IDENTITY OPTIONS
+========================================================================================================================
+
+Inspect whether the StageResult contract already:
+
+- generates result_id
+- derives result_id
+- exposes a deterministic identity fingerprint
+- expects caller-supplied result_id
+
+_fingerprint: lines 550-558
+validate_universal_stage_result: lines 1578-1646
+identity_fingerprint: lines 1502-1542
+content_fingerprint: lines 1545-1551
+
+========================================================================================================================
+5. CANONICAL WORKER COMPLETION EVIDENCE
+========================================================================================================================
+
+00446:     return requeued
+00447: 
+00448: 
+00449: def run_one_universal_runtime_job_v1(
+00450:     *,
+00451:     worker_id: str = "universal_runtime_worker_v1",
+00452:     dispatcher: Callable[
+00453:         [Mapping[str, Any]],
+00454:         dict[str, Any],
+00455:     ] = dispatch_registered_runtime_handler,
+00456: ) -> dict[str, Any]:
+00457:     """
+00458:     Claim and execute at most one canonical orchestration job.
+00459: 
+00460:     Returns IDLE when no queued work exists.
+00461: 
+00462:     The dequeue operation itself owns QUEUED -> RUNNING.
+00463:     """
+00464: 
+00465:     canonical_worker_id = str(
+00466:         worker_id
+00467:         or ""
+00468:     ).strip()
+00469: 
+00470:     if not canonical_worker_id:
+00471:         raise UniversalRuntimeWorkerContractError(
+00472:             "worker_id must not be empty."
+00473:         )
+00474: 
+00475:     if not callable(
+00476:         dispatcher
+00477:     ):
+00478:         raise UniversalRuntimeWorkerContractError(
+00479:             "dispatcher must be callable."
+00480:         )
+00481: 
+00482:     claimed_job = dequeue_job(
+00483:         worker_id=canonical_worker_id
+00484:     )
+00485: 
+00486:     if claimed_job is None:
+00487:         return {
+00488:             "schema_version":
+00489:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00490: 
+00491:             "worker_version":
+00492:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+00493: 
+00494:             "worker_id":
+00495:                 canonical_worker_id,
+00496: 
+00497:             "worker_status":
+00498:                 "IDLE",
+00499: 
+00500:             "job_claimed":
+00501:                 False,
+00502: 
+00503:             "job_id":
+00504:                 None,
+00505: 
+00506:             "dispatch_performed":
+00507:                 False,
+00508: 
+00509:             "terminal_status":
+00510:                 None,
+00511:         }
+00512: 
+00513:     job_id = str(
+00514:         claimed_job.job_id
+00515:         or ""
+00516:     ).strip()
+00517: 
+00518:     if not job_id:
+00519:         raise UniversalRuntimeWorkerContractError(
+00520:             "dequeue_job returned a claimed job without job_id."
+00521:         )
+00522: 
+00523:     if claimed_job.status != JOB_STATUS_RUNNING:
+00524:         raise UniversalRuntimeWorkerContractError(
+00525:             "dequeue_job returned a job that is not RUNNING."
+00526:         )
+00527: 
+00528:     runtime_job = (
+00529:         orchestration_job_to_runtime_mapping_v1(
+00530:             claimed_job
+00531:         )
+00532:     )
+00533: 
+00534:     if runtime_job[
+00535:         "job_id"
+00536:     ] != job_id:
+00537:         raise UniversalRuntimeWorkerContractError(
+00538:             "Runtime mapping changed canonical job identity."
+00539:         )
+00540: 
+00541:     try:
+00542:         dispatch_result = dispatcher(
+00543:             runtime_job
+00544:         )
+00545: 
+00546:         if dispatch_result is None:
+00547:             dispatch_result = {}
+00548: 
+00549:         if not isinstance(
+00550:             dispatch_result,
+00551:             Mapping,
+00552:         ):
+00553:             dispatch_result = {
+00554:                 "value":
+00555:                     dispatch_result,
+00556:             }
+00557: 
+00558:         completed_job = mark_job_completed(
+00559:             job_id,
+00560:             metadata={
+00561:                 "worker_id":
+00562:                     canonical_worker_id,
+00563: 
+00564:                 "runtime_worker_version":
+00565:                     UNIVERSAL_RUNTIME_WORKER_VERSION,
+00566: 
+00567:                 "runtime_dispatch_completed":
+00568:                     True,
+00569: 
+00570:                 "runtime_dispatch_result":
+00571:                     deepcopy(
+00572:                         dict(
+00573:                             dispatch_result
+00574:                         )
+00575:                     ),
+00576: 
+00577:                 "canonical_job_id_preserved":
+00578:                     True,
+00579: 
+00580:                 "old_universal_knowledge_jsonl_used":
+00581:                     False,
+00582:             },
+00583:         )
+00584: 
+00585:         if (
+00586:             completed_job.job_id
+00587:             != job_id
+00588:         ):
+00589:             raise UniversalRuntimeWorkerFinalizationError(
+00590:                 "Completion changed canonical job identity."
+00591:             )
+00592: 
+00593:         if (
+00594:             completed_job.status
+00595:             != JOB_STATUS_COMPLETED
+00596:         ):
+00597:             raise UniversalRuntimeWorkerFinalizationError(
+00598:                 "Completion did not persist COMPLETED status."
+00599:             )
+00600: 
+00601:         return {
+00602:             "schema_version":
+00603:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00604: 
+00605:             "worker_version":
+00606:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+00607: 
+00608:             "worker_id":
+00609:                 canonical_worker_id,
+00610: 
+00611:             "worker_status":
+00612:                 "COMPLETED",
+00613: 
+00614:             "job_claimed":
+00615:                 True,
+00616: 
+00617:             "job_id":
+00618:                 job_id,
+00619: 
+00620:             "job_type":
+00621:                 claimed_job.job_type,
+00622: 
+00623:             "claimed_status":
+00624:                 JOB_STATUS_RUNNING,
+00625: 
+00626:             "dispatch_performed":
+00627:                 True,
+00628: 
+00629:             "dispatch_result":
+00630:                 deepcopy(
+00631:                     dict(
+00632:                         dispatch_result
+00633:                     )
+00634:                 ),
+00635: 
+00636:             "terminal_status":
+00637:                 completed_job.status,
+00638: 
+00639:             "canonical_job_id_preserved":
+00640:                 True,
+00641: 
+00642:             "old_universal_knowledge_jsonl_used":
+00643:                 False,
+00644:         }
+00645: 
+00646:     except UniversalRuntimeWorkerFinalizationError:
+00647:         raise
+00648: 
+00649:     except Exception as exc:
+00650: 
+00651:         error_message = (
+00652:             f"{type(exc).__name__}: {exc}"
+00653:         )
+00654: 
+00655:         claimed_metadata = (
+00656:             claimed_job.metadata
+00657:             if isinstance(
+00658:                 claimed_job.metadata,
+00659:                 Mapping,
+00660:             )
+00661:             else {}
+00662:         )
+00663: 
+00664:         attempt_number = (
+00665:             _runtime_failure_attempt_number_v1(
+00666:                 claimed_metadata
+00667:             )
+00668:         )
+00669: 
+00670:         retry_policy = (
+00671:             _runtime_retry_policy_v1(
+00672:                 job_type=
+00673:                     claimed_job.job_type
+00674:             )
+00675:         )
+00676: 
+00677:         maximum_attempts = int(
+00678:             retry_policy[
+00679:                 "maximum_attempts"
+00680:             ]
+00681:         )
+00682: 
+00683:         contract_error = (
+00684:             _runtime_failure_is_contract_error_v1(
+00685:                 exc
+00686:             )
+00687:         )
+00688: 
+00689:         if contract_error:
+00690:             retry_type_allowed = bool(
+00691:                 retry_policy[
+00692:                     "retry_on_contract_error"
+00693:                 ]
+00694:             )
+00695:         else:
+00696:             retry_type_allowed = bool(
+00697:                 retry_policy[
+00698:                     "retry_on_handler_error"
+00699:                 ]
+00700:             )
+00701: 
+00702:         retry_ceiling_allows = (
+00703:             attempt_number
+00704:             < maximum_attempts
+00705:         )
+00706: 
+00707:         retry_allowed = (
+00708:             retry_type_allowed
+00709:             and retry_ceiling_allows
+00710:         )
+00711: 
+00712:         # ====================================================
+00713:         # RETRY PATH
+00714:         # SAME canonical job_id -> QUEUED
+00715:         # ====================================================
+00716: 
+00717:         if retry_allowed:
+00718: 
+00719:             try:
+00720:                 requeued_job = (
+00721:                     _requeue_same_runtime_job_v1(
+00722:                         job_id=
+00723:                             job_id,
+00724: 
+00725:                         worker_id=
+00726:                             canonical_worker_id,
+00727: 
+00728:                         error=
+00729:                             exc,
+00730: 
+00731:                         attempt_number=
+00732:                             attempt_number,
+00733: 
+00734:                         maximum_attempts=
+00735:                             maximum_attempts,
+00736:                     )
+00737:                 )
+00738: 
+00739:             except Exception as finalization_exc:
+00740:                 raise UniversalRuntimeWorkerFinalizationError(
+00741:                     "Runtime dispatch failed and same-job retry "
+00742:                     "could not be persisted."
+00743:                 ) from finalization_exc
+00744: 
+00745:             return {
+00746:                 "schema_version":
+00747:                     UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00748: 
+00749:                 "worker_version":
+00750:                     UNIVERSAL_RUNTIME_WORKER_VERSION,
+00751: 
+00752:                 "worker_id":
+00753:                     canonical_worker_id,
+00754: 
+00755:                 "worker_status":
+00756:                     "RETRY_QUEUED",
+00757: 
+00758:                 "job_claimed":
+00759:                     True,
+00760: 
+00761:                 "job_id":
+00762:                     job_id,
+00763: 
+00764:                 "job_type":
+00765:                     claimed_job.job_type,
+00766: 
+00767:                 "claimed_status":
+00768:                     JOB_STATUS_RUNNING,
+00769: 
+00770:                 "dispatch_performed":
+00771:                     True,
+00772: 
+00773:                 "dispatch_succeeded":
+00774:                     False,
+00775: 
+00776:                 "dispatch_error_type":
+00777:                     type(
+00778:                         exc
+00779:                     ).__name__,
+00780: 
+00781:                 "dispatch_error":
+00782:                     str(
+00783:                         exc
+00784:                     ),
+00785: 
+00786:                 "contract_error":
+00787:                     contract_error,
+00788: 
+00789:                 "retry_type_allowed":
+00790:                     retry_type_allowed,
+00791: 
+00792:                 "retry_ceiling_allows":
+00793:                     retry_ceiling_allows,
+00794: 
+00795:                 "retry_allowed":
+00796:                     True,
+00797: 
+00798:                 "retry_scheduled":
+00799:                     True,
+00800: 
+00801:                 "attempt_number":
+00802:                     attempt_number,
+00803: 
+00804:                 "maximum_attempts":
+00805:                     maximum_attempts,
+00806: 
+00807:                 "queue_status":
+00808:                     requeued_job.status,
+00809: 
+00810:                 "terminal_status":
+00811:                     None,
+00812: 
+00813:                 "canonical_job_id_preserved":
+00814:                     True,
+00815: 
+00816:                 "retry_created_new_job":
+00817:                     False,
+00818: 
+00819:                 "old_universal_knowledge_jsonl_used":
+00820:                     False,
+00821:             }
+00822: 
+00823:         # ====================================================
+00824:         # TERMINAL FAILURE PATH
+00825:         # SAME canonical job_id -> FAILED
+00826:         # ====================================================
+00827: 
+00828:         try:
+00829:             failed_job = mark_job_failed(
+00830:                 job_id,
+00831:                 error_message,
+00832:                 metadata={
+00833:                     "worker_id":
+00834:                         canonical_worker_id,
+00835: 
+00836:                     "runtime_worker_version":
+00837:                         UNIVERSAL_RUNTIME_WORKER_VERSION,
+00838: 
+00839:                     "runtime_dispatch_completed":
+00840:                         False,
+00841: 
+00842:                     "runtime_dispatch_failed":
+00843:                         True,
+00844: 
+00845:                     "runtime_retry_scheduled":
+00846:                         False,
+00847: 
+00848:                     "runtime_failure_attempt_count":
+00849:                         attempt_number,
+00850: 
+00851:                     "runtime_maximum_attempts":
+00852:                         maximum_attempts,
+00853: 
+00854:                     "runtime_retry_type_allowed":
+00855:                         retry_type_allowed,
+00856: 
+00857:                     "runtime_retry_exhausted":
+00858:                         (
+00859:                             retry_type_allowed
+00860:                             and not retry_ceiling_allows
+00861:                         ),
+00862: 
+00863:                     "runtime_contract_error":
+00864:                         contract_error,
+00865: 
+00866:                     "runtime_dispatch_error_type":
+00867:                         type(
+00868:                             exc
+00869:                         ).__name__,
+00870: 
+00871:                     "canonical_job_id_preserved":
+00872:                         True,
+00873: 
+00874:                     "retry_created_new_job":
+00875:                         False,
+00876: 
+00877:                     "old_universal_knowledge_jsonl_used":
+00878:                         False,
+00879:                 },
+00880:             )
+00881: 
+00882:         except Exception as finalization_exc:
+00883:             raise UniversalRuntimeWorkerFinalizationError(
+00884:                 "Runtime dispatch failed and FAILED status "
+00885:                 "could not be persisted."
+00886:             ) from finalization_exc
+00887: 
+00888:         if failed_job.job_id != job_id:
+00889:             raise UniversalRuntimeWorkerFinalizationError(
+00890:                 "Failure finalization changed canonical job identity."
+00891:             )
+00892: 
+00893:         if failed_job.status != JOB_STATUS_FAILED:
+00894:             raise UniversalRuntimeWorkerFinalizationError(
+00895:                 "Failure finalization did not persist FAILED status."
+00896:             )
+00897: 
+00898:         return {
+00899:             "schema_version":
+00900:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+00901: 
+00902:             "worker_version":
+00903:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+00904: 
+00905:             "worker_id":
+00906:                 canonical_worker_id,
+00907: 
+00908:             "worker_status":
+00909:                 "FAILED",
+00910: 
+00911:             "job_claimed":
+00912:                 True,
+00913: 
+00914:             "job_id":
+00915:                 job_id,
+00916: 
+00917:             "job_type":
+00918:                 claimed_job.job_type,
+00919: 
+00920:             "claimed_status":
+00921:                 JOB_STATUS_RUNNING,
+00922: 
+00923:             "dispatch_performed":
+00924:                 True,
+00925: 
+00926:             "dispatch_succeeded":
+00927:                 False,
+00928: 
+00929:             "dispatch_error_type":
+00930:                 type(
+00931:                     exc
+00932:                 ).__name__,
+00933: 
+00934:             "dispatch_error":
+00935:                 str(
+00936:                     exc
+00937:                 ),
+00938: 
+00939:             "contract_error":
+00940:                 contract_error,
+00941: 
+00942:             "retry_type_allowed":
+00943:                 retry_type_allowed,
+00944: 
+00945:             "retry_ceiling_allows":
+00946:                 retry_ceiling_allows,
+00947: 
+00948:             "retry_allowed":
+00949:                 False,
+00950: 
+00951:             "retry_scheduled":
+00952:                 False,
+00953: 
+00954:             "attempt_number":
+00955:                 attempt_number,
+00956: 
+00957:             "maximum_attempts":
+00958:                 maximum_attempts,
+00959: 
+00960:             "retry_exhausted":
+00961:                 (
+00962:                     retry_type_allowed
+00963:                     and not retry_ceiling_allows
+00964:                 ),
+00965: 
+00966:             "terminal_status":
+00967:                 failed_job.status,
+00968: 
+00969:             "canonical_job_id_preserved":
+00970:                 True,
+00971: 
+00972:             "retry_created_new_job":
+00973:                 False,
+00974: 
+00975:             "old_universal_knowledge_jsonl_used":
+00976:                 False,
+00977:         }
+00978: 
+00979: 
+00980: 
+
+========================================================================================================================
+6. REQUIRED FINAL AUTHORITY DECISIONS
+========================================================================================================================
+
+TIMESTAMP AUTHORITY
+
+Resolve exactly:
+
+A. Where RUNNING started_at is written.
+B. Where COMPLETED completed_at is written.
+C. Whether updated_at may be used as terminal completion time.
+D. Whether worker terminal return itself carries timestamps.
+E. Whether missing persisted timestamps are an existing Runtime
+   integration defect rather than a Phase 5.4 responsibility.
+
+RESULT_ID AUTHORITY
+
+Resolve exactly:
+
+A. Whether result_id already exists before Phase 5.4.
+B. Whether StageResult requires caller-supplied result_id.
+C. Whether result_id may deterministically derive from:
+      workflow_id
+      stage_id
+      job_id
+      completion status
+   without random UUID generation.
+D. Whether Phase 5.4 should own that deterministic derivation.
+
+========================================================================================================================
+7. PROPOSED FAIL-CLOSED RULES
+========================================================================================================================
+
+Phase 5.4 must not:
+
+- fabricate Runtime started_at
+- fabricate Runtime completed_at
+- silently substitute current wall-clock time
+- generate a random result_id without authority
+- mutate canonical Runtime completion records
+- mark Runtime jobs completed
+- update Runtime progress
+- execute handlers
+- process failures
+
+If authoritative completion timestamps are genuinely absent,
+classify that separately as a Runtime completion persistence gap.
+
+Production modified: False
+Installation performed: False
+Next if resolved: 5.4.3 Architecture Resolution

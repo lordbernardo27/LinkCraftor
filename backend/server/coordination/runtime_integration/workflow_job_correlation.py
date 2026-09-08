@@ -45,7 +45,7 @@ from backend.server.coordination.runtime_integration.runtime_job_mapping import 
 
 
 WORKFLOW_JOB_CORRELATION_VERSION = (
-    "workflow_job_correlation_v5.3.0"
+    "workflow_job_correlation_v5.3.1"
 )
 
 WORKFLOW_JOB_CORRELATION_SCHEMA_VERSION = (
@@ -375,6 +375,123 @@ def correlate_submitted_job(
 
     request = mapping.creation_request
 
+    # ---------------------------------------------------------------------
+    # Phase 5.3.1 corrective validation
+    #
+    # Correlation may only be created from a canonically submitted Runtime
+    # job. Request-side coordination evidence alone is insufficient.
+    # ---------------------------------------------------------------------
+
+    submission = submitted.get(
+        "submission"
+    )
+
+    if not isinstance(
+        submission,
+        Mapping,
+    ):
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime job is missing "
+                "canonical submission evidence."
+            ),
+            violations=(
+                "submitted_job.submission must be a mapping",
+            ),
+        )
+
+    if (
+        submission.get(
+            "persisted"
+        )
+        is not True
+    ):
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime job does not prove "
+                "canonical persistence."
+            ),
+            violations=(
+                "submission.persisted must be literal True",
+            ),
+        )
+
+    if (
+        submission.get(
+            "queued"
+        )
+        is not True
+    ):
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime job does not prove "
+                "canonical queue ingress."
+            ),
+            violations=(
+                "submission.queued must be literal True",
+            ),
+        )
+
+    if (
+        submission.get(
+            "canonical_identity_preserved"
+        )
+        is not True
+    ):
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime job does not prove "
+                "canonical identity preservation."
+            ),
+            violations=(
+                (
+                    "submission.canonical_identity_preserved "
+                    "must be literal True"
+                ),
+            ),
+        )
+
+    submitted_metadata = submitted.get(
+        "metadata"
+    )
+
+    if not isinstance(
+        submitted_metadata,
+        Mapping,
+    ):
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime job is missing "
+                "canonical metadata."
+            ),
+            violations=(
+                "submitted_job.metadata must be a mapping",
+            ),
+        )
+
+    submitted_coordination = (
+        submitted_metadata.get(
+            "coordination"
+        )
+    )
+
+    if not isinstance(
+        submitted_coordination,
+        Mapping,
+    ):
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime job is missing "
+                "coordination identity evidence."
+            ),
+            violations=(
+                (
+                    "submitted_job.metadata.coordination "
+                    "must be a mapping"
+                ),
+            ),
+        )
+
     submitted_job_id = _clean_required_text(
         submitted.get("job_id"),
         field_name="submitted_job.job_id",
@@ -537,18 +654,138 @@ def correlate_submitted_job(
             ),
         )
 
+    submitted_workflow_id = _clean_required_text(
+        submitted_coordination.get(
+            "workflow_id"
+        ),
+        field_name=(
+            "submitted coordination.workflow_id"
+        ),
+    )
+
+    submitted_correlation_id = _clean_required_text(
+        submitted_coordination.get(
+            "correlation_id"
+        ),
+        field_name=(
+            "submitted coordination.correlation_id"
+        ),
+    )
+
+    submitted_stage_id = _clean_required_text(
+        submitted_coordination.get(
+            "stage_id"
+        ),
+        field_name=(
+            "submitted coordination.stage_id"
+        ),
+    )
+
+    submitted_stage_version = _clean_required_text(
+        submitted_coordination.get(
+            "stage_version"
+        ),
+        field_name=(
+            "submitted coordination.stage_version"
+        ),
+    )
+
+    submitted_workflow_type = _clean_required_text(
+        submitted_coordination.get(
+            "workflow_type"
+        ),
+        field_name=(
+            "submitted coordination.workflow_type"
+        ),
+    )
+
+    submitted_wave_index = _clean_wave_index(
+        submitted_coordination.get(
+            "wave_index"
+        )
+    )
+
+    expected_stage_version = _clean_required_text(
+        coordination.get(
+            "stage_version"
+        ),
+        field_name=(
+            "coordination.stage_version"
+        ),
+    )
+
+    expected_workflow_type = _clean_required_text(
+        coordination.get(
+            "workflow_type"
+        ),
+        field_name=(
+            "coordination.workflow_type"
+        ),
+    )
+
+    expected_wave_index = _clean_wave_index(
+        mapping.wave_index
+    )
+
+    submitted_identity_mismatches = []
+
+    if submitted_workflow_id != workflow_id:
+        submitted_identity_mismatches.append(
+            "submitted workflow_id mismatch"
+        )
+
+    if submitted_correlation_id != correlation_id:
+        submitted_identity_mismatches.append(
+            "submitted correlation_id mismatch"
+        )
+
+    if submitted_stage_id != stage_id:
+        submitted_identity_mismatches.append(
+            "submitted stage_id mismatch"
+        )
+
+    if (
+        submitted_stage_version
+        != expected_stage_version
+    ):
+        submitted_identity_mismatches.append(
+            "submitted stage_version mismatch"
+        )
+
+    if (
+        submitted_workflow_type
+        != expected_workflow_type
+    ):
+        submitted_identity_mismatches.append(
+            "submitted workflow_type mismatch"
+        )
+
+    if (
+        submitted_wave_index
+        != expected_wave_index
+    ):
+        submitted_identity_mismatches.append(
+            "submitted wave_index mismatch"
+        )
+
+    if submitted_identity_mismatches:
+        raise WorkflowJobCorrelationValidationError(
+            (
+                "Submitted Runtime coordination evidence "
+                "does not match certified Coordination "
+                "identity authority."
+            ),
+            violations=tuple(
+                submitted_identity_mismatches
+            ),
+        )
+
     correlation = WorkflowJobCorrelation(
         workflow_id=workflow_id,
         correlation_id=correlation_id,
         stage_id=stage_id,
-        stage_version=_clean_required_text(
-            coordination.get("stage_version"),
-            field_name="coordination.stage_version",
-        ),
-        workflow_type=_clean_required_text(
-            coordination.get("workflow_type"),
-            field_name="coordination.workflow_type",
-        ),
+        stage_version=expected_stage_version,
+        workflow_type=expected_workflow_type,
         workspace_id=submitted_workspace_id,
         job_id=submitted_job_id,
         job_type=submitted_job_type,

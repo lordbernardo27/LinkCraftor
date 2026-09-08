@@ -1,4 +1,4 @@
-﻿<?php
+<?php
 /**
  * Plugin Name: LinkCraftor
  * Description: Official LinkCraftor integration for WordPress.
@@ -14,3 +14,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'LINKCRAFTOR_PLUGIN_FILE', __FILE__ );
+
+require_once __DIR__ . '/autoload.php';
+

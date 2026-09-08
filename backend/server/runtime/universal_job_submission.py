@@ -10,6 +10,10 @@ from backend.server.runtime.universal_jobs.creation_engine import (
     UniversalJobCreationResult,
     create_universal_job,
 )
+from backend.server.runtime.universal_jobs.priority import (
+    UniversalJobPriorityError,
+    normalize_universal_job_priority,
+)
 from backend.server.runtime.universal_runtime_registration import (
     get_runtime_registration,
 )
@@ -45,67 +49,34 @@ def _canonical_orchestration_priority(
     value: Any,
 ) -> int:
     """
-    Project the already-normalized Universal Job priority into the
+    Project an already-normalized Universal Job priority into the
     current orchestration store's integer priority representation.
 
-    This is intentionally NOT the canonical Job Priority authority.
-    Phase 2.1.6 remains responsible for final Universal Job priority
-    semantics.
+    Canonical priority semantics remain owned by Universal Job
+    priority normalization. This boundary only converts the canonical
+    priority member to the integer representation required by the
+    orchestration store.
     """
 
-    raw = getattr(
-        value,
-        "value",
-        value,
-    )
+    try:
+        canonical_priority = (
+            normalize_universal_job_priority(
+                value
+            )
+        )
 
-    if isinstance(
-        raw,
-        bool,
-    ):
+    except UniversalJobPriorityError as exc:
         raise UniversalJobSubmissionError(
-            "Boolean priority cannot be projected into orchestration.",
+            (
+                "Canonical Universal Job priority cannot be "
+                "projected into the orchestration integer "
+                "priority field."
+            ),
             code="invalid_orchestration_priority",
-        )
+        ) from exc
 
-    if isinstance(
-        raw,
-        int,
-    ):
-        return raw
-
-    if isinstance(
-        raw,
-        float,
-    ):
-        if raw.is_integer():
-            return int(raw)
-
-        raise UniversalJobSubmissionError(
-            "Non-integral priority cannot be projected into orchestration.",
-            code="invalid_orchestration_priority",
-        )
-
-    text = str(
-        raw
-    ).strip()
-
-    if (
-        text
-        and text.lstrip(
-            "+-"
-        ).isdigit()
-    ):
-        return int(
-            text
-        )
-
-    raise UniversalJobSubmissionError(
-        (
-            "Canonical Universal Job priority cannot currently be "
-            "projected into the orchestration integer priority field."
-        ),
-        code="invalid_orchestration_priority",
+    return int(
+        canonical_priority
     )
 
 
@@ -541,4 +512,4 @@ __all__ = [
     "UniversalJobSubmissionError",
     "submit_universal_job",
     "explain_universal_job_submission_v1",
-]
+]
