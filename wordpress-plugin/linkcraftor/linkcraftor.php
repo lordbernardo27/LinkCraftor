@@ -13,7 +13,9 @@ if ( ! defined( 'ABSPATH' ) ) {
     exit;
 }
 
-define( 'LINKCRAFTOR_PLUGIN_FILE', __FILE__ );
+if ( ! defined( 'LINKCRAFTOR_PLUGIN_FILE' ) ) {
+    define( 'LINKCRAFTOR_PLUGIN_FILE', __FILE__ );
+}
 
+require_once __DIR__ . '/constants.php';
 require_once __DIR__ . '/autoload.php';
-
