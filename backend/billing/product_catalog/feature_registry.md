@@ -1,9 +1,9 @@
 ﻿# Feature Registry
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.3
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -72,17 +72,9 @@ Every registered feature shall include:
 
 # Canonical Batch Upload Limits
 
-| Plan | Maximum Documents Per Batch |
-|---|---:|
-| Starter | 10 |
-| Pro | 50 |
-| Business | 200 |
-| Enterprise | 1,000 |
-| Growth Enterprise | 2,000 |
-| Scale Enterprise | 3,000 |
-| Hyper Enterprise | 5,000 |
+Batch upload limits are defined canonically by **Phase 2.1.3.4 — Batch Upload Limits**.
 
-These are per-batch limits and are separate from total plan document allowances.
+This registry records batch-limit applicability only and shall not duplicate plan-specific numeric limits.
 
 ---
 
@@ -125,3 +117,4 @@ Production Status: Not Implemented
 ---
 
 End of Feature Registry
+

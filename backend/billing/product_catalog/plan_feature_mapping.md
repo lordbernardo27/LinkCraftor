@@ -1,9 +1,9 @@
 ﻿# Plan Feature Mapping
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.3.3
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -48,6 +48,7 @@ Every mapping shall include:
 - Feature ID
 - Availability Status
 - Entitlement Type
+- Add-On Eligibility
 - Usage Limits
 - Batch Upload Limit
 - Trial Eligibility

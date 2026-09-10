@@ -1,9 +1,9 @@
 ﻿# Feature Availability Matrix
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.3.2
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -62,15 +62,9 @@ Trial users receive selected-plan feature access subject to trial-specific docum
 
 # Canonical Batch Upload Availability
 
-| Plan | Maximum Documents Per Batch |
-|---|---:|
-| Starter | 10 |
-| Pro | 50 |
-| Business | 200 |
-| Enterprise | 1,000 |
-| Growth Enterprise | 2,000 |
-| Scale Enterprise | 3,000 |
-| Hyper Enterprise | 5,000 |
+Batch upload availability and plan-specific numeric limits are defined canonically by **Phase 2.1.3.4 — Batch Upload Limits**.
+
+This matrix records whether a feature is subject to a batch entitlement but shall not duplicate the canonical numeric limits.
 
 ---
 
@@ -134,3 +128,5 @@ Production Status: Not Implemented
 ---
 
 End of Feature Availability Matrix
+
+

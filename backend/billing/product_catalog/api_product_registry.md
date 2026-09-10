@@ -1,12 +1,12 @@
 ﻿# API Product Registry
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 
 **Status:** Canonical
 
 **Architecture Phase:** 2.1.4
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -24,7 +24,7 @@ No API product may be published, subscribed to, billed or exposed unless it is r
 - Assign unique API Product IDs
 - Support API lifecycle management
 - Support billing integration
-- Support Action Unit accounting
+- Support usage metering integration
 - Support entitlement mapping
 - Support authentication and authorization mapping
 - Support pricing integration
@@ -40,6 +40,7 @@ The registry shall support:
 - Internal Linking APIs
 - Semantic Linking APIs
 - External Linking APIs
+- Unified Linking APIs
 - Content Intelligence APIs
 - Analytics APIs
 - Administration APIs
@@ -51,19 +52,41 @@ The registry shall support:
 
 # Initial API Products
 
-| API Product | Monthly Access Fee | API AU Cost |
-|---|---:|---:|
-| Internal Linking API | $49 | 25 AU |
-| External Linking API | $79 | 50 AU |
-| Topic Cluster API | $99 | 100 AU |
-| Semantic Audit API | $149 | 150 AU |
-| Autonomous Intelligence API | $199 | 300 AU |
+The initial LinkCraftor API product family consists of:
 
-The API access fee and API Action Unit consumption are billed separately.
+- Internal Linking API
+- Semantic Linking API
+- External Linking API
 
-Approved API AU rate:
+A future Unified Linking API may orchestrate Internal Linking, Semantic Linking and External Linking through a unified product interface.
 
-**1 API AU = $0.0005**
+The Unified Linking API shall not receive final pricing or metering rules until its runtime consumption model has been benchmarked and approved.
+
+---
+
+# API Access Architecture
+
+API product registration is separate from API access eligibility and API usage billing.
+
+Subscription API access eligibility begins at the Business plan and above.
+
+Starter and Pro do not receive subscription API access eligibility.
+
+Business, Enterprise, Growth Enterprise, Scale Enterprise and Hyper Enterprise may receive API platform eligibility according to the canonical API Feature Mapping and subscription entitlement architecture.
+
+Standalone API-only access for non-subscribers is governed by the Pricing Engine.
+
+API access pricing shall not be duplicated in this registry.
+
+---
+
+# API Usage Metering Status
+
+Exact API usage package quantities, prices, per-request consumption values, Action Unit equivalents and final API metering units are intentionally not defined here.
+
+These values remain suspended pending real API consumption benchmarking.
+
+The final API metering architecture shall be referenced by this registry once approved.
 
 ---
 
@@ -77,9 +100,9 @@ Every API product shall include:
 - Description
 - Associated Service ID
 - Associated Feature IDs
-- Pricing Model
-- Access Fee
-- Action Unit Cost
+- Pricing Model Reference
+- Access Eligibility Reference
+- Usage Metering Policy Reference
 - Authentication Method
 - Authorization Policy
 - Endpoint Group
@@ -110,7 +133,7 @@ This registry depends on:
 - Feature Registry
 - API Feature Mapping
 - Pricing Engine
-- Action Unit Accounting
+- API Metering Architecture
 - Subscription Entitlements
 
 ---
@@ -124,12 +147,13 @@ It does not:
 - process API requests
 - authenticate users
 - authorize requests
-- consume Action Units
+- meter billable API usage
+- deduct usage balances
 - create runtime jobs
 - execute workers
 - create queues
 
-Those responsibilities belong to the API runtime infrastructure.
+Those responsibilities belong to the API runtime and billing infrastructure.
 
 ---
 
@@ -151,7 +175,7 @@ Current URRS Requirement:
 
 Not Applicable
 
-Future executable API product services shall undergo independent URRS assessment before implementation.
+Future executable API product loaders, entitlement services, access-control components, API metering services and runtime API infrastructure shall undergo independent URRS assessment before implementation.
 
 ---
 
@@ -160,10 +184,13 @@ Future executable API product services shall undergo independent URRS assessment
 - Every API product shall have a unique API Product ID.
 - API products shall reference registered services and features.
 - API pricing shall reference the Pricing Engine.
-- Action Unit pricing shall remain configuration-driven.
+- API access eligibility shall reference the canonical entitlement architecture.
+- API usage metering shall reference the approved API metering architecture.
+- Commercial values shall not be duplicated in this registry.
 - Changes shall be version-controlled.
 - Historical records shall remain traceable.
 - Deprecated API products shall not be deleted.
+- Exact API consumption values shall remain undefined until approved benchmarking is complete.
 
 ---
 
@@ -172,6 +199,10 @@ Future executable API product services shall undergo independent URRS assessment
 Status: Approved API Product Registry
 
 Implementation Status: Pending
+
+Runtime Eligibility: Not Runtime Eligible
+
+URRS Requirement: Not Applicable
 
 Production Status: Not Implemented
 

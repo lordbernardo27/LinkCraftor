@@ -1,9 +1,9 @@
 ﻿# Feature Versioning
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.3.8
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -153,17 +153,9 @@ A change to one mapping shall not silently modify another.
 
 # Batch Upload Limit Versioning
 
-| Plan | Maximum Documents Per Batch |
-|---|---:|
-| Starter | 10 |
-| Pro | 50 |
-| Business | 200 |
-| Enterprise | 1,000 |
-| Growth Enterprise | 2,000 |
-| Scale Enterprise | 3,000 |
-| Hyper Enterprise | 5,000 |
+Plan-specific batch upload limits are owned canonically by **Phase 2.1.3.4 — Batch Upload Limits** and shall not be duplicated in this versioning document.
 
-Every limit change shall record the previous limit, new limit, effective date, entitlement impact, trial impact and approval record.
+Every batch-limit change shall create a version record containing the previous limit, new limit, effective date, entitlement impact, trial impact where applicable, approval record and rollback reference.
 
 ---
 

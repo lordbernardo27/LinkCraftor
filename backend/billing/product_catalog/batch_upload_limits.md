@@ -1,9 +1,9 @@
 ﻿# Batch Upload Limits
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.3.4
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -19,13 +19,13 @@ These limits are separate from the total document allowance included with each p
 
 | Plan | Maximum Documents Per Batch |
 |---|---:|
-| Starter | 10 |
-| Pro | 50 |
-| Business | 200 |
-| Enterprise | 1,000 |
-| Growth Enterprise | 2,000 |
-| Scale Enterprise | 3,000 |
-| Hyper Enterprise | 5,000 |
+| Starter | 5 |
+| Pro | 10 |
+| Business | 20 |
+| Enterprise | 50 |
+| Growth Enterprise | 100 |
+| Scale Enterprise | 200 |
+| Hyper Enterprise | 500 |
 
 ---
 
@@ -35,8 +35,8 @@ Starter and Pro are the only plans eligible for the seven-day free trial.
 
 | Trial Plan | Maximum Documents Per Batch |
 |---|---:|
-| Starter Trial | 10 |
-| Pro Trial | 50 |
+| Starter Trial | 5 |
+| Pro Trial | 10 |
 
 Trial access remains subject to separate trial document and Action Unit limits.
 
@@ -98,3 +98,4 @@ Production Status: Not Implemented
 ---
 
 End of Batch Upload Limits
+

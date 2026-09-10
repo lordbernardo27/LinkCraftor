@@ -1,9 +1,9 @@
 ﻿# Core Feature Registry
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 **Status:** Canonical
 **Architecture Phase:** 2.1.3.1
-**Last Updated:** 2026-07-26
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -35,6 +35,7 @@ Every feature shall be uniquely registered before it can be assigned to a subscr
 - Document Upload
 - Internal Linking
 - Semantic Linking
+- External Linking
 - AI Processing
 - Content Intelligence
 - Batch Operations

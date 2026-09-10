@@ -1,9 +1,9 @@
 ﻿# OEM Feature Mapping
 
-**Version:** 1.0.0  
+**Version:** 1.0.1  
 **Status:** Canonical  
 **Architecture Phase:** 2.1.3.7  
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -129,7 +129,7 @@ Every OEM feature mapping shall include:
 - Customer Scope
 - Workspace Scope
 - Usage Limit
-- Action Unit Limit
+- Usage Metering Policy Reference
 - API Rate Limit
 - Infrastructure Assignment
 - Support Level
@@ -194,7 +194,8 @@ All rights must be granted explicitly.
 - OEM API access requires an approved OEM agreement.
 - OEM API access shall not be granted through normal Pro-to-Hyper plan entitlement alone.
 - API Product IDs shall reference the canonical API Product Registry.
-- OEM API consumption may use Action Units, custom rate cards or contract pricing.
+- OEM API consumption shall follow the approved contract and canonical API metering architecture.
+- Exact API consumption units and values shall not be defined here while API metering remains pending benchmarking.
 - OEM API limits may be customer-specific.
 - OEM API credentials shall be isolated, revocable and auditable.
 - API authentication and authorization shall remain mandatory.
@@ -288,7 +289,6 @@ This mapping depends on:
 - OEM Pricing
 - Enterprise Contracts
 - Subscription Entitlements
-- Action Unit Accounting
 - Usage Metering
 - API Authentication
 - API Authorization
@@ -312,7 +312,6 @@ Executable enforcement belongs to:
 - API Authorization
 - License Enforcement
 - Usage Metering
-- Action Unit Accounting
 - Infrastructure Assignment
 - Deployment Control
 - Billing Enforcement
@@ -327,7 +326,7 @@ This definition document does not:
 - Start runtime jobs
 - Create workers
 - Create queues
-- Consume Action Units
+- Consume or record billable usage units
 - Process invoices
 - Suspend licenses
 - Revoke access
@@ -379,3 +378,4 @@ Production Status: Not Implemented
 ---
 
 End of OEM Feature Mapping
+

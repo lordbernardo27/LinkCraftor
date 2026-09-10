@@ -1,9 +1,9 @@
 ﻿# Enterprise Feature Mapping
 
-**Version:** 1.0.0  
-**Status:** Canonical  
-**Architecture Phase:** 2.1.3.6  
-**Last Updated:** 2026-08-01
+**Version:** 1.1.0
+**Status:** Canonical
+**Architecture Phase:** 2.1.3.6
+**Last Updated:** 2026-09-10
 
 ---
 
@@ -13,26 +13,36 @@ The Enterprise Feature Mapping defines the canonical relationship between LinkCr
 
 No enterprise customer shall receive a feature, limit, entitlement or contract override unless it is defined through this mapping or an approved enterprise contract.
 
+This document owns enterprise feature availability and override architecture only.
+
+Commercial prices, document allowances, batch limits, Action Unit allowances and API usage prices shall remain owned by their respective canonical billing and entitlement components and shall not be duplicated here.
+
 ---
 
 # Enterprise Plans
 
-The canonical enterprise plans are:
+The canonical enterprise plan family is:
 
-| Plan | Monthly Price | Documents | Included AU | Batch Upload Limit |
-|---|---:|---:|---:|---:|
-| Enterprise | $1,999 | 5,000 | 2,000,000 AU | 1,000 |
-| Growth Enterprise | $5,000 | Unlimited | 5,000,000 AU | 2,000 |
-| Scale Enterprise | $10,000 | Unlimited | 20,000,000 AU | 3,000 |
-| Hyper Enterprise | $15,000 | Unlimited | 50,000,000 AU | 5,000 |
+- Enterprise
+- Growth Enterprise
+- Scale Enterprise
+- Hyper Enterprise
 
-Annual subscriptions receive the approved 17% discount.
+Plan pricing is owned by the Pricing Engine.
+
+Plan document allowances are owned by the canonical subscription entitlement architecture.
+
+Batch upload limits are owned by **Phase 2.1.3.4 — Batch Upload Limits**.
+
+Included application Action Unit allowances are currently suspended pending real engine-consumption benchmarking and shall not be defined in this mapping.
+
+Annual billing rules are owned by the Pricing Engine.
 
 ---
 
 # Enterprise Trial Rules
 
-Enterprise plans do not receive self-service free trials.
+Enterprise plans do not receive self-service free trials under the currently defined trial architecture.
 
 | Plan | Free Trial |
 |---|---|
@@ -42,6 +52,8 @@ Enterprise plans do not receive self-service free trials.
 | Hyper Enterprise | Unavailable |
 
 Enterprise access begins through direct subscription, approved sales conversion or contract activation.
+
+Final trial-commercial rules remain subject to the canonical Trial Pricing & Free Trial Rules.
 
 ---
 
@@ -93,7 +105,11 @@ Enterprise mappings may include:
 | Reseller Rights | Unavailable | Contract Based | Contract Based | Available |
 | OEM Rights | Unavailable | Unavailable | Contract Only | Contract Only |
 
-This table defines default availability only. Approved enterprise contracts may add, restrict or override specific entitlements.
+This table defines default feature availability only.
+
+It does not define commercial prices, document allowances, workspace quantities, seat quantities, Action Unit allowances, batch limits or API usage prices.
+
+Approved enterprise contracts may add, restrict or override specific entitlements.
 
 ---
 
@@ -110,10 +126,10 @@ Every enterprise feature mapping shall include:
 - Service ID
 - Availability State
 - Entitlement Type
-- Usage Limit
-- Batch Limit
+- Usage Limit Reference
+- Batch Limit Reference
 - API Access
-- API Throughput
+- API Throughput Policy Reference
 - Support Level
 - SLA Reference
 - Infrastructure Assignment
@@ -167,20 +183,21 @@ Each enterprise feature mapping shall use one of these states:
 
 # Enterprise API Rules
 
-- Enterprise through Hyper Enterprise receive API access.
-- API usage shall consume Action Units.
+- Enterprise through Hyper Enterprise receive API platform eligibility.
+- API usage shall be separately metered according to the canonical API usage architecture.
 - Enterprise contracts may define custom API throughput and rate limits.
 - Contract overrides shall not bypass authentication, authorization or workspace isolation.
-- Massive API usage may require custom pricing or a separate enterprise agreement.
-- Standalone API subscriptions remain separate from application-plan API entitlements.
+- Large API usage may require custom pricing or a separate enterprise agreement.
+- Standalone API access remains separate from application-plan API entitlement.
 - OEM API rights require a separate OEM agreement.
+- Exact API usage package quantities, prices and consumption values shall not be defined here while API metering remains pending benchmarking.
 
 ---
 
 # Enterprise Billing Rules
 
 - Enterprise plans may use monthly or annual billing.
-- Annual billing receives a 17% discount.
+- Annual billing rules and discounts shall be obtained from the canonical Pricing Engine.
 - Enterprise contracts may include custom invoicing.
 - Purchase orders may be supported.
 - Multi-year agreements may define approved custom pricing.
@@ -188,6 +205,7 @@ Each enterprise feature mapping shall use one of these states:
 - Private deployment may be billed separately.
 - Professional services may be billed separately.
 - OEM licensing shall not be included automatically in an enterprise subscription.
+- Commercial values shall not be duplicated in this feature-mapping document.
 
 ---
 
@@ -207,6 +225,7 @@ This mapping depends on:
 - Subscription Entitlements
 - Enterprise Contracts
 - Action Unit Accounting
+- API Metering
 - API Authentication
 - API Authorization
 - Workspace Isolation
@@ -236,7 +255,7 @@ This definition document does not:
 - Create runtime jobs
 - Start workers
 - Create queues
-- Consume Action Units
+- Consume usage units
 - Apply contract overrides
 - Assign infrastructure
 - Process invoices or payments
@@ -245,12 +264,12 @@ This definition document does not:
 
 # Runtime Eligibility
 
-**Current Component:** Enterprise Feature Mapping document  
-**Runtime Eligible:** No  
-**Reason:** Canonical architecture and entitlement-definition document only  
+**Current Component:** Enterprise Feature Mapping document
+**Runtime Eligible:** No
+**Reason:** Canonical architecture and entitlement-definition document only
 **URRS Requirement:** Not applicable
 
-Executable enterprise entitlement and contract enforcement shall be scanned separately when the dependent Subscription and Enterprise Contract infrastructure is built.
+Executable enterprise entitlement, contract enforcement, usage-control or infrastructure-assignment components shall receive separate runtime and URRS assessment when implemented.
 
 ---
 
@@ -259,6 +278,7 @@ Executable enterprise entitlement and contract enforcement shall be scanned sepa
 - Enterprise mappings shall be configuration-driven.
 - Enterprise limits shall not be hard-coded.
 - Every mapping shall reference canonical identifiers.
+- Commercial values owned elsewhere shall not be duplicated here.
 - Contract overrides shall require formal approval.
 - Changes shall be version-controlled and auditable.
 - Historical mappings shall remain traceable.

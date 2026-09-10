@@ -1,66 +1,85 @@
 ﻿# API Feature Mapping
 
-**Version:** 1.0.0  
-**Status:** Canonical  
-**Architecture Phase:** 2.1.3.5  
-**Last Updated:** 2026-08-01
+**Version:** 1.1.0
+**Status:** Canonical
+**Architecture Phase:** 2.1.3.5
+**Last Updated:** 2026-09-10
 
 ---
 
 # Purpose
 
-The API Feature Mapping defines the canonical relationship between LinkCraftor features, subscription plans, standalone API products and API access entitlements.
+The API Feature Mapping defines the canonical relationship between LinkCraftor features, subscription plans, standalone API access and registered API products.
 
 No LinkCraftor feature may be exposed through an API unless its API availability is registered through this mapping.
+
+This document defines API feature eligibility and mapping only.
+
+API access pricing, API usage package pricing and API consumption values are owned by the Pricing Engine and shall not be duplicated here.
 
 ---
 
 # API Access Eligibility
 
-API access is available beginning with the Pro plan.
+Subscription API access begins with the Business plan.
 
 | Plan | API Access |
 |---|---|
 | Starter | Unavailable |
-| Pro | Available |
+| Pro | Unavailable |
 | Business | Available |
 | Enterprise | Available |
 | Growth Enterprise | Available |
 | Scale Enterprise | Available |
 | Hyper Enterprise | Available |
 
-API access inside a subscription plan remains subject to:
+Business through Hyper Enterprise receive API platform eligibility through their subscription entitlement.
 
-- Registered API products
-- Feature entitlements
-- Authentication and authorization
-- Action Unit availability
-- Rate limits
-- Usage limits
-- Contract restrictions
-- Workspace isolation
+API usage remains separately metered and billed according to the canonical API usage architecture.
 
 ---
 
-# Standalone API Products
+# Standalone API Access
 
-The initial standalone API products are:
+Non-subscribers may obtain standalone API platform access.
 
-| API Product | Monthly Access Fee | Action Units Per Request |
-|---|---:|---:|
-| Internal Linking API | $49 | 25 AU |
-| External Linking API | $79 | 50 AU |
-| Topic Cluster API | $99 | 100 AU |
-| Semantic Audit API | $149 | 150 AU |
-| Autonomous Intelligence API | $199 | 300 AU |
+Standalone API access pricing is defined canonically by the Pricing Engine and shall not be duplicated in this mapping.
 
-Standalone API customers pay:
+Standalone API access does not itself grant unlimited usage.
 
-**API access fee + actual API AU consumption**
+API usage packages, metering units and consumption values shall be governed separately by the canonical API pricing and metering architecture.
 
-The approved API consumption rate is:
+---
 
-**1 API AU = $0.0005**
+# Initial API Products
+
+The initial canonical API product scope is:
+
+- Internal Linking API
+- Semantic Linking API
+- External Linking API
+
+A future Unified Linking API may orchestrate Internal Linking, Semantic Linking and External Linking capabilities.
+
+Unified Linking API pricing and usage metering are not finalized.
+
+Canonical API Product IDs shall be provided by Phase 2.1.4 — API Product Registry.
+
+---
+
+# API Metering Status
+
+Exact API usage package quantities, prices, Action Unit consumption values and per-request metering rules are currently suspended pending real API consumption benchmarking.
+
+This mapping shall therefore not define:
+
+- Fixed API Action Units per request
+- API usage package quantities
+- API usage package prices
+- API-specific AU conversion rates
+- Unified API consumption values
+
+These values shall be introduced only after benchmarking and approval.
 
 ---
 
@@ -78,7 +97,7 @@ Every API feature mapping shall include:
 - Entitlement Type
 - Authentication Requirement
 - Authorization Requirement
-- Action Unit Cost
+- Metering Policy Reference
 - Rate Limit
 - Usage Limit
 - Workspace Scope
@@ -111,9 +130,10 @@ Each API feature mapping shall use one of these states:
 # Subscription API Rules
 
 - Starter shall not receive API access.
-- Pro through Hyper Enterprise shall receive API access entitlement.
-- API usage shall consume Action Units.
-- Application-plan API usage shall use the customer's available plan AU and approved top-ups.
+- Pro shall not receive API access.
+- Business through Hyper Enterprise shall receive API platform eligibility.
+- API usage shall be separately metered.
+- API usage shall follow the canonical API usage and billing architecture.
 - API access shall not bypass feature or plan restrictions.
 - API access shall not bypass workspace isolation.
 - API requests shall reference registered API Product IDs and Feature IDs.
@@ -126,13 +146,11 @@ Each API feature mapping shall use one of these states:
 
 # Standalone API Rules
 
-- Standalone developers may subscribe to individual API products.
-- Each API product shall have an independent access fee.
-- No fixed AU allocation is attached to the access fee.
-- Consumption shall be billed using actual API AU usage.
-- Different APIs may consume different AU amounts.
-- API access fees and API consumption charges shall remain separate.
-- Developers subscribing to one API shall not automatically receive access to other APIs.
+- Standalone API access shall use the canonical standalone API platform-access entitlement.
+- Standalone access pricing shall be owned by the Pricing Engine.
+- API usage charges shall remain separate from API access charges.
+- Standalone API access shall not imply unlimited usage.
+- API products shall remain independently entitlement-controlled.
 - Enterprise and OEM agreements may define custom API mappings.
 - All standalone API activity shall be metered and auditable.
 
@@ -151,7 +169,7 @@ This mapping depends on:
 - API Product Registry
 - Pricing Engine
 - Subscription Entitlements
-- Action Unit Accounting
+- API Metering
 - API Authentication
 - API Authorization
 - Workspace Isolation
@@ -172,7 +190,7 @@ This definition document does not:
 - Create jobs
 - Start workers
 - Create queues
-- Consume Action Units
+- Consume usage units
 - Grant access directly
 - Perform runtime authorization
 - Produce runtime failures or recovery actions
@@ -181,12 +199,12 @@ This definition document does not:
 
 # Runtime Eligibility
 
-**Current Component:** API Feature Mapping document  
-**Runtime Eligible:** No  
-**Reason:** Canonical configuration and architecture definition only  
+**Current Component:** API Feature Mapping document
+**Runtime Eligible:** No
+**Reason:** Canonical configuration and architecture definition only
 **URRS Requirement:** Not applicable
 
-Any future executable API entitlement validator shall be scanned separately when its dependent API and runtime infrastructure are ready.
+Any future executable API entitlement validator, usage-metering component or API access-control component shall receive a separate runtime and URRS assessment.
 
 ---
 
@@ -195,6 +213,8 @@ Any future executable API entitlement validator shall be scanned separately when
 - API mappings shall be configuration-driven.
 - API mappings shall not be hard-coded into endpoints.
 - Every mapping shall reference canonical identifiers.
+- Pricing values shall not be duplicated in this mapping.
+- Metering values shall not be duplicated until benchmarked and approved.
 - Changes shall be version-controlled.
 - Changes shall be reviewed and approved.
 - Changes shall generate audit records.
