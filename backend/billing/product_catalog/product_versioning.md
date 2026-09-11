@@ -1,12 +1,12 @@
 ﻿# Product Versioning
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 
 **Status:** Canonical
 
 **Architecture Phase:** 2.1.7
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-11
 
 ---
 
@@ -280,7 +280,7 @@ Subscription product versions shall preserve:
 - Annual price association
 - Trial eligibility
 - Included document allowance
-- Included Action Units
+- Usage Allowance and Metering Policy Reference
 - Batch upload limit
 - Feature availability
 - API eligibility
@@ -304,8 +304,8 @@ API product versions shall preserve:
 - Response contract
 - Authentication method
 - Authorization policy
-- API access fee
-- Action Unit cost
+- API Access Pricing Reference
+- API Usage Metering Policy Reference
 - Rate limit
 - Usage limit
 - Deprecation date
@@ -608,3 +608,4 @@ Production Status: Not Implemented
 ---
 
 End of Product Versioning
+

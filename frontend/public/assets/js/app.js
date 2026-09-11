@@ -1,4 +1,4 @@
- console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
 // ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
@@ -23,7 +23,7 @@ if (typeof window.reloadFromBackend !== "function") {
 
 
 // -------------------------------------------------------------------------------------------
-// app.js â€” LinkCraftor (Full, updated)  
+// app.js Ã¢â‚¬â€ LinkCraftor (Full, updated)  
 // -------------------------------------------------------------------------------------------
 
 import { KEYS, lsGet, lsSet, lsDel } from "./core/storage.js";
@@ -122,7 +122,7 @@ function getCurrentWorkspaceId(fallback = "default") {
 }
 
 // =====================================================
-// Layer 1.3 â€“ UI â†’ Decision Ingestion (canonical Layer 0)
+// Layer 1.3 Ã¢â‚¬â€œ UI Ã¢â€ â€™ Decision Ingestion (canonical Layer 0)
 // Endpoint: POST /api/engine/decision
 // =====================================================
 const API_DECISION = "/api/engine/decision";
@@ -189,7 +189,7 @@ const payload = {
 }
 
 // =====================================================
-// Layer 1.3.1 â€” Global bridge for IL Modal ? Decision API
+// Layer 1.3.1 Ã¢â‚¬â€ Global bridge for IL Modal ? Decision API
 // IL modal calls window.LC_registerLinkFeedback(...)
 // =====================================================
 if (typeof window !== "undefined" && typeof window.LC_registerLinkFeedback !== "function") {
@@ -525,11 +525,11 @@ const FLOORS = (PHASE === "publish")
 
 const CAPS = Object.freeze({ MAX_PER_SECTION: 4, MAX_PER_200W: 5, MAX_PER_TOPIC: 3 });
 
-// Spacing radius for mark placement (â€”words)
+// Spacing radius for mark placement (Ã¢â‚¬â€words)
 const WINDOW_RADIUS_WORDS = 90;
 
 /* ==========================================================================
-   NEW: External V2 (local, rule-based) â€” mirrors internal placement logic
+   NEW: External V2 (local, rule-based) Ã¢â‚¬â€ mirrors internal placement logic
    ========================================================================== */
 const EXT_V2 = Object.freeze({
   ENABLED: true,
@@ -673,7 +673,7 @@ const toggleHighlight = $("toggleHighlight");
 const highlightCountBadge = $("highlightCountBadge");
 
 // ============================================================================
-// Draft + Sitemap Audit (Right Sidebar Card) â€” no new button
+// Draft + Sitemap Audit (Right Sidebar Card) Ã¢â‚¬â€ no new button
 // Combines:
 //  A) Draft ? Sitemap audit (backend truth)
 //  B) Topics NOT matched to a phrase (this doc/run) using LAST_ENGINE_OUTPUT
@@ -727,7 +727,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </h3>
 
   <div id="auditStats" style="font-size:12px;color:#6b7280;margin-top:6px;">
-    Loadingâ€”
+    LoadingÃ¢â‚¬â€
   </div>
 
   <div id="auditList" style="margin-top:10px;">
@@ -735,7 +735,7 @@ const highlightCountBadge = $("highlightCountBadge");
   </div>
 
   <div id="auditHint" style="margin-top:10px;font-size:12px;color:#6b7280;">
-    Tip: Use the filter to switch between draft gaps and sitemap topics that didnâ€”t match any phrase in this doc.
+    Tip: Use the filter to switch between draft gaps and sitemap topics that didnÃ¢â‚¬â€t match any phrase in this doc.
   </div>
 `;
 
@@ -888,7 +888,7 @@ const res = await fetch(`${API_BASE}/api/planning/draft_audit?workspace_id=${enc
   `;
 }).join("")
  
-  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} moreâ€”</div>` : "");
+  (unmatched.length > limit ? `<div style="opacity:.7;margin-top:6px;">+ ${unmatched.length - limit} moreÃ¢â‚¬â€</div>` : "");
   }
 
 
@@ -962,7 +962,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
     }).join("");
   } catch(e){
     console.warn("[renderDraftRows] failed:", e?.message || e);
-    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">â€”</div>`;
+    if (mountEl) mountEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">Ã¢â‚¬â€</div>`;
   }
 }
 
@@ -980,7 +980,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
   if (!listEl) return;
 
   try {
-    if (stats) stats.textContent = "Loadingâ€”";
+    if (stats) stats.textContent = "LoadingÃ¢â‚¬â€";
 
     const data = await fetchAudit();
 
@@ -1194,7 +1194,7 @@ function renderDraftRows(rows, mountEl, limit = 120){
   } catch(e){
     console.warn("[AuditCard] refresh failed:", e?.message || e);
     if (stats) stats.textContent = "Audit failed: " + (e?.message || e);
-    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">â€”</div>`;
+    listEl.innerHTML = `<div style="font-size:12px;color:#6b7280;">Ã¢â‚¬â€</div>`;
   }
 }
 
@@ -1659,7 +1659,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
 
 
 // ==========================================================================
-// Session format helpers (upload/download lock to one format) â€” COLLISION-SAFE
+// Session format helpers (upload/download lock to one format) Ã¢â‚¬â€ COLLISION-SAFE
 // ==========================================================================
 (function(){
   const W = (typeof window !== "undefined") ? window : globalThis;
@@ -1733,7 +1733,7 @@ const TITLE_INDEX_KEY     = "linkcraftor_title_index_v2";
       menu.querySelectorAll("button[data-ext]").forEach(btn=>{
         const extAttr = (btn.getAttribute("data-ext") || "").toLowerCase();
 
-        // Never show â€”originalâ€” or â€”.htmâ€”
+        // Never show Ã¢â‚¬â€originalÃ¢â‚¬â€ or Ã¢â‚¬â€.htmÃ¢â‚¬â€
         if (kill.has(extAttr)) { btn.style.display = "none"; return; }
 
         // If a session format is locked, show only that matching option
@@ -1798,7 +1798,7 @@ async function loadAndRenderDocByIndex(idx){
 /* ==========================================================================
    HELPERS
    ========================================================================== */
-const rxWord = /[\p{L}\p{N}â€”'-]+/gu;
+const rxWord = /[\p{L}\p{N}Ã¢â‚¬â€'-]+/gu;
 const norm   = (s)=> String(s||"").toLowerCase().trim().replace(/\s+/g, " ");
 const tokens = (s)=> (String(s||"").toLowerCase().match(rxWord) || []).filter(Boolean);
 const uniq   = (a)=> Array.from(new Set(a));
@@ -1819,7 +1819,7 @@ function extractHtmlPayload(rawHtml = "") {
     }
     doc.documentElement.innerHTML = rawHtml;
 
-    // Collect inline styles from <head> (ignore <link> for nowâ€”canâ€”t fetch local files)
+    // Collect inline styles from <head> (ignore <link> for nowÃ¢â‚¬â€canÃ¢â‚¬â€t fetch local files)
     const head = doc.querySelector("head");
     let styles = "";
     if (head) {
@@ -1843,7 +1843,7 @@ function markdownToHtml(md = "") {
     return `\uE000CODE${fences.length - 1}\uE000`;
   });
 
-  // 2) Escape HTML (so markdown canâ€”t inject raw tags)
+  // 2) Escape HTML (so markdown canÃ¢â‚¬â€t inject raw tags)
   const esc = s => String(s)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -2332,7 +2332,7 @@ if (downloadMenu) downloadMenu.querySelectorAll("button").forEach(btn=>{
     hideMenu(downloadMenu, btnDownloadMenu);
 
     try{
-      // Prefer the locked session format; if not set yet, use the buttonâ€”s request
+      // Prefer the locked session format; if not set yet, use the buttonÃ¢â‚¬â€s request
       const sess = getSessionFormat(); // ".docx" | ".md" | ".txt" | ".html" | ""
       const requested = (btn.getAttribute("data-ext") || "").toLowerCase();
 
@@ -2450,7 +2450,7 @@ fileInput?.addEventListener("change", async () => {
         errorBox,
         parts.length
           ? parts.join(". ") + "."
-          : `No files uploaded â€” session is locked to ${sessExt}.`,
+          : `No files uploaded Ã¢â‚¬â€ session is locked to ${sessExt}.`,
         2600
       );
 
@@ -2690,11 +2690,11 @@ try {
   try { LINKED_SET.clear(); } catch {}
   try { LINKED_MAP.clear(); } catch {}
   // Clear UI.
-  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editingâ€¦";
+  if (viewerEl) viewerEl.innerHTML = "Upload a document to begin editingÃ¢â‚¬Â¦";
   if (editor) editor.innerHTML = "";
 
   safeSetText(topMeta, "No document loaded", "topMeta");
-  safeSetText(docMeta, "Code: â€”", "docMeta");
+  safeSetText(docMeta, "Code: Ã¢â‚¬â€", "docMeta");
   safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
 
   if (allDocs) allDocs.innerHTML = "<option value=''>All docs</option>";
@@ -2732,7 +2732,7 @@ btnNextDoc?.addEventListener("click", () => {
 });
 
 /* ==========================================================================
-   BULK APPLY â€” TURN MARKS INTO UNDERLINED LINKS
+   BULK APPLY Ã¢â‚¬â€ TURN MARKS INTO UNDERLINED LINKS
    ========================================================================== */
 
 /**
@@ -2873,7 +2873,7 @@ async function bulkApplyInContainer(root) {
     if (!href) {
       skippedNoHref++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no href) â€” phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
+        `[BulkApply] MARK #${i}: SKIP (no href) Ã¢â‚¬â€ phrase="${phrase}", kind="${kind}", strength="${strength}", title="${title}"`
       );
       continue;
     }
@@ -2889,7 +2889,7 @@ async function bulkApplyInContainer(root) {
     if (!text) {
       skippedNoText++;
       console.log(
-        `[BulkApply] MARK #${i}: SKIP (no text) â€” href="${href}", phrase="${phrase}"`
+        `[BulkApply] MARK #${i}: SKIP (no text) Ã¢â‚¬â€ href="${href}", phrase="${phrase}"`
       );
       continue;
     }
@@ -2931,12 +2931,12 @@ async function bulkApplyInContainer(root) {
     applied++;
 
     console.log(
-      `[BulkApply] MARK #${i}: APPLY â€” href="${href}", text="${text}"`
+      `[BulkApply] MARK #${i}: APPLY Ã¢â‚¬â€ href="${href}", text="${text}"`
     );
   }
 
   console.log(
-    "[BulkApply] SUMMARY (container) â€” applied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApply] SUMMARY (container) Ã¢â‚¬â€ applied=%d, skippedNoHref=%d, skippedNoText=%d",
     applied,
     skippedNoHref,
     skippedNoText
@@ -3062,7 +3062,7 @@ async function bulkApplyAllDocs() {
   }
 
   console.log(
-    "[BulkApplyAll] DONE â€” totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
+    "[BulkApplyAll] DONE Ã¢â‚¬â€ totalApplied=%d, skippedNoHref=%d, skippedNoText=%d",
     totalApplied,
     totalSkippedNoHref,
     totalSkippedNoText
@@ -3070,7 +3070,7 @@ async function bulkApplyAllDocs() {
 }
 
 /* ------------------------------------------------------------------
- * Button wiring â€” ONE CLICK = BULK APPLY ACROSS ALL DOCS
+ * Button wiring Ã¢â‚¬â€ ONE CLICK = BULK APPLY ACROSS ALL DOCS
  * ------------------------------------------------------------------ */
 
 async function handleBulkApplyAllClick() {
@@ -3514,7 +3514,7 @@ function underlineLinkedPhrases(){
   }
 }
 
-// Remove keyword marks around/inside headings (h1â€”h6) so titles are never highlighted
+// Remove keyword marks around/inside headings (h1Ã¢â‚¬â€h6) so titles are never highlighted
 function stripMarksFromHeadings(root) {
   if (!root) return;
 
@@ -3687,13 +3687,13 @@ const acceptBtn = document.createElement("button");
 acceptBtn.type = "button";
 acceptBtn.className = "kw-btn kw-accept";
 acceptBtn.title = "Accept suggestion";
-acceptBtn.textContent = "âœ“";
+acceptBtn.textContent = "Ã¢Å“â€œ";
 
 const rejectBtn = document.createElement("button");
 rejectBtn.type = "button";
 rejectBtn.className = "kw-btn kw-reject";
 rejectBtn.title = "Reject suggestion";
-rejectBtn.textContent = "Ã—";
+rejectBtn.textContent = "Ãƒâ€”";
 
 ctl.appendChild(acceptBtn);
 ctl.appendChild(rejectBtn);
@@ -3769,7 +3769,7 @@ function rebuildEngineHighlightsPanel() {
         <div class="kw-item" data-phrase="${escapeHtml(r.phrase)}" data-mode="${r.mode}" data-i="${i}">
           <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${r.dot};margin-right:6px;"></span>
           <button class="kw-jump" title="Find in doc" style="font-size:12px;">${escapeHtml(r.phrase)}</button>
-          <span class="qty" style="font-size:12px;color:#6b7280;">â€” ${r.tier} (Bucket)</span>
+          <span class="qty" style="font-size:12px;color:#6b7280;">Ã¢â‚¬â€ ${r.tier} (Bucket)</span>
         </div>
       `;
     }).join("");
@@ -3817,7 +3817,7 @@ function rebuildEngineHighlightsPanel() {
       <div class="kw-item" data-i="${i}">
         <span class="kw-dot" style="display:inline-block;width:8px;height:8px;border-radius:999px;background:${dot};margin-right:6px;"></span>
         <button class="kw-jump" title="Jump to highlight" style="font-size:12px;">${escapeHtml(phrase)}</button>
-        <span class="qty" style="font-size:12px;color:#6b7280;">â€” ${tier}</span>
+        <span class="qty" style="font-size:12px;color:#6b7280;">Ã¢â‚¬â€ ${tier}</span>
       </div>
     `;
   }).join("");
@@ -4011,7 +4011,7 @@ async function fetchSitemapContent(urls) {
 
 async function downloadDocx() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet Ã¢â‚¬â€ upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -4029,7 +4029,7 @@ async function downloadDocx() {
 
 function downloadHTML(ext = "html") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet Ã¢â‚¬â€ upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -4050,7 +4050,7 @@ function downloadHTML(ext = "html") {
 
 function downloadText(ext = "txt") {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet Ã¢â‚¬â€ upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -4070,7 +4070,7 @@ function downloadText(ext = "txt") {
 
 async function downloadOriginal() {
   if (currentIndex < 0 || !docs[currentIndex]) {
-    safeSetText(errorBox, "Nothing to download yet â€” upload a document first.", "error");
+    safeSetText(errorBox, "Nothing to download yet Ã¢â‚¬â€ upload a document first.", "error");
     return;
   }
   const d = docs[currentIndex];
@@ -4234,7 +4234,7 @@ function fillExternalReferencesFromMark(markEl) {
   for (const r of list) {
     const opt = document.createElement("option");
     opt.value = r.url || "";
-    opt.textContent = r.title ? `${r.title} â€” ${r.domainRoot || r.domain || ""}` : (r.url || "");
+    opt.textContent = r.title ? `${r.title} Ã¢â‚¬â€ ${r.domainRoot || r.domain || ""}` : (r.url || "");
     opt.dataset.title = r.title || "";
     opt.dataset.provider = r.domainRoot || r.domain || "";
     extReferences.appendChild(opt);
@@ -4242,7 +4242,7 @@ function fillExternalReferencesFromMark(markEl) {
 }
 
 // ==========================================================================
-// HEADING CLEANUP â€” remove any marks from H1â€”H6 *and* heading-like <p> tags
+// HEADING CLEANUP Ã¢â‚¬â€ remove any marks from H1Ã¢â‚¬â€H6 *and* heading-like <p> tags
 // ==========================================================================
 function cleanupMarksInHeadings(root) {
   if (!root) return;
@@ -4252,7 +4252,7 @@ function cleanupMarksInHeadings(root) {
     " mark.kwd-external, mark.kwd-int, mark.kwd-sem, mark.kwd-ext";
 
   // -------------------------------------------------
-  // A) Real heading tags: <h1>â€”<h6>
+  // A) Real heading tags: <h1>Ã¢â‚¬â€<h6>
   // -------------------------------------------------
   const headings = root.querySelectorAll("h1, h2, h3, h4, h5, h6");
   headings.forEach(h => {
@@ -4266,7 +4266,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // B) Mark WRAPPING a heading:
-  //    <mark class="kwd-â€”"><h1>Heading</h1></mark>
+  //    <mark class="kwd-Ã¢â‚¬â€"><h1>Heading</h1></mark>
   // -------------------------------------------------
   const allMarks = root.querySelectorAll(MARK_SELECTOR);
   allMarks.forEach(mark => {
@@ -4278,7 +4278,7 @@ function cleanupMarksInHeadings(root) {
 
   // -------------------------------------------------
   // C) "Heading-like" paragraphs (your exact case):
-  //    <p><strong><span><mark â€”><span class="kw-core">Heading</span>â€”</mark></span></strong></p>
+  //    <p><strong><span><mark Ã¢â‚¬â€><span class="kw-core">Heading</span>Ã¢â‚¬â€</mark></span></strong></p>
   //    We treat short, mostly-bold <p> as headings and remove marks inside.
   // -------------------------------------------------
   const paras = root.querySelectorAll("p");
@@ -4335,7 +4335,7 @@ async function applyAllThisDoc(){
       await delay(30);
     }
   } finally {
-    showToast(errorBox, `Apply All (this doc) â€” added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
+    showToast(errorBox, `Apply All (this doc) Ã¢â‚¬â€ added ${Math.max(0, getEngineMarkCount() - startMarks)} highlight(s) in ${passes} pass(es).`, 2200);
     applyingAll = false;
     updateHighlightBadge();
     rebuildEngineHighlightsPanel();
@@ -4397,7 +4397,7 @@ async function applyAllAcrossDocs() {
     applyingAll = false;
     showToast(
       errorBox,
-      `Apply All (all docs) â€” total added ${totalAdded}.`,
+      `Apply All (all docs) Ã¢â‚¬â€ total added ${totalAdded}.`,
       2300
     );
     updateHighlightBadge();
@@ -4582,7 +4582,7 @@ btnResetLinked?.addEventListener("click", () => {
 
 /* ==========================================================================
    Suggestion picker (for IL modal)
-   Uses LAST_ENGINE_OUTPUT only â€” stable and simple.
+   Uses LAST_ENGINE_OUTPUT only Ã¢â‚¬â€ stable and simple.
    ========================================================================== */
 function findEngineSuggestionsForPhrase(phrase) {
   const norm = (s) => String(s || "").toLowerCase().trim().replace(/\s+/g, " ");
@@ -4716,7 +4716,7 @@ function buildPhraseContext(phraseText) {
     contextType: null
   };
 
-  // Optional hook â€” if you later define window.LC_getPhraseContext,
+  // Optional hook Ã¢â‚¬â€ if you later define window.LC_getPhraseContext,
   // it can enrich this context (entities, graphVector, contextType, etc.)
   if (typeof window.LC_getPhraseContext === "function") {
     try {
@@ -5057,29 +5057,6 @@ function renderFromText(txt) {
 }
 
 
-async function syncActiveDocumentMembership(docId) {
-  try {
-    if (!docId) return;
-
-    const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
-    const ws = getCurrentWorkspaceId("");
-
-    console.log("[ActiveDocSync]", docId);
-
-    await fetch(`${API_BASE}/api/files/active_target_set/save`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        workspace_id: ws,
-        active_document_ids: [docId],
-        active_upload_ids: [docId],
-      }),
-    });
-
-  } catch (e) {
-    console.warn("[ActiveDocSync] failed:", e);
-  }
-}
 
 /* ==========================================================================
    RENDERING + SESSION
@@ -5090,7 +5067,6 @@ function renderDoc(i){
   const d = docs[i];
   const activeDocId = d?.doc_id || d?.docId || "";
   window.LC_ACTIVE_DOC_ID = activeDocId;
-  syncActiveDocumentMembership(activeDocId);
   const code = getOrAssignCode(d);
 
   const ext = canonicalSessionFormat(
@@ -5141,7 +5117,7 @@ function renderDoc(i){
       } else if (safeText && safeText.trim()) {
         renderFromText(safeText);
       } else {
-        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingâ€”</p></div>`;
+        viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingÃ¢â‚¬â€</p></div>`;
       }
     }
   } catch (e) {
@@ -5165,8 +5141,8 @@ function renderDoc(i){
       if (docs.length === 0) {
         currentIndex = -1;
         // Clear viewer + meta when no docs left
-        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingâ€”</p></div>`;
-        safeSetText(topMeta, "File: â€”", "topMeta");
+        if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingÃ¢â‚¬â€</p></div>`;
+        safeSetText(topMeta, "File: Ã¢â‚¬â€", "topMeta");
         safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
       } else {
         currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -5191,8 +5167,8 @@ function renderDoc(i){
           docs.splice(j, 1);
           if (docs.length === 0) {
             currentIndex = -1;
-            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingâ€”</p></div>`;
-            safeSetText(topMeta, "File: â€”", "topMeta");
+            if (viewerEl) viewerEl.innerHTML = `<div class="doc-root"><p>Upload a document to begin editingÃ¢â‚¬â€</p></div>`;
+            safeSetText(topMeta, "File: Ã¢â‚¬â€", "topMeta");
             safeSetText(docCountMeta, "Doc 0 of 0", "docCountMeta");
           } else {
             currentIndex = Math.min(currentIndex, docs.length - 1);
@@ -5291,7 +5267,7 @@ function refreshDropdown(){
 }
 
 // ==========================================================================
-// IMPORTED_URLS storage â€” BACKEND ONLY (localStorage disabled)
+// IMPORTED_URLS storage Ã¢â‚¬â€ BACKEND ONLY (localStorage disabled)
 // ==========================================================================
 
 async function saveImportedUrlsLocal(){
@@ -5322,7 +5298,7 @@ const res = await fetch(`${base}/api/urls/list?workspace_id=${encodeURIComponent
 
 
 // ================================
-// Draft Topics â€” BACKEND load on startup
+// Draft Topics Ã¢â‚¬â€ BACKEND load on startup
 // ================================
 async function loadDraftsFromBackend(workspaceId = "default") {
   const API_BASE = (window.LINKCRAFTOR_API_BASE || "http://127.0.0.1:8001").replace(/\/+$/, "");
@@ -6105,7 +6081,7 @@ async function bootExtras() {
 }
 
 // =====================================================
-// Layer 1.3 â€” Wire ? Accept / ? Reject buttons to /api/engine/decision
+// Layer 1.3 Ã¢â‚¬â€ Wire ? Accept / ? Reject buttons to /api/engine/decision
 // (Event delegation on viewerEl; no UI logic changes beyond emitting decisions)
 // =====================================================
 function wireDecisionButtons(){
@@ -7196,7 +7172,7 @@ function initSupportTicketForm() {
         throw new Error(data?.detail || "Ticket submission failed");
       }
 
-      setSupportFormStatus(`âœ… Ticket submitted successfully: ${data.ticket_number}`, "ok");
+      setSupportFormStatus(`Ã¢Å“â€¦ Ticket submitted successfully: ${data.ticket_number}`, "ok");
       alert(`Ticket submitted successfully: ${data.ticket_number}`);
       form.reset();
 
@@ -8460,3 +8436,4 @@ window.LC_openWorkspaceFileInEditor = async function(workspaceId, sessionId){
     alert("Could not open workspace: " + (e.message || e));
   }
 };
+

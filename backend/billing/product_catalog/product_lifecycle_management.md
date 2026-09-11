@@ -1,12 +1,12 @@
 ﻿# Product Lifecycle Management
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 
 **Status:** Canonical
 
 **Architecture Phase:** 2.1.8
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-11
 
 ---
 
@@ -419,7 +419,7 @@ Subscription products shall additionally define:
 - Monthly billing eligibility
 - Annual billing eligibility
 - Included document allowance
-- Included Action Units
+- Usage Allowance and Metering Policy Reference
 - Batch upload limit
 - Upgrade rules
 - Downgrade rules
@@ -443,8 +443,8 @@ Before activation, an API product shall define:
 - Endpoint group
 - Authentication method
 - Authorization policy
-- Access fee
-- Action Unit cost
+- API Access Pricing Reference
+- API Usage Metering Policy Reference
 - Rate limit
 - Usage limit
 - Versioning policy
@@ -686,3 +686,4 @@ Production Status: Not Implemented
 ---
 
 End of Product Lifecycle Management
+

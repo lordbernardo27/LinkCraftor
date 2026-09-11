@@ -1668,8 +1668,8 @@ def score_phrase_strength(
         and not has_valid_pair
         and not has_natural_compound
         and not structural_signal
+        and "multi_signal_recovery_floor" not in reasons
     )
-
     if structurally_weak_short_phrase:
         score = min(score, 0.61)
         threshold = max(threshold, 0.72)
@@ -1693,6 +1693,7 @@ def score_phrase_strength(
         "phrase": p,
         "reason": "+".join(reasons) if reasons else "neutral",
     }
+
 
 
 

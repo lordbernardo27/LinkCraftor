@@ -1,12 +1,12 @@
 ﻿# OEM Product Registry
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 
 **Status:** Canonical
 
 **Architecture Phase:** 2.1.6
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-11
 
 ---
 
@@ -118,7 +118,7 @@ Every registered OEM product shall include:
 - Customer Scope
 - Workspace Scope
 - Usage Limits
-- Action Unit Rules
+- Usage Metering Policy Reference
 - API Rules
 - Infrastructure Requirements
 - Security Requirements
@@ -154,7 +154,7 @@ Registered OEM products may support one or more approved licensing models:
 - Annual License
 - Multi-Year License
 - Usage-Based License
-- Action Unit License
+- Usage-Based Metered License
 - API Consumption License
 - Per-Seat License
 - Per-Customer License
@@ -269,7 +269,7 @@ The contract mapping shall identify:
 - Permitted Use
 - Prohibited Use
 - Usage Limits
-- Action Unit Terms
+- Usage Metering Terms
 - API Terms
 - Infrastructure Assignment
 - Support Level
@@ -305,7 +305,7 @@ The contract mapping shall identify:
 - API resale requires explicit contractual permission.
 - API white-label rights require explicit contractual permission.
 - API authentication, authorization and metering remain mandatory.
-- OEM API consumption may use custom pricing or Action Unit terms.
+- OEM API consumption shall follow the approved OEM agreement and canonical API metering architecture; exact consumption units shall remain configuration-driven and shall not be fixed by this registry.
 - OEM API credentials shall remain isolated and revocable.
 
 ---
@@ -355,7 +355,7 @@ OEM pricing may include:
 - License fee
 - Minimum annual commitment
 - Usage pricing
-- Action Unit pricing
+- Usage-based pricing
 - API pricing
 - Deployment fee
 - Dedicated infrastructure fee
@@ -405,7 +405,7 @@ This registry depends on:
 - Enterprise Contracts
 - OEM Agreements
 - Subscription Entitlements
-- Action Unit Accounting
+
 - Usage Metering
 - API Authentication
 - API Authorization
@@ -427,7 +427,7 @@ Executable enforcement belongs to:
 - API Authentication
 - API Authorization
 - Usage Metering
-- Action Unit Accounting
+
 - Deployment Control
 - Infrastructure Assignment
 - Billing Enforcement
@@ -442,7 +442,7 @@ This registry does not:
 - issue credentials
 - deploy infrastructure
 - process API requests
-- consume Action Units
+- consume or record billable usage units
 - create runtime jobs
 - start workers
 - create queues
@@ -508,3 +508,4 @@ Production Status: Not Implemented
 ---
 
 End of OEM Product Registry
+

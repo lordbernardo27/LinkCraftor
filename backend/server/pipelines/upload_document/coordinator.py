@@ -1,4 +1,4 @@
-"""
+﻿"""
 Canonical Upload Document Coordinator
 
 Dependency-aware execution:
@@ -398,6 +398,10 @@ async def run_upload_document(
         extraction_result=highlight_extraction_result,
     )
 
+    print("[PHRASE_CANDIDATE_COUNT]", pipeline_1.get("phrase_candidate_count"))
+    for _i, _candidate in enumerate((pipeline_1.get("phrase_candidates") or [])[:20], start=1):
+        print(f"[PHRASE_CANDIDATE {_i}] {_candidate}")
+
     # ------------------------------------------------------------
     # Registry handoff receives real UDUC instead of a hand-built
     # preview-derived pseudo-unified-content dictionary.
@@ -494,3 +498,4 @@ async def run_upload_document(
 __all__ = [
     "run_upload_document",
 ]
+

@@ -35,9 +35,10 @@ class EngineRunRequest(BaseModel):
     phase: Optional[str] = PHASE_DEFAULT
     limit: int = 2500
 
-    class Config:
-        extra = "allow"
-        allow_population_by_field_name = True
+    model_config = {
+        "extra": "allow",
+        "validate_by_name": True,
+    }
 
 
 def _priority_phrase_set_path(workspace_id: str) -> Path:

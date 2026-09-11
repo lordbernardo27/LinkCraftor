@@ -1,12 +1,12 @@
 ﻿# Product Catalog Certification
 
-**Version:** 1.0.0
+**Version:** 1.0.1
 
 **Status:** Canonical
 
 **Architecture Phase:** 2.1.9
 
-**Last Updated:** 2026-08-01
+**Last Updated:** 2026-09-11
 
 ---
 
@@ -74,7 +74,7 @@ It does not:
 - grant entitlements
 - authorize API access
 - process subscriptions
-- consume Action Units
+- consume or record billable usage units
 - perform billing calculations
 
 Therefore:
@@ -123,6 +123,14 @@ Runtime Eligibility Assessment:
 
 PASS
 
+Deferred Benchmarking Validation:
+
+PASS — Included application AU allowances remain intentionally suspended pending real engine-consumption benchmarking.
+
+API Metering Deferral Validation:
+
+PASS — Exact API usage packages, consumption values and final metering rules remain intentionally suspended pending API consumption benchmarking.
+
 Overall Certification:
 
 CERTIFIED
@@ -148,3 +156,5 @@ PHASE 2.2 — Pricing Engine
 ---
 
 End of Product Catalog Certification
+
+

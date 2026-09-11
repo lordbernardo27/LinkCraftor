@@ -1,12 +1,12 @@
 ﻿# Plan Pricing
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 
 **Status:** Canonical
 
 **Architecture Phase:** 2.2.1
 
-**Last Updated:** 2026-08-11
+**Last Updated:** 2026-09-11
 
 ---
 
@@ -41,7 +41,7 @@ Subscription prices shall not be inferred from:
 - API product prices
 - marketplace prices
 - OEM prices
-- Action Unit prices
+- application AU prices
 - promotional prices
 - historical UI values
 - enterprise contract overrides
@@ -70,11 +70,11 @@ The canonical LinkCraftor subscription plans are:
 |---|---:|
 | Starter | $49 |
 | Pro | $199 |
-| Business | $799 |
-| Enterprise | $1,999 |
-| Growth Enterprise | $5,000 |
-| Scale Enterprise | $10,000 |
-| Hyper Enterprise | $15,000 |
+| Business | $499 |
+| Enterprise | $999 |
+| Growth Enterprise | $2,000 |
+| Scale Enterprise | $5,000 |
+| Hyper Enterprise | $10,000 |
 
 Currency:
 
@@ -86,7 +86,7 @@ These values represent base subscription prices before:
 - promotions
 - credits
 - taxes
-- Action Unit top-ups
+- application AU top-ups
 - API product charges
 - marketplace charges
 - OEM licensing charges
@@ -98,7 +98,7 @@ These values represent base subscription prices before:
 
 The approved standard annual discount is:
 
-**17%**
+**20%**
 
 Annual billing shall be derived from the canonical monthly base price.
 
@@ -106,13 +106,13 @@ Canonical calculation:
 
 Annual List Price = Monthly Base Price × 12
 
-Annual Discount = Annual List Price × 17%
+Annual Discount = Annual List Price × 20%
 
 Annual Subscription Price = Annual List Price − Annual Discount
 
 Equivalent multiplier:
 
-**Annual Subscription Price = Monthly Base Price × 12 × 0.83**
+**Annual Subscription Price = Monthly Base Price × 12 × 0.80**
 
 The Pricing Engine implementation shall perform monetary rounding according to the future canonical Money and Rounding Rules.
 
@@ -120,17 +120,17 @@ The Pricing Engine implementation shall perform monetary rounding according to t
 
 # Reference Annual Pricing
 
-The following values are architectural reference values derived from the approved 17% annual discount.
+The following values are architectural reference values derived from the approved 20% annual discount.
 
-| Plan | Monthly | 12-Month List Price | 17% Discount | Annual Price |
+| Plan | Monthly | 12-Month List Price | 20% Discount | Annual Price |
 |---|---:|---:|---:|---:|
-| Starter | $49 | $588 | $99.96 | $488.04 |
-| Pro | $199 | $2,388 | $405.96 | $1,982.04 |
-| Business | $799 | $9,588 | $1,629.96 | $7,958.04 |
-| Enterprise | $1,999 | $23,988 | $4,077.96 | $19,910.04 |
-| Growth Enterprise | $5,000 | $60,000 | $10,200.00 | $49,800.00 |
-| Scale Enterprise | $10,000 | $120,000 | $20,400.00 | $99,600.00 |
-| Hyper Enterprise | $15,000 | $180,000 | $30,600.00 | $149,400.00 |
+| Starter | $49 | $588 | $117.60 | $470.40 |
+| Pro | $199 | $2,388 | $477.60 | $1,910.40 |
+| Business | $499 | $5,988 | $1,197.60 | $4,790.40 |
+| Enterprise | $999 | $11,988 | $2,397.60 | $9,590.40 |
+| Growth Enterprise | $2,000 | $24,000 | $4,800.00 | $19,200.00 |
+| Scale Enterprise | $5,000 | $60,000 | $12,000.00 | $48,000.00 |
+| Hyper Enterprise | $10,000 | $120,000 | $24,000.00 | $96,000.00 |
 
 These reference calculations do not constitute an executable pricing calculator.
 
@@ -218,17 +218,17 @@ Dynamic foreign-exchange conversion shall not automatically become canonical pla
 
 Subscription plan pricing shall remain separate from all other monetary domains.
 
-## Action Units
+## Application Action Units
 
-Action Unit pricing is not included in the monthly subscription price definition.
+Application AU pricing is not included in the monthly subscription price definition.
 
-Included Action Unit allowances, where applicable, are subscription entitlements.
+Included application AU allowances are subscription entitlements whose exact plan quantities remain suspended pending real engine-consumption benchmarking.
 
-Additional Action Units are separately metered and billed.
+Additional application AU is separately metered and billed under the canonical AU Top-Up Pricing architecture.
 
 ## API Products
 
-API product access fees and API Action Unit charges are independent from subscription plan base pricing.
+API access pricing and API usage charges are independent from subscription plan base pricing and are governed by the canonical API pricing and metering architecture.
 
 An API price that numerically equals a subscription price does not establish a pricing relationship between the two products.
 
@@ -378,7 +378,7 @@ Future executable pricing services will additionally depend on:
 - Subscription Engine
 - Tax Infrastructure
 - Payment Infrastructure
-- Action Unit Accounting
+- Usage Metering Infrastructure
 
 ---
 
@@ -392,7 +392,7 @@ It does not:
 - charge customers
 - process payments
 - calculate taxes
-- consume Action Units
+- consume or record billable usage units
 - grant entitlements
 - apply promotions
 - create subscriptions
@@ -428,7 +428,7 @@ Future executable pricing loaders, resolvers, calculators, discount processors a
 - API pricing shall remain separate.
 - Marketplace pricing shall remain separate.
 - OEM pricing shall remain separate.
-- Action Unit pricing shall remain separate.
+- Application AU pricing shall remain separate.
 - Promotional pricing shall not overwrite base pricing.
 - Contract pricing shall not overwrite public canonical pricing.
 - Annual pricing shall derive from approved annual-discount policy.
@@ -456,3 +456,5 @@ Proceed to:
 ---
 
 End of Plan Pricing
+
+
