@@ -78,19 +78,19 @@ def _display_text(item: Dict[str, Any]) -> str:
             or item.get("phrase_text") or item.get("label") or "")
 
 
-def extract_phrase_candidates(active_phrase_pool: Any) -> List[Dict[str, Any]]:
+def extract_phrase_candidates(phrase_candidates: Any) -> List[Dict[str, Any]]:
     """Extract candidate dicts from any of the known active-pool shapes."""
     candidates: List[Dict[str, Any]] = []
-    if not active_phrase_pool:
+    if not phrase_candidates:
         return candidates
 
     raw = None
-    if isinstance(active_phrase_pool, dict):
-        raw = (active_phrase_pool.get("phrases")
-               or active_phrase_pool.get("items")
-               or active_phrase_pool.get("candidates"))
-    elif isinstance(active_phrase_pool, list):
-        raw = active_phrase_pool
+    if isinstance(phrase_candidates, dict):
+        raw = (phrase_candidates.get("phrases")
+               or phrase_candidates.get("items")
+               or phrase_candidates.get("candidates"))
+    elif isinstance(phrase_candidates, list):
+        raw = phrase_candidates
 
     if isinstance(raw, dict):
         for key, payload in raw.items():
@@ -282,7 +282,7 @@ def select_highlight_candidates(
     workspace_id: str,
     doc_id: str,
     article_text: str,
-    active_phrase_pool: Any,
+    phrase_candidates: Any,
     resolved_targets: Any = None,
     vertical: str = "",
 ) -> Dict[str, Any]:
@@ -292,7 +292,7 @@ def select_highlight_candidates(
     norm_article = _normalized_article(article_text)
     resolver_map = build_resolver_signal_map(resolved_targets)
 
-    raw_candidates = extract_phrase_candidates(active_phrase_pool)
+    raw_candidates = extract_phrase_candidates(phrase_candidates)
 
     candidates: List[Dict[str, Any]] = []
     rejected: List[Dict[str, Any]] = []

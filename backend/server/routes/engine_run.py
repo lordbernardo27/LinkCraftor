@@ -13,8 +13,8 @@ import glob
 import re
 
 from backend.server.engine.rb2_adapter import build_rb2_phrase_contexts
-from backend.server.stores.highlight_selection_engine import select_highlight_candidates
 from backend.server.stores.highlight_density_engine import apply_highlight_density
+from backend.server.pipelines.upload_document.uploaded_document_to_highlight_pipeline.coordinator import run_uploaded_document_to_highlight_pipeline
 from backend.server.engine.scoring import classify_highlight_buckets
 from backend.server.engine.intelligence_target_resolver import resolve_intelligent_targets
 
@@ -688,7 +688,7 @@ def _build_rb2_hit(candidate: Dict[str, Any], bucket: str = "internal_strong", w
             "layers": [
                 "highlight_selection_engine_v2",
                 "highlight_density_engine_v2",
-                "document_specific_upload_pool",
+                "canonical_uploaded_document_highlight_pipeline",
                 "rb2_runtime_bridge",
                 "intelligence_target_resolver",
                 "runtime_target_filtering",
@@ -723,51 +723,19 @@ def engine_run(payload: EngineRunRequest = Body(...)):
 
     joined_text = text if text else str(rb2_doc.get("joinedText") or "")
 
-    pool_path, pool_resolution = _resolve_pool_path(ws, doc_id)
-    pool_obj = _safe_read_json(pool_path) if os.path.exists(pool_path) else None
-
-    if not isinstance(pool_obj, dict):
-        fallback_pool = _load_workspace_upload_pool_fallback(ws)
-        if isinstance(fallback_pool, dict) and fallback_pool.get("phrases"):
-            pool_obj = fallback_pool
-            pool_resolution = "document_specific_workspace_merge_fallback"
-
-    if not isinstance(pool_obj, dict):
-        return {
-            "ok": True,
-            "engine": "RB2",
-            "mode": "highlight_only",
-            "workspaceId": ws,
-            "docId": doc_id,
-            "internal_strong": [],
-            "semantic_optional": [],
-            "meta": {
-                "build": ENGINE_RUN_BUILD,
-                "resolved_workspace": ws,
-                "phase": phase,
-                "pool_path": pool_path,
-                "pool_resolution": pool_resolution,
-                "pool_loaded": False,
-                "error": "upload_phrase_pool_not_found_or_invalid",
-                "internal_found": 0,
-                "internal_strong_count": 0,
-                "semantic_optional_count": 0,
-                "rb2_extract": {
-                    "version": rb2_doc.get("version"),
-                    "paragraphs": len(rb2_doc.get("paragraphs") or []),
-                    "joined_text_len": len(joined_text),
-                    "payload_text_len": len(text),
-                    "adapter_joined_text_len": len(str(rb2_doc.get("joinedText") or "")),
-                },
-            },
-        }
-
-    selection_result = select_highlight_candidates(
+    canonical_highlight_result = run_uploaded_document_to_highlight_pipeline(
         workspace_id=ws,
-        doc_id=doc_id,
-        article_text=joined_text,
-        active_phrase_pool=pool_obj,
+        document_id=doc_id,
+        extraction_result={
+            "text": joined_text,
+            "html": html,
+        },
     )
+
+    selection_result = canonical_highlight_result.get("highlight_selection", {})
+    if not isinstance(selection_result, dict):
+        raise RuntimeError("Canonical uploaded-document highlight pipeline returned an invalid selection result.")
+
 
     # FIX: snapshot the selection output BEFORE density runs. The density engine
     # mutates candidate dicts in place (and the selection engine aliases
@@ -882,16 +850,9 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "build": ENGINE_RUN_BUILD,
             "resolved_workspace": ws,
             "phase": phase,
-            "pool_path": pool_path,
-            "pool_resolution": pool_resolution,
-            "pool_loaded": True,
-            "document_specific_pool": bool(pool_obj.get("document_specific_pool")),
-            "document_id_from_pool": pool_obj.get("document_id"),
-            "phrase_pool_count": int(pool_obj.get("phrase_count") or 0),
-            "source_phrase_count": int(pool_obj.get("source_phrase_count") or 0),
-            "quality_filtered_source_count": int(pool_obj.get("quality_filtered_source_count") or 0),
-            "active_phrase_set_used": bool(pool_obj.get("active_phrase_set_used")),
-            "active_filter_reason": pool_obj.get("active_filter_reason"),
+            "canonical_highlight_pipeline_status": canonical_highlight_result.get("status"),
+            "canonical_highlight_pipeline_stage": canonical_highlight_result.get("latest_stage"),
+            "canonical_phrase_candidate_count": canonical_highlight_result.get("phrase_candidate_count", 0),
             "selection_stats": selection_result.get("stats", {}),
             "density_stats": density_result.get("stats", {}),
             "selection_rejected_sample": selection_result.get("rejected", [])[:10],
@@ -913,7 +874,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "runtime_intelligence_layers": [
                 "highlight_selection_engine_v2",
                 "highlight_density_engine_v2",
-                "document_specific_upload_pool",
+                "canonical_uploaded_document_highlight_pipeline",
                 "rb2_runtime_bridge",
             ],
             "rb2_extract": {
