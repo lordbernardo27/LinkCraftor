@@ -684,16 +684,41 @@ def _spacy_chunks(sent: str) -> List[Cand]:
         return []
     out: List[Cand] = []
     doc = nlp(sent)
+
     for nc in doc.noun_chunks:
-        keep: List[str] = []
-        tags: List[str] = []
-        for t in nc:
-            if not WORD_RE.fullmatch(t.text):
+        toks = [t for t in nc if WORD_RE.fullmatch(t.text)]
+        if len(toks) < 2:
+            continue
+
+        for e in range(len(toks)):
+            end_tok = toks[e]
+            end_tag = _coarsen_ptb(end_tok.tag_) if end_tok.tag_ else _spacy_coarse(end_tok)
+            end_word = end_tok.text.lower()
+            if not _head_is_noun_like(end_word, end_tag):
                 continue
-            keep.append(t.text.lower())
-            tags.append(_coarsen_ptb(t.tag_) if t.tag_ else _spacy_coarse(t))
-        # enumerate sub-anchors so compounds yield their inner phrases too
-        out.extend(_windows_from_run(list(zip(keep, tags))))
+
+            for s in range(e):
+                if e - s + 1 > 6:
+                    continue
+
+                span = toks[s:e + 1]
+                span_ids = {t.i for t in span}
+
+                # A nested phrase is structurally complete only when every token
+                # before its right-edge head attaches to a token inside the span.
+                # The right-edge head itself may attach outside to a larger NP.
+                if any(t.head.i not in span_ids for t in span[:-1]):
+                    continue
+
+                words = [t.text.lower() for t in span]
+                tags = [
+                    _coarsen_ptb(t.tag_) if t.tag_ else _spacy_coarse(t)
+                    for t in span
+                ]
+                tt, tg = _trim_with_tags(words, tags)
+                if _is_complete_phrase(tt, tg):
+                    out.append((" ".join(tt), "np", tg))
+
     return out
 
 
@@ -796,6 +821,12 @@ def _nominalize_tags(tags: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
 
         # (1) resolve inflected known-verb forms by right context
         if _is_inflected_verb(w):
+            # Preserve a plural nominal subject before an independent bare verb:
+            # "interest rates cause", "investment returns depend", "water flows shape".
+            if t == "NOUN" and w.endswith("s") and not w.endswith(("ss", "us", "is", "'s")) and len(w) > 3 and rt is not None \
+                    and rt[1] == "VERB" and rt[0] in ALL_VERB_LEMMAS and not _is_gerund(rt[0]):
+                out[i] = (w, "NOUN")
+                continue
             obj_start = (
                 rt is not None and rt[0] not in CONJUNCTIONS and rt[0] != "to"
                 and (rt[1] in _OBJECT_STARTERS
@@ -863,10 +894,11 @@ def _windows_from_run(run: List[Tuple[str, str]]) -> List[Cand]:
 
 
 def _noun_chunks_pos(sent: str) -> List[Cand]:
-    tokens = tokenize(sent)
-    if not tokens:
+    cased_tokens = WORD_RE.findall(sent or "")
+    if not cased_tokens:
         return []
-    tags = _nominalize_tags(pos_tag(tokens))
+    raw_tags = pos_tag(cased_tokens)
+    tags = _nominalize_tags([(word.lower(), tag) for word, tag in raw_tags])
     out: List[Cand] = []
     for run in _runs_from_tags(tags):
         out.extend(_windows_from_run(run))
@@ -897,9 +929,9 @@ def _intent_phrases(sent: str) -> List[Cand]:
             cand.append(t)
             if len(cand) >= 8:
                 break
-        # drop interior possessives/determiners ("calculate your due date")
-        if len(cand) > nstart:
-            cand = cand[:nstart] + [t for t in cand[nstart:] if t not in STRIP_INTERIOR]
+        # Preserve interior determiners/possessives so intent phrases remain literal.
+
+
         while cand and (cand[-1] in TRAILING_BAN or cand[-1] in AUX_VERBS
                         or not _head_is_noun_like(cand[-1], None)):
             cand.pop()
@@ -908,19 +940,113 @@ def _intent_phrases(sent: str) -> List[Cand]:
     return out
 
 
+PROPER_NAME_CONNECTORS: Set[str] = {
+    "of", "and", "the", "for", "in", "on", "at", "to", "de", "da", "del", "van", "von",
+}
+
+
+def _proper_name_phrases(sent: str) -> List[Cand]:
+    """Return maximal literal multiword proper-name spans from original casing."""
+    cased_tokens = WORD_RE.findall(sent or "")
+    if not cased_tokens:
+        return []
+
+    out: List[Cand] = []
+    i = 0
+    while i < len(cased_tokens):
+        tok = cased_tokens[i]
+        if not (tok and tok[0].isupper() and any(ch.isalpha() for ch in tok)):
+            i += 1
+            continue
+
+        start = i
+        j = i
+        capitalized = 0
+
+        while j < len(cased_tokens):
+            cur = cased_tokens[j]
+            low = cur.lower()
+            is_cap = bool(cur and cur[0].isupper() and any(ch.isalpha() for ch in cur))
+
+            if is_cap:
+                capitalized += 1
+                j += 1
+                continue
+
+            if low in PROPER_NAME_CONNECTORS and j + 1 < len(cased_tokens):
+                nxt = cased_tokens[j + 1]
+                if nxt and nxt[0].isupper() and any(ch.isalpha() for ch in nxt):
+                    j += 1
+                    continue
+
+            break
+
+        span = cased_tokens[start:j]
+        while span and span[0].lower() in DETERMINERS:
+            span = span[1:]
+
+        if capitalized >= 2 and len(span) >= 2:
+            phrase = " ".join(span).lower()
+            tags = [
+                "CONJ" if t.lower() == "and"
+                else "ADP" if t.lower() in PROPER_NAME_CONNECTORS
+                else "NOUN"
+                for t in span
+            ]
+            out.append((phrase, "proper_name", tags))
+
+        i = max(j, i + 1)
+
+    return out
+
+
 def _candidate_phrases(sent: str) -> List[Cand]:
-    """Dispatch to the best chunker available, plus intent phrases."""
-    if _get_spacy() is not None:
-        chunks = _spacy_chunks(sent)
-    else:
-        chunks = _noun_chunks_pos(sent)
-    chunks.extend(_intent_phrases(sent))
+    """Dispatch chunkers while respecting punctuation and complete proper names."""
+    proper_names = _proper_name_phrases(sent)
+    proper_name_tokens = [p.split() for p, _, _ in proper_names]
+
+    segments = [
+        part.strip()
+        for part in re.split(r"[,;:()\[\]{}]|[—–]|\s+-\s+", sent or "")
+        if part and part.strip()
+    ]
+
+    chunks: List[Cand] = list(proper_names)
+    for segment in segments:
+        has_lexical_hyphen = bool(
+            re.search(r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+)+\b", segment)
+        )
+        if has_lexical_hyphen:
+            chunks.extend(_noun_chunks_pos(segment))
+        elif _get_spacy() is not None:
+            chunks.extend(_spacy_chunks(segment))
+        else:
+            chunks.extend(_noun_chunks_pos(segment))
+        chunks.extend(_intent_phrases(segment))
+
     seen: Set[str] = set()
     uniq: List[Cand] = []
     for phrase, kind, tg in chunks:
-        if phrase and phrase not in seen:
-            seen.add(phrase)
-            uniq.append((phrase, kind, tg))
+        if not phrase or phrase in seen:
+            continue
+
+        if kind != "proper_name":
+            pt = phrase.split()
+            is_truncated_name = False
+            for nt in proper_name_tokens:
+                if len(pt) >= len(nt):
+                    continue
+                for i in range(0, len(nt) - len(pt) + 1):
+                    if nt[i:i + len(pt)] == pt:
+                        is_truncated_name = True
+                        break
+                if is_truncated_name:
+                    break
+            if is_truncated_name:
+                continue
+
+        seen.add(phrase)
+        uniq.append((phrase, kind, tg))
     return uniq
 
 
@@ -1036,10 +1162,10 @@ def _add_candidate(
 ) -> None:
     p = canonical_phrase(phrase)
     tokens = _trim_boundaries(tokenize(p))
-    # drop interior determiners/possessives ("estimate your due date" -> "estimate due date")
-    if len(tokens) > 2:
-        tokens = [tokens[0]] + [t for t in tokens[1:-1] if t not in STRIP_INTERIOR] + [tokens[-1]]
-        tokens = _trim_boundaries(tokens)
+    # Preserve the literal token sequence from the source document.
+    # Never delete interior determiners/possessives here: doing so creates
+    # synthetic phrases that do not physically occur in the document.
+
     p = " ".join(tokens)
     record = {"phrase": p, "source_type": source_type, "section_id": section_id}
 
@@ -1049,9 +1175,22 @@ def _add_candidate(
     if tags and len(tags) == len(tokens):
         tg = list(tags)
 
+    is_proper_name = kind == "proper_name"
     is_intent = kind == "intent" or (tokens and tokens[0] in INTENT_FIRST_WORDS
                                       and " ".join(tokens).startswith(INTENT_STARTS))
-    if is_intent:
+    if is_proper_name:
+        if tg is None:
+            tg = [t for _, t in pos_tag(tokens)]
+        # Proper names may legitimately contain connectors such as "of" and "and".
+        # They were already detected from a maximal literal source span, so apply
+        # structural sanity checks without ordinary NP interior-word rejection.
+        ok = (
+            2 <= len(tokens) <= 8
+            and _head_is_noun_like(tokens[-1], tg[-1])
+            and not any(t in AUX_VERBS for t in tokens)
+            and not any(t in PRONOUNS for t in tokens)
+        )
+    elif is_intent:
         if tg is None:
             tg = [t for _, t in pos_tag(tokens)]
         ok = _is_complete_intent(tokens, tg)
