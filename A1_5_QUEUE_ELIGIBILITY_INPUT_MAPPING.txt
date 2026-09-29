@@ -1,0 +1,2883 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.5-Q1 QUEUE ELIGIBILITY AND FAIRNESS INPUT MAPPING
+Generated: 2026-09-29T11:49:07.344083+00:00
+Mode: READ-ONLY ? NO PRODUCTION FILES MODIFIED
+
+================================================================================================================
+backend\server\runtime\universal_job_submission.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   16: from backend.server.runtime.universal_jobs.priority import (
+   18:     normalize_universal_job_priority,
+   51: def _canonical_orchestration_priority(
+   55:     Project an already-normalized Universal Job priority into the
+   56:     current orchestration store's integer priority representation.
+   58:     Canonical priority semantics remain owned by Universal Job
+   59:     priority normalization. This boundary only converts the canonical
+   60:     priority member to the integer representation required by the
+   65:         canonical_priority = (
+   66:             normalize_universal_job_priority(
+   74:                 "Canonical Universal Job priority cannot be "
+   76:                 "priority field."
+   78:             code="invalid_orchestration_priority",
+   82:         canonical_priority
+  159:     workspace_id: str,
+  172:     priority: Any = UniversalJobPriority.NORMAL,
+  174:     dependency_job_ids: Optional[
+  232:             workspace_id=workspace_id,
+  243:             priority=priority,
+  247:             dependency_job_ids=(
+  248:                 dependency_job_ids
+  299:     canonical_workspace_id = str(
+  301:             "workspace_id"
+  303:         or workspace_id
+  315:     orchestration_priority = (
+  316:         _canonical_orchestration_priority(
+  318:                 "priority",
+  319:                 priority,
+  334:             workspace_id=(
+  335:                 canonical_workspace_id
+  349:             priority=(
+  350:                 orchestration_priority
+
+DECLARATION: submit_universal_job
+LINES: 157-459
+
+def submit_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[
+        Mapping[str, Any]
+    ] = None,
+    metadata: Optional[
+        Mapping[str, Any]
+    ] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[
+        Iterable[Any]
+    ] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    job_id: Optional[str] = None,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[
+        Iterable[Any]
+    ] = None,
+    runtime_registration: Optional[
+        Mapping[str, Any]
+    ] = None,
+    enqueue: bool = True,
+) -> dict[str, Any]:
+    """
+    Create one canonical Universal Job and submit that SAME identity
+    into the LinkCraftor orchestration store.
+
+    This is an I/O boundary.
+
+    Creation authority:
+        Universal Job Creation Engine
+
+    Registration authority:
+        Universal Runtime Registration
+
+    Persistence / queue authority:
+        orchestration.service -> orchestration.job_store
+
+    The Creation Engine remains I/O-free.
+    """
+
+    if not enqueue:
+        raise UniversalJobSubmissionError(
+            (
+                "Universal job submission currently represents the "
+                "persisted queued ingress and therefore requires "
+                "enqueue=True."
+            ),
+            code="submission_requires_enqueue",
+        )
+
+    effective_registration = (
+        runtime_registration
+    )
+
+    if effective_registration is None:
+        effective_registration = (
+            get_runtime_registration(
+                job_type
+            )
+        )
+
+    creation_result = (
+        create_universal_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=(
+                payload_reference
+            ),
+            priority=priority,
+            parent_job_id=(
+                parent_job_id
+            ),
+            dependency_job_ids=(
+                dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=(
+                pipeline_run_id
+            ),
+            idempotency_key=(
+                idempotency_key
+            ),
+            maximum_attempts=(
+                maximum_attempts
+            ),
+            enqueue=True,
+            job_id=job_id,
+            created_at=created_at,
+            supported_job_types=(
+                supported_job_types
+            ),
+            runtime_registration=(
+                effective_registration
+            ),
+        )
+    )
+
+    creation_document = (
+        creation_result.to_dict()
+    )
+
+    canonical_job = dict(
+        creation_document.get(
+            "job"
+        )
+        or {}
+    )
+
+    canonical_job_id = str(
+        canonical_job.get(
+            "job_id"
+        )
+        or ""
+    ).strip()
+
+    if not canonical_job_id:
+        raise UniversalJobSubmissionError(
+            (
+                "Universal Job Creation Engine returned "
+                "no canonical job_id."
+            ),
+            code="missing_canonical_job_id",
+        )
+
+    canonical_workspace_id = str(
+        canonical_job.get(
+            "workspace_id"
+        )
+        or workspace_id
+        or ""
+    ).strip()
+
+    canonical_job_type = str(
+        canonical_job.get(
+            "job_type"
+        )
+        or job_type
+        or ""
+    ).strip()
+
+    orchestration_priority = (
+        _canonical_orchestration_priority(
+            canonical_job.get(
+                "priority",
+                priority,
+            )
+        )
+    )
+
+    orchestration_metadata = (
+        _build_orchestration_metadata(
+            creation_result=(
+                creation_result
+            )
+        )
+    )
+
+    orchestration_job = (
+        create_orchestration_job(
+            workspace_id=(
+                canonical_workspace_id
+            ),
+            job_type=(
+                canonical_job_type
+            ),
+            payload=dict(
+                creation_document.get(
+                    "payload"
+                )
+                or {}
+            ),
+            metadata=(
+                orchestration_metadata
+            ),
+            priority=(
+                orchestration_priority
+            ),
+            job_id=(
+                canonical_job_id
+            ),
+        )
+    )
+
+    persisted_job_id = str(
+        orchestration_job.job_id
+        or ""
+    ).strip()
+
+    if (
+        persisted_job_id
+        != canonical_job_id
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Orchestration persisted a different job identity "
+                "than the canonical Universal Job identity."
+            ),
+            code="orchestration_identity_mismatch",
+        )
+
+    persisted_status = str(
+        orchestration_job.status
+        or ""
+    ).strip()
+
+    if (
+        persisted_status
+        != "queued"
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Submitted Universal Job was not persisted "
+                "with queued orchestration status."
+            ),
+            code="orchestration_not_queued",
+        )
+
+    result = dict(
+        canonical_job
+    )
+
+    # Preserve the payload and creation metadata in the familiar
+    # job-shaped result consumed by existing pipeline callers.
+    result[
+        "payload"
+    ] = dict(
+        creation_document.get(
+            "payload"
+        )
+        or {}
+    )
+
+    result[
+        "metadata"
+    ] = dict(
+        creation_document.get(
+            "metadata"
+        )
+        or {}
+    )
+
+    result[
+        "registration"
+    ] = (
+        creation_document.get(
+            "registration"
+        )
+    )
+
+    result[
+        "identity_fingerprint"
+    ] = creation_document.get(
+        "identity_fingerprint"
+    )
+
+    result[
+        "contract_fingerprint"
+    ] = creation_document.get(
+        "contract_fingerprint"
+    )
+
+    result[
+        "content_fingerprint"
+    ] = creation_document.get(
+        "content_fingerprint"
+    )
+
+    result[
+        "orchestration"
+    ] = asdict(
+        orchestration_job
+    )
+
+    result[
+        "submission"
+    ] = {
+        "submission_version": (
+            UNIVERSAL_JOB_SUBMISSION_VERSION
+        ),
+        "persisted": True,
+        "queued": True,
+        "canonical_identity_preserved": True,
+    }
+
+    return result
+
+================================================================================================================
+backend\server\runtime\universal_jobs\contract.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   49:     "workspace_id",
+   56:     "priority",
+   65:     "dependency_job_ids",
+   77:     "scheduled_at",
+  108:     "scheduled_at",
+  173:     """Canonical priority classes.
+  193:             raise UniversalJobContractError("priority must not be a boolean")
+  206:             "invalid job priority: " + repr(value),
+  208:                 "priority must be one of " + ", ".join(m.name.lower() for m in cls),
+  698:     workspace_id: str
+  711:     priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+  726:     dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+  750:     scheduled_at: Optional[str] = None
+  770:         set_(self, "workspace_id", _normalize_identifier(
+  771:             self.workspace_id, name="workspace_id", violations=violations,
+  801:             set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+  804:             set_(self, "priority", UniversalJobPriority.NORMAL)
+  841:         set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+  842:             self.dependency_job_ids, name="dependency_job_ids",
+  844:         if self.job_id and self.job_id in self.dependency_job_ids:
+  845:             violations.append("dependency_job_ids must not contain job_id")
+  958:             "workspace_id": self.workspace_id,
+  965:             "priority": str(self.priority),
+  974:             "dependency_job_ids": list(self.dependency_job_ids),
+  986:             "scheduled_at": self.scheduled_at,
+ 1086:         if "priority" in kwargs:
+ 1087:             kwargs["priority"] = (
+ 1089:                     kwargs["priority"]
+ 1138:             "workspace_id": self.workspace_id,
+
+DECLARATION: UniversalJob
+LINES: 687-1207
+
+class UniversalJob:
+    """The canonical, immutable Universal Job Contract.
+
+    Every field is normalized and validated at construction. Instances are
+    deeply immutable: nested mappings are read-only proxies and nested
+    sequences are tuples. Construction raises ``UniversalJobContractError``
+    when the data cannot satisfy the contract.
+    """
+
+    # Identity and ownership
+    job_id: str
+    workspace_id: str
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+
+    # Classification
+    pipeline: str = ""
+    stage: str = ""
+    job_type: str = ""
+
+    # Payload
+    payload_reference: Optional[str] = None
+
+    # Scheduling inputs
+    priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+    status: UniversalJobStatus = UniversalJobStatus.CREATED
+
+    # Attempts
+    attempts: int = 0
+    maximum_attempts: int = 1
+
+    # Lease (declared shape only; no lease operations here)
+    lease_owner: Optional[str] = None
+    lease_id: Optional[str] = None
+    lease_started_at: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+
+    # Relationships
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+
+    # Progress and checkpointing
+    progress: UniversalJobProgress = field(default_factory=UniversalJobProgress)
+    checkpoint_reference: Optional[str] = None
+
+    # Results
+    result_reference: Optional[str] = None
+    artifact_references: Tuple[str, ...] = _EMPTY_TUPLE
+
+    # Idempotency
+    idempotency_key: Optional[str] = None
+
+    # Accounting
+    AU_reserved: int = 0
+    AU_consumed: int = 0
+    cost_record: UniversalJobCostRecord = field(
+        default_factory=UniversalJobCostRecord
+    )
+
+    # Lifecycle timestamps
+    created_at: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    failed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
+
+    # Diagnostics
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    error_details: Mapping[str, Any] = _EMPTY_MAP
+
+    # Contract version stamped onto every instance
+    contract_version: str = UNIVERSAL_JOB_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        violations: list = []
+        set_ = object.__setattr__
+
+        set_(self, "job_id", _normalize_identifier(
+            self.job_id, name="job_id", violations=violations, required=True) or "")
+        set_(self, "workspace_id", _normalize_identifier(
+            self.workspace_id, name="workspace_id", violations=violations,
+            required=True) or "")
+        set_(self, "user_id", _normalize_identifier(
+            self.user_id, name="user_id", violations=violations, required=False)
+            or "system")
+        set_(self, "product_id", _normalize_identifier(
+            self.product_id, name="product_id", violations=violations,
+            required=False) or "linkcraftor")
+
+        for name in ("pipeline", "stage"):
+            value = _normalize_optional_text(
+                getattr(self, name), name=name, violations=violations,
+                max_length=_MAX_IDENTIFIER_LENGTH,
+            )
+            set_(self, name, value or "")
+
+        job_type = _normalize_optional_text(
+            self.job_type,
+            name="job_type",
+            violations=violations,
+            max_length=_MAX_IDENTIFIER_LENGTH,
+        )
+        if job_type is None:
+            violations.append("job_type is required")
+        set_(self, "job_type", job_type or "")
+
+        set_(self, "payload_reference", _normalize_optional_text(
+            self.payload_reference, name="payload_reference", violations=violations))
+
+        try:
+            set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "priority", UniversalJobPriority.NORMAL)
+
+        try:
+            set_(self, "status", UniversalJobStatus.coerce(self.status))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "status", UniversalJobStatus.CREATED)
+
+        set_(self, "attempts", _normalize_non_negative_int(
+            self.attempts, name="attempts", violations=violations))
+        maximum_attempts = _normalize_non_negative_int(
+            self.maximum_attempts, name="maximum_attempts", violations=violations,
+            default=1,
+        )
+        if maximum_attempts < 1:
+            violations.append("maximum_attempts must be at least 1")
+            maximum_attempts = 1
+        set_(self, "maximum_attempts", maximum_attempts)
+        if self.attempts > maximum_attempts:
+            violations.append("attempts must not exceed maximum_attempts")
+
+        for name in ("lease_owner", "lease_id"):
+            set_(self, name, _normalize_identifier(
+                getattr(self, name), name=name, violations=violations,
+                required=False))
+        set_(self, "lease_started_at", _normalize_timestamp(
+            self.lease_started_at, name="lease_started_at", violations=violations))
+        set_(self, "lease_expires_at", _normalize_timestamp(
+            self.lease_expires_at, name="lease_expires_at", violations=violations))
+        if self.lease_started_at and self.lease_expires_at:
+            if self.lease_expires_at < self.lease_started_at:
+                violations.append(
+                    "lease_expires_at must not precede lease_started_at")
+
+        set_(self, "parent_job_id", _normalize_identifier(
+            self.parent_job_id, name="parent_job_id", violations=violations,
+            required=False))
+        set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+            self.dependency_job_ids, name="dependency_job_ids",
+            violations=violations))
+        if self.job_id and self.job_id in self.dependency_job_ids:
+            violations.append("dependency_job_ids must not contain job_id")
+        set_(self, "batch_id", _normalize_identifier(
+            self.batch_id, name="batch_id", violations=violations, required=False))
+        set_(self, "pipeline_run_id", _normalize_identifier(
+            self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+            required=False))
+
+        try:
+            set_(self, "progress", UniversalJobProgress.from_value(self.progress))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "progress", UniversalJobProgress())
+
+        set_(self, "checkpoint_reference", _normalize_optional_text(
+            self.checkpoint_reference, name="checkpoint_reference",
+            violations=violations))
+        set_(self, "result_reference", _normalize_optional_text(
+            self.result_reference, name="result_reference", violations=violations))
+        set_(self, "artifact_references", _normalize_reference_tuple(
+            self.artifact_references, name="artifact_references",
+            violations=violations))
+
+        set_(self, "idempotency_key", _normalize_identifier(
+            self.idempotency_key, name="idempotency_key", violations=violations,
+            required=False))
+
+        set_(self, "AU_reserved", _normalize_non_negative_int(
+            self.AU_reserved, name="AU_reserved", violations=violations))
+        set_(self, "AU_consumed", _normalize_non_negative_int(
+            self.AU_consumed, name="AU_consumed", violations=violations))
+
+        try:
+            set_(self, "cost_record", UniversalJobCostRecord.from_value(
+                self.cost_record))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "cost_record", UniversalJobCostRecord())
+
+        for name in _TIMESTAMP_ORDER + ("failed_at", "cancelled_at"):
+            set_(self, name, _normalize_timestamp(
+                getattr(self, name), name=name, violations=violations))
+
+        if self.created_at is None:
+            violations.append("created_at is required")
+
+        self._check_timestamp_ordering(violations)
+
+        set_(self, "error_code", _normalize_identifier(
+            self.error_code, name="error_code", violations=violations,
+            required=False))
+        set_(self, "error_message", _normalize_optional_text(
+            self.error_message, name="error_message", violations=violations,
+            max_length=_MAX_TEXT_LENGTH))
+        set_(self, "error_details", _normalize_mapping(
+            self.error_details, name="error_details", violations=violations))
+
+        version = _normalize_optional_text(
+            self.contract_version, name="contract_version", violations=violations,
+            max_length=_MAX_IDENTIFIER_LENGTH,
+        )
+        if version != UNIVERSAL_JOB_CONTRACT_VERSION:
+            violations.append(
+                "contract_version must be " + UNIVERSAL_JOB_CONTRACT_VERSION)
+        set_(self, "contract_version", version or UNIVERSAL_JOB_CONTRACT_VERSION)
+
+        if violations:
+            raise UniversalJobContractError(
+                "invalid universal job: " + "; ".join(violations),
+                violations=violations,
+            )
+
+    def _check_timestamp_ordering(self, violations: list) -> None:
+        present = [
+            (name, getattr(self, name))
+            for name in _TIMESTAMP_ORDER
+            if getattr(self, name) is not None
+        ]
+        for (earlier_name, earlier), (later_name, later) in zip(present, present[1:]):
+            if later < earlier:
+                violations.append(
+                    later_name + " must not precede " + earlier_name)
+
+    # -- derived views ------------------------------------------------------
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in _TERMINAL_STATUSES
+
+    @property
+    def is_leased(self) -> bool:
+        return self.lease_owner is not None and self.status == UniversalJobStatus.LEASED
+
+    # -- immutable evolution ------------------------------------------------
+
+    def evolve(self, **changes: Any) -> "UniversalJob":
+        """Return a new validated job with the given fields replaced.
+
+        This never mutates ``self``; it is a pure constructor for a derived
+        contract instance and applies the full validation pass again.
+        """
+        unknown = set(changes) - _CONTRACT_CONSTRUCTOR_FIELDS
+        if unknown:
+            raise UniversalJobContractError(
+                "unknown fields for evolve: " + ", ".join(sorted(unknown))
+            )
+        return replace(self, **changes)
+
+    # -- serialization ------------------------------------------------------
+
+    def to_canonical_dict(self) -> Dict[str, Any]:
+        """Return a plain, JSON-safe dict in canonical field order."""
+        return {
+            "job_id": self.job_id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "job_type": self.job_type,
+            "payload_reference": self.payload_reference,
+            "priority": str(self.priority),
+            "status": self.status.value,
+            "attempts": self.attempts,
+            "maximum_attempts": self.maximum_attempts,
+            "lease_owner": self.lease_owner,
+            "lease_id": self.lease_id,
+            "lease_started_at": self.lease_started_at,
+            "lease_expires_at": self.lease_expires_at,
+            "parent_job_id": self.parent_job_id,
+            "dependency_job_ids": list(self.dependency_job_ids),
+            "batch_id": self.batch_id,
+            "pipeline_run_id": self.pipeline_run_id,
+            "progress": self.progress.to_dict(),
+            "checkpoint_reference": self.checkpoint_reference,
+            "result_reference": self.result_reference,
+            "artifact_references": list(self.artifact_references),
+            "idempotency_key": self.idempotency_key,
+            "AU_reserved": self.AU_reserved,
+            "AU_consumed": self.AU_consumed,
+            "cost_record": self.cost_record.to_dict(),
+            "created_at": self.created_at,
+            "scheduled_at": self.scheduled_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "failed_at": self.failed_at,
+            "cancelled_at": self.cancelled_at,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "error_details": _thaw(self.error_details),
+            "contract_version": self.contract_version,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.to_canonical_dict()
+
+    def to_canonical_json(self) -> str:
+        return _canonical_json(
+            self.to_canonical_dict()
+        )
+
+    @classmethod
+    def required_fields(
+        cls,
+    ) -> Tuple[str, ...]:
+        """Return the immutable canonical required-field roster."""
+        return REQUIRED_UNIVERSAL_JOB_FIELDS
+
+    @classmethod
+    def schema(
+        cls,
+    ) -> Mapping[str, Any]:
+        """Return the immutable canonical contract schema identity."""
+        return MappingProxyType(
+            {
+                "contract_id": (
+                    UNIVERSAL_JOB_CONTRACT_ID
+                ),
+                "contract_version": (
+                    UNIVERSAL_JOB_CONTRACT_VERSION
+                ),
+                "required_fields": (
+                    REQUIRED_UNIVERSAL_JOB_FIELDS
+                ),
+            }
+        )
+
+    # -- deserialization / reconstruction -----------------------------------
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalJob":
+        if not isinstance(
+            data,
+            Mapping,
+        ):
+            raise UniversalJobContractError(
+                "job data must be a mapping"
+            )
+
+        unknown_fields = sorted(
+            set(data)
+            - _CONTRACT_CONSTRUCTOR_FIELDS
+        )
+
+        if unknown_fields:
+            raise UniversalJobContractError(
+                "unknown universal job fields: "
+                + ", ".join(
+                    unknown_fields
+                ),
+                violations=tuple(
+                    "unknown field: " + name
+                    for name in unknown_fields
+                ),
+            )
+
+        missing_fields = tuple(
+            name
+            for name in REQUIRED_UNIVERSAL_JOB_FIELDS
+            if name not in data
+        )
+
+        if missing_fields:
+            raise UniversalJobContractError(
+                "missing required universal job fields: "
+                + ", ".join(
+                    missing_fields
+                ),
+                violations=tuple(
+                    "missing required field: " + name
+                    for name in missing_fields
+                ),
+            )
+
+        kwargs = {
+            key: data[key]
+            for key in data
+        }
+
+        if "priority" in kwargs:
+            kwargs["priority"] = (
+                UniversalJobPriority.coerce(
+                    kwargs["priority"]
+                )
+            )
+
+        if "status" in kwargs:
+            kwargs["status"] = (
+                UniversalJobStatus.coerce(
+                    kwargs["status"]
+                )
+            )
+
+        if "progress" in kwargs:
+            kwargs["progress"] = (
+                UniversalJobProgress.from_value(
+                    kwargs["progress"]
+                )
+            )
+
+        if "cost_record" in kwargs:
+            kwargs["cost_record"] = (
+                UniversalJobCostRecord.from_value(
+                    kwargs["cost_record"]
+                )
+            )
+
+        return cls(
+            **kwargs
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "UniversalJob":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise UniversalJobContractError(
+                "job json is not decodable: " + str(exc)) from exc
+        return cls.from_dict(data)
+
+    @classmethod
+    def reconstruct(cls, data: Mapping[str, Any]) -> "UniversalJob":
+        """Alias for :meth:`from_dict` for reconstruction call sites."""
+        return cls.from_dict(data)
+
+    # -- identity and hashing -----------------------------------------------
+
+    def identity_fingerprint(self) -> str:
+        """Stable across mutable state; depends only on identity inputs."""
+        material = {
+            "job_id": self.job_id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "job_type": self.job_type,
+            "idempotency_key": self.idempotency_key,
+            "contract_version": self.contract_version,
+        }
+        return _fingerprint(_canonical_json(material))
+
+    def contract_fingerprint(self) -> str:
+        """Fingerprint the frozen canonical contract field set."""
+        canonical = self.to_canonical_dict()
+
+        material = {
+            "contract_id": (
+                UNIVERSAL_JOB_CONTRACT_ID
+            ),
+            "contract_version": (
+                self.contract_version
+            ),
+            "fields": {
+                name: canonical[name]
+                for name
+                in REQUIRED_UNIVERSAL_JOB_FIELDS
+            },
+        }
+
+        return _fingerprint(
+            _canonical_json(
+                material
+            )
+        )
+
+    def content_fingerprint(self) -> str:
+        """Cover every canonical serialized field of this job."""
+        return _fingerprint(
+            self.to_canonical_json()
+        )
+
+    def __hash__(self) -> int:
+        """Return a deterministic hash independent of Python hash seeding."""
+        digest = hashlib.sha256(
+            self.to_canonical_json().encode(
+                "utf-8"
+            )
+        ).digest()
+
+        return int.from_bytes(
+            digest[:8],
+            byteorder="big",
+            signed=True,
+        )
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, UniversalJob):
+            return NotImplemented
+        return self.to_canonical_dict() == other.to_canonical_dict()
+
+    # -- validation ---------------------------------------------------------
+
+    def validate(self) -> UniversalJobValidationReport:
+        """Re-run structural validation and return a report.
+
+        Construction already guarantees a valid instance; this method exists so
+        callers can obtain a report (for example after :meth:`from_dict`)
+        without catching exceptions.
+        """
+        return validate_universal_job(self)
+
+================================================================================================================
+backend\server\runtime\universal_jobs\creation_engine.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   44: from backend.server.runtime.universal_jobs.priority import (
+   46:     normalize_universal_job_priority,
+   62:     normalize_dependency_job_ids,
+  236: def _resolve_priority(
+  240:         return normalize_universal_job_priority(
+  246:             "Invalid canonical job priority.",
+  247:             code="invalid_priority",
+  457:     workspace_id: str
+  466:     priority: Any = UniversalJobPriority.NORMAL
+  468:     dependency_job_ids: Tuple[str, ...] = ()
+  528:     workspace_id = _clean_text(request.workspace_id)
+  530:     if not workspace_id:
+  532:             "workspace_id is required.",
+  533:             code="missing_workspace_id",
+  534:             violations=("workspace_id is required",),
+  566:         dependencies = normalize_dependency_job_ids(
+  567:             request.dependency_job_ids
+  633:     priority = _resolve_priority(request.priority)
+  678:             dependency_job_ids=dependencies,
+  705:         workspace_id=workspace_id,
+  714:         priority=priority,
+  716:         dependency_job_ids=lineage.dependency_job_ids,
+  732:     workspace_id: str,
+  741:     priority: Any = UniversalJobPriority.NORMAL,
+  743:     dependency_job_ids: Optional[Iterable[Any]] = None,
+  758:         workspace_id=workspace_id,
+  767:         priority=priority,
+  769:         dependency_job_ids=(
+  771:             if dependency_job_ids is None
+  772:             else dependency_job_ids
+  804:             workspace_id=normalized.workspace_id,
+  811:             priority=normalized.priority,
+  820:             dependency_job_ids=normalized.dependency_job_ids,
+  837:             scheduled_at=None,
+
+DECLARATION: create_universal_job
+LINES: 730-868
+
+def create_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[Iterable[Any]] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    enqueue: bool = True,
+    job_id: Optional[str] = None,
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> UniversalJobCreationResult:
+    """Validate and construct one canonical Universal Job without I/O."""
+
+    request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+
+    normalized, source, registration = (
+        normalize_universal_job_creation_request(
+            request,
+            supported_job_types=supported_job_types,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    status = initial_universal_job_status(
+        enqueue=normalized.enqueue,
+    )
+    message = (
+        "Job queued."
+        if normalized.enqueue
+        else "Job created without queue dispatch."
+    )
+
+    try:
+        job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=initial_universal_job_attempts(),
+            maximum_attempts=normalized.maximum_attempts,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+    except UniversalJobContractError as exc:
+        raise UniversalJobCreationError(
+            "Universal Job Contract rejected the creation request.",
+            code="contract_validation_failed",
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    validation = validate_universal_job(job)
+    if not validation.is_valid:
+        raise UniversalJobCreationError(
+            "Created Universal Job failed final validation.",
+            code="final_validation_failed",
+            violations=validation.violations,
+        )
+
+    return UniversalJobCreationResult(
+        job=job,
+        payload=normalized.payload,
+        metadata=normalized.metadata,
+        registration=registration,
+        enqueue_requested=normalized.enqueue,
+        job_type_source=source,
+    )
+
+================================================================================================================
+backend\server\runtime\universal_queue\fairness.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   10:     "universal_queue_fairness_v3.1.12"
+   14:     "universal_queue_fairness_candidate_schema_v1"
+   18:     "universal_queue_fairness_decision_schema_v1"
+   86: def normalize_universal_queue_fairness_workspace_id(
+   92:         field_name="workspace_id",
+   96: def normalize_universal_queue_fairness_job_id(
+  106: def normalize_universal_queue_fairness_priority(
+  122:             "priority must be a canonical integer priority.",
+  123:             code="invalid_fairness_priority_type",
+  131:                 "priority must be one of "
+  134:             code="unsupported_fairness_priority",
+  141: def normalize_universal_queue_fairness_service_count(
+  157:             "service_count must be a non-negative integer.",
+  158:             code="invalid_fairness_service_count_type",
+  165:             "service_count must not be negative.",
+  166:             code="negative_fairness_service_count",
+  173: def normalize_universal_queue_fairness_created_at(
+  195:                 code="blank_fairness_created_at",
+  218:                 code="invalid_fairness_created_at",
+  226:             code="invalid_fairness_created_at_type",
+  234:             code="naive_fairness_created_at",
+  249:     workspace_id: str
+  251:     priority: int
+  253:     service_count: int
+  266:             "workspace_id",
+  267:             normalize_universal_queue_fairness_workspace_id(
+  268:                 self.workspace_id
+  275:             normalize_universal_queue_fairness_job_id(
+  282:             "priority",
+  283:             normalize_universal_queue_fairness_priority(
+  284:                 self.priority
+  291:             normalize_universal_queue_fairness_created_at(
+  298:             "service_count",
+  299:             normalize_universal_queue_fairness_service_count(
+  300:                 self.service_count
+  310:                 "Invalid fairness candidate schema_version.",
+  311:                 code="invalid_fairness_candidate_schema_version",
+  316:     def fairness_key(
+  321:             self.service_count,
+  324:             self.workspace_id,
+  335:             "workspace_id":
+  336:                 self.workspace_id,
+  341:             "priority":
+  342:                 self.priority,
+  347:             "service_count":
+  348:                 self.service_count,
+  358:     selected_workspace_id: str
+  360:     priority: int
+  361:     selected_service_count: int
+  364:     fairness_applied: bool
+  379:             "selected_workspace_id",
+  380:             normalize_universal_queue_fairness_workspace_id(
+  381:                 self.selected_workspace_id
+  388:             normalize_universal_queue_fairness_job_id(
+  395:             "priority",
+  396:             normalize_universal_queue_fairness_priority(
+  397:                 self.priority
+  403:             "selected_service_count",
+  404:             normalize_universal_queue_fairness_service_count(
+  405:                 self.selected_service_count
+  412:             normalize_universal_queue_fairness_created_at(
+  431:                 code="invalid_fairness_candidate_count",
+  436:             self.fairness_applied,
+  441:                 "fairness_applied must be bool.",
+  442:                 code="invalid_fairness_applied_flag",
+  443:                 value=self.fairness_applied,
+  446:         expected_fairness_applied = (
+  451:             self.fairness_applied
+  452:             is not expected_fairness_applied
+  456:                 "fairness_applied is inconsistent with candidate_count.",
+  457:                 code="inconsistent_fairness_applied",
+  458:                 value=self.fairness_applied,
+  468:                 code="invalid_fairness_mutation_flag",
+  476:                     "3.1.12 selects a logical fairness winner "
+  479:                 code="fairness_mutation_not_owned",
+  490:                 code="invalid_fairness_reason_type",
+  500:                 code="blank_fairness_reason",
+  516:                 "Invalid fairness decision schema_version.",
+  517:                 code="invalid_fairness_decision_schema_version",
+  529:             "selected_workspace_id":
+  530:                 self.selected_workspace_id,
+  535:             "priority":
+  536:                 self.priority,
+  538:             "selected_service_count":
+  539:                 self.selected_service_count,
+  547:             "fairness_applied":
+  548:                 self.fairness_applied,
+  558: def create_universal_queue_fairness_candidate(
+  560:     workspace_id: str,
+  562:     priority: int,
+  564:     service_count: int,
+  568:         workspace_id=workspace_id,
+  570:         priority=priority,
+  572:         service_count=service_count,
+  576: def select_universal_queue_fairness_candidate(
+  593:             "candidates must be an iterable of fairness candidates.",
+  594:             code="invalid_fairness_candidates",
+  608:             code="invalid_fairness_candidates",
+  615:             "At least one fairness candidate is required.",
+  616:             code="empty_fairness_candidates",
+  629:                     "Every fairness candidate must be a "
+  632:                 code="invalid_fairness_candidate",
+  637:         candidate.workspace_id
+  652:                 "Exactly one eligible head candidate per "
+  655:             code="duplicate_fairness_workspace",
+  662:         candidate.priority
+  673:                 "A fairness cohort must contain exactly "
+  674:                 "one canonical priority class."
+  676:             code="mixed_fairness_priority_cohort",
+  687:             candidate.fairness_key,
+  690:     fairness_applied = (
+  699:         if not fairness_applied
+  704:         selected_workspace_id=selected.workspace_id,
+  706:         priority=selected.priority,
+  707:         selected_service_count=selected.service_count,
+  712:         fairness_applied=fairness_applied,
+  718: def explain_universal_queue_fairness_v1(
+  741:             "canonical_fairness_identity":
+  742:                 "workspace_id",
+  744:             "canonical_fairness_evidence":
+  745:                 "service_count",
+  748:                 "caller supplies exactly one already-eligible "
+  752:             "priority_rule": (
+  753:                 "all candidates in one fairness cohort must share "
+  754:                 "the same canonical Universal Job priority; 3.1.12 "
+  755:                 "does not change or age priority"
+  759:                 "least service_count wins; ties use created_at FIFO, "
+  760:                 "then job_id, then workspace_id"
+  763:             "service_count_rule": (
+  764:                 "service_count is caller-supplied fairness accounting "
+  769:                 "3.1.3 determines canonical job priority and the "
+  770:                 "eligible head candidate presented by each workspace; "
+  772:                 "same-priority workspace heads"
+  777:                 "with a larger service_count from monopolizing "
+  778:                 "same-priority service opportunities"
+  782:                 "priority aging is not part of Queue Fairness v1"
+  788:                 "stateless fairness"
+  792:                 "weighted fairness is not part of Queue Fairness v1"
+  817:                 "does not mutate job priority",
+  818:                 "does not implement priority aging",
+  820:                 "does not implement weighted fairness",
+  831:                 "does not increment service_count",
+  832:                 "does not persist service_count",
+  858:     "normalize_universal_queue_fairness_workspace_id",
+  859:     "normalize_universal_queue_fairness_job_id",
+  860:     "normalize_universal_queue_fairness_priority",
+  861:     "normalize_universal_queue_fairness_service_count",
+  862:     "normalize_universal_queue_fairness_created_at",
+  863:     "create_universal_queue_fairness_candidate",
+  864:     "select_universal_queue_fairness_candidate",
+  865:     "explain_universal_queue_fairness_v1",
+
+DECLARATION: UniversalQueueFairnessError
+LINES: 33-53
+
+class UniversalQueueFairnessError(
+    ValueError
+):
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        value: Any = None,
+    ) -> None:
+
+        super().__init__(
+            message
+        )
+
+        self.code = str(
+            code
+        )
+
+        self.value = value
+
+DECLARATION: normalize_universal_queue_fairness_workspace_id
+LINES: 86-93
+
+def normalize_universal_queue_fairness_workspace_id(
+    value: Any,
+) -> str:
+
+    return _normalize_nonblank_string(
+        value,
+        field_name="workspace_id",
+    )
+
+DECLARATION: normalize_universal_queue_fairness_job_id
+LINES: 96-103
+
+def normalize_universal_queue_fairness_job_id(
+    value: Any,
+) -> str:
+
+    return _normalize_nonblank_string(
+        value,
+        field_name="job_id",
+    )
+
+DECLARATION: normalize_universal_queue_fairness_priority
+LINES: 106-138
+
+def normalize_universal_queue_fairness_priority(
+    value: Any,
+) -> int:
+
+    if (
+        isinstance(
+            value,
+            bool,
+        )
+        or not isinstance(
+            value,
+            int,
+        )
+    ):
+
+        raise UniversalQueueFairnessError(
+            "priority must be a canonical integer priority.",
+            code="invalid_fairness_priority_type",
+            value=value,
+        )
+
+    if value not in CANONICAL_UNIVERSAL_JOB_PRIORITIES:
+
+        raise UniversalQueueFairnessError(
+            (
+                "priority must be one of "
+                "10, 20, 30, 40, 50."
+            ),
+            code="unsupported_fairness_priority",
+            value=value,
+        )
+
+    return value
+
+DECLARATION: normalize_universal_queue_fairness_service_count
+LINES: 141-170
+
+def normalize_universal_queue_fairness_service_count(
+    value: Any,
+) -> int:
+
+    if (
+        isinstance(
+            value,
+            bool,
+        )
+        or not isinstance(
+            value,
+            int,
+        )
+    ):
+
+        raise UniversalQueueFairnessError(
+            "service_count must be a non-negative integer.",
+            code="invalid_fairness_service_count_type",
+            value=value,
+        )
+
+    if value < 0:
+
+        raise UniversalQueueFairnessError(
+            "service_count must not be negative.",
+            code="negative_fairness_service_count",
+            value=value,
+        )
+
+    return value
+
+DECLARATION: normalize_universal_queue_fairness_created_at
+LINES: 173-240
+
+def normalize_universal_queue_fairness_created_at(
+    value: Any,
+) -> datetime:
+
+    if isinstance(
+        value,
+        datetime,
+    ):
+
+        parsed = value
+
+    elif isinstance(
+        value,
+        str,
+    ):
+
+        text = value.strip()
+
+        if not text:
+
+            raise UniversalQueueFairnessError(
+                "created_at must not be blank.",
+                code="blank_fairness_created_at",
+                value=value,
+            )
+
+        if text.endswith(
+            "Z"
+        ):
+
+            text = (
+                text[:-1]
+                + "+00:00"
+            )
+
+        try:
+
+            parsed = datetime.fromisoformat(
+                text
+            )
+
+        except ValueError as exc:
+
+            raise UniversalQueueFairnessError(
+                "created_at must be ISO-8601.",
+                code="invalid_fairness_created_at",
+                value=value,
+            ) from exc
+
+    else:
+
+        raise UniversalQueueFairnessError(
+            "created_at must be datetime or ISO-8601 string.",
+            code="invalid_fairness_created_at_type",
+            value=value,
+        )
+
+    if parsed.tzinfo is None:
+
+        raise UniversalQueueFairnessError(
+            "created_at must be timezone-aware.",
+            code="naive_fairness_created_at",
+            value=value,
+        )
+
+    return parsed.astimezone(
+        timezone.utc
+    )
+
+DECLARATION: UniversalQueueFairnessCandidate
+LINES: 247-349
+
+class UniversalQueueFairnessCandidate:
+
+    workspace_id: str
+    job_id: str
+    priority: int
+    created_at: datetime | str
+    service_count: int
+    schema_version: str = (
+        UNIVERSAL_QUEUE_FAIRNESS_CANDIDATE_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        set_ = object.__setattr__
+
+        set_(
+            self,
+            "workspace_id",
+            normalize_universal_queue_fairness_workspace_id(
+                self.workspace_id
+            ),
+        )
+
+        set_(
+            self,
+            "job_id",
+            normalize_universal_queue_fairness_job_id(
+                self.job_id
+            ),
+        )
+
+        set_(
+            self,
+            "priority",
+            normalize_universal_queue_fairness_priority(
+                self.priority
+            ),
+        )
+
+        set_(
+            self,
+            "created_at",
+            normalize_universal_queue_fairness_created_at(
+                self.created_at
+            ),
+        )
+
+        set_(
+            self,
+            "service_count",
+            normalize_universal_queue_fairness_service_count(
+                self.service_count
+            ),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_FAIRNESS_CANDIDATE_SCHEMA_VERSION
+        ):
+
+            raise UniversalQueueFairnessError(
+                "Invalid fairness candidate schema_version.",
+                code="invalid_fairness_candidate_schema_version",
+                value=self.schema_version,
+            )
+
+    @property
+    def fairness_key(
+        self,
+    ) -> tuple[Any, ...]:
+
+        return (
+            self.service_count,
+            self.created_at,
+            self.job_id,
+            self.workspace_id,
+        )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "workspace_id":
+                self.workspace_id,
+
+            "job_id":
+                self.job_id,
+
+            "priority":
+                self.priority,
+
+            "created_at":
+                self.created_at.isoformat(),
+
+            "service_count":
+                self.service_count,
+        }
+
+DECLARATION: UniversalQueueFairnessDecision
+LINES: 356-555
+
+class UniversalQueueFairnessDecision:
+
+    selected_workspace_id: str
+    selected_job_id: str
+    priority: int
+    selected_service_count: int
+    selected_created_at: datetime | str
+    candidate_count: int
+    fairness_applied: bool
+    mutation_required: bool
+    reason: str
+    schema_version: str = (
+        UNIVERSAL_QUEUE_FAIRNESS_DECISION_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        set_ = object.__setattr__
+
+        set_(
+            self,
+            "selected_workspace_id",
+            normalize_universal_queue_fairness_workspace_id(
+                self.selected_workspace_id
+            ),
+        )
+
+        set_(
+            self,
+            "selected_job_id",
+            normalize_universal_queue_fairness_job_id(
+                self.selected_job_id
+            ),
+        )
+
+        set_(
+            self,
+            "priority",
+            normalize_universal_queue_fairness_priority(
+                self.priority
+            ),
+        )
+
+        set_(
+            self,
+            "selected_service_count",
+            normalize_universal_queue_fairness_service_count(
+                self.selected_service_count
+            ),
+        )
+
+        set_(
+            self,
+            "selected_created_at",
+            normalize_universal_queue_fairness_created_at(
+                self.selected_created_at
+            ),
+        )
+
+        if (
+            isinstance(
+                self.candidate_count,
+                bool,
+            )
+            or not isinstance(
+                self.candidate_count,
+                int,
+            )
+            or self.candidate_count < 1
+        ):
+
+            raise UniversalQueueFairnessError(
+                "candidate_count must be an integer >= 1.",
+                code="invalid_fairness_candidate_count",
+                value=self.candidate_count,
+            )
+
+        if not isinstance(
+            self.fairness_applied,
+            bool,
+        ):
+
+            raise UniversalQueueFairnessError(
+                "fairness_applied must be bool.",
+                code="invalid_fairness_applied_flag",
+                value=self.fairness_applied,
+            )
+
+        expected_fairness_applied = (
+            self.candidate_count > 1
+        )
+
+        if (
+            self.fairness_applied
+            is not expected_fairness_applied
+        ):
+
+            raise UniversalQueueFairnessError(
+                "fairness_applied is inconsistent with candidate_count.",
+                code="inconsistent_fairness_applied",
+                value=self.fairness_applied,
+            )
+
+        if not isinstance(
+            self.mutation_required,
+            bool,
+        ):
+
+            raise UniversalQueueFairnessError(
+                "mutation_required must be bool.",
+                code="invalid_fairness_mutation_flag",
+                value=self.mutation_required,
+            )
+
+        if self.mutation_required is not False:
+
+            raise UniversalQueueFairnessError(
+                (
+                    "3.1.12 selects a logical fairness winner "
+                    "but does not claim, dispatch or mutate."
+                ),
+                code="fairness_mutation_not_owned",
+                value=self.mutation_required,
+            )
+
+        if not isinstance(
+            self.reason,
+            str,
+        ):
+
+            raise UniversalQueueFairnessError(
+                "reason must be a string.",
+                code="invalid_fairness_reason_type",
+                value=self.reason,
+            )
+
+        reason = self.reason.strip()
+
+        if not reason:
+
+            raise UniversalQueueFairnessError(
+                "reason must not be blank.",
+                code="blank_fairness_reason",
+                value=self.reason,
+            )
+
+        set_(
+            self,
+            "reason",
+            reason,
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_FAIRNESS_DECISION_SCHEMA_VERSION
+        ):
+
+            raise UniversalQueueFairnessError(
+                "Invalid fairness decision schema_version.",
+                code="invalid_fairness_decision_schema_version",
+                value=self.schema_version,
+            )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "selected_workspace_id":
+                self.selected_workspace_id,
+
+            "selected_job_id":
+                self.selected_job_id,
+
+            "priority":
+                self.priority,
+
+            "selected_service_count":
+                self.selected_service_count,
+
+            "selected_created_at":
+                self.selected_created_at.isoformat(),
+
+            "candidate_count":
+                self.candidate_count,
+
+            "fairness_applied":
+                self.fairness_applied,
+
+            "mutation_required":
+                self.mutation_required,
+
+            "reason":
+                self.reason,
+        }
+
+DECLARATION: create_universal_queue_fairness_candidate
+LINES: 558-573
+
+def create_universal_queue_fairness_candidate(
+    *,
+    workspace_id: str,
+    job_id: str,
+    priority: int,
+    created_at: datetime | str,
+    service_count: int,
+) -> UniversalQueueFairnessCandidate:
+
+    return UniversalQueueFairnessCandidate(
+        workspace_id=workspace_id,
+        job_id=job_id,
+        priority=priority,
+        created_at=created_at,
+        service_count=service_count,
+    )
+
+DECLARATION: select_universal_queue_fairness_candidate
+LINES: 576-715
+
+def select_universal_queue_fairness_candidate(
+    *,
+    candidates: Iterable[
+        UniversalQueueFairnessCandidate
+    ],
+) -> UniversalQueueFairnessDecision:
+
+    if isinstance(
+        candidates,
+        (
+            str,
+            bytes,
+            Mapping,
+        ),
+    ):
+
+        raise UniversalQueueFairnessError(
+            "candidates must be an iterable of fairness candidates.",
+            code="invalid_fairness_candidates",
+            value=candidates,
+        )
+
+    try:
+
+        materialized = tuple(
+            candidates
+        )
+
+    except TypeError as exc:
+
+        raise UniversalQueueFairnessError(
+            "candidates must be iterable.",
+            code="invalid_fairness_candidates",
+            value=candidates,
+        ) from exc
+
+    if not materialized:
+
+        raise UniversalQueueFairnessError(
+            "At least one fairness candidate is required.",
+            code="empty_fairness_candidates",
+            value=materialized,
+        )
+
+    for candidate in materialized:
+
+        if not isinstance(
+            candidate,
+            UniversalQueueFairnessCandidate,
+        ):
+
+            raise UniversalQueueFairnessError(
+                (
+                    "Every fairness candidate must be a "
+                    "UniversalQueueFairnessCandidate."
+                ),
+                code="invalid_fairness_candidate",
+                value=candidate,
+            )
+
+    workspaces = [
+        candidate.workspace_id
+        for candidate
+        in materialized
+    ]
+
+    if len(
+        set(
+            workspaces
+        )
+    ) != len(
+        workspaces
+    ):
+
+        raise UniversalQueueFairnessError(
+            (
+                "Exactly one eligible head candidate per "
+                "workspace is permitted."
+            ),
+            code="duplicate_fairness_workspace",
+            value=tuple(
+                workspaces
+            ),
+        )
+
+    priorities = {
+        candidate.priority
+        for candidate
+        in materialized
+    }
+
+    if len(
+        priorities
+    ) != 1:
+
+        raise UniversalQueueFairnessError(
+            (
+                "A fairness cohort must contain exactly "
+                "one canonical priority class."
+            ),
+            code="mixed_fairness_priority_cohort",
+            value=tuple(
+                sorted(
+                    priorities
+                )
+            ),
+        )
+
+    selected = min(
+        materialized,
+        key=lambda candidate:
+            candidate.fairness_key,
+    )
+
+    fairness_applied = (
+        len(
+            materialized
+        )
+        > 1
+    )
+
+    reason = (
+        "single_workspace_candidate"
+        if not fairness_applied
+        else "least_served_workspace"
+    )
+
+    return UniversalQueueFairnessDecision(
+        selected_workspace_id=selected.workspace_id,
+        selected_job_id=selected.job_id,
+        priority=selected.priority,
+        selected_service_count=selected.service_count,
+        selected_created_at=selected.created_at,
+        candidate_count=len(
+            materialized
+        ),
+        fairness_applied=fairness_applied,
+        mutation_required=False,
+        reason=reason,
+    )
+
+DECLARATION: explain_universal_queue_fairness_v1
+LINES: 718-847
+
+def explain_universal_queue_fairness_v1(
+) -> Mapping[str, Any]:
+
+    return MappingProxyType(
+        {
+            "phase":
+                "3.1.12",
+
+            "component":
+                "Universal Queue Fairness",
+
+            "version":
+                UNIVERSAL_QUEUE_FAIRNESS_VERSION,
+
+            "candidate_schema":
+                UNIVERSAL_QUEUE_FAIRNESS_CANDIDATE_SCHEMA_VERSION,
+
+            "decision_schema":
+                UNIVERSAL_QUEUE_FAIRNESS_DECISION_SCHEMA_VERSION,
+
+            "scope":
+                "LinkCraftor-wide",
+
+            "canonical_fairness_identity":
+                "workspace_id",
+
+            "canonical_fairness_evidence":
+                "service_count",
+
+            "candidate_rule": (
+                "caller supplies exactly one already-eligible "
+                "head job candidate per workspace"
+            ),
+
+            "priority_rule": (
+                "all candidates in one fairness cohort must share "
+                "the same canonical Universal Job priority; 3.1.12 "
+                "does not change or age priority"
+            ),
+
+            "selection_rule": (
+                "least service_count wins; ties use created_at FIFO, "
+                "then job_id, then workspace_id"
+            ),
+
+            "service_count_rule": (
+                "service_count is caller-supplied fairness accounting "
+                "evidence; 3.1.12 does not increment or persist it"
+            ),
+
+            "prioritization_relationship": (
+                "3.1.3 determines canonical job priority and the "
+                "eligible head candidate presented by each workspace; "
+                "3.1.12 allocates the next service opportunity among "
+                "same-priority workspace heads"
+            ),
+
+            "starvation_rule": (
+                "least-served workspace selection prevents a workspace "
+                "with a larger service_count from monopolizing "
+                "same-priority service opportunities"
+            ),
+
+            "aging_rule": (
+                "priority aging is not part of Queue Fairness v1"
+            ),
+
+            "round_robin_rule": (
+                "3.1.12 maintains no persistent round-robin cursor; "
+                "least-served caller evidence provides deterministic "
+                "stateless fairness"
+            ),
+
+            "weighted_rule": (
+                "weighted fairness is not part of Queue Fairness v1"
+            ),
+
+            "capacity_boundary": (
+                "hard queue capacity belongs to "
+                "3.1.11 Queue Capacity Limits"
+            ),
+
+            "backpressure_boundary": (
+                "pressure classification belongs to "
+                "3.1.10 Queue Backpressure"
+            ),
+
+            "rate_limit_boundary": (
+                "rate limiting belongs to "
+                "3.1.13 Queue Rate Limiting"
+            ),
+
+            "worker_boundary": (
+                "claiming, leasing, dispatching and worker selection "
+                "belong to Worker Infrastructure"
+            ),
+
+            "prohibitions": (
+                "does not redefine Universal Job Priority",
+                "does not mutate job priority",
+                "does not implement priority aging",
+                "does not maintain round-robin state",
+                "does not implement weighted fairness",
+                "does not create Universal Jobs",
+                "does not mutate Universal Jobs",
+                "does not mutate queues",
+                "does not enqueue jobs",
+                "does not dequeue jobs",
+                "does not claim jobs",
+                "does not lease jobs",
+                "does not dispatch jobs",
+                "does not select workers",
+                "does not inspect worker capability",
+                "does not increment service_count",
+                "does not persist service_count",
+                "does not read live queue state",
+                "does not access orchestration",
+                "does not access the Job Store",
+                "does not access Runtime State Store",
+                "does not apply Queue Backpressure",
+                "does not enforce queue capacity",
+                "does not implement rate limiting",
+                "does not apply billing quotas",
+                "does not apply subscription limits",
+                "does not create physical queues",
+                "does not perform filesystem I/O",
+                "does not perform network I/O",
+            ),
+        }
+    )
+
+DECLARATION: fairness_key
+LINES: 316-325
+
+    def fairness_key(
+        self,
+    ) -> tuple[Any, ...]:
+
+        return (
+            self.service_count,
+            self.created_at,
+            self.job_id,
+            self.workspace_id,
+        )
+
+================================================================================================================
+backend\server\runtime\universal_queue\dependency_eligibility.py
+================================================================================================================
+EXISTS: False
+
+================================================================================================================
+backend\server\runtime\universal_queue\scheduling.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   18:     "universal_queue_readiness_schema_v1"
+  157: def normalize_universal_queue_scheduled_at(
+  164:     item is immediately time-eligible.
+  173:             field_name="scheduled_at",
+  220:     scheduled_at=None means immediately time-eligible.
+  223:     scheduled_at: str | None
+  234:             "scheduled_at",
+  235:             normalize_universal_queue_scheduled_at(
+  236:                 self.scheduled_at
+  256:             self.scheduled_at
+  266:             self.scheduled_at
+  278:             "scheduled_at":
+  279:                 self.scheduled_at,
+  295:     Pure time-readiness decision.
+  300:     scheduled_at: str | None
+  302:     eligible: bool
+  304:     seconds_until_eligible: float
+  316:             "scheduled_at",
+  317:             normalize_universal_queue_scheduled_at(
+  318:                 self.scheduled_at
+  331:             self.eligible,
+  335:                 "eligible must be bool.",
+  336:                 code="invalid_eligible_type",
+  337:                 value=self.eligible,
+  351:             self.seconds_until_eligible
+  369:                     "seconds_until_eligible "
+  373:                     "invalid_seconds_until_eligible"
+  389:             "seconds_until_eligible",
+  399:                 code="invalid_readiness_reason",
+  414:                 "Invalid readiness schema_version.",
+  415:                 code="invalid_readiness_schema_version",
+  427:             "scheduled_at":
+  428:                 self.scheduled_at,
+  433:             "eligible":
+  434:                 self.eligible,
+  439:             "seconds_until_eligible":
+  440:                 self.seconds_until_eligible,
+  449:     scheduled_at: str | None = None,
+  453:         scheduled_at=scheduled_at
+  457: def evaluate_universal_queue_readiness(
+  459:     scheduled_at: str | None,
+  470:         normalize_universal_queue_scheduled_at(
+  471:             scheduled_at
+  484:             scheduled_at=None,
+  486:             eligible=True,
+  488:             seconds_until_eligible=0.0,
+  512:             scheduled_at=canonical_scheduled,
+  514:             eligible=True,
+  516:             seconds_until_eligible=0.0,
+  521:         scheduled_at=canonical_scheduled,
+  523:         eligible=False,
+  525:         seconds_until_eligible=delta,
+  530: def is_universal_queue_time_eligible(
+  532:     scheduled_at: str | None,
+  537:         evaluate_universal_queue_readiness(
+  538:             scheduled_at=scheduled_at,
+  540:         ).eligible
+  561:             "readiness_schema":
+  568:                 "scheduled_at",
+  572:                     "scheduled_at=None means immediately "
+  573:                     "time-eligible"
+  576:                     "scheduled_at <= evaluation_time "
+  577:                     "means time-eligible"
+  580:                     "scheduled_at > evaluation_time "
+  598:                 "does not mutate scheduled_at on a job",
+  634:     "normalize_universal_queue_scheduled_at",
+  637:     "evaluate_universal_queue_readiness",
+  638:     "is_universal_queue_time_eligible",
+
+DECLARATION: normalize_universal_queue_scheduled_at
+LINES: 157-179
+
+def normalize_universal_queue_scheduled_at(
+    value: Any,
+) -> str | None:
+    """
+    Normalize one optional scheduling timestamp.
+
+    None means there is no deferred execution boundary and the
+    item is immediately time-eligible.
+    """
+
+    if value is None:
+        return None
+
+    parsed = (
+        _parse_aware_timestamp(
+            value,
+            field_name="scheduled_at",
+        )
+    )
+
+    return _canonical_utc_timestamp(
+        parsed
+    )
+
+DECLARATION: UniversalQueueSchedule
+LINES: 216-286
+
+class UniversalQueueSchedule:
+    """
+    Immutable scheduling representation.
+
+    scheduled_at=None means immediately time-eligible.
+    """
+
+    scheduled_at: str | None
+    schema_version: str = (
+        UNIVERSAL_QUEUE_SCHEDULE_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "scheduled_at",
+            normalize_universal_queue_scheduled_at(
+                self.scheduled_at
+            ),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_SCHEDULE_SCHEMA_VERSION
+        ):
+            raise UniversalQueueSchedulingError(
+                "Invalid schedule schema_version.",
+                code="invalid_schedule_schema_version",
+                value=self.schema_version,
+            )
+
+    @property
+    def is_immediate(
+        self,
+    ) -> bool:
+
+        return (
+            self.scheduled_at
+            is None
+        )
+
+    @property
+    def is_deferred(
+        self,
+    ) -> bool:
+
+        return (
+            self.scheduled_at
+            is not None
+        )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "scheduled_at":
+                self.scheduled_at,
+
+            "is_immediate":
+                self.is_immediate,
+
+            "is_deferred":
+                self.is_deferred,
+        }
+
+DECLARATION: UniversalQueueReadiness
+LINES: 293-444
+
+class UniversalQueueReadiness:
+    """
+    Pure time-readiness decision.
+
+    This object does not mutate Universal Job status.
+    """
+
+    scheduled_at: str | None
+    evaluation_time: str
+    eligible: bool
+    immediate: bool
+    seconds_until_eligible: float
+    reason: str
+    schema_version: str = (
+        UNIVERSAL_QUEUE_READINESS_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "scheduled_at",
+            normalize_universal_queue_scheduled_at(
+                self.scheduled_at
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "evaluation_time",
+            normalize_universal_queue_evaluation_time(
+                self.evaluation_time
+            ),
+        )
+
+        if not isinstance(
+            self.eligible,
+            bool,
+        ):
+            raise UniversalQueueSchedulingError(
+                "eligible must be bool.",
+                code="invalid_eligible_type",
+                value=self.eligible,
+            )
+
+        if not isinstance(
+            self.immediate,
+            bool,
+        ):
+            raise UniversalQueueSchedulingError(
+                "immediate must be bool.",
+                code="invalid_immediate_type",
+                value=self.immediate,
+            )
+
+        seconds = (
+            self.seconds_until_eligible
+        )
+
+        if (
+            isinstance(
+                seconds,
+                bool,
+            )
+            or not isinstance(
+                seconds,
+                (
+                    int,
+                    float,
+                ),
+            )
+        ):
+            raise UniversalQueueSchedulingError(
+                (
+                    "seconds_until_eligible "
+                    "must be numeric."
+                ),
+                code=(
+                    "invalid_seconds_until_eligible"
+                ),
+                value=seconds,
+            )
+
+        normalized_seconds = (
+            max(
+                0.0,
+                float(
+                    seconds
+                ),
+            )
+        )
+
+        object.__setattr__(
+            self,
+            "seconds_until_eligible",
+            normalized_seconds,
+        )
+
+        if not isinstance(
+            self.reason,
+            str,
+        ) or not self.reason.strip():
+            raise UniversalQueueSchedulingError(
+                "reason must be a nonblank string.",
+                code="invalid_readiness_reason",
+                value=self.reason,
+            )
+
+        object.__setattr__(
+            self,
+            "reason",
+            self.reason.strip(),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_READINESS_SCHEMA_VERSION
+        ):
+            raise UniversalQueueSchedulingError(
+                "Invalid readiness schema_version.",
+                code="invalid_readiness_schema_version",
+                value=self.schema_version,
+            )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "scheduled_at":
+                self.scheduled_at,
+
+            "evaluation_time":
+                self.evaluation_time,
+
+            "eligible":
+                self.eligible,
+
+            "immediate":
+                self.immediate,
+
+            "seconds_until_eligible":
+                self.seconds_until_eligible,
+
+            "reason":
+                self.reason,
+        }
+
+DECLARATION: create_universal_queue_schedule
+LINES: 447-454
+
+def create_universal_queue_schedule(
+    *,
+    scheduled_at: str | None = None,
+) -> UniversalQueueSchedule:
+
+    return UniversalQueueSchedule(
+        scheduled_at=scheduled_at
+    )
+
+DECLARATION: evaluate_universal_queue_readiness
+LINES: 457-527
+
+def evaluate_universal_queue_readiness(
+    *,
+    scheduled_at: str | None,
+    evaluation_time: str,
+) -> UniversalQueueReadiness:
+    """
+    Evaluate time eligibility only.
+
+    No sleeping, persistence, queue mutation or status transition
+    is performed.
+    """
+
+    canonical_scheduled = (
+        normalize_universal_queue_scheduled_at(
+            scheduled_at
+        )
+    )
+
+    canonical_evaluation = (
+        normalize_universal_queue_evaluation_time(
+            evaluation_time
+        )
+    )
+
+    if canonical_scheduled is None:
+
+        return UniversalQueueReadiness(
+            scheduled_at=None,
+            evaluation_time=canonical_evaluation,
+            eligible=True,
+            immediate=True,
+            seconds_until_eligible=0.0,
+            reason="immediate",
+        )
+
+    scheduled_dt = (
+        _canonical_to_datetime(
+            canonical_scheduled
+        )
+    )
+
+    evaluation_dt = (
+        _canonical_to_datetime(
+            canonical_evaluation
+        )
+    )
+
+    delta = (
+        scheduled_dt
+        - evaluation_dt
+    ).total_seconds()
+
+    if delta <= 0:
+
+        return UniversalQueueReadiness(
+            scheduled_at=canonical_scheduled,
+            evaluation_time=canonical_evaluation,
+            eligible=True,
+            immediate=False,
+            seconds_until_eligible=0.0,
+            reason="scheduled_time_reached",
+        )
+
+    return UniversalQueueReadiness(
+        scheduled_at=canonical_scheduled,
+        evaluation_time=canonical_evaluation,
+        eligible=False,
+        immediate=False,
+        seconds_until_eligible=delta,
+        reason="scheduled_for_future",
+    )
+
+DECLARATION: is_universal_queue_time_eligible
+LINES: 530-541
+
+def is_universal_queue_time_eligible(
+    *,
+    scheduled_at: str | None,
+    evaluation_time: str,
+) -> bool:
+
+    return (
+        evaluate_universal_queue_readiness(
+            scheduled_at=scheduled_at,
+            evaluation_time=evaluation_time,
+        ).eligible
+    )
+
+================================================================================================================
+backend\server\runtime\universal_queue\certification.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   72:         "3.1.12": "fairness.py",
+
+================================================================================================================
+backend\server\orchestration\models.py
+================================================================================================================
+EXISTS: True
+SYNTAX: FAIL ? invalid non-printable character U+FEFF (models.py, line 1)
+
+MATCHING LINES:
+   32:     workspace_id: str
+   35:     priority: int = 5
+AST ERROR: invalid non-printable character U+FEFF (<unknown>, line 1)
+
+================================================================================================================
+backend\server\orchestration\job_store.py
+================================================================================================================
+EXISTS: True
+SYNTAX: FAIL ? invalid non-printable character U+FEFF (job_store.py, line 1)
+
+MATCHING LINES:
+   66:         workspace_id=str(data.get("workspace_id", "")),
+   69:         priority=int(data.get("priority", 5)),
+  117:     workspace_id: str,
+  121:     priority: int = 5,
+  161:         workspace_id=workspace_id,
+  165:         priority=priority,
+AST ERROR: invalid non-printable character U+FEFF (<unknown>, line 1)
+
+================================================================================================================
+backend\server\orchestration\queue.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+MATCHING LINES:
+   38: # Ordering is unchanged: ascending (priority, created_at) — i.e. LOWER
+   39: # priority number is served first, ties broken oldest-first (FIFO). job_id is
+   94:     return (job.priority, job.created_at, job.job_id)
+  119:     """Atomically claim and return the highest-priority queued job.
+  170:                 "workspace_id": job.workspace_id,
+  172:                 "priority": job.priority,
+
+DECLARATION: _sort_key
+LINES: 93-94
+
+def _sort_key(job: OrchestrationJob):
+    return (job.priority, job.created_at, job.job_id)
+
+DECLARATION: _queued_jobs
+LINES: 97-103
+
+def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+    """All jobs currently persisted as queued, in service order."""
+    if jobs is None:
+        jobs = load_jobs()
+    queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+    queued.sort(key=_sort_key)
+    return queued
+
+DECLARATION: dequeue_job
+LINES: 118-145
+
+def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+            if worker_id:
+                metadata["worker_id"] = worker_id
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write —
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+================================================================================================================
+CROSS-FILE ELIGIBILITY AND FAIRNESS CALL SITES
+================================================================================================================
+
+SYMBOL: evaluate_universal_queue_readiness
+MATCHES: 3
+  backend/server/runtime/universal_queue/scheduling.py:457: def evaluate_universal_queue_readiness(
+  backend/server/runtime/universal_queue/scheduling.py:537: evaluate_universal_queue_readiness(
+  backend/server/runtime/universal_queue/scheduling.py:637: "evaluate_universal_queue_readiness",
+
+SYMBOL: is_universal_queue_time_eligible
+MATCHES: 2
+  backend/server/runtime/universal_queue/scheduling.py:530: def is_universal_queue_time_eligible(
+  backend/server/runtime/universal_queue/scheduling.py:638: "is_universal_queue_time_eligible",
+
+SYMBOL: dependency_job_ids
+MATCHES: 149
+  backend/server/runtime/universal_job_submission.py:174: dependency_job_ids: Optional[
+  backend/server/runtime/universal_job_submission.py:247: dependency_job_ids=(
+  backend/server/runtime/universal_job_submission.py:248: dependency_job_ids
+  backend/server/runtime/universal_jobs/contract.py:65: "dependency_job_ids",
+  backend/server/runtime/universal_jobs/contract.py:726: dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+  backend/server/runtime/universal_jobs/contract.py:841: set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+  backend/server/runtime/universal_jobs/contract.py:842: self.dependency_job_ids, name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/contract.py:844: if self.job_id and self.job_id in self.dependency_job_ids:
+  backend/server/runtime/universal_jobs/contract.py:845: violations.append("dependency_job_ids must not contain job_id")
+  backend/server/runtime/universal_jobs/contract.py:974: "dependency_job_ids": list(self.dependency_job_ids),
+  backend/server/runtime/universal_jobs/creation_engine.py:62: normalize_dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine.py:468: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine.py:566: dependencies = normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/creation_engine.py:567: request.dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine.py:678: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine.py:716: dependency_job_ids=lineage.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine.py:743: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine.py:769: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine.py:771: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine.py:772: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine.py:820: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:455: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:550: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:551: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:657: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:684: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:710: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:712: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:713: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:761: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:62: normalize_dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:463: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:561: dependencies = normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:562: request.dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:673: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:697: dependency_job_ids=lineage.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:724: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:750: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:752: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:753: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:801: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:454: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:549: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:550: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:656: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:683: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:709: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:711: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:712: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:760: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:437: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:532: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:533: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:644: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:671: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:697: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:699: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:700: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:750: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:441: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:536: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:537: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:643: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:670: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:696: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:698: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:699: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:749: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:451: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:546: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:547: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:653: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:680: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:706: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:708: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:709: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:759: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:467: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:553: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:554: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:650: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:677: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:703: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:705: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:706: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:756: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:431: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:520: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:521: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:632: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:659: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:685: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:687: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:688: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:738: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/lineage.py:77: def normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/lineage.py:99: "dependency_job_ids must be an "
+  backend/server/runtime/universal_jobs/lineage.py:102: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:114: "dependency_job_ids must be an "
+  backend/server/runtime/universal_jobs/lineage.py:117: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:131: "dependency_job_ids must contain "
+  backend/server/runtime/universal_jobs/lineage.py:134: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:143: "dependency_job_ids must not "
+  backend/server/runtime/universal_jobs/lineage.py:146: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:193: dependency_job_ids: tuple[str, ...]
+  backend/server/runtime/universal_jobs/lineage.py:208: self.dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:216: self.dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:229: "dependency_job_ids":
+  backend/server/runtime/universal_jobs/lineage.py:231: self.dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:250: dependency_job_ids: Any = (),
+  backend/server/runtime/universal_jobs/lineage.py:288: normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/lineage.py:289: dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:324: "dependency_job_ids must not "
+  backend/server/runtime/universal_jobs/lineage.py:334: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/lineage.py:359: "dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:366: "dependency_job_ids are "
+  backend/server/runtime/universal_jobs/lineage.py:374: "dependency_job_ids must not "
+  backend/server/runtime/universal_jobs/lineage.py:402: "normalize_dependency_job_ids",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:144: dependency_job_ids: tuple[str, ...],
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:170: dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:402: in target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:420: dependency_job_ids=(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:421: target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:470: def dependency_job_ids(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:475: self.target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:484: self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:513: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:537: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:561: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:585: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:651: not in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:703: dependency_job_ids=(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:704: canonical_target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:778: "dependency_job_ids come only from the canonical "
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:830: "does not redefine dependency_job_ids",
+  backend/server/runtime/universal_orchestration/execution_planning.py:234: in job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/execution_planning.py:269: job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/execution_planning.py:794: "present in dependency_job_ids."
+  backend/server/runtime/universal_orchestration/execution_planning.py:803: "A root job has zero dependency_job_ids."
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:133: def _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:186: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:231: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:300: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:336: def direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:341: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:357: in self.direct_dependency_job_ids
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:366: self.direct_dependency_job_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:192: != dependency_resolution.dependency_job_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:501: in self.dependency_resolution.dependency_job_ids
+
+SYMBOL: service_count
+MATCHES: 42
+  backend/server/runtime/runtime_boot_process.py:175: service_count: int
+  backend/server/runtime/runtime_boot_process.py:608: f"{registry_snapshot.service_count}"
+  backend/server/runtime/runtime_boot_process.py:880: service_count=(
+  backend/server/runtime/runtime_boot_process.py:883: else registry.service_count
+  backend/server/runtime/runtime_service_registry.py:107: service_count: int
+  backend/server/runtime/runtime_service_registry.py:194: def service_count(self) -> int:
+  backend/server/runtime/runtime_service_registry.py:595: service_count=len(self._services),
+  backend/server/runtime/runtime_shutdown_process.py:128: service_count: int
+  backend/server/runtime/runtime_shutdown_process.py:288: service_count = max(
+  backend/server/runtime/runtime_shutdown_process.py:290: context.service_registry.service_count,
+  backend/server/runtime/runtime_shutdown_process.py:296: * ((service_count * 2) + 2),
+  backend/server/runtime/runtime_shutdown_process.py:479: service_count=(
+  backend/server/runtime/runtime_shutdown_process.py:482: .service_count
+  backend/server/runtime/universal_queue/fairness.py:141: def normalize_universal_queue_fairness_service_count(
+  backend/server/runtime/universal_queue/fairness.py:157: "service_count must be a non-negative integer.",
+  backend/server/runtime/universal_queue/fairness.py:158: code="invalid_fairness_service_count_type",
+  backend/server/runtime/universal_queue/fairness.py:165: "service_count must not be negative.",
+  backend/server/runtime/universal_queue/fairness.py:166: code="negative_fairness_service_count",
+  backend/server/runtime/universal_queue/fairness.py:253: service_count: int
+  backend/server/runtime/universal_queue/fairness.py:298: "service_count",
+  backend/server/runtime/universal_queue/fairness.py:299: normalize_universal_queue_fairness_service_count(
+  backend/server/runtime/universal_queue/fairness.py:300: self.service_count
+  backend/server/runtime/universal_queue/fairness.py:321: self.service_count,
+  backend/server/runtime/universal_queue/fairness.py:347: "service_count":
+  backend/server/runtime/universal_queue/fairness.py:348: self.service_count,
+  backend/server/runtime/universal_queue/fairness.py:361: selected_service_count: int
+  backend/server/runtime/universal_queue/fairness.py:403: "selected_service_count",
+  backend/server/runtime/universal_queue/fairness.py:404: normalize_universal_queue_fairness_service_count(
+  backend/server/runtime/universal_queue/fairness.py:405: self.selected_service_count
+  backend/server/runtime/universal_queue/fairness.py:538: "selected_service_count":
+  backend/server/runtime/universal_queue/fairness.py:539: self.selected_service_count,
+  backend/server/runtime/universal_queue/fairness.py:564: service_count: int,
+  backend/server/runtime/universal_queue/fairness.py:572: service_count=service_count,
+  backend/server/runtime/universal_queue/fairness.py:707: selected_service_count=selected.service_count,
+  backend/server/runtime/universal_queue/fairness.py:745: "service_count",
+  backend/server/runtime/universal_queue/fairness.py:759: "least service_count wins; ties use created_at FIFO, "
+  backend/server/runtime/universal_queue/fairness.py:763: "service_count_rule": (
+  backend/server/runtime/universal_queue/fairness.py:764: "service_count is caller-supplied fairness accounting "
+  backend/server/runtime/universal_queue/fairness.py:777: "with a larger service_count from monopolizing "
+  backend/server/runtime/universal_queue/fairness.py:831: "does not increment service_count",
+  backend/server/runtime/universal_queue/fairness.py:832: "does not persist service_count",
+  backend/server/runtime/universal_queue/fairness.py:861: "normalize_universal_queue_fairness_service_count",
+
+SYMBOL: UniversalQueueFairnessCandidate
+MATCHES: 7
+  backend/server/runtime/universal_queue/fairness.py:247: class UniversalQueueFairnessCandidate:
+  backend/server/runtime/universal_queue/fairness.py:565: ) -> UniversalQueueFairnessCandidate:
+  backend/server/runtime/universal_queue/fairness.py:567: return UniversalQueueFairnessCandidate(
+  backend/server/runtime/universal_queue/fairness.py:579: UniversalQueueFairnessCandidate
+  backend/server/runtime/universal_queue/fairness.py:624: UniversalQueueFairnessCandidate,
+  backend/server/runtime/universal_queue/fairness.py:630: "UniversalQueueFairnessCandidate."
+  backend/server/runtime/universal_queue/fairness.py:856: "UniversalQueueFairnessCandidate",
+
+SYMBOL: UniversalQueueFairnessDecision
+MATCHES: 4
+  backend/server/runtime/universal_queue/fairness.py:356: class UniversalQueueFairnessDecision:
+  backend/server/runtime/universal_queue/fairness.py:581: ) -> UniversalQueueFairnessDecision:
+  backend/server/runtime/universal_queue/fairness.py:703: return UniversalQueueFairnessDecision(
+  backend/server/runtime/universal_queue/fairness.py:857: "UniversalQueueFairnessDecision",
+
+SYMBOL: select_universal_queue
+MATCHES: 2
+  backend/server/runtime/universal_queue/fairness.py:576: def select_universal_queue_fairness_candidate(
+  backend/server/runtime/universal_queue/fairness.py:864: "select_universal_queue_fairness_candidate",
+
+SYMBOL: canonical_universal_job
+MATCHES: 23
+  backend/server/runtime/uucd_runtime_handoff_v1.py:687: "canonical_universal_job"
+  backend/server/runtime/uucd_runtime_handoff_v1.py:697: "contain canonical_universal_job metadata."
+  backend/server/runtime/uucd_runtime_handoff_v1.py:742: "canonical_universal_job":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1048: "canonical_universal_job":
+  backend/server/runtime/universal_jobs/artifact_references.py:244: def is_canonical_universal_job_artifact_references(
+  backend/server/runtime/universal_jobs/artifact_references.py:365: "is_canonical_universal_job_artifact_references",
+  backend/server/runtime/universal_jobs/identity.py:76: def is_canonical_universal_job_id(
+  backend/server/runtime/universal_jobs/identity.py:145: if not is_canonical_universal_job_id(
+  backend/server/runtime/universal_jobs/identity.py:172: def is_canonical_universal_job_type(
+  backend/server/runtime/universal_jobs/identity.py:306: "is_canonical_universal_job_id",
+  backend/server/runtime/universal_jobs/identity.py:310: "is_canonical_universal_job_type",
+  backend/server/runtime/universal_jobs/metadata.py:307: def is_canonical_universal_job_metadata(
+  backend/server/runtime/universal_jobs/metadata.py:445: "is_canonical_universal_job_metadata",
+  backend/server/runtime/universal_jobs/payload_reference.py:133: def is_canonical_universal_job_payload_reference(
+  backend/server/runtime/universal_jobs/payload_reference.py:241: "is_canonical_universal_job_payload_reference",
+  backend/server/runtime/universal_jobs/payload_reference_before_universal_cleanup.py:353: def is_canonical_universal_job_payload_reference(
+  backend/server/runtime/universal_jobs/payload_reference_before_universal_cleanup.py:489: "is_canonical_universal_job_payload_reference",
+  backend/server/runtime/universal_jobs/priority.py:115: def is_canonical_universal_job_priority(
+  backend/server/runtime/universal_jobs/priority.py:214: "is_canonical_universal_job_priority",
+  backend/server/runtime/universal_jobs/result_reference.py:157: def is_canonical_universal_job_result_reference(
+  backend/server/runtime/universal_jobs/result_reference.py:281: "is_canonical_universal_job_result_reference",
+  backend/server/runtime/universal_jobs/status.py:130: def is_canonical_universal_job_status(
+  backend/server/runtime/universal_jobs/status.py:259: "is_canonical_universal_job_status",
+
+================================================================================================================
+PATCH DECISIONS REQUIRED
+================================================================================================================
+1. Where does the orchestration record retain scheduled_at?
+2. Where does it retain dependency_job_ids?
+3. How is completion of dependency jobs determined?
+4. Which callable selects the workspace fairness winner?
+5. Where is workspace service_count persisted or calculated?
+6. Can queue eligibility be evaluated without changing dequeue_job()?
+7. Can canonical prioritization be wired through _sort_key()?

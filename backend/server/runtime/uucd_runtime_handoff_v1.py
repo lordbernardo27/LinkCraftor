@@ -1,4 +1,4 @@
-﻿"""
+"""
 Canonical UUCD -> Universal Runtime Handoff Adapter v1.
 
 Canonical position:
@@ -41,6 +41,11 @@ This component does NOT:
 
 from __future__ import annotations
 
+from backend.server.runtime.universal_jobs.contract import (
+    REQUIRED_UNIVERSAL_JOB_FIELDS,
+    UniversalJobPriority,
+)
+
 import hashlib
 import json
 import re
@@ -49,11 +54,10 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from backend.server.orchestration.job_store import (
-    create_job as create_orchestration_job,
     load_jobs as load_orchestration_jobs,
 )
-from backend.server.runtime.universal_jobs.creation_engine import (
-    create_universal_job,
+from backend.server.runtime.universal_job_submission import (
+    submit_universal_job,
 )
 from backend.server.runtime.universal_runtime_registration import (
     get_runtime_registration,
@@ -613,7 +617,7 @@ def handoff_persisted_uucd_to_runtime_v1(
     runtime_registration: Mapping[str, Any] | None = None,
     user_id: str = "system",
     product_id: str = "linkcraftor",
-    priority: int = 5,
+    priority: UniversalJobPriority = UniversalJobPriority.NORMAL,
 ) -> dict[str, Any]:
     """
     Create and persist one canonical Universal Job for a persisted UUCD.
@@ -803,7 +807,7 @@ def handoff_persisted_uucd_to_runtime_v1(
                 "universal_runtime_worker",
         }
 
-    creation_result = create_universal_job(
+    submission_result = submit_universal_job(
         workspace_id=validated[
             "workspace_id"
         ],
@@ -837,17 +841,30 @@ def handoff_persisted_uucd_to_runtime_v1(
             "content_ref"
         ],
         idempotency_key=idempotency_key,
+        priority=priority,
         enqueue=True,
         runtime_registration=registration,
     )
 
-    universal_job = (
-        creation_result.job
-    )
+    missing_canonical_fields = [
+        field_name
+        for field_name in REQUIRED_UNIVERSAL_JOB_FIELDS
+        if field_name not in submission_result
+    ]
 
-    canonical_job = (
-        universal_job.to_canonical_dict()
-    )
+    if missing_canonical_fields:
+        raise UUCDRuntimeHandoffContractError(
+            "Universal submission result is missing canonical "
+            "Universal Job fields: "
+            + ", ".join(missing_canonical_fields)
+        )
+
+    canonical_job = {
+        field_name: deepcopy(
+            submission_result[field_name]
+        )
+        for field_name in REQUIRED_UNIVERSAL_JOB_FIELDS
+    }
 
     canonical_job_id = (
         _require_non_empty_string(
@@ -894,57 +911,23 @@ def handoff_persisted_uucd_to_runtime_v1(
             "Universal Job idempotency_key drifted."
         )
 
-    try:
+    orchestration_job = (
+        submission_result.get(
+            "orchestration"
+        )
+    )
 
-        orchestration_job = (
-            create_orchestration_job(
-                workspace_id=validated[
-                    "workspace_id"
-                ],
-                job_type=UUCD_RUNTIME_JOB_TYPE,
-                payload=deepcopy(
-                    payload
-                ),
-                metadata={
-                    "canonical_universal_job":
-                        canonical_job,
-
-                    "universal_job_contract_version":
-                        canonical_job.get(
-                            "contract_version"
-                        ),
-
-                    "payload_reference":
-                        validated[
-                            "content_ref"
-                        ],
-
-                    "idempotency_key":
-                        idempotency_key,
-
-                    "persistence_fingerprint":
-                        validated[
-                            "persistence_fingerprint"
-                        ],
-
-                    "handoff_adapter":
-                        UUCD_RUNTIME_HANDOFF_VERSION,
-
-                    "body_content_in_job":
-                        False,
-                },
-                priority=priority,
-                job_id=canonical_job_id,
-            )
+    if not isinstance(
+        orchestration_job,
+        Mapping,
+    ):
+        raise UUCDRuntimeHandoffPersistenceError(
+            "Universal submission did not return a valid "
+            "orchestration record."
         )
 
-    except Exception as exc:
-        raise UUCDRuntimeHandoffPersistenceError(
-            "Canonical orchestration ingress failed."
-        ) from exc
-
     if (
-        orchestration_job.job_id
+        orchestration_job.get("job_id")
         != canonical_job_id
     ):
         raise UUCDRuntimeHandoffPersistenceError(
@@ -953,7 +936,7 @@ def handoff_persisted_uucd_to_runtime_v1(
         )
 
     if (
-        orchestration_job.status
+        orchestration_job.get("status")
         != "queued"
     ):
         raise UUCDRuntimeHandoffPersistenceError(
@@ -1020,7 +1003,7 @@ def handoff_persisted_uucd_to_runtime_v1(
             True,
 
         "orchestration_status":
-            orchestration_job.status,
+            orchestration_job.get("status"),
 
         "body_content_in_job":
             False,
@@ -1068,19 +1051,19 @@ def handoff_persisted_uucd_to_runtime_v1(
         "orchestration_job":
             {
                 "job_id":
-                    orchestration_job.job_id,
+                    orchestration_job.get("job_id"),
 
                 "workspace_id":
-                    orchestration_job.workspace_id,
+                    orchestration_job.get("workspace_id"),
 
                 "job_type":
-                    orchestration_job.job_type,
+                    orchestration_job.get("job_type"),
 
                 "status":
-                    orchestration_job.status,
+                    orchestration_job.get("status"),
 
                 "priority":
-                    orchestration_job.priority,
+                    orchestration_job.get("priority"),
             },
 
         "handoff_certificate":

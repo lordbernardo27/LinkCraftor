@@ -1,0 +1,1769 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.5-Q3 SCHEDULED-JOB WIRING INSPECTION
+Generated: 2026-09-29T12:06:06.987112+00:00
+Mode: READ-ONLY ? NO PRODUCTION FILES MODIFIED
+
+================================================================================================================
+backend\server\runtime\universal_job_submission.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+NONE
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _build_orchestration_metadata
+LINES: 86-154
+----------------------------------------------------------------------------------------------------------------
+def _build_orchestration_metadata(
+    *,
+    creation_result: UniversalJobCreationResult,
+) -> dict[str, Any]:
+    """
+    Preserve creation-time metadata while carrying a namespaced snapshot
+    of the canonical Universal Job into orchestration.
+
+    The snapshot prevents orchestration persistence from becoming a
+    second job-contract authority.
+    """
+
+    creation_document = (
+        creation_result.to_dict()
+    )
+
+    creation_metadata = dict(
+        creation_document.get(
+            "metadata"
+        )
+        or {}
+    )
+
+    if (
+        UNIVERSAL_JOB_SUBMISSION_METADATA_KEY
+        in creation_metadata
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Creation metadata uses the reserved "
+                f"{UNIVERSAL_JOB_SUBMISSION_METADATA_KEY!r} key."
+            ),
+            code="reserved_submission_metadata_key",
+        )
+
+    creation_metadata[
+        UNIVERSAL_JOB_SUBMISSION_METADATA_KEY
+    ] = {
+        "schema_version": (
+            UNIVERSAL_JOB_SUBMISSION_PROJECTION_VERSION
+        ),
+        "submission_version": (
+            UNIVERSAL_JOB_SUBMISSION_VERSION
+        ),
+        "canonical_job": dict(
+            creation_document.get(
+                "job"
+            )
+            or {}
+        ),
+        "registration": (
+            creation_document.get(
+                "registration"
+            )
+        ),
+        "fingerprints": {
+            "identity": creation_document.get(
+                "identity_fingerprint"
+            ),
+            "contract": creation_document.get(
+                "contract_fingerprint"
+            ),
+            "content": creation_document.get(
+                "content_fingerprint"
+            ),
+        },
+    }
+
+    return creation_metadata
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: submit_universal_job
+LINES: 157-459
+----------------------------------------------------------------------------------------------------------------
+def submit_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[
+        Mapping[str, Any]
+    ] = None,
+    metadata: Optional[
+        Mapping[str, Any]
+    ] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[
+        Iterable[Any]
+    ] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    job_id: Optional[str] = None,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[
+        Iterable[Any]
+    ] = None,
+    runtime_registration: Optional[
+        Mapping[str, Any]
+    ] = None,
+    enqueue: bool = True,
+) -> dict[str, Any]:
+    """
+    Create one canonical Universal Job and submit that SAME identity
+    into the LinkCraftor orchestration store.
+
+    This is an I/O boundary.
+
+    Creation authority:
+        Universal Job Creation Engine
+
+    Registration authority:
+        Universal Runtime Registration
+
+    Persistence / queue authority:
+        orchestration.service -> orchestration.job_store
+
+    The Creation Engine remains I/O-free.
+    """
+
+    if not enqueue:
+        raise UniversalJobSubmissionError(
+            (
+                "Universal job submission currently represents the "
+                "persisted queued ingress and therefore requires "
+                "enqueue=True."
+            ),
+            code="submission_requires_enqueue",
+        )
+
+    effective_registration = (
+        runtime_registration
+    )
+
+    if effective_registration is None:
+        effective_registration = (
+            get_runtime_registration(
+                job_type
+            )
+        )
+
+    creation_result = (
+        create_universal_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=(
+                payload_reference
+            ),
+            priority=priority,
+            parent_job_id=(
+                parent_job_id
+            ),
+            dependency_job_ids=(
+                dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=(
+                pipeline_run_id
+            ),
+            idempotency_key=(
+                idempotency_key
+            ),
+            maximum_attempts=(
+                maximum_attempts
+            ),
+            enqueue=True,
+            job_id=job_id,
+            created_at=created_at,
+            supported_job_types=(
+                supported_job_types
+            ),
+            runtime_registration=(
+                effective_registration
+            ),
+        )
+    )
+
+    creation_document = (
+        creation_result.to_dict()
+    )
+
+    canonical_job = dict(
+        creation_document.get(
+            "job"
+        )
+        or {}
+    )
+
+    canonical_job_id = str(
+        canonical_job.get(
+            "job_id"
+        )
+        or ""
+    ).strip()
+
+    if not canonical_job_id:
+        raise UniversalJobSubmissionError(
+            (
+                "Universal Job Creation Engine returned "
+                "no canonical job_id."
+            ),
+            code="missing_canonical_job_id",
+        )
+
+    canonical_workspace_id = str(
+        canonical_job.get(
+            "workspace_id"
+        )
+        or workspace_id
+        or ""
+    ).strip()
+
+    canonical_job_type = str(
+        canonical_job.get(
+            "job_type"
+        )
+        or job_type
+        or ""
+    ).strip()
+
+    orchestration_priority = (
+        _canonical_orchestration_priority(
+            canonical_job.get(
+                "priority",
+                priority,
+            )
+        )
+    )
+
+    orchestration_metadata = (
+        _build_orchestration_metadata(
+            creation_result=(
+                creation_result
+            )
+        )
+    )
+
+    orchestration_job = (
+        create_orchestration_job(
+            workspace_id=(
+                canonical_workspace_id
+            ),
+            job_type=(
+                canonical_job_type
+            ),
+            payload=dict(
+                creation_document.get(
+                    "payload"
+                )
+                or {}
+            ),
+            metadata=(
+                orchestration_metadata
+            ),
+            priority=(
+                orchestration_priority
+            ),
+            job_id=(
+                canonical_job_id
+            ),
+        )
+    )
+
+    persisted_job_id = str(
+        orchestration_job.job_id
+        or ""
+    ).strip()
+
+    if (
+        persisted_job_id
+        != canonical_job_id
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Orchestration persisted a different job identity "
+                "than the canonical Universal Job identity."
+            ),
+            code="orchestration_identity_mismatch",
+        )
+
+    persisted_status = str(
+        orchestration_job.status
+        or ""
+    ).strip()
+
+    if (
+        persisted_status
+        != "queued"
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Submitted Universal Job was not persisted "
+                "with queued orchestration status."
+            ),
+            code="orchestration_not_queued",
+        )
+
+    result = dict(
+        canonical_job
+    )
+
+    # Preserve the payload and creation metadata in the familiar
+    # job-shaped result consumed by existing pipeline callers.
+    result[
+        "payload"
+    ] = dict(
+        creation_document.get(
+            "payload"
+        )
+        or {}
+    )
+
+    result[
+        "metadata"
+    ] = dict(
+        creation_document.get(
+            "metadata"
+        )
+        or {}
+    )
+
+    result[
+        "registration"
+    ] = (
+        creation_document.get(
+            "registration"
+        )
+    )
+
+    result[
+        "identity_fingerprint"
+    ] = creation_document.get(
+        "identity_fingerprint"
+    )
+
+    result[
+        "contract_fingerprint"
+    ] = creation_document.get(
+        "contract_fingerprint"
+    )
+
+    result[
+        "content_fingerprint"
+    ] = creation_document.get(
+        "content_fingerprint"
+    )
+
+    result[
+        "orchestration"
+    ] = asdict(
+        orchestration_job
+    )
+
+    result[
+        "submission"
+    ] = {
+        "submission_version": (
+            UNIVERSAL_JOB_SUBMISSION_VERSION
+        ),
+        "persisted": True,
+        "queued": True,
+        "canonical_identity_preserved": True,
+    }
+
+    return result
+
+================================================================================================================
+backend\server\runtime\universal_jobs\creation_engine.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+  837:             scheduled_at=None,
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalJobCreationRequest
+LINES: 456-476
+----------------------------------------------------------------------------------------------------------------
+class UniversalJobCreationRequest:
+    workspace_id: str
+    job_type: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+    pipeline: str = ""
+    stage: str = ""
+    payload_reference: Optional[str] = None
+    priority: Any = UniversalJobPriority.NORMAL
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = ()
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    maximum_attempts: Optional[int] = None
+    enqueue: bool = True
+    job_id: Optional[str] = None
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX
+    created_at: Optional[str] = None
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: normalize_universal_job_creation_request
+LINES: 511-727
+----------------------------------------------------------------------------------------------------------------
+def normalize_universal_job_creation_request(
+    request: UniversalJobCreationRequest,
+    *,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> tuple[
+    UniversalJobCreationRequest,
+    str,
+    Optional[Mapping[str, Any]],
+]:
+    if not isinstance(request, UniversalJobCreationRequest):
+        raise UniversalJobCreationError(
+            "request must be UniversalJobCreationRequest.",
+            code="invalid_creation_request",
+            violations=("request must be UniversalJobCreationRequest",),
+        )
+
+    workspace_id = _clean_text(request.workspace_id)
+
+    if not workspace_id:
+        raise UniversalJobCreationError(
+            "workspace_id is required.",
+            code="missing_workspace_id",
+            violations=("workspace_id is required",),
+        )
+
+    try:
+        job_type = validate_universal_job_type(
+            request.job_type
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    payload = _normalize_mapping(
+        request.payload,
+        field_name="payload",
+    )
+    try:
+        metadata = normalize_universal_job_metadata(
+            request.metadata
+        )
+    except UniversalJobMetadataError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+    try:
+        parent_job_id = normalize_parent_job_id(
+            request.parent_job_id
+        )
+        dependencies = normalize_dependency_job_ids(
+            request.dependency_job_ids
+        )
+        batch_id = normalize_batch_id(
+            request.batch_id
+        )
+        pipeline_run_id = normalize_pipeline_run_id(
+            request.pipeline_run_id
+        )
+
+    except UniversalJobLineageError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+    static_job_types = _normalize_supported_job_types(
+        supported_job_types,
+    )
+    source, registration = _resolve_registration(
+        job_type=job_type,
+        supported_job_types=static_job_types,
+        runtime_registration=runtime_registration,
+    )
+    _validate_registered_payload(
+        registration=registration,
+        payload=payload,
+    )
+
+    registration_pipeline = (
+        registration.get("pipeline")
+        if registration is not None
+        else ""
+    )
+    registration_stage = (
+        registration.get("stage")
+        if registration is not None
+        else ""
+    )
+
+    pipeline = _first_text(
+        request.pipeline,
+        payload.get("pipeline"),
+        payload.get("pipeline_name"),
+        registration_pipeline,
+        fallback="universal_knowledge",
+    )
+    stage = _first_text(
+        request.stage,
+        payload.get("stage"),
+        payload.get("stage_name"),
+        registration_stage,
+        fallback=job_type,
+    )
+    user_id = _first_text(
+        request.user_id,
+        payload.get("user_id"),
+        fallback="system",
+    )
+    product_id = _first_text(
+        request.product_id,
+        payload.get("product_id"),
+        fallback="linkcraftor",
+    )
+    payload_reference = normalize_universal_job_payload_reference(
+        request.payload_reference
+    )
+    priority = _resolve_priority(request.priority)
+    maximum_attempts = _resolve_maximum_attempts(
+        request.maximum_attempts,
+        payload,
+        registration,
+    )
+
+    if not isinstance(request.enqueue, bool):
+        raise UniversalJobCreationError(
+            "enqueue must be a boolean.",
+            code="invalid_enqueue",
+            violations=(
+                "enqueue must be either True or False",
+            ),
+        )
+
+    if (
+        not isinstance(request.job_id_prefix, str)
+        or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+    ):
+        raise UniversalJobCreationError(
+            "job_id_prefix is fixed by the Universal Job identity namespace.",
+            code="invalid_job_id_prefix",
+            violations=(
+                f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+            ),
+        )
+
+    created_at = _clean_text(request.created_at) or _utc_now()
+
+    try:
+        job_id = resolve_universal_job_id(
+            request.job_id
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    try:
+        lineage = validate_universal_job_lineage(
+            job_id=job_id,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=dependencies,
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+        )
+
+    except UniversalJobLineageError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+
+    try:
+        idempotency_key = (
+            normalize_universal_job_idempotency_key(
+                request.idempotency_key
+            )
+        )
+
+    except UniversalJobIdempotencyKeyError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+
+    normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=lineage.parent_job_id,
+        dependency_job_ids=lineage.dependency_job_ids,
+        batch_id=lineage.batch_id,
+        pipeline_run_id=lineage.pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+    )
+
+    return normalized, source, registration
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: create_universal_job
+LINES: 730-868
+----------------------------------------------------------------------------------------------------------------
+def create_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[Iterable[Any]] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    enqueue: bool = True,
+    job_id: Optional[str] = None,
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> UniversalJobCreationResult:
+    """Validate and construct one canonical Universal Job without I/O."""
+
+    request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+    )
+
+    normalized, source, registration = (
+        normalize_universal_job_creation_request(
+            request,
+            supported_job_types=supported_job_types,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    status = initial_universal_job_status(
+        enqueue=normalized.enqueue,
+    )
+    message = (
+        "Job queued."
+        if normalized.enqueue
+        else "Job created without queue dispatch."
+    )
+
+    try:
+        job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=initial_universal_job_attempts(),
+            maximum_attempts=normalized.maximum_attempts,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=None,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+    except UniversalJobContractError as exc:
+        raise UniversalJobCreationError(
+            "Universal Job Contract rejected the creation request.",
+            code="contract_validation_failed",
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    validation = validate_universal_job(job)
+    if not validation.is_valid:
+        raise UniversalJobCreationError(
+            "Created Universal Job failed final validation.",
+            code="final_validation_failed",
+            violations=validation.violations,
+        )
+
+    return UniversalJobCreationResult(
+        job=job,
+        payload=normalized.payload,
+        metadata=normalized.metadata,
+        registration=registration,
+        enqueue_requested=normalized.enqueue,
+        job_type_source=source,
+    )
+
+================================================================================================================
+backend\server\runtime\universal_jobs\contract.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+   77:     "scheduled_at",
+  108:     "scheduled_at",
+  750:     scheduled_at: Optional[str] = None
+  986:             "scheduled_at": self.scheduled_at,
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalJob
+LINES: 687-1207
+----------------------------------------------------------------------------------------------------------------
+class UniversalJob:
+    """The canonical, immutable Universal Job Contract.
+
+    Every field is normalized and validated at construction. Instances are
+    deeply immutable: nested mappings are read-only proxies and nested
+    sequences are tuples. Construction raises ``UniversalJobContractError``
+    when the data cannot satisfy the contract.
+    """
+
+    # Identity and ownership
+    job_id: str
+    workspace_id: str
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+
+    # Classification
+    pipeline: str = ""
+    stage: str = ""
+    job_type: str = ""
+
+    # Payload
+    payload_reference: Optional[str] = None
+
+    # Scheduling inputs
+    priority: UniversalJobPriority = UniversalJobPriority.NORMAL
+    status: UniversalJobStatus = UniversalJobStatus.CREATED
+
+    # Attempts
+    attempts: int = 0
+    maximum_attempts: int = 1
+
+    # Lease (declared shape only; no lease operations here)
+    lease_owner: Optional[str] = None
+    lease_id: Optional[str] = None
+    lease_started_at: Optional[str] = None
+    lease_expires_at: Optional[str] = None
+
+    # Relationships
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+
+    # Progress and checkpointing
+    progress: UniversalJobProgress = field(default_factory=UniversalJobProgress)
+    checkpoint_reference: Optional[str] = None
+
+    # Results
+    result_reference: Optional[str] = None
+    artifact_references: Tuple[str, ...] = _EMPTY_TUPLE
+
+    # Idempotency
+    idempotency_key: Optional[str] = None
+
+    # Accounting
+    AU_reserved: int = 0
+    AU_consumed: int = 0
+    cost_record: UniversalJobCostRecord = field(
+        default_factory=UniversalJobCostRecord
+    )
+
+    # Lifecycle timestamps
+    created_at: Optional[str] = None
+    scheduled_at: Optional[str] = None
+    started_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    failed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
+
+    # Diagnostics
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    error_details: Mapping[str, Any] = _EMPTY_MAP
+
+    # Contract version stamped onto every instance
+    contract_version: str = UNIVERSAL_JOB_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        violations: list = []
+        set_ = object.__setattr__
+
+        set_(self, "job_id", _normalize_identifier(
+            self.job_id, name="job_id", violations=violations, required=True) or "")
+        set_(self, "workspace_id", _normalize_identifier(
+            self.workspace_id, name="workspace_id", violations=violations,
+            required=True) or "")
+        set_(self, "user_id", _normalize_identifier(
+            self.user_id, name="user_id", violations=violations, required=False)
+            or "system")
+        set_(self, "product_id", _normalize_identifier(
+            self.product_id, name="product_id", violations=violations,
+            required=False) or "linkcraftor")
+
+        for name in ("pipeline", "stage"):
+            value = _normalize_optional_text(
+                getattr(self, name), name=name, violations=violations,
+                max_length=_MAX_IDENTIFIER_LENGTH,
+            )
+            set_(self, name, value or "")
+
+        job_type = _normalize_optional_text(
+            self.job_type,
+            name="job_type",
+            violations=violations,
+            max_length=_MAX_IDENTIFIER_LENGTH,
+        )
+        if job_type is None:
+            violations.append("job_type is required")
+        set_(self, "job_type", job_type or "")
+
+        set_(self, "payload_reference", _normalize_optional_text(
+            self.payload_reference, name="payload_reference", violations=violations))
+
+        try:
+            set_(self, "priority", UniversalJobPriority.coerce(self.priority))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "priority", UniversalJobPriority.NORMAL)
+
+        try:
+            set_(self, "status", UniversalJobStatus.coerce(self.status))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "status", UniversalJobStatus.CREATED)
+
+        set_(self, "attempts", _normalize_non_negative_int(
+            self.attempts, name="attempts", violations=violations))
+        maximum_attempts = _normalize_non_negative_int(
+            self.maximum_attempts, name="maximum_attempts", violations=violations,
+            default=1,
+        )
+        if maximum_attempts < 1:
+            violations.append("maximum_attempts must be at least 1")
+            maximum_attempts = 1
+        set_(self, "maximum_attempts", maximum_attempts)
+        if self.attempts > maximum_attempts:
+            violations.append("attempts must not exceed maximum_attempts")
+
+        for name in ("lease_owner", "lease_id"):
+            set_(self, name, _normalize_identifier(
+                getattr(self, name), name=name, violations=violations,
+                required=False))
+        set_(self, "lease_started_at", _normalize_timestamp(
+            self.lease_started_at, name="lease_started_at", violations=violations))
+        set_(self, "lease_expires_at", _normalize_timestamp(
+            self.lease_expires_at, name="lease_expires_at", violations=violations))
+        if self.lease_started_at and self.lease_expires_at:
+            if self.lease_expires_at < self.lease_started_at:
+                violations.append(
+                    "lease_expires_at must not precede lease_started_at")
+
+        set_(self, "parent_job_id", _normalize_identifier(
+            self.parent_job_id, name="parent_job_id", violations=violations,
+            required=False))
+        set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+            self.dependency_job_ids, name="dependency_job_ids",
+            violations=violations))
+        if self.job_id and self.job_id in self.dependency_job_ids:
+            violations.append("dependency_job_ids must not contain job_id")
+        set_(self, "batch_id", _normalize_identifier(
+            self.batch_id, name="batch_id", violations=violations, required=False))
+        set_(self, "pipeline_run_id", _normalize_identifier(
+            self.pipeline_run_id, name="pipeline_run_id", violations=violations,
+            required=False))
+
+        try:
+            set_(self, "progress", UniversalJobProgress.from_value(self.progress))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "progress", UniversalJobProgress())
+
+        set_(self, "checkpoint_reference", _normalize_optional_text(
+            self.checkpoint_reference, name="checkpoint_reference",
+            violations=violations))
+        set_(self, "result_reference", _normalize_optional_text(
+            self.result_reference, name="result_reference", violations=violations))
+        set_(self, "artifact_references", _normalize_reference_tuple(
+            self.artifact_references, name="artifact_references",
+            violations=violations))
+
+        set_(self, "idempotency_key", _normalize_identifier(
+            self.idempotency_key, name="idempotency_key", violations=violations,
+            required=False))
+
+        set_(self, "AU_reserved", _normalize_non_negative_int(
+            self.AU_reserved, name="AU_reserved", violations=violations))
+        set_(self, "AU_consumed", _normalize_non_negative_int(
+            self.AU_consumed, name="AU_consumed", violations=violations))
+
+        try:
+            set_(self, "cost_record", UniversalJobCostRecord.from_value(
+                self.cost_record))
+        except UniversalJobContractError as exc:
+            violations.extend(exc.violations or (str(exc),))
+            set_(self, "cost_record", UniversalJobCostRecord())
+
+        for name in _TIMESTAMP_ORDER + ("failed_at", "cancelled_at"):
+            set_(self, name, _normalize_timestamp(
+                getattr(self, name), name=name, violations=violations))
+
+        if self.created_at is None:
+            violations.append("created_at is required")
+
+        self._check_timestamp_ordering(violations)
+
+        set_(self, "error_code", _normalize_identifier(
+            self.error_code, name="error_code", violations=violations,
+            required=False))
+        set_(self, "error_message", _normalize_optional_text(
+            self.error_message, name="error_message", violations=violations,
+            max_length=_MAX_TEXT_LENGTH))
+        set_(self, "error_details", _normalize_mapping(
+            self.error_details, name="error_details", violations=violations))
+
+        version = _normalize_optional_text(
+            self.contract_version, name="contract_version", violations=violations,
+            max_length=_MAX_IDENTIFIER_LENGTH,
+        )
+        if version != UNIVERSAL_JOB_CONTRACT_VERSION:
+            violations.append(
+                "contract_version must be " + UNIVERSAL_JOB_CONTRACT_VERSION)
+        set_(self, "contract_version", version or UNIVERSAL_JOB_CONTRACT_VERSION)
+
+        if violations:
+            raise UniversalJobContractError(
+                "invalid universal job: " + "; ".join(violations),
+                violations=violations,
+            )
+
+    def _check_timestamp_ordering(self, violations: list) -> None:
+        present = [
+            (name, getattr(self, name))
+            for name in _TIMESTAMP_ORDER
+            if getattr(self, name) is not None
+        ]
+        for (earlier_name, earlier), (later_name, later) in zip(present, present[1:]):
+            if later < earlier:
+                violations.append(
+                    later_name + " must not precede " + earlier_name)
+
+    # -- derived views ------------------------------------------------------
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in _TERMINAL_STATUSES
+
+    @property
+    def is_leased(self) -> bool:
+        return self.lease_owner is not None and self.status == UniversalJobStatus.LEASED
+
+    # -- immutable evolution ------------------------------------------------
+
+    def evolve(self, **changes: Any) -> "UniversalJob":
+        """Return a new validated job with the given fields replaced.
+
+        This never mutates ``self``; it is a pure constructor for a derived
+        contract instance and applies the full validation pass again.
+        """
+        unknown = set(changes) - _CONTRACT_CONSTRUCTOR_FIELDS
+        if unknown:
+            raise UniversalJobContractError(
+                "unknown fields for evolve: " + ", ".join(sorted(unknown))
+            )
+        return replace(self, **changes)
+
+    # -- serialization ------------------------------------------------------
+
+    def to_canonical_dict(self) -> Dict[str, Any]:
+        """Return a plain, JSON-safe dict in canonical field order."""
+        return {
+            "job_id": self.job_id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "job_type": self.job_type,
+            "payload_reference": self.payload_reference,
+            "priority": str(self.priority),
+            "status": self.status.value,
+            "attempts": self.attempts,
+            "maximum_attempts": self.maximum_attempts,
+            "lease_owner": self.lease_owner,
+            "lease_id": self.lease_id,
+            "lease_started_at": self.lease_started_at,
+            "lease_expires_at": self.lease_expires_at,
+            "parent_job_id": self.parent_job_id,
+            "dependency_job_ids": list(self.dependency_job_ids),
+            "batch_id": self.batch_id,
+            "pipeline_run_id": self.pipeline_run_id,
+            "progress": self.progress.to_dict(),
+            "checkpoint_reference": self.checkpoint_reference,
+            "result_reference": self.result_reference,
+            "artifact_references": list(self.artifact_references),
+            "idempotency_key": self.idempotency_key,
+            "AU_reserved": self.AU_reserved,
+            "AU_consumed": self.AU_consumed,
+            "cost_record": self.cost_record.to_dict(),
+            "created_at": self.created_at,
+            "scheduled_at": self.scheduled_at,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "failed_at": self.failed_at,
+            "cancelled_at": self.cancelled_at,
+            "error_code": self.error_code,
+            "error_message": self.error_message,
+            "error_details": _thaw(self.error_details),
+            "contract_version": self.contract_version,
+        }
+
+    def to_dict(self) -> Dict[str, Any]:
+        return self.to_canonical_dict()
+
+    def to_canonical_json(self) -> str:
+        return _canonical_json(
+            self.to_canonical_dict()
+        )
+
+    @classmethod
+    def required_fields(
+        cls,
+    ) -> Tuple[str, ...]:
+        """Return the immutable canonical required-field roster."""
+        return REQUIRED_UNIVERSAL_JOB_FIELDS
+
+    @classmethod
+    def schema(
+        cls,
+    ) -> Mapping[str, Any]:
+        """Return the immutable canonical contract schema identity."""
+        return MappingProxyType(
+            {
+                "contract_id": (
+                    UNIVERSAL_JOB_CONTRACT_ID
+                ),
+                "contract_version": (
+                    UNIVERSAL_JOB_CONTRACT_VERSION
+                ),
+                "required_fields": (
+                    REQUIRED_UNIVERSAL_JOB_FIELDS
+                ),
+            }
+        )
+
+    # -- deserialization / reconstruction -----------------------------------
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalJob":
+        if not isinstance(
+            data,
+            Mapping,
+        ):
+            raise UniversalJobContractError(
+                "job data must be a mapping"
+            )
+
+        unknown_fields = sorted(
+            set(data)
+            - _CONTRACT_CONSTRUCTOR_FIELDS
+        )
+
+        if unknown_fields:
+            raise UniversalJobContractError(
+                "unknown universal job fields: "
+                + ", ".join(
+                    unknown_fields
+                ),
+                violations=tuple(
+                    "unknown field: " + name
+                    for name in unknown_fields
+                ),
+            )
+
+        missing_fields = tuple(
+            name
+            for name in REQUIRED_UNIVERSAL_JOB_FIELDS
+            if name not in data
+        )
+
+        if missing_fields:
+            raise UniversalJobContractError(
+                "missing required universal job fields: "
+                + ", ".join(
+                    missing_fields
+                ),
+                violations=tuple(
+                    "missing required field: " + name
+                    for name in missing_fields
+                ),
+            )
+
+        kwargs = {
+            key: data[key]
+            for key in data
+        }
+
+        if "priority" in kwargs:
+            kwargs["priority"] = (
+                UniversalJobPriority.coerce(
+                    kwargs["priority"]
+                )
+            )
+
+        if "status" in kwargs:
+            kwargs["status"] = (
+                UniversalJobStatus.coerce(
+                    kwargs["status"]
+                )
+            )
+
+        if "progress" in kwargs:
+            kwargs["progress"] = (
+                UniversalJobProgress.from_value(
+                    kwargs["progress"]
+                )
+            )
+
+        if "cost_record" in kwargs:
+            kwargs["cost_record"] = (
+                UniversalJobCostRecord.from_value(
+                    kwargs["cost_record"]
+                )
+            )
+
+        return cls(
+            **kwargs
+        )
+
+    @classmethod
+    def from_json(cls, text: str) -> "UniversalJob":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise UniversalJobContractError(
+                "job json is not decodable: " + str(exc)) from exc
+        return cls.from_dict(data)
+
+    @classmethod
+    def reconstruct(cls, data: Mapping[str, Any]) -> "UniversalJob":
+        """Alias for :meth:`from_dict` for reconstruction call sites."""
+        return cls.from_dict(data)
+
+    # -- identity and hashing -----------------------------------------------
+
+    def identity_fingerprint(self) -> str:
+        """Stable across mutable state; depends only on identity inputs."""
+        material = {
+            "job_id": self.job_id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "product_id": self.product_id,
+            "pipeline": self.pipeline,
+            "stage": self.stage,
+            "job_type": self.job_type,
+            "idempotency_key": self.idempotency_key,
+            "contract_version": self.contract_version,
+        }
+        return _fingerprint(_canonical_json(material))
+
+    def contract_fingerprint(self) -> str:
+        """Fingerprint the frozen canonical contract field set."""
+        canonical = self.to_canonical_dict()
+
+        material = {
+            "contract_id": (
+                UNIVERSAL_JOB_CONTRACT_ID
+            ),
+            "contract_version": (
+                self.contract_version
+            ),
+            "fields": {
+                name: canonical[name]
+                for name
+                in REQUIRED_UNIVERSAL_JOB_FIELDS
+            },
+        }
+
+        return _fingerprint(
+            _canonical_json(
+                material
+            )
+        )
+
+    def content_fingerprint(self) -> str:
+        """Cover every canonical serialized field of this job."""
+        return _fingerprint(
+            self.to_canonical_json()
+        )
+
+    def __hash__(self) -> int:
+        """Return a deterministic hash independent of Python hash seeding."""
+        digest = hashlib.sha256(
+            self.to_canonical_json().encode(
+                "utf-8"
+            )
+        ).digest()
+
+        return int.from_bytes(
+            digest[:8],
+            byteorder="big",
+            signed=True,
+        )
+
+    def __eq__(self, other: Any) -> bool:
+        if not isinstance(other, UniversalJob):
+            return NotImplemented
+        return self.to_canonical_dict() == other.to_canonical_dict()
+
+    # -- validation ---------------------------------------------------------
+
+    def validate(self) -> UniversalJobValidationReport:
+        """Re-run structural validation and return a report.
+
+        Construction already guarantees a valid instance; this method exists so
+        callers can obtain a report (for example after :meth:`from_dict`)
+        without catching exceptions.
+        """
+        return validate_universal_job(self)
+
+================================================================================================================
+backend\server\runtime\universal_queue\scheduling.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+  157: def normalize_universal_queue_scheduled_at(
+  173:             field_name="scheduled_at",
+  220:     scheduled_at=None means immediately time-eligible.
+  223:     scheduled_at: str | None
+  234:             "scheduled_at",
+  235:             normalize_universal_queue_scheduled_at(
+  236:                 self.scheduled_at
+  256:             self.scheduled_at
+  266:             self.scheduled_at
+  278:             "scheduled_at":
+  279:                 self.scheduled_at,
+  300:     scheduled_at: str | None
+  316:             "scheduled_at",
+  317:             normalize_universal_queue_scheduled_at(
+  318:                 self.scheduled_at
+  427:             "scheduled_at":
+  428:                 self.scheduled_at,
+  449:     scheduled_at: str | None = None,
+  453:         scheduled_at=scheduled_at
+  459:     scheduled_at: str | None,
+  470:         normalize_universal_queue_scheduled_at(
+  471:             scheduled_at
+  484:             scheduled_at=None,
+  512:             scheduled_at=canonical_scheduled,
+  521:         scheduled_at=canonical_scheduled,
+  532:     scheduled_at: str | None,
+  538:             scheduled_at=scheduled_at,
+  568:                 "scheduled_at",
+  572:                     "scheduled_at=None means immediately "
+  576:                     "scheduled_at <= evaluation_time "
+  580:                     "scheduled_at > evaluation_time "
+  598:                 "does not mutate scheduled_at on a job",
+  634:     "normalize_universal_queue_scheduled_at",
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: evaluate_universal_queue_readiness
+LINES: 457-527
+----------------------------------------------------------------------------------------------------------------
+def evaluate_universal_queue_readiness(
+    *,
+    scheduled_at: str | None,
+    evaluation_time: str,
+) -> UniversalQueueReadiness:
+    """
+    Evaluate time eligibility only.
+
+    No sleeping, persistence, queue mutation or status transition
+    is performed.
+    """
+
+    canonical_scheduled = (
+        normalize_universal_queue_scheduled_at(
+            scheduled_at
+        )
+    )
+
+    canonical_evaluation = (
+        normalize_universal_queue_evaluation_time(
+            evaluation_time
+        )
+    )
+
+    if canonical_scheduled is None:
+
+        return UniversalQueueReadiness(
+            scheduled_at=None,
+            evaluation_time=canonical_evaluation,
+            eligible=True,
+            immediate=True,
+            seconds_until_eligible=0.0,
+            reason="immediate",
+        )
+
+    scheduled_dt = (
+        _canonical_to_datetime(
+            canonical_scheduled
+        )
+    )
+
+    evaluation_dt = (
+        _canonical_to_datetime(
+            canonical_evaluation
+        )
+    )
+
+    delta = (
+        scheduled_dt
+        - evaluation_dt
+    ).total_seconds()
+
+    if delta <= 0:
+
+        return UniversalQueueReadiness(
+            scheduled_at=canonical_scheduled,
+            evaluation_time=canonical_evaluation,
+            eligible=True,
+            immediate=False,
+            seconds_until_eligible=0.0,
+            reason="scheduled_time_reached",
+        )
+
+    return UniversalQueueReadiness(
+        scheduled_at=canonical_scheduled,
+        evaluation_time=canonical_evaluation,
+        eligible=False,
+        immediate=False,
+        seconds_until_eligible=delta,
+        reason="scheduled_for_future",
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: is_universal_queue_time_eligible
+LINES: 530-541
+----------------------------------------------------------------------------------------------------------------
+def is_universal_queue_time_eligible(
+    *,
+    scheduled_at: str | None,
+    evaluation_time: str,
+) -> bool:
+
+    return (
+        evaluate_universal_queue_readiness(
+            scheduled_at=scheduled_at,
+            evaluation_time=evaluation_time,
+        ).eligible
+    )
+
+================================================================================================================
+backend\server\orchestration\queue.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+NONE
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _sort_key
+LINES: 93-105
+----------------------------------------------------------------------------------------------------------------
+def _sort_key(job: OrchestrationJob):
+    """Return the canonical Universal Queue priority ordering key."""
+    created_at = (
+        job.created_at.isoformat()
+        if hasattr(job.created_at, "isoformat")
+        else str(job.created_at)
+    )
+
+    return universal_queue_priority_sort_key(
+        priority=job.priority,
+        created_at=created_at,
+        job_id=job.job_id,
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _queued_jobs
+LINES: 108-114
+----------------------------------------------------------------------------------------------------------------
+def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+    """All jobs currently persisted as queued, in service order."""
+    if jobs is None:
+        jobs = load_jobs()
+    queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+    queued.sort(key=_sort_key)
+    return queued
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: dequeue_job
+LINES: 129-156
+----------------------------------------------------------------------------------------------------------------
+def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+            if worker_id:
+                metadata["worker_id"] = worker_id
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write —
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+================================================================================================================
+backend\server\orchestration\models.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+NONE
+
+RELEVANT DECLARATIONS:
+NONE
+
+================================================================================================================
+backend\server\orchestration\job_store.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+SCHEDULED_AT OCCURRENCES:
+NONE
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _job_from_dict
+LINES: 63-94
+----------------------------------------------------------------------------------------------------------------
+def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+    return OrchestrationJob(
+        job_id=str(data.get("job_id", "")),
+        workspace_id=str(data.get("workspace_id", "")),
+        job_type=str(data.get("job_type", "")),
+        status=str(data.get("status", "queued")),
+        priority=int(data.get("priority", 5)),
+        created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+        updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+        payload=data.get("payload") or {},
+        metadata=data.get("metadata") or {},
+        assigned_worker_id=data.get("assigned_worker_id"),
+        progress_percent=float(data.get("progress_percent", 0.0)),
+        current_step=str(data.get("current_step", "")),
+        total_steps=int(data.get("total_steps", 0)),
+        processed_count=int(data.get("processed_count", 0)),
+        failed_count=int(data.get("failed_count", 0)),
+        warning_count=int(data.get("warning_count", 0)),
+
+        total_documents=int(data.get("total_documents", 0)),
+        processed_documents=int(data.get("processed_documents", 0)),
+        failed_documents=int(data.get("failed_documents", 0)),
+        skipped_documents=int(data.get("skipped_documents", 0)),
+
+        current_document_id=str(data.get("current_document_id", "")),
+        current_document_name=str(data.get("current_document_name", "")),
+
+        progress_message=str(data.get("progress_message", "")),
+        started_at=_parse_datetime(data.get("started_at")),
+        completed_at=_parse_datetime(data.get("completed_at")),
+        error_message=data.get("error_message"),
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: create_job
+LINES: 116-188
+----------------------------------------------------------------------------------------------------------------
+def create_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+    *,
+    job_id: Optional[str] = None,
+) -> OrchestrationJob:
+    """Persist one orchestration job.
+
+    ``job_id`` is optional for backward compatibility.
+
+    When omitted, this function preserves the historical orchestration
+    behaviour and allocates a local ``job_*`` identity.
+
+    When supplied, the caller owns the canonical job identity.  This is the
+    ingress required by Universal Job / Runtime Registration integrations:
+    the orchestration layer MUST persist that exact identity rather than
+    minting a second job ID.
+    """
+    jobs = load_jobs()
+
+    canonical_job_id = str(
+        job_id
+        or f"job_{uuid4().hex[:16]}"
+    ).strip()
+
+    if not canonical_job_id:
+        raise ValueError(
+            "job_id must be a non-empty string when supplied"
+        )
+
+    existing = jobs.get(
+        canonical_job_id
+    )
+
+    if existing is not None:
+        raise ValueError(
+            "Job already exists: "
+            + canonical_job_id
+        )
+
+    job = OrchestrationJob(
+        job_id=canonical_job_id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+
+    jobs[
+        canonical_job_id
+    ] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        canonical_job_id,
+        "none",
+        job.status,
+        {
+            "reason": "job_created",
+            "caller_supplied_job_id": (
+                job_id is not None
+            ),
+        },
+    )
+
+    return job
+
+================================================================================================================
+ACTIVE PRODUCTION SCHEDULE CALL SITES
+================================================================================================================
+
+SYMBOL: scheduled_at=
+MATCHES: 16
+  backend/server/runtime/universal_jobs/creation_engine.py:837: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:778: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:818: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:777: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:767: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:766: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:776: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:773: scheduled_at=None,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:755: scheduled_at=None,
+  backend/server/runtime/universal_queue/scheduling.py:220: scheduled_at=None means immediately time-eligible.
+  backend/server/runtime/universal_queue/scheduling.py:453: scheduled_at=scheduled_at
+  backend/server/runtime/universal_queue/scheduling.py:484: scheduled_at=None,
+  backend/server/runtime/universal_queue/scheduling.py:512: scheduled_at=canonical_scheduled,
+  backend/server/runtime/universal_queue/scheduling.py:521: scheduled_at=canonical_scheduled,
+  backend/server/runtime/universal_queue/scheduling.py:538: scheduled_at=scheduled_at,
+  backend/server/runtime/universal_queue/scheduling.py:572: "scheduled_at=None means immediately "
+
+SYMBOL: "scheduled_at"
+MATCHES: 9
+  backend/server/runtime/universal_jobs/contract.py:77: "scheduled_at",
+  backend/server/runtime/universal_jobs/contract.py:108: "scheduled_at",
+  backend/server/runtime/universal_jobs/contract.py:986: "scheduled_at": self.scheduled_at,
+  backend/server/runtime/universal_queue/scheduling.py:173: field_name="scheduled_at",
+  backend/server/runtime/universal_queue/scheduling.py:234: "scheduled_at",
+  backend/server/runtime/universal_queue/scheduling.py:278: "scheduled_at":
+  backend/server/runtime/universal_queue/scheduling.py:316: "scheduled_at",
+  backend/server/runtime/universal_queue/scheduling.py:427: "scheduled_at":
+  backend/server/runtime/universal_queue/scheduling.py:568: "scheduled_at",
+
+SYMBOL: 'scheduled_at'
+MATCHES: 0
+
+SYMBOL: evaluate_universal_queue_readiness
+MATCHES: 3
+  backend/server/runtime/universal_queue/scheduling.py:457: def evaluate_universal_queue_readiness(
+  backend/server/runtime/universal_queue/scheduling.py:537: evaluate_universal_queue_readiness(
+  backend/server/runtime/universal_queue/scheduling.py:637: "evaluate_universal_queue_readiness",
+
+SYMBOL: is_universal_queue_time_eligible
+MATCHES: 2
+  backend/server/runtime/universal_queue/scheduling.py:530: def is_universal_queue_time_eligible(
+  backend/server/runtime/universal_queue/scheduling.py:638: "is_universal_queue_time_eligible",
+
+SYMBOL: submit_universal_job(
+MATCHES: 2
+  backend/server/runtime/universal_job_submission.py:157: def submit_universal_job(
+  backend/server/runtime/uucd_runtime_handoff_v1.py:810: submission_result = submit_universal_job(
+
+SYMBOL: create_universal_job(
+MATCHES: 10
+  backend/server/runtime/universal_job_submission.py:231: create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine.py:730: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:671: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:711: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:670: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:658: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:657: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:667: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:664: def create_universal_job(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:646: def create_universal_job(
+
+================================================================================================================
+A1.5-Q3 PATCH QUESTIONS
+================================================================================================================
+1. Does UniversalJobCreationRequest declare scheduled_at?
+2. Does create_universal_job accept scheduled_at?
+3. Is scheduled_at currently forced to None?
+4. Does submit_universal_job accept and forward scheduled_at?
+5. Does orchestration metadata preserve the canonical Universal Job?
+6. Can queue selection read scheduled_at from canonical metadata?
+7. Can future jobs remain QUEUED without being claimed?
+8. Can immediate and overdue jobs remain eligible?
+9. Can malformed scheduling data fail closed?
+10. Can dequeue_job(worker_id=...) remain unchanged?

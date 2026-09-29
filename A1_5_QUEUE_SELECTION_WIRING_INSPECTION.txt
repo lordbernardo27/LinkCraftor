@@ -1,0 +1,1870 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.5 QUEUE SELECTION AND PRIORITIZATION WIRING INSPECTION
+Generated: 2026-09-29T11:46:13.256214+00:00
+Mode: READ-ONLY ? NO PRODUCTION FILES MODIFIED
+
+==============================================================================================================
+backend\server\orchestration\queue.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+  10: job_store.get_job
+  10: job_store.load_jobs
+  10: job_store.update_job_status
+  11: models.JOB_STATUS_QUEUED
+  11: models.JOB_STATUS_RUNNING
+  11: models.OrchestrationJob
+
+DECLARATION: _sort_key
+LINES: 93-94
+
+def _sort_key(job: OrchestrationJob):
+    return (job.priority, job.created_at, job.job_id)
+
+DECLARATION: _queued_jobs
+LINES: 97-103
+
+def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+    """All jobs currently persisted as queued, in service order."""
+    if jobs is None:
+        jobs = load_jobs()
+    queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+    queued.sort(key=_sort_key)
+    return queued
+
+DECLARATION: enqueue_job
+LINES: 106-115
+
+def enqueue_job(job_id: str) -> bool:
+    """Kept for API compatibility.
+
+    Enqueueing is now implicit: create_job persists the job with status
+    JOB_STATUS_QUEUED, and that persisted status is the queue membership.
+    This function only verifies the job actually exists in a queued state,
+    which catches caller bugs (e.g. enqueueing an ID that was never created).
+    """
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+DECLARATION: dequeue_job
+LINES: 118-145
+
+def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+            if worker_id:
+                metadata["worker_id"] = worker_id
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write —
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+DECLARATION: queue_snapshot
+LINES: 161-181
+
+def queue_snapshot() -> Dict[str, object]:
+    queued = _queued_jobs()
+
+    return {
+        "queue_length": len(queued),
+        "queued_job_ids": [job.job_id for job in queued],
+        "queued_jobs": [
+            {
+                "job_id": job.job_id,
+                "workspace_id": job.workspace_id,
+                "job_type": job.job_type,
+                "priority": job.priority,
+                "created_at": (
+                    job.created_at.isoformat()
+                    if hasattr(job.created_at, "isoformat")
+                    else str(job.created_at)
+                ),
+            }
+            for job in queued
+        ],
+    }
+
+==============================================================================================================
+backend\server\orchestration\models.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+
+DECLARATION: OrchestrationJob
+LINES: 30-59
+
+class OrchestrationJob:
+    job_id: str
+    workspace_id: str
+    job_type: str
+    status: str = JOB_STATUS_QUEUED
+    priority: int = 5
+    created_at: datetime = field(default_factory=utc_now)
+    updated_at: datetime = field(default_factory=utc_now)
+    payload: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    assigned_worker_id: Optional[str] = None
+    progress_percent: float = 0.0
+    current_step: str = ""
+    total_steps: int = 0
+    processed_count: int = 0
+    failed_count: int = 0
+    warning_count: int = 0
+
+    total_documents: int = 0
+    processed_documents: int = 0
+    failed_documents: int = 0
+    skipped_documents: int = 0
+
+    current_document_id: str = ""
+    current_document_name: str = ""
+
+    progress_message: str = ""
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_message: Optional[str] = None
+
+DECLARATION: QueueStats
+LINES: 106-111
+
+class QueueStats:
+    total_jobs: int = 0
+    queued_jobs: int = 0
+    running_jobs: int = 0
+    completed_jobs: int = 0
+    failed_jobs: int = 0
+
+==============================================================================================================
+backend\server\orchestration\job_store.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+  10: models.JOB_STATUS_FAILED
+  10: models.JobStatusEvent
+  10: models.OrchestrationJob
+  10: models.VALID_JOB_STATUSES
+
+DECLARATION: _job_from_dict
+LINES: 63-94
+
+def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+    return OrchestrationJob(
+        job_id=str(data.get("job_id", "")),
+        workspace_id=str(data.get("workspace_id", "")),
+        job_type=str(data.get("job_type", "")),
+        status=str(data.get("status", "queued")),
+        priority=int(data.get("priority", 5)),
+        created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+        updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+        payload=data.get("payload") or {},
+        metadata=data.get("metadata") or {},
+        assigned_worker_id=data.get("assigned_worker_id"),
+        progress_percent=float(data.get("progress_percent", 0.0)),
+        current_step=str(data.get("current_step", "")),
+        total_steps=int(data.get("total_steps", 0)),
+        processed_count=int(data.get("processed_count", 0)),
+        failed_count=int(data.get("failed_count", 0)),
+        warning_count=int(data.get("warning_count", 0)),
+
+        total_documents=int(data.get("total_documents", 0)),
+        processed_documents=int(data.get("processed_documents", 0)),
+        failed_documents=int(data.get("failed_documents", 0)),
+        skipped_documents=int(data.get("skipped_documents", 0)),
+
+        current_document_id=str(data.get("current_document_id", "")),
+        current_document_name=str(data.get("current_document_name", "")),
+
+        progress_message=str(data.get("progress_message", "")),
+        started_at=_parse_datetime(data.get("started_at")),
+        completed_at=_parse_datetime(data.get("completed_at")),
+        error_message=data.get("error_message"),
+    )
+
+DECLARATION: load_jobs
+LINES: 97-105
+
+def load_jobs() -> Dict[str, OrchestrationJob]:
+    raw = _read_json(JOBS_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        job_id: _job_from_dict(item)
+        for job_id, item in raw.items()
+        if isinstance(item, dict)
+    }
+
+DECLARATION: save_jobs
+LINES: 108-109
+
+def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+    _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+
+DECLARATION: create_job
+LINES: 116-188
+
+def create_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+    *,
+    job_id: Optional[str] = None,
+) -> OrchestrationJob:
+    """Persist one orchestration job.
+
+    ``job_id`` is optional for backward compatibility.
+
+    When omitted, this function preserves the historical orchestration
+    behaviour and allocates a local ``job_*`` identity.
+
+    When supplied, the caller owns the canonical job identity.  This is the
+    ingress required by Universal Job / Runtime Registration integrations:
+    the orchestration layer MUST persist that exact identity rather than
+    minting a second job ID.
+    """
+    jobs = load_jobs()
+
+    canonical_job_id = str(
+        job_id
+        or f"job_{uuid4().hex[:16]}"
+    ).strip()
+
+    if not canonical_job_id:
+        raise ValueError(
+            "job_id must be a non-empty string when supplied"
+        )
+
+    existing = jobs.get(
+        canonical_job_id
+    )
+
+    if existing is not None:
+        raise ValueError(
+            "Job already exists: "
+            + canonical_job_id
+        )
+
+    job = OrchestrationJob(
+        job_id=canonical_job_id,
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+    )
+
+    jobs[
+        canonical_job_id
+    ] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        canonical_job_id,
+        "none",
+        job.status,
+        {
+            "reason": "job_created",
+            "caller_supplied_job_id": (
+                job_id is not None
+            ),
+        },
+    )
+
+    return job
+
+DECLARATION: update_job_status
+LINES: 191-256
+
+def update_job_status(
+    job_id: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> OrchestrationJob:
+    if new_status not in VALID_JOB_STATUSES:
+        raise ValueError(f"Invalid job status: {new_status}")
+
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    old_status = job.status
+    job.status = new_status
+    job.updated_at = utc_now()
+
+    normalized_metadata = (
+        dict(metadata)
+        if isinstance(
+            metadata,
+            dict,
+        )
+        else {}
+    )
+
+    if normalized_metadata:
+
+        existing_metadata = (
+            job.metadata
+            if isinstance(
+                job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        job.metadata = {
+            **existing_metadata,
+            **normalized_metadata,
+        }
+
+    if error_message:
+        job.error_message = error_message
+
+        if new_status == JOB_STATUS_FAILED:
+            job.progress_percent = min(
+                job.progress_percent,
+                99.0,
+            )
+
+    jobs[job_id] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        job_id,
+        old_status,
+        new_status,
+        normalized_metadata,
+    )
+
+    return job
+
+==============================================================================================================
+backend\server\orchestration\service.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+  7: job_store.create_job
+  7: job_store.get_job
+  7: job_store.list_job_events
+  7: job_store.load_jobs
+  7: job_store.update_job_progress
+  7: job_store.update_job_status
+  15: models.JOB_STATUS_CANCELLED
+  15: models.JOB_STATUS_COMPLETED
+  15: models.JOB_STATUS_FAILED
+  15: models.JOB_STATUS_QUEUED
+  15: models.JOB_STATUS_RUNNING
+  15: models.OrchestrationJob
+  23: queue.enqueue_job
+  23: queue.queue_snapshot
+
+DECLARATION: create_orchestration_job
+LINES: 26-60
+
+def create_orchestration_job(
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    priority: int = 5,
+    *,
+    job_id: Optional[str] = None,
+) -> OrchestrationJob:
+    """Create and enqueue a job.
+
+    When ``job_id`` is supplied, orchestration preserves that exact
+    caller-owned canonical identity. This is the ingress used by the
+    Universal Job Creation Engine so orchestration does not mint a
+    second runtime identity.
+
+    NOTE on priority: jobs are served in ascending (priority, created_at)
+    order — a LOWER number means served sooner. The default of 5 leaves
+    room on both sides (e.g. 1 for urgent user-facing work, 9 for bulk
+    background rebuilds).
+    """
+    job = create_job(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload or {},
+        metadata=metadata or {},
+        priority=priority,
+        job_id=job_id,
+    )
+    # Enqueueing is implicit (queue membership == persisted "queued" status);
+    # enqueue_job is retained as a sanity check that the job landed in the
+    # store correctly.
+    if not enqueue_job(job.job_id):
+        print(f"[ORCHESTRATION_ENQUEUE_WARNING] job {job.job_id} not visible as queued after create")
+    return job
+
+DECLARATION: mark_job_running
+LINES: 82-107
+
+def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+    """Transition a job to RUNNING.
+
+    FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+    RUNNING atomically, so by the time the worker calls this the job is
+    usually already running. Re-issuing the transition would be harmless in
+    most stores but is wasteful and can clobber claim metadata; if the job is
+    already RUNNING we just return it (merging in the worker_id if it wasn't
+    recorded yet).
+    """
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"unknown job: {job_id}")
+
+    if job.status == JOB_STATUS_RUNNING:
+        if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+            # Record the worker identity without re-transitioning status.
+            return update_job_status(
+                job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+            )
+        return job
+
+    metadata: Dict[str, Any] = {}
+    if worker_id:
+        metadata["worker_id"] = worker_id
+    return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+
+==============================================================================================================
+backend\server\runtime\universal_queue\prioritization.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+  8: backend.server.runtime.universal_jobs.priority.UniversalJobPriorityError
+  8: backend.server.runtime.universal_jobs.priority.normalize_universal_job_priority
+  8: backend.server.runtime.universal_jobs.priority.universal_job_priority_order
+
+DECLARATION: UniversalQueuePriorityRank
+LINES: 173-279
+
+class UniversalQueuePriorityRank:
+    """
+    Immutable deterministic queue ranking representation.
+
+    Ordering:
+        priority ascending
+        created_at ascending
+        job_id ascending
+    """
+
+    priority: Any
+    created_at: str
+    job_id: str
+    schema_version: str = (
+        UNIVERSAL_QUEUE_PRIORITY_RANK_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        canonical_priority = (
+            normalize_universal_queue_priority(
+                self.priority
+            )
+        )
+
+        object.__setattr__(
+            self,
+            "priority",
+            canonical_priority,
+        )
+
+        object.__setattr__(
+            self,
+            "created_at",
+            _normalize_created_at(
+                self.created_at
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "job_id",
+            _normalize_job_id(
+                self.job_id
+            ),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_PRIORITY_RANK_SCHEMA_VERSION
+        ):
+            raise UniversalQueuePrioritizationError(
+                "Invalid priority-rank schema_version.",
+                code="invalid_priority_rank_schema_version",
+                value=self.schema_version,
+            )
+
+    @property
+    def priority_order(
+        self,
+    ) -> int:
+
+        return universal_job_priority_order(
+            self.priority
+        )
+
+    @property
+    def sort_key(
+        self,
+    ) -> tuple[int, str, str]:
+
+        return (
+            self.priority_order,
+            self.created_at,
+            self.job_id,
+        )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "priority":
+                str(
+                    self.priority
+                ),
+
+            "priority_order":
+                self.priority_order,
+
+            "created_at":
+                self.created_at,
+
+            "job_id":
+                self.job_id,
+
+            "sort_key": [
+                self.priority_order,
+                self.created_at,
+                self.job_id,
+            ],
+        }
+
+DECLARATION: normalize_universal_queue_priority
+LINES: 147-166
+
+def normalize_universal_queue_priority(
+    value: Any,
+):
+    """
+    Consume the already-frozen Universal Job Priority authority.
+
+    Queue Prioritization does not define a second priority scale.
+    """
+
+    try:
+        return normalize_universal_job_priority(
+            value
+        )
+
+    except UniversalJobPriorityError as exc:
+        raise UniversalQueuePrioritizationError(
+            "Invalid canonical Universal Job priority.",
+            code="invalid_queue_priority",
+            value=value,
+        ) from exc
+
+DECLARATION: create_universal_queue_priority_rank
+LINES: 282-293
+
+def create_universal_queue_priority_rank(
+    *,
+    priority: Any,
+    created_at: str,
+    job_id: str,
+) -> UniversalQueuePriorityRank:
+
+    return UniversalQueuePriorityRank(
+        priority=priority,
+        created_at=created_at,
+        job_id=job_id,
+    )
+
+DECLARATION: universal_queue_priority_sort_key
+LINES: 296-309
+
+def universal_queue_priority_sort_key(
+    *,
+    priority: Any,
+    created_at: str,
+    job_id: str,
+) -> tuple[int, str, str]:
+
+    return (
+        create_universal_queue_priority_rank(
+            priority=priority,
+            created_at=created_at,
+            job_id=job_id,
+        ).sort_key
+    )
+
+DECLARATION: order_universal_queue_priority_ranks
+LINES: 312-372
+
+def order_universal_queue_priority_ranks(
+    values: Iterable[
+        UniversalQueuePriorityRank
+    ],
+) -> tuple[
+    UniversalQueuePriorityRank,
+    ...
+]:
+    """
+    Return a deterministically ordered immutable tuple.
+
+    This performs no queue mutation.
+    """
+
+    if isinstance(
+        values,
+        (
+            str,
+            bytes,
+            bytearray,
+        ),
+    ):
+        raise UniversalQueuePrioritizationError(
+            "values must be an iterable of priority ranks.",
+            code="invalid_priority_rank_collection",
+            value=values,
+        )
+
+    try:
+        materialized = tuple(
+            values
+        )
+
+    except TypeError as exc:
+        raise UniversalQueuePrioritizationError(
+            "values must be iterable.",
+            code="invalid_priority_rank_collection",
+            value=values,
+        ) from exc
+
+    for value in materialized:
+
+        if not isinstance(
+            value,
+            UniversalQueuePriorityRank,
+        ):
+            raise UniversalQueuePrioritizationError(
+                (
+                    "values must contain only "
+                    "UniversalQueuePriorityRank members."
+                ),
+                code="invalid_priority_rank_member",
+                value=value,
+            )
+
+    return tuple(
+        sorted(
+            materialized,
+            key=lambda item: item.sort_key,
+        )
+    )
+
+==============================================================================================================
+backend\server\runtime\universal_queue\fairness.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+
+DECLARATION: UniversalQueueFairnessCandidate
+LINES: 247-349
+
+class UniversalQueueFairnessCandidate:
+
+    workspace_id: str
+    job_id: str
+    priority: int
+    created_at: datetime | str
+    service_count: int
+    schema_version: str = (
+        UNIVERSAL_QUEUE_FAIRNESS_CANDIDATE_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        set_ = object.__setattr__
+
+        set_(
+            self,
+            "workspace_id",
+            normalize_universal_queue_fairness_workspace_id(
+                self.workspace_id
+            ),
+        )
+
+        set_(
+            self,
+            "job_id",
+            normalize_universal_queue_fairness_job_id(
+                self.job_id
+            ),
+        )
+
+        set_(
+            self,
+            "priority",
+            normalize_universal_queue_fairness_priority(
+                self.priority
+            ),
+        )
+
+        set_(
+            self,
+            "created_at",
+            normalize_universal_queue_fairness_created_at(
+                self.created_at
+            ),
+        )
+
+        set_(
+            self,
+            "service_count",
+            normalize_universal_queue_fairness_service_count(
+                self.service_count
+            ),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_FAIRNESS_CANDIDATE_SCHEMA_VERSION
+        ):
+
+            raise UniversalQueueFairnessError(
+                "Invalid fairness candidate schema_version.",
+                code="invalid_fairness_candidate_schema_version",
+                value=self.schema_version,
+            )
+
+    @property
+    def fairness_key(
+        self,
+    ) -> tuple[Any, ...]:
+
+        return (
+            self.service_count,
+            self.created_at,
+            self.job_id,
+            self.workspace_id,
+        )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "workspace_id":
+                self.workspace_id,
+
+            "job_id":
+                self.job_id,
+
+            "priority":
+                self.priority,
+
+            "created_at":
+                self.created_at.isoformat(),
+
+            "service_count":
+                self.service_count,
+        }
+
+DECLARATION: UniversalQueueFairnessDecision
+LINES: 356-555
+
+class UniversalQueueFairnessDecision:
+
+    selected_workspace_id: str
+    selected_job_id: str
+    priority: int
+    selected_service_count: int
+    selected_created_at: datetime | str
+    candidate_count: int
+    fairness_applied: bool
+    mutation_required: bool
+    reason: str
+    schema_version: str = (
+        UNIVERSAL_QUEUE_FAIRNESS_DECISION_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        set_ = object.__setattr__
+
+        set_(
+            self,
+            "selected_workspace_id",
+            normalize_universal_queue_fairness_workspace_id(
+                self.selected_workspace_id
+            ),
+        )
+
+        set_(
+            self,
+            "selected_job_id",
+            normalize_universal_queue_fairness_job_id(
+                self.selected_job_id
+            ),
+        )
+
+        set_(
+            self,
+            "priority",
+            normalize_universal_queue_fairness_priority(
+                self.priority
+            ),
+        )
+
+        set_(
+            self,
+            "selected_service_count",
+            normalize_universal_queue_fairness_service_count(
+                self.selected_service_count
+            ),
+        )
+
+        set_(
+            self,
+            "selected_created_at",
+            normalize_universal_queue_fairness_created_at(
+                self.selected_created_at
+            ),
+        )
+
+        if (
+            isinstance(
+                self.candidate_count,
+                bool,
+            )
+            or not isinstance(
+                self.candidate_count,
+                int,
+            )
+            or self.candidate_count < 1
+        ):
+
+            raise UniversalQueueFairnessError(
+                "candidate_count must be an integer >= 1.",
+                code="invalid_fairness_candidate_count",
+                value=self.candidate_count,
+            )
+
+        if not isinstance(
+            self.fairness_applied,
+            bool,
+        ):
+
+            raise UniversalQueueFairnessError(
+                "fairness_applied must be bool.",
+                code="invalid_fairness_applied_flag",
+                value=self.fairness_applied,
+            )
+
+        expected_fairness_applied = (
+            self.candidate_count > 1
+        )
+
+        if (
+            self.fairness_applied
+            is not expected_fairness_applied
+        ):
+
+            raise UniversalQueueFairnessError(
+                "fairness_applied is inconsistent with candidate_count.",
+                code="inconsistent_fairness_applied",
+                value=self.fairness_applied,
+            )
+
+        if not isinstance(
+            self.mutation_required,
+            bool,
+        ):
+
+            raise UniversalQueueFairnessError(
+                "mutation_required must be bool.",
+                code="invalid_fairness_mutation_flag",
+                value=self.mutation_required,
+            )
+
+        if self.mutation_required is not False:
+
+            raise UniversalQueueFairnessError(
+                (
+                    "3.1.12 selects a logical fairness winner "
+                    "but does not claim, dispatch or mutate."
+                ),
+                code="fairness_mutation_not_owned",
+                value=self.mutation_required,
+            )
+
+        if not isinstance(
+            self.reason,
+            str,
+        ):
+
+            raise UniversalQueueFairnessError(
+                "reason must be a string.",
+                code="invalid_fairness_reason_type",
+                value=self.reason,
+            )
+
+        reason = self.reason.strip()
+
+        if not reason:
+
+            raise UniversalQueueFairnessError(
+                "reason must not be blank.",
+                code="blank_fairness_reason",
+                value=self.reason,
+            )
+
+        set_(
+            self,
+            "reason",
+            reason,
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_FAIRNESS_DECISION_SCHEMA_VERSION
+        ):
+
+            raise UniversalQueueFairnessError(
+                "Invalid fairness decision schema_version.",
+                code="invalid_fairness_decision_schema_version",
+                value=self.schema_version,
+            )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "selected_workspace_id":
+                self.selected_workspace_id,
+
+            "selected_job_id":
+                self.selected_job_id,
+
+            "priority":
+                self.priority,
+
+            "selected_service_count":
+                self.selected_service_count,
+
+            "selected_created_at":
+                self.selected_created_at.isoformat(),
+
+            "candidate_count":
+                self.candidate_count,
+
+            "fairness_applied":
+                self.fairness_applied,
+
+            "mutation_required":
+                self.mutation_required,
+
+            "reason":
+                self.reason,
+        }
+
+DECLARATION: select_universal_queue_fair_candidate
+NOT FOUND
+
+==============================================================================================================
+backend\server\runtime\universal_queue\scheduling.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+
+DECLARATION: UniversalQueueSchedule
+LINES: 216-286
+
+class UniversalQueueSchedule:
+    """
+    Immutable scheduling representation.
+
+    scheduled_at=None means immediately time-eligible.
+    """
+
+    scheduled_at: str | None
+    schema_version: str = (
+        UNIVERSAL_QUEUE_SCHEDULE_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "scheduled_at",
+            normalize_universal_queue_scheduled_at(
+                self.scheduled_at
+            ),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_SCHEDULE_SCHEMA_VERSION
+        ):
+            raise UniversalQueueSchedulingError(
+                "Invalid schedule schema_version.",
+                code="invalid_schedule_schema_version",
+                value=self.schema_version,
+            )
+
+    @property
+    def is_immediate(
+        self,
+    ) -> bool:
+
+        return (
+            self.scheduled_at
+            is None
+        )
+
+    @property
+    def is_deferred(
+        self,
+    ) -> bool:
+
+        return (
+            self.scheduled_at
+            is not None
+        )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "scheduled_at":
+                self.scheduled_at,
+
+            "is_immediate":
+                self.is_immediate,
+
+            "is_deferred":
+                self.is_deferred,
+        }
+
+DECLARATION: UniversalQueueReadiness
+LINES: 293-444
+
+class UniversalQueueReadiness:
+    """
+    Pure time-readiness decision.
+
+    This object does not mutate Universal Job status.
+    """
+
+    scheduled_at: str | None
+    evaluation_time: str
+    eligible: bool
+    immediate: bool
+    seconds_until_eligible: float
+    reason: str
+    schema_version: str = (
+        UNIVERSAL_QUEUE_READINESS_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "scheduled_at",
+            normalize_universal_queue_scheduled_at(
+                self.scheduled_at
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "evaluation_time",
+            normalize_universal_queue_evaluation_time(
+                self.evaluation_time
+            ),
+        )
+
+        if not isinstance(
+            self.eligible,
+            bool,
+        ):
+            raise UniversalQueueSchedulingError(
+                "eligible must be bool.",
+                code="invalid_eligible_type",
+                value=self.eligible,
+            )
+
+        if not isinstance(
+            self.immediate,
+            bool,
+        ):
+            raise UniversalQueueSchedulingError(
+                "immediate must be bool.",
+                code="invalid_immediate_type",
+                value=self.immediate,
+            )
+
+        seconds = (
+            self.seconds_until_eligible
+        )
+
+        if (
+            isinstance(
+                seconds,
+                bool,
+            )
+            or not isinstance(
+                seconds,
+                (
+                    int,
+                    float,
+                ),
+            )
+        ):
+            raise UniversalQueueSchedulingError(
+                (
+                    "seconds_until_eligible "
+                    "must be numeric."
+                ),
+                code=(
+                    "invalid_seconds_until_eligible"
+                ),
+                value=seconds,
+            )
+
+        normalized_seconds = (
+            max(
+                0.0,
+                float(
+                    seconds
+                ),
+            )
+        )
+
+        object.__setattr__(
+            self,
+            "seconds_until_eligible",
+            normalized_seconds,
+        )
+
+        if not isinstance(
+            self.reason,
+            str,
+        ) or not self.reason.strip():
+            raise UniversalQueueSchedulingError(
+                "reason must be a nonblank string.",
+                code="invalid_readiness_reason",
+                value=self.reason,
+            )
+
+        object.__setattr__(
+            self,
+            "reason",
+            self.reason.strip(),
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_QUEUE_READINESS_SCHEMA_VERSION
+        ):
+            raise UniversalQueueSchedulingError(
+                "Invalid readiness schema_version.",
+                code="invalid_readiness_schema_version",
+                value=self.schema_version,
+            )
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version":
+                self.schema_version,
+
+            "scheduled_at":
+                self.scheduled_at,
+
+            "evaluation_time":
+                self.evaluation_time,
+
+            "eligible":
+                self.eligible,
+
+            "immediate":
+                self.immediate,
+
+            "seconds_until_eligible":
+                self.seconds_until_eligible,
+
+            "reason":
+                self.reason,
+        }
+
+DECLARATION: evaluate_universal_queue_readiness
+LINES: 457-527
+
+def evaluate_universal_queue_readiness(
+    *,
+    scheduled_at: str | None,
+    evaluation_time: str,
+) -> UniversalQueueReadiness:
+    """
+    Evaluate time eligibility only.
+
+    No sleeping, persistence, queue mutation or status transition
+    is performed.
+    """
+
+    canonical_scheduled = (
+        normalize_universal_queue_scheduled_at(
+            scheduled_at
+        )
+    )
+
+    canonical_evaluation = (
+        normalize_universal_queue_evaluation_time(
+            evaluation_time
+        )
+    )
+
+    if canonical_scheduled is None:
+
+        return UniversalQueueReadiness(
+            scheduled_at=None,
+            evaluation_time=canonical_evaluation,
+            eligible=True,
+            immediate=True,
+            seconds_until_eligible=0.0,
+            reason="immediate",
+        )
+
+    scheduled_dt = (
+        _canonical_to_datetime(
+            canonical_scheduled
+        )
+    )
+
+    evaluation_dt = (
+        _canonical_to_datetime(
+            canonical_evaluation
+        )
+    )
+
+    delta = (
+        scheduled_dt
+        - evaluation_dt
+    ).total_seconds()
+
+    if delta <= 0:
+
+        return UniversalQueueReadiness(
+            scheduled_at=canonical_scheduled,
+            evaluation_time=canonical_evaluation,
+            eligible=True,
+            immediate=False,
+            seconds_until_eligible=0.0,
+            reason="scheduled_time_reached",
+        )
+
+    return UniversalQueueReadiness(
+        scheduled_at=canonical_scheduled,
+        evaluation_time=canonical_evaluation,
+        eligible=False,
+        immediate=False,
+        seconds_until_eligible=delta,
+        reason="scheduled_for_future",
+    )
+
+DECLARATION: is_universal_queue_time_eligible
+LINES: 530-541
+
+def is_universal_queue_time_eligible(
+    *,
+    scheduled_at: str | None,
+    evaluation_time: str,
+) -> bool:
+
+    return (
+        evaluate_universal_queue_readiness(
+            scheduled_at=scheduled_at,
+            evaluation_time=evaluation_time,
+        ).eligible
+    )
+
+==============================================================================================================
+backend\server\runtime\execution_engine\job_queue_worker_integration.py
+==============================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT IMPORTS:
+
+DECLARATION: dequeue_existing_job
+LINES: 646-659
+
+def dequeue_existing_job(
+    *,
+    bindings: ExecutionRuntimeBindings,
+    worker_id: str,
+) -> Any:
+    """
+    Use the canonical existing queue claim path.
+    """
+
+    return bindings.queue_operations[
+        "dequeue_job"
+    ](
+        worker_id=worker_id
+    )
+
+DECLARATION: create_job_queue_worker_integration
+NOT FOUND
+
+DECLARATION: certify_job_queue_worker_integration_v1
+LINES: 838-1244
+
+def certify_job_queue_worker_integration_v1(
+) -> Mapping[str, Any]:
+    """
+    Phase 6.15 production integration certification.
+
+    IMPORTANT:
+    Certification binds and inspects real existing components only.
+    It does not perform destructive or state-changing production operations.
+    """
+
+    bindings = build_production_execution_bindings()
+
+    service = bindings.orchestration_service
+    queue = bindings.orchestration_queue
+    worker = bindings.universal_runtime_worker
+    leasing = bindings.universal_worker_leasing
+    registration = bindings.universal_runtime_registration
+
+    job_completed = (
+        bindings.job_operations.get(
+            "mark_job_completed"
+        )
+    )
+
+    job_failed = (
+        bindings.job_operations.get(
+            "mark_job_failed"
+        )
+    )
+
+    queue_dequeue = (
+        bindings.queue_operations.get(
+            "dequeue_job"
+        )
+    )
+
+    worker_requeue = (
+        bindings.worker_operations.get(
+            "_requeue_same_runtime_job_v1"
+        )
+    )
+
+    runtime_dispatch = (
+        bindings.runtime_registration_operations.get(
+            "dispatch_registered_runtime_handler"
+        )
+    )
+
+    runtime_execute = (
+        bindings.runtime_registration_operations.get(
+            "execute_registered_runtime_job_v1"
+        )
+    )
+
+    resolve_handler = (
+        bindings.runtime_registration_operations.get(
+            "_resolve_handler"
+        )
+    )
+
+    invoke_handler = (
+        bindings.runtime_registration_operations.get(
+            "_invoke_handler"
+        )
+    )
+
+    register_handler = (
+        bindings.handler_registry_operations.get(
+            "register_runtime_handler"
+        )
+    )
+
+    has_handler = (
+        bindings.handler_registry_operations.get(
+            "has_runtime_handler"
+        )
+    )
+
+    unregister_handler = (
+        bindings.handler_registry_operations.get(
+            "unregister_runtime_handler"
+        )
+    )
+
+    runtime_handler_decorator = (
+        bindings.handler_registry_operations.get(
+            "runtime_handler"
+        )
+    )
+
+    checks = {
+        "universal_job_module_bound":
+            (
+                service.__name__
+                == ORCHESTRATION_SERVICE_MODULE
+            ),
+
+        "universal_job_completed_operation_bound":
+            (
+                callable(job_completed)
+                and job_completed
+                is getattr(
+                    service,
+                    "mark_job_completed",
+                )
+            ),
+
+        "universal_job_failed_operation_bound":
+            (
+                callable(job_failed)
+                and job_failed
+                is getattr(
+                    service,
+                    "mark_job_failed",
+                )
+            ),
+
+        "existing_job_operations_discovered":
+            (
+                len(
+                    bindings.job_operations
+                )
+                >= 2
+            ),
+
+        "queue_module_bound":
+            (
+                queue.__name__
+                == ORCHESTRATION_QUEUE_MODULE
+            ),
+
+        "queue_dequeue_bound":
+            (
+                callable(queue_dequeue)
+                and queue_dequeue
+                is getattr(
+                    queue,
+                    "dequeue_job",
+                )
+            ),
+
+        "worker_module_bound":
+            (
+                worker.__name__
+                == UNIVERSAL_RUNTIME_WORKER_MODULE
+            ),
+
+        "worker_retry_policy_bound":
+            callable(
+                bindings.worker_operations.get(
+                    "_runtime_retry_policy_v1"
+                )
+            ),
+
+        "worker_attempt_accounting_bound":
+            callable(
+                bindings.worker_operations.get(
+                    "_runtime_failure_attempt_number_v1"
+                )
+            ),
+
+        "worker_requeue_bound":
+            (
+                callable(worker_requeue)
+                and worker_requeue
+                is getattr(
+                    worker,
+                    "_requeue_same_runtime_job_v1",
+                )
+            ),
+
+        "worker_dequeue_contract_bound":
+            callable(
+                bindings.worker_operations.get(
+                    "dequeue_job"
+                )
+            ),
+
+        "lease_module_bound":
+            (
+                leasing.__name__
+                == UNIVERSAL_WORKER_LEASING_MODULE
+            ),
+
+        "lease_integration_surface_discovered":
+            (
+                len(
+                    bindings.lease_operations
+                )
+                >= 1
+            ),
+
+        "runtime_registration_module_bound":
+            (
+                registration.__name__
+                == UNIVERSAL_RUNTIME_REGISTRATION_MODULE
+            ),
+
+        "runtime_handler_resolution_bound":
+            (
+                callable(resolve_handler)
+                and resolve_handler
+                is getattr(
+                    registration,
+                    "_resolve_handler",
+                )
+            ),
+
+        "runtime_handler_invocation_bound":
+            (
+                callable(invoke_handler)
+                and invoke_handler
+                is getattr(
+                    registration,
+                    "_invoke_handler",
+                )
+            ),
+
+        "runtime_dispatch_bound":
+            (
+                callable(runtime_dispatch)
+                and runtime_dispatch
+                is getattr(
+                    registration,
+                    "dispatch_registered_runtime_handler",
+                )
+            ),
+
+        "registered_runtime_job_execution_bound":
+            (
+                callable(runtime_execute)
+                and runtime_execute
+                is getattr(
+                    registration,
+                    "execute_registered_runtime_job_v1",
+                )
+            ),
+
+        "handler_registry_register_bound":
+            (
+                callable(register_handler)
+                and register_handler
+                is getattr(
+                    registration,
+                    "register_runtime_handler",
+                )
+            ),
+
+        "handler_registry_lookup_bound":
+            (
+                callable(has_handler)
+                and has_handler
+                is getattr(
+                    registration,
+                    "has_runtime_handler",
+                )
+            ),
+
+        "handler_registry_unregister_bound":
+            (
+                callable(unregister_handler)
+                and unregister_handler
+                is getattr(
+                    registration,
+                    "unregister_runtime_handler",
+                )
+            ),
+
+        "handler_registry_decorator_bound":
+            (
+                callable(runtime_handler_decorator)
+                and runtime_handler_decorator
+                is getattr(
+                    registration,
+                    "runtime_handler",
+                )
+            ),
+
+        "all_six_integration_components_available":
+            (
+                len(
+                    bindings.capabilities
+                )
+                == 6
+                and all(
+                    capability.available
+                    for capability
+                    in bindings.capabilities.values()
+                )
+            ),
+
+        "production_bindings_use_original_callables":
+            (
+                job_completed
+                is getattr(
+                    service,
+                    "mark_job_completed",
+                )
+                and queue_dequeue
+                is getattr(
+                    queue,
+                    "dequeue_job",
+                )
+                and worker_requeue
+                is getattr(
+                    worker,
+                    "_requeue_same_runtime_job_v1",
+                )
+                and runtime_dispatch
+                is getattr(
+                    registration,
+                    "dispatch_registered_runtime_handler",
+                )
+            ),
+
+        "no_second_universal_job_system":
+            True,
+
+        "no_second_queue_created":
+            True,
+
+        "no_second_worker_created":
+            True,
+
+        "no_second_lease_system_created":
+            True,
+
+        "no_second_runtime_registration_created":
+            True,
+
+        "no_second_handler_registry_created":
+            True,
+
+        "no_production_job_mutation_during_certification":
+            True,
+
+        "no_queue_mutation_during_certification":
+            True,
+
+        "no_worker_execution_during_certification":
+            True,
+
+        "no_lease_mutation_during_certification":
+            True,
+
+        "no_handler_execution_during_certification":
+            True,
+
+        "no_persistence_engine_created":
+            True,
+    }
+
+    certified = all(
+        checks.values()
+    )
+
+    capability_report = {
+        key: {
+            "component":
+                capability.component,
+            "module_path":
+                capability.module_path,
+            "callable_names":
+                capability.callable_names,
+            "state_names":
+                capability.state_names,
+        }
+        for key, capability
+        in bindings.capabilities.items()
+    }
+
+    return MappingProxyType(
+        {
+            "phase":
+                "6.15",
+
+            "component":
+                "Job / Queue / Worker Integration",
+
+            "version":
+                JOB_QUEUE_WORKER_INTEGRATION_VERSION,
+
+            "schema_version":
+                JOB_QUEUE_WORKER_INTEGRATION_SCHEMA_VERSION,
+
+            "certified":
+                certified,
+
+            "checks":
+                MappingProxyType(
+                    checks
+                ),
+
+            "capabilities":
+                MappingProxyType(
+                    capability_report
+                ),
+
+            "authority_boundary": (
+                "Phase 6.15 binds the Execution Engine directly to the "
+                "existing LinkCraftor orchestration service, queue, universal "
+                "runtime worker, worker leasing module, runtime registration "
+                "and handler registry. It creates no duplicate production "
+                "job, queue, worker, lease, registry or persistence system."
+            ),
+        }
+    )
+
+==============================================================================================================
+CROSS-FILE PRIORITIZATION CALL SITES
+==============================================================================================================
+
+SYMBOL: universal_queue_priority_sort_key
+MATCHES: 2
+  backend/server/runtime/universal_queue/prioritization.py:296: def universal_queue_priority_sort_key(
+  backend/server/runtime/universal_queue/prioritization.py:468: "universal_queue_priority_sort_key",
+
+SYMBOL: create_universal_queue_priority_rank
+MATCHES: 3
+  backend/server/runtime/universal_queue/prioritization.py:282: def create_universal_queue_priority_rank(
+  backend/server/runtime/universal_queue/prioritization.py:304: create_universal_queue_priority_rank(
+  backend/server/runtime/universal_queue/prioritization.py:467: "create_universal_queue_priority_rank",
+
+SYMBOL: order_universal_queue_priority_ranks
+MATCHES: 2
+  backend/server/runtime/universal_queue/prioritization.py:312: def order_universal_queue_priority_ranks(
+  backend/server/runtime/universal_queue/prioritization.py:469: "order_universal_queue_priority_ranks",
+
+SYMBOL: select_universal_queue_fair_candidate
+MATCHES: 0
+
+SYMBOL: evaluate_universal_queue_readiness
+MATCHES: 3
+  backend/server/runtime/universal_queue/scheduling.py:457: def evaluate_universal_queue_readiness(
+  backend/server/runtime/universal_queue/scheduling.py:537: evaluate_universal_queue_readiness(
+  backend/server/runtime/universal_queue/scheduling.py:637: "evaluate_universal_queue_readiness",
+
+SYMBOL: is_universal_queue_time_eligible
+MATCHES: 2
+  backend/server/runtime/universal_queue/scheduling.py:530: def is_universal_queue_time_eligible(
+  backend/server/runtime/universal_queue/scheduling.py:638: "is_universal_queue_time_eligible",
+
+SYMBOL: dequeue_job
+MATCHES: 20
+  backend/server/orchestration/queue.py:21: #   1. NON-ATOMIC DEQUEUE: dequeue_job() removed a job from the local list
+  backend/server/orchestration/queue.py:33: # dequeue_job() now CLAIMS the job atomically — it transitions the job to
+  backend/server/orchestration/queue.py:118: def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+  backend/server/orchestration/service.py:85: FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+  backend/server/runtime/universal_runtime_worker_v1.py:8: dequeue_job(worker_id=...)
+  backend/server/runtime/universal_runtime_worker_v1.py:54: dequeue_job,
+  backend/server/runtime/universal_runtime_worker_v1.py:482: claimed_job = dequeue_job(
+  backend/server/runtime/universal_runtime_worker_v1.py:520: "dequeue_job returned a claimed job without job_id."
+  backend/server/runtime/universal_runtime_worker_v1.py:525: "dequeue_job returned a job that is not RUNNING."
+  backend/server/runtime/universal_runtime_worker_v1.py:998: "dequeue_job(worker_id=...)",
+  backend/server/runtime/universal_runtime_worker_v1.py:1001: "QUEUED -> RUNNING owned by dequeue_job",
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:302: "dequeue_job"
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:305: "dequeue_job",
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:341: "dequeue_job",
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:656: "dequeue_job"
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:870: "dequeue_job"
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:975: "dequeue_job",
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:1012: "dequeue_job"
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:1139: "dequeue_job",
+  backend/server/runtime/execution_engine/job_queue_worker_integration.py:1267: "Binds the existing orchestration.queue dequeue_job claim "
+
+==============================================================================================================
+DECISION QUESTIONS
+==============================================================================================================
+1. Does orchestration.queue._sort_key use the universal priority sort key?
+2. Does it order lower canonical priority values first?
+3. Does created_at provide FIFO ordering for equal priorities?
+4. Is job_id the deterministic final tie-breaker?
+5. Are scheduled jobs filtered before dequeue?
+6. Are dependency-blocked jobs filtered before dequeue?
+7. Is workspace fairness applied during selection?
+8. Does dequeue claim the selected job atomically?
+9. Can the universal components be connected without changing the public dequeue_job() contract?

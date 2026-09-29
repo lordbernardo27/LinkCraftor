@@ -1,0 +1,207 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.5-Q3C CURRENT PRODUCTION QUEUE SOURCE
+
+Generated: 2026-09-29T13:38:23.9884248Z
+Target: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\queue.py
+Mode: READ-ONLY — NO FILES MODIFIED
+
+=========================================================================================================
+CURRENT QUEUE.PY
+=========================================================================================================
+    1: # backend/server/orchestration/queue.py
+    2: from __future__ import annotations
+    3: 
+    4: import os
+    5: import threading
+    6: from contextlib import contextmanager
+    7: from pathlib import Path
+    8: from typing import Dict, Iterator, List, Optional
+    9: 
+   10: from .job_store import get_job, load_jobs, update_job_status
+   11: from .models import JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, OrchestrationJob
+   12: 
+   13: # ---------------------------------------------------------------------------
+   14: # Design notes (what changed and why)
+   15: #
+   16: # The previous implementation kept a module-level list (_queue_job_ids) that
+   17: # was rebuilt from the job store on every call via refresh_queue_from_store().
+   18: # Because the store was always authoritative, the list carried no information
+   19: # of its own — but it created two real problems:
+   20: #
+   21: #   1. NON-ATOMIC DEQUEUE: dequeue_job() removed a job from the local list
+   22: #      while its status in the store remained "queued" until the worker later
+   23: #      called mark_job_running(). Any concurrent worker (thread OR separate
+   24: #      process) refreshing from the store in that window would re-discover the
+   25: #      job and dequeue it again -> duplicate processing.
+   26: #
+   27: #   2. STATE DRIFT: two sources of truth that had to be defended against each
+   28: #      other in multiple places (dead "clear()" branch, redundant existence
+   29: #      checks, 2-3 load_jobs() calls per operation).
+   30: #
+   31: # This version deletes the in-memory list entirely. The job store IS the
+   32: # queue: a job is "queued" iff its persisted status is JOB_STATUS_QUEUED.
+   33: # dequeue_job() now CLAIMS the job atomically — it transitions the job to
+   34: # JOB_STATUS_RUNNING inside a cross-process lock before returning it — so a
+   35: # job can be handed to exactly one worker. This also means the queue trivially
+   36: # survives process restarts: anything persisted as "queued" is picked up.
+   37: #
+   38: # Ordering is unchanged: ascending (priority, created_at) — i.e. LOWER
+   39: # priority number is served first, ties broken oldest-first (FIFO). job_id is
+   40: # appended as a final tie-breaker so ordering is fully deterministic.
+   41: # ---------------------------------------------------------------------------
+   42: 
+   43: # Cross-process lock file guarding the dequeue critical section
+   44: # (read store -> pick job -> flip status). Lives next to this module by
+   45: # default; override with ORCHESTRATION_QUEUE_LOCK_PATH if the package
+   46: # directory is read-only in your deployment.
+   47: _LOCK_PATH = Path(
+   48:     os.environ.get(
+   49:         "ORCHESTRATION_QUEUE_LOCK_PATH",
+   50:         str(Path(__file__).resolve().parent / ".queue.lock"),
+   51:     )
+   52: )
+   53: 
+   54: # In-process lock: cheaper than the file lock for threads within one process,
+   55: # and required anyway because fcntl/msvcrt locks are per-process, not
+   56: # per-thread.
+   57: _thread_lock = threading.Lock()
+   58: 
+   59: try:
+   60:     import fcntl  # POSIX
+   61: 
+   62:     def _flock(fh) -> None:
+   63:         fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+   64: 
+   65:     def _funlock(fh) -> None:
+   66:         fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+   67: 
+   68: except ImportError:  # Windows
+   69:     import msvcrt
+   70: 
+   71:     def _flock(fh) -> None:
+   72:         msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+   73: 
+   74:     def _funlock(fh) -> None:
+   75:         fh.seek(0)
+   76:         msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+   77: 
+   78: 
+   79: @contextmanager
+   80: def _dequeue_lock() -> Iterator[None]:
+   81:     """Serialize the select-and-claim critical section across threads and
+   82:     processes on this machine."""
+   83:     with _thread_lock:
+   84:         _LOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+   85:         with open(_LOCK_PATH, "a+") as fh:
+   86:             _flock(fh)
+   87:             try:
+   88:                 yield
+   89:             finally:
+   90:                 _funlock(fh)
+   91: 
+   92: 
+   93: def _sort_key(job: OrchestrationJob):
+   94:     """Return the canonical Universal Queue priority ordering key."""
+   95:     created_at = (
+   96:         job.created_at.isoformat()
+   97:         if hasattr(job.created_at, "isoformat")
+   98:         else str(job.created_at)
+   99:     )
+  100: 
+  101:     return universal_queue_priority_sort_key(
+  102:         priority=job.priority,
+  103:         created_at=created_at,
+  104:         job_id=job.job_id,
+  105:     )
+  106: 
+  107: 
+  108: def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+  109:     """All jobs currently persisted as queued, in service order."""
+  110:     if jobs is None:
+  111:         jobs = load_jobs()
+  112:     queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+  113:     queued.sort(key=_sort_key)
+  114:     return queued
+  115: 
+  116: 
+  117: def enqueue_job(job_id: str) -> bool:
+  118:     """Kept for API compatibility.
+  119: 
+  120:     Enqueueing is now implicit: create_job persists the job with status
+  121:     JOB_STATUS_QUEUED, and that persisted status is the queue membership.
+  122:     This function only verifies the job actually exists in a queued state,
+  123:     which catches caller bugs (e.g. enqueueing an ID that was never created).
+  124:     """
+  125:     job = get_job(job_id)
+  126:     return job is not None and job.status == JOB_STATUS_QUEUED
+  127: 
+  128: 
+  129: def dequeue_job(worker_id: str | None = None) -> Optional[OrchestrationJob]:
+  130:     """Atomically claim and return the highest-priority queued job.
+  131: 
+  132:     The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+  133:     (with claim metadata) under a cross-process lock, so no other worker
+  134:     can receive the same job. Returns None when nothing is queued.
+  135: 
+  136:     Workers may still call mark_job_running() afterwards; with the
+  137:     corrected service.py that call is idempotent.
+  138:     """
+  139:     with _dequeue_lock():
+  140:         for candidate in _queued_jobs():
+  141:             metadata: Dict[str, object] = {"claimed_by_dequeue": True}
+  142:             if worker_id:
+  143:                 metadata["worker_id"] = worker_id
+  144:             try:
+  145:                 claimed = update_job_status(
+  146:                     candidate.job_id,
+  147:                     JOB_STATUS_RUNNING,
+  148:                     metadata=metadata,
+  149:                 )
+  150:             except Exception:
+  151:                 # Job vanished or store hiccuped between read and write —
+  152:                 # skip it and try the next candidate rather than failing
+  153:                 # the whole dequeue.
+  154:                 continue
+  155:             return claimed
+  156:         return None
+  157: 
+  158: 
+  159: def queue_length() -> int:
+  160:     return len(_queued_jobs())
+  161: 
+  162: 
+  163: def refresh_queue_from_store() -> None:
+  164:     """Kept for API compatibility.
+  165: 
+  166:     There is no longer any in-memory queue state to refresh — every read
+  167:     goes straight to the job store — so this is a no-op.
+  168:     """
+  169:     return None
+  170: 
+  171: 
+  172: def queue_snapshot() -> Dict[str, object]:
+  173:     queued = _queued_jobs()
+  174: 
+  175:     return {
+  176:         "queue_length": len(queued),
+  177:         "queued_job_ids": [job.job_id for job in queued],
+  178:         "queued_jobs": [
+  179:             {
+  180:                 "job_id": job.job_id,
+  181:                 "workspace_id": job.workspace_id,
+  182:                 "job_type": job.job_type,
+  183:                 "priority": job.priority,
+  184:                 "created_at": (
+  185:                     job.created_at.isoformat()
+  186:                     if hasattr(job.created_at, "isoformat")
+  187:                     else str(job.created_at)
+  188:                 ),
+  189:             }
+  190:             for job in queued
+  191:         ],
+  192:     }
+  193: 
+  194: 
+  195: def is_job_queued(job_id: str) -> bool:
+  196:     job = get_job(job_id)
+  197:     return job is not None and job.status == JOB_STATUS_QUEUED

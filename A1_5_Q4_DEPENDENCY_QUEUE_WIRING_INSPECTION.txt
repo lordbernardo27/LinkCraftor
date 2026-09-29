@@ -1,0 +1,2611 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.5-Q4 DEPENDENCY QUEUE WIRING INSPECTION
+Generated: 2026-09-29T13:33:11.284629+00:00
+Mode: READ-ONLY ? NO PRODUCTION FILES MODIFIED
+
+================================================================================================================
+backend\server\runtime\universal_orchestration\dependency_resolution.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationDependencyResolutionError
+LINES: 31-51
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationDependencyResolutionError(
+    ValueError
+):
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        value: Any = None,
+    ) -> None:
+
+        super().__init__(
+            message
+        )
+
+        self.code = str(
+            code
+        )
+
+        self.value = value
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationDependencyClassification
+LINES: 54-65
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationDependencyClassification(
+    str,
+    enum.Enum,
+):
+
+    SATISFIED = "satisfied"
+
+    UNRESOLVED = "unresolved"
+
+    TERMINAL_UNSATISFIED = "terminal_unsatisfied"
+
+    MISSING = "missing"
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _normalize_dependency_statuses
+LINES: 142-267
+----------------------------------------------------------------------------------------------------------------
+def _normalize_dependency_statuses(
+    *,
+    dependency_job_ids: tuple[str, ...],
+    dependency_statuses: Any,
+) -> tuple[
+    tuple[
+        str,
+        UniversalJobStatus,
+    ],
+    ...,
+]:
+
+    if dependency_statuses is None:
+
+        dependency_statuses = {}
+
+    if not isinstance(
+        dependency_statuses,
+        Mapping,
+    ):
+
+        raise UniversalOrchestrationDependencyResolutionError(
+            "dependency_statuses must be a mapping.",
+            code="invalid_dependency_status_mapping",
+            value=dependency_statuses,
+        )
+
+    expected_ids = frozenset(
+        dependency_job_ids
+    )
+
+    normalized_items = []
+
+    seen_ids = set()
+
+    for raw_job_id, raw_status in (
+        dependency_statuses.items()
+    ):
+
+        if not isinstance(
+            raw_job_id,
+            str,
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                "Dependency status keys must be job-id strings.",
+                code="invalid_dependency_status_job_id",
+                value=raw_job_id,
+            )
+
+        job_id = raw_job_id.strip()
+
+        if not job_id:
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                "Dependency status job-id must not be empty.",
+                code="invalid_dependency_status_job_id",
+                value=raw_job_id,
+            )
+
+        if any(
+            character.isspace()
+            for character in job_id
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "Dependency status job-id must not contain "
+                    "internal whitespace."
+                ),
+                code="invalid_dependency_status_job_id",
+                value=raw_job_id,
+            )
+
+        if job_id in seen_ids:
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                "Duplicate dependency status evidence.",
+                code="duplicate_dependency_status_evidence",
+                value=job_id,
+            )
+
+        seen_ids.add(
+            job_id
+        )
+
+        if job_id not in expected_ids:
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "Dependency status evidence was supplied for a "
+                    "job that is not a dependency of target_job."
+                ),
+                code="extraneous_dependency_status_evidence",
+                value=job_id,
+            )
+
+        try:
+
+            status = (
+                normalize_universal_job_status(
+                    raw_status
+                )
+            )
+
+        except Exception as exc:
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                "Invalid dependency Universal Job status.",
+                code="invalid_dependency_job_status",
+                value=raw_status,
+            ) from exc
+
+        normalized_items.append(
+            (
+                job_id,
+                status,
+            )
+        )
+
+    return tuple(
+        sorted(
+            normalized_items,
+            key=lambda item: item[0],
+        )
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: classify_universal_orchestration_dependency_status
+LINES: 270-316
+----------------------------------------------------------------------------------------------------------------
+def classify_universal_orchestration_dependency_status(
+    value: Any,
+) -> UniversalOrchestrationDependencyClassification:
+
+    try:
+
+        status = (
+            normalize_universal_job_status(
+                value
+            )
+        )
+
+    except Exception as exc:
+
+        raise UniversalOrchestrationDependencyResolutionError(
+            "Invalid dependency Universal Job status.",
+            code="invalid_dependency_job_status",
+            value=value,
+        ) from exc
+
+    if status in SATISFIED_UNIVERSAL_JOB_STATUSES:
+
+        return (
+            UniversalOrchestrationDependencyClassification.SATISFIED
+        )
+
+    if (
+        status
+        in TERMINAL_UNSATISFIED_UNIVERSAL_JOB_STATUSES
+    ):
+
+        return (
+            UniversalOrchestrationDependencyClassification
+            .TERMINAL_UNSATISFIED
+        )
+
+    if status in UNRESOLVED_UNIVERSAL_JOB_STATUSES:
+
+        return (
+            UniversalOrchestrationDependencyClassification.UNRESOLVED
+        )
+
+    raise UniversalOrchestrationDependencyResolutionError(
+        "Universal Job status has no dependency classification.",
+        code="unclassified_dependency_job_status",
+        value=status,
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationDependencyResolution
+LINES: 323-679
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationDependencyResolution:
+
+    identity: UniversalOrchestrationRunIdentity
+
+    target_job: UniversalJob
+
+    dependency_statuses: tuple[
+        tuple[
+            str,
+            UniversalJobStatus,
+        ],
+        ...,
+    ] = ()
+
+    schema_version: str = (
+        UNIVERSAL_ORCHESTRATION_DEPENDENCY_RESOLUTION_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        identity = (
+            _require_orchestration_run_identity(
+                self.identity
+            )
+        )
+
+        target_job = (
+            _require_universal_job(
+                self.target_job
+            )
+        )
+
+        if (
+            target_job.job_id
+            not in identity.job_ids
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "target_job must belong to the "
+                    "5.1.1 orchestration contract."
+                ),
+                code="target_job_outside_orchestration_contract",
+                value=target_job.job_id,
+            )
+
+        if (
+            target_job.workspace_id
+            != identity.workspace_id
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "target_job workspace_id does not match "
+                    "orchestration identity."
+                ),
+                code="dependency_target_workspace_mismatch",
+                value=target_job.workspace_id,
+            )
+
+        if (
+            target_job.pipeline
+            != identity.pipeline
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "target_job pipeline does not match "
+                    "orchestration identity."
+                ),
+                code="dependency_target_pipeline_mismatch",
+                value=target_job.pipeline,
+            )
+
+        outside_contract = tuple(
+            dependency_job_id
+            for dependency_job_id
+            in target_job.dependency_job_ids
+            if dependency_job_id
+            not in identity.job_ids
+        )
+
+        if outside_contract:
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "All target_job dependencies must belong "
+                    "to the 5.1.1 orchestration contract."
+                ),
+                code="dependency_outside_orchestration_contract",
+                value=outside_contract,
+            )
+
+        normalized_statuses = (
+            _normalize_dependency_statuses(
+                dependency_job_ids=(
+                    target_job.dependency_job_ids
+                ),
+                dependency_statuses=dict(
+                    self.dependency_statuses
+                ),
+            )
+        )
+
+        if (
+            self.schema_version
+            !=
+            UNIVERSAL_ORCHESTRATION_DEPENDENCY_RESOLUTION_SCHEMA_VERSION
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "Invalid Dependency Resolution "
+                    "schema_version."
+                ),
+                code="invalid_dependency_resolution_schema_version",
+                value=self.schema_version,
+            )
+
+        object.__setattr__(
+            self,
+            "identity",
+            identity,
+        )
+
+        object.__setattr__(
+            self,
+            "target_job",
+            target_job,
+        )
+
+        object.__setattr__(
+            self,
+            "dependency_statuses",
+            normalized_statuses,
+        )
+
+    @property
+    def job_id(
+        self,
+    ) -> str:
+
+        return self.target_job.job_id
+
+    @property
+    def dependency_job_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.target_job.dependency_job_ids
+        )
+
+    @property
+    def dependency_count(
+        self,
+    ) -> int:
+
+        return len(
+            self.dependency_job_ids
+        )
+
+    @property
+    def dependency_status_map(
+        self,
+    ) -> Mapping[
+        str,
+        UniversalJobStatus,
+    ]:
+
+        return MappingProxyType(
+            dict(
+                self.dependency_statuses
+            )
+        )
+
+    @property
+    def satisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if (
+                dependency_job_id
+                in statuses
+                and
+                statuses[
+                    dependency_job_id
+                ]
+                in SATISFIED_UNIVERSAL_JOB_STATUSES
+            )
+        )
+
+    @property
+    def unresolved_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if (
+                dependency_job_id
+                in statuses
+                and
+                statuses[
+                    dependency_job_id
+                ]
+                in UNRESOLVED_UNIVERSAL_JOB_STATUSES
+            )
+        )
+
+    @property
+    def terminal_unsatisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if (
+                dependency_job_id
+                in statuses
+                and
+                statuses[
+                    dependency_job_id
+                ]
+                in TERMINAL_UNSATISFIED_UNIVERSAL_JOB_STATUSES
+            )
+        )
+
+    @property
+    def missing_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if dependency_job_id
+            not in statuses
+        )
+
+    @property
+    def all_dependencies_satisfied(
+        self,
+    ) -> bool:
+
+        return (
+            len(
+                self.satisfied_dependency_ids
+            )
+            == self.dependency_count
+        )
+
+    @property
+    def has_unresolved_dependencies(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.unresolved_dependency_ids
+        )
+
+    @property
+    def has_terminal_dependency_failure(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.terminal_unsatisfied_dependency_ids
+        )
+
+    @property
+    def has_missing_dependency_evidence(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.missing_dependency_ids
+        )
+
+    def classification_for_dependency(
+        self,
+        dependency_job_id: Any,
+    ) -> UniversalOrchestrationDependencyClassification:
+
+        if not isinstance(
+            dependency_job_id,
+            str,
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                "dependency_job_id must be a string.",
+                code="invalid_dependency_lookup_job_id",
+                value=dependency_job_id,
+            )
+
+        normalized = (
+            dependency_job_id.strip()
+        )
+
+        if (
+            normalized
+            not in self.dependency_job_ids
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "dependency_job_id is not a dependency "
+                    "of target_job."
+                ),
+                code="unknown_dependency_lookup_job_id",
+                value=dependency_job_id,
+            )
+
+        status = (
+            self.dependency_status_map.get(
+                normalized
+            )
+        )
+
+        if status is None:
+
+            return (
+                UniversalOrchestrationDependencyClassification.MISSING
+            )
+
+        return (
+            classify_universal_orchestration_dependency_status(
+                status
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: resolve_universal_orchestration_dependencies
+LINES: 682-714
+----------------------------------------------------------------------------------------------------------------
+def resolve_universal_orchestration_dependencies(
+    *,
+    identity: Any,
+    target_job: Any,
+    dependency_statuses: Any = None,
+) -> UniversalOrchestrationDependencyResolution:
+
+    canonical_identity = (
+        _require_orchestration_run_identity(
+            identity
+        )
+    )
+
+    canonical_target_job = (
+        _require_universal_job(
+            target_job
+        )
+    )
+
+    normalized_statuses = (
+        _normalize_dependency_statuses(
+            dependency_job_ids=(
+                canonical_target_job.dependency_job_ids
+            ),
+            dependency_statuses=dependency_statuses,
+        )
+    )
+
+    return UniversalOrchestrationDependencyResolution(
+        identity=canonical_identity,
+        target_job=canonical_target_job,
+        dependency_statuses=normalized_statuses,
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: explain_universal_orchestration_dependency_resolution_v1
+LINES: 717-858
+----------------------------------------------------------------------------------------------------------------
+def explain_universal_orchestration_dependency_resolution_v1(
+) -> Mapping[str, Any]:
+
+    return MappingProxyType(
+        {
+            "phase":
+                "5.1.4",
+
+            "component":
+                "Universal Orchestration Dependency Resolution",
+
+            "version":
+                UNIVERSAL_ORCHESTRATION_DEPENDENCY_RESOLUTION_VERSION,
+
+            "schema_version":
+                UNIVERSAL_ORCHESTRATION_DEPENDENCY_RESOLUTION_SCHEMA_VERSION,
+
+            "stored_fields": (
+                "identity",
+                "target_job",
+                "dependency_statuses",
+                "schema_version",
+            ),
+
+            "classification": MappingProxyType(
+                {
+                    "satisfied": (
+                        UniversalJobStatus.SUCCEEDED.value,
+                    ),
+
+                    "unresolved": tuple(
+                        status.value
+                        for status
+                        in (
+                            UniversalJobStatus.CREATED,
+                            UniversalJobStatus.QUEUED,
+                            UniversalJobStatus.SCHEDULED,
+                            UniversalJobStatus.LEASED,
+                            UniversalJobStatus.RUNNING,
+                            UniversalJobStatus.SUSPENDED,
+                        )
+                    ),
+
+                    "terminal_unsatisfied": tuple(
+                        status.value
+                        for status
+                        in (
+                            UniversalJobStatus.FAILED,
+                            UniversalJobStatus.CANCELLED,
+                            UniversalJobStatus.DEAD_LETTER,
+                            UniversalJobStatus.EXPIRED,
+                        )
+                    ),
+
+                    "missing": (
+                        "no caller-supplied status evidence"
+                    ),
+                }
+            ),
+
+            "dependency_source_rule": (
+                "dependency_job_ids come only from the canonical "
+                "Universal Job target_job; 5.1.4 does not redefine "
+                "or mutate Universal Job lineage."
+            ),
+
+            "membership_rule": (
+                "target_job and every target_job dependency must "
+                "belong to the frozen 5.1.1 orchestration contract."
+            ),
+
+            "parent_rule": (
+                "parent_job_id remains Universal Job lineage evidence "
+                "and is not implicitly treated as a dependency."
+            ),
+
+            "evidence_rule": (
+                "Dependency status evidence is caller supplied; "
+                "5.1.4 performs no persistence lookup."
+            ),
+
+            "missing_rule": (
+                "A dependency without supplied status evidence is "
+                "MISSING, not failed and not satisfied."
+            ),
+
+            "zero_dependency_rule": (
+                "A target job with zero dependencies has "
+                "all_dependencies_satisfied=True."
+            ),
+
+            "cycle_boundary": (
+                "5.1.4 does not perform cross-job cycle detection; "
+                "dependency graph structural validation belongs to "
+                "5.1.5 Execution Planning."
+            ),
+
+            "planning_boundary": (
+                "5.1.4 does not determine execution order; "
+                "execution planning belongs to 5.1.5."
+            ),
+
+            "readiness_boundary": (
+                "Dependency resolution evidence is not a READY or "
+                "BLOCKED decision; readiness belongs to 5.1.6."
+            ),
+
+            "state_boundary": (
+                "5.1.4 does not transition the 5.1.3 "
+                "Orchestration State Model."
+            ),
+
+            "prohibitions": (
+                "does not redefine dependency_job_ids",
+                "does not mutate Universal Job lineage",
+                "does not treat parent_job_id as an implicit dependency",
+                "does not perform cross-job cycle detection",
+                "does not read Runtime State Store",
+                "does not query job persistence",
+                "does not mutate Universal Jobs",
+                "does not transition orchestration state",
+                "does not determine execution order",
+                "does not create execution plans",
+                "does not determine READY",
+                "does not determine BLOCKED",
+                "does not enqueue jobs",
+                "does not claim jobs",
+                "does not assign workers",
+                "does not acquire worker leases",
+                "does not register runtime handlers",
+                "does not dispatch runtime handlers",
+                "does not execute runtime handlers",
+                "does not execute jobs",
+                "does not import Universal Coordination Framework",
+                "does not invoke pipeline coordinators",
+                "does not persist dependency resolution",
+                "does not use wall clock",
+                "does not perform filesystem I/O",
+                "does not perform network I/O",
+            ),
+        }
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: dependency_job_ids
+LINES: 470-476
+----------------------------------------------------------------------------------------------------------------
+    def dependency_job_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.target_job.dependency_job_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: dependency_count
+LINES: 479-485
+----------------------------------------------------------------------------------------------------------------
+    def dependency_count(
+        self,
+    ) -> int:
+
+        return len(
+            self.dependency_job_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: dependency_status_map
+LINES: 488-499
+----------------------------------------------------------------------------------------------------------------
+    def dependency_status_map(
+        self,
+    ) -> Mapping[
+        str,
+        UniversalJobStatus,
+    ]:
+
+        return MappingProxyType(
+            dict(
+                self.dependency_statuses
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: satisfied_dependency_ids
+LINES: 502-523
+----------------------------------------------------------------------------------------------------------------
+    def satisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if (
+                dependency_job_id
+                in statuses
+                and
+                statuses[
+                    dependency_job_id
+                ]
+                in SATISFIED_UNIVERSAL_JOB_STATUSES
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: unresolved_dependency_ids
+LINES: 526-547
+----------------------------------------------------------------------------------------------------------------
+    def unresolved_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if (
+                dependency_job_id
+                in statuses
+                and
+                statuses[
+                    dependency_job_id
+                ]
+                in UNRESOLVED_UNIVERSAL_JOB_STATUSES
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: terminal_unsatisfied_dependency_ids
+LINES: 550-571
+----------------------------------------------------------------------------------------------------------------
+    def terminal_unsatisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if (
+                dependency_job_id
+                in statuses
+                and
+                statuses[
+                    dependency_job_id
+                ]
+                in TERMINAL_UNSATISFIED_UNIVERSAL_JOB_STATUSES
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: missing_dependency_ids
+LINES: 574-588
+----------------------------------------------------------------------------------------------------------------
+    def missing_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        statuses = (
+            self.dependency_status_map
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_job_ids
+            if dependency_job_id
+            not in statuses
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: all_dependencies_satisfied
+LINES: 591-600
+----------------------------------------------------------------------------------------------------------------
+    def all_dependencies_satisfied(
+        self,
+    ) -> bool:
+
+        return (
+            len(
+                self.satisfied_dependency_ids
+            )
+            == self.dependency_count
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: has_unresolved_dependencies
+LINES: 603-609
+----------------------------------------------------------------------------------------------------------------
+    def has_unresolved_dependencies(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.unresolved_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: has_terminal_dependency_failure
+LINES: 612-618
+----------------------------------------------------------------------------------------------------------------
+    def has_terminal_dependency_failure(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.terminal_unsatisfied_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: has_missing_dependency_evidence
+LINES: 621-627
+----------------------------------------------------------------------------------------------------------------
+    def has_missing_dependency_evidence(
+        self,
+    ) -> bool:
+
+        return bool(
+            self.missing_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: classification_for_dependency
+LINES: 629-679
+----------------------------------------------------------------------------------------------------------------
+    def classification_for_dependency(
+        self,
+        dependency_job_id: Any,
+    ) -> UniversalOrchestrationDependencyClassification:
+
+        if not isinstance(
+            dependency_job_id,
+            str,
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                "dependency_job_id must be a string.",
+                code="invalid_dependency_lookup_job_id",
+                value=dependency_job_id,
+            )
+
+        normalized = (
+            dependency_job_id.strip()
+        )
+
+        if (
+            normalized
+            not in self.dependency_job_ids
+        ):
+
+            raise UniversalOrchestrationDependencyResolutionError(
+                (
+                    "dependency_job_id is not a dependency "
+                    "of target_job."
+                ),
+                code="unknown_dependency_lookup_job_id",
+                value=dependency_job_id,
+            )
+
+        status = (
+            self.dependency_status_map.get(
+                normalized
+            )
+        )
+
+        if status is None:
+
+            return (
+                UniversalOrchestrationDependencyClassification.MISSING
+            )
+
+        return (
+            classify_universal_orchestration_dependency_status(
+                status
+            )
+        )
+
+RELEVANT LINES:
+   23:     "universal_orchestration_dependency_resolution_v5.1.4"
+   27:     "universal_orchestration_dependency_resolution_schema_v1"
+  117:             code="invalid_dependency_resolution_identity",
+  135:             code="invalid_dependency_resolution_target_job",
+  142: def _normalize_dependency_statuses(
+  144:     dependency_job_ids: tuple[str, ...],
+  145:     dependency_statuses: Any,
+  154:     if dependency_statuses is None:
+  156:         dependency_statuses = {}
+  159:         dependency_statuses,
+  164:             "dependency_statuses must be a mapping.",
+  165:             code="invalid_dependency_status_mapping",
+  166:             value=dependency_statuses,
+  170:         dependency_job_ids
+  178:         dependency_statuses.items()
+  188:                 code="invalid_dependency_status_job_id",
+  198:                 code="invalid_dependency_status_job_id",
+  212:                 code="invalid_dependency_status_job_id",
+  219:                 "Duplicate dependency status evidence.",
+  220:                 code="duplicate_dependency_status_evidence",
+  233:                     "job that is not a dependency of target_job."
+  235:                 code="extraneous_dependency_status_evidence",
+  250:                 "Invalid dependency Universal Job status.",
+  251:                 code="invalid_dependency_job_status",
+  270: def classify_universal_orchestration_dependency_status(
+  285:             "Invalid dependency Universal Job status.",
+  286:             code="invalid_dependency_job_status",
+  313:         "Universal Job status has no dependency classification.",
+  314:         code="unclassified_dependency_job_status",
+  329:     dependency_statuses: tuple[
+  381:                 code="dependency_target_workspace_mismatch",
+  395:                 code="dependency_target_pipeline_mismatch",
+  400:             dependency_job_id
+  401:             for dependency_job_id
+  402:             in target_job.dependency_job_ids
+  403:             if dependency_job_id
+  414:                 code="dependency_outside_orchestration_contract",
+  419:             _normalize_dependency_statuses(
+  420:                 dependency_job_ids=(
+  421:                     target_job.dependency_job_ids
+  423:                 dependency_statuses=dict(
+  424:                     self.dependency_statuses
+  440:                 code="invalid_dependency_resolution_schema_version",
+  458:             "dependency_statuses",
+  470:     def dependency_job_ids(
+  475:             self.target_job.dependency_job_ids
+  479:     def dependency_count(
+  484:             self.dependency_job_ids
+  488:     def dependency_status_map(
+  497:                 self.dependency_statuses
+  502:     def satisfied_dependency_ids(
+  507:             self.dependency_status_map
+  511:             dependency_job_id
+  512:             for dependency_job_id
+  513:             in self.dependency_job_ids
+  515:                 dependency_job_id
+  519:                     dependency_job_id
+  526:     def unresolved_dependency_ids(
+  531:             self.dependency_status_map
+  535:             dependency_job_id
+  536:             for dependency_job_id
+  537:             in self.dependency_job_ids
+  539:                 dependency_job_id
+  543:                     dependency_job_id
+  550:     def terminal_unsatisfied_dependency_ids(
+  555:             self.dependency_status_map
+  559:             dependency_job_id
+  560:             for dependency_job_id
+  561:             in self.dependency_job_ids
+  563:                 dependency_job_id
+  567:                     dependency_job_id
+  574:     def missing_dependency_ids(
+  579:             self.dependency_status_map
+  583:             dependency_job_id
+  584:             for dependency_job_id
+  585:             in self.dependency_job_ids
+  586:             if dependency_job_id
+  597:                 self.satisfied_dependency_ids
+  599:             == self.dependency_count
+  608:             self.unresolved_dependency_ids
+  612:     def has_terminal_dependency_failure(
+  617:             self.terminal_unsatisfied_dependency_ids
+  621:     def has_missing_dependency_evidence(
+  626:             self.missing_dependency_ids
+  629:     def classification_for_dependency(
+  631:         dependency_job_id: Any,
+  635:             dependency_job_id,
+  640:                 "dependency_job_id must be a string.",
+  641:                 code="invalid_dependency_lookup_job_id",
+  642:                 value=dependency_job_id,
+  646:             dependency_job_id.strip()
+  651:             not in self.dependency_job_ids
+  656:                     "dependency_job_id is not a dependency "
+  659:                 code="unknown_dependency_lookup_job_id",
+  660:                 value=dependency_job_id,
+  664:             self.dependency_status_map.get(
+  676:             classify_universal_orchestration_dependency_status(
+  686:     dependency_statuses: Any = None,
+  702:         _normalize_dependency_statuses(
+  703:             dependency_job_ids=(
+  704:                 canonical_target_job.dependency_job_ids
+  706:             dependency_statuses=dependency_statuses,
+  713:         dependency_statuses=normalized_statuses,
+  717: def explain_universal_orchestration_dependency_resolution_v1(
+  737:                 "dependency_statuses",
+  777:             "dependency_source_rule": (
+  778:                 "dependency_job_ids come only from the canonical "
+  784:                 "target_job and every target_job dependency must "
+  790:                 "and is not implicitly treated as a dependency."
+  799:                 "A dependency without supplied status evidence is "
+  803:             "zero_dependency_rule": (
+  810:                 "dependency graph structural validation belongs to "
+  830:                 "does not redefine dependency_job_ids",
+  832:                 "does not treat parent_job_id as an implicit dependency",
+  852:                 "does not persist dependency resolution",
+  869:     "classify_universal_orchestration_dependency_status",
+  872:     "explain_universal_orchestration_dependency_resolution_v1",
+
+================================================================================================================
+backend\server\runtime\universal_orchestration\stage_readiness.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationStageReadinessError
+LINES: 26-46
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationStageReadinessError(
+    ValueError
+):
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        value: Any = None,
+    ) -> None:
+
+        super().__init__(
+            message
+        )
+
+        self.code = str(
+            code
+        )
+
+        self.value = value
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationStageReadinessClassification
+LINES: 49-58
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationStageReadinessClassification(
+    str,
+    enum.Enum,
+):
+
+    READY = "ready"
+
+    WAITING = "waiting"
+
+    BLOCKED = "blocked"
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationStageReadinessReason
+LINES: 61-76
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationStageReadinessReason(
+    str,
+    enum.Enum,
+):
+
+    ALL_DEPENDENCIES_SATISFIED = (
+        "all_dependencies_satisfied"
+    )
+
+    DEPENDENCY_EVIDENCE_PENDING = (
+        "dependency_evidence_pending"
+    )
+
+    TERMINAL_DEPENDENCY_FAILURE = (
+        "terminal_dependency_failure"
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _require_dependency_resolution
+LINES: 79-97
+----------------------------------------------------------------------------------------------------------------
+def _require_dependency_resolution(
+    value: Any,
+) -> UniversalOrchestrationDependencyResolution:
+
+    if not isinstance(
+        value,
+        UniversalOrchestrationDependencyResolution,
+    ):
+
+        raise UniversalOrchestrationStageReadinessError(
+            (
+                "dependency_resolution must be a "
+                "UniversalOrchestrationDependencyResolution."
+            ),
+            code="invalid_stage_readiness_dependency_resolution",
+            value=value,
+        )
+
+    return value
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _validate_stage_readiness_alignment
+LINES: 121-202
+----------------------------------------------------------------------------------------------------------------
+def _validate_stage_readiness_alignment(
+    *,
+    dependency_resolution: (
+        UniversalOrchestrationDependencyResolution
+    ),
+    execution_plan: UniversalOrchestrationExecutionPlan,
+) -> None:
+
+    if (
+        dependency_resolution.identity
+        != execution_plan.identity
+    ):
+
+        raise UniversalOrchestrationStageReadinessError(
+            (
+                "Dependency Resolution and Execution Plan "
+                "must belong to the same orchestration identity."
+            ),
+            code="stage_readiness_identity_mismatch",
+            value=(
+                dependency_resolution.identity.orchestration_run_id,
+                execution_plan.identity.orchestration_run_id,
+            ),
+        )
+
+    job_id = (
+        dependency_resolution.job_id
+    )
+
+    if (
+        job_id
+        not in execution_plan.job_map
+    ):
+
+        raise UniversalOrchestrationStageReadinessError(
+            (
+                "Dependency Resolution target job must "
+                "exist in the Execution Plan."
+            ),
+            code="stage_readiness_target_not_in_execution_plan",
+            value=job_id,
+        )
+
+    planned_job = (
+        execution_plan.job_map[
+            job_id
+        ]
+    )
+
+    if (
+        planned_job
+        != dependency_resolution.target_job
+    ):
+
+        raise UniversalOrchestrationStageReadinessError(
+            (
+                "Dependency Resolution target_job must "
+                "exactly match the planned UniversalJob."
+            ),
+            code="stage_readiness_target_job_mismatch",
+            value=job_id,
+        )
+
+    planned_dependencies = (
+        execution_plan.dependency_map[
+            job_id
+        ]
+    )
+
+    if (
+        planned_dependencies
+        != dependency_resolution.dependency_job_ids
+    ):
+
+        raise UniversalOrchestrationStageReadinessError(
+            (
+                "Dependency Resolution dependency structure "
+                "must match the Execution Plan."
+            ),
+            code="stage_readiness_dependency_structure_mismatch",
+            value=job_id,
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: classify_universal_orchestration_stage_readiness
+LINES: 205-251
+----------------------------------------------------------------------------------------------------------------
+def classify_universal_orchestration_stage_readiness(
+    dependency_resolution: Any,
+) -> UniversalOrchestrationStageReadinessClassification:
+
+    resolution = (
+        _require_dependency_resolution(
+            dependency_resolution
+        )
+    )
+
+    if (
+        resolution.has_terminal_dependency_failure
+    ):
+
+        return (
+            UniversalOrchestrationStageReadinessClassification
+            .BLOCKED
+        )
+
+    if (
+        resolution.has_unresolved_dependencies
+        or
+        resolution.has_missing_dependency_evidence
+    ):
+
+        return (
+            UniversalOrchestrationStageReadinessClassification
+            .WAITING
+        )
+
+    if (
+        resolution.all_dependencies_satisfied
+    ):
+
+        return (
+            UniversalOrchestrationStageReadinessClassification
+            .READY
+        )
+
+    raise UniversalOrchestrationStageReadinessError(
+        (
+            "Dependency Resolution evidence does not map "
+            "to a canonical readiness classification."
+        ),
+        code="inconsistent_stage_readiness_evidence",
+        value=resolution.job_id,
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: reason_for_universal_orchestration_stage_readiness
+LINES: 254-287
+----------------------------------------------------------------------------------------------------------------
+def reason_for_universal_orchestration_stage_readiness(
+    dependency_resolution: Any,
+) -> UniversalOrchestrationStageReadinessReason:
+
+    classification = (
+        classify_universal_orchestration_stage_readiness(
+            dependency_resolution
+        )
+    )
+
+    if (
+        classification
+        is UniversalOrchestrationStageReadinessClassification.BLOCKED
+    ):
+
+        return (
+            UniversalOrchestrationStageReadinessReason
+            .TERMINAL_DEPENDENCY_FAILURE
+        )
+
+    if (
+        classification
+        is UniversalOrchestrationStageReadinessClassification.WAITING
+    ):
+
+        return (
+            UniversalOrchestrationStageReadinessReason
+            .DEPENDENCY_EVIDENCE_PENDING
+        )
+
+    return (
+        UniversalOrchestrationStageReadinessReason
+        .ALL_DEPENDENCIES_SATISFIED
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: UniversalOrchestrationStageReadiness
+LINES: 294-509
+----------------------------------------------------------------------------------------------------------------
+class UniversalOrchestrationStageReadiness:
+
+    dependency_resolution: (
+        UniversalOrchestrationDependencyResolution
+    )
+
+    execution_plan: (
+        UniversalOrchestrationExecutionPlan
+    )
+
+    schema_version: str = (
+        UNIVERSAL_ORCHESTRATION_STAGE_READINESS_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        dependency_resolution = (
+            _require_dependency_resolution(
+                self.dependency_resolution
+            )
+        )
+
+        execution_plan = (
+            _require_execution_plan(
+                self.execution_plan
+            )
+        )
+
+        if (
+            self.schema_version
+            !=
+            UNIVERSAL_ORCHESTRATION_STAGE_READINESS_SCHEMA_VERSION
+        ):
+
+            raise UniversalOrchestrationStageReadinessError(
+                "Invalid Stage Readiness schema_version.",
+                code="invalid_stage_readiness_schema_version",
+                value=self.schema_version,
+            )
+
+        _validate_stage_readiness_alignment(
+            dependency_resolution=dependency_resolution,
+            execution_plan=execution_plan,
+        )
+
+        object.__setattr__(
+            self,
+            "dependency_resolution",
+            dependency_resolution,
+        )
+
+        object.__setattr__(
+            self,
+            "execution_plan",
+            execution_plan,
+        )
+
+    @property
+    def identity(
+        self,
+    ):
+
+        return (
+            self.dependency_resolution.identity
+        )
+
+    @property
+    def target_job(
+        self,
+    ):
+
+        return (
+            self.dependency_resolution.target_job
+        )
+
+    @property
+    def job_id(
+        self,
+    ) -> str:
+
+        return (
+            self.dependency_resolution.job_id
+        )
+
+    @property
+    def classification(
+        self,
+    ) -> UniversalOrchestrationStageReadinessClassification:
+
+        return (
+            classify_universal_orchestration_stage_readiness(
+                self.dependency_resolution
+            )
+        )
+
+    @property
+    def reason(
+        self,
+    ) -> UniversalOrchestrationStageReadinessReason:
+
+        return (
+            reason_for_universal_orchestration_stage_readiness(
+                self.dependency_resolution
+            )
+        )
+
+    @property
+    def reason_code(
+        self,
+    ) -> str:
+
+        return self.reason.value
+
+    @property
+    def is_ready(
+        self,
+    ) -> bool:
+
+        return (
+            self.classification
+            is UniversalOrchestrationStageReadinessClassification.READY
+        )
+
+    @property
+    def is_waiting(
+        self,
+    ) -> bool:
+
+        return (
+            self.classification
+            is UniversalOrchestrationStageReadinessClassification.WAITING
+        )
+
+    @property
+    def is_blocked(
+        self,
+    ) -> bool:
+
+        return (
+            self.classification
+            is UniversalOrchestrationStageReadinessClassification.BLOCKED
+        )
+
+    @property
+    def satisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution.satisfied_dependency_ids
+        )
+
+    @property
+    def unresolved_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution.unresolved_dependency_ids
+        )
+
+    @property
+    def terminal_unsatisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution
+            .terminal_unsatisfied_dependency_ids
+        )
+
+    @property
+    def missing_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution.missing_dependency_ids
+        )
+
+    @property
+    def blocking_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.terminal_unsatisfied_dependency_ids
+        )
+
+    @property
+    def waiting_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        unresolved = frozenset(
+            self.unresolved_dependency_ids
+        )
+
+        missing = frozenset(
+            self.missing_dependency_ids
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_resolution.dependency_job_ids
+            if (
+                dependency_job_id
+                in unresolved
+                or
+                dependency_job_id
+                in missing
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: evaluate_universal_orchestration_stage_readiness
+LINES: 512-529
+----------------------------------------------------------------------------------------------------------------
+def evaluate_universal_orchestration_stage_readiness(
+    *,
+    dependency_resolution: Any,
+    execution_plan: Any,
+) -> UniversalOrchestrationStageReadiness:
+
+    return UniversalOrchestrationStageReadiness(
+        dependency_resolution=(
+            _require_dependency_resolution(
+                dependency_resolution
+            )
+        ),
+        execution_plan=(
+            _require_execution_plan(
+                execution_plan
+            )
+        ),
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: explain_universal_orchestration_stage_readiness_v1
+LINES: 532-655
+----------------------------------------------------------------------------------------------------------------
+def explain_universal_orchestration_stage_readiness_v1(
+) -> Mapping[str, Any]:
+
+    return MappingProxyType(
+        {
+            "phase":
+                "5.1.6",
+
+            "component":
+                "Universal Orchestration Stage Readiness Evaluation",
+
+            "version":
+                UNIVERSAL_ORCHESTRATION_STAGE_READINESS_VERSION,
+
+            "schema_version":
+                UNIVERSAL_ORCHESTRATION_STAGE_READINESS_SCHEMA_VERSION,
+
+            "stored_fields": (
+                "dependency_resolution",
+                "execution_plan",
+                "schema_version",
+            ),
+
+            "classifications": (
+                "ready",
+                "waiting",
+                "blocked",
+            ),
+
+            "precedence_rule": (
+                "BLOCKED outranks WAITING; WAITING outranks READY."
+            ),
+
+            "blocked_rule": (
+                "Any terminally-unsatisfied dependency evidence "
+                "classifies the target as BLOCKED."
+            ),
+
+            "waiting_rule": (
+                "Without terminal dependency failure, unresolved "
+                "or missing dependency evidence classifies the "
+                "target as WAITING."
+            ),
+
+            "ready_rule": (
+                "Without terminal failure, unresolved dependencies, "
+                "or missing evidence, all dependencies satisfied "
+                "classifies the target as READY."
+            ),
+
+            "zero_dependency_rule": (
+                "A zero-dependency target is READY because its "
+                "dependency prerequisites are vacuously satisfied."
+            ),
+
+            "target_status_boundary": (
+                "5.1.6 does not inspect target UniversalJob.status; "
+                "readiness is dependency-prerequisite evidence, not "
+                "job lifecycle or runtime-handoff eligibility."
+            ),
+
+            "handoff_boundary": (
+                "Whether a READY target may actually proceed to "
+                "runtime handoff belongs to 5.1.7."
+            ),
+
+            "suspension_boundary": (
+                "Suspension/resume eligibility belongs to 5.1.12."
+            ),
+
+            "dependency_boundary": (
+                "Dependency status interpretation belongs to frozen "
+                "5.1.4 Dependency Resolution."
+            ),
+
+            "planning_boundary": (
+                "Dependency graph topology belongs to frozen "
+                "5.1.5 Execution Planning."
+            ),
+
+            "alignment_rule": (
+                "Dependency Resolution and Execution Plan must share "
+                "the same orchestration identity and exact target "
+                "UniversalJob/dependency structure."
+            ),
+
+            "prohibitions": (
+                "does not inspect target UniversalJob.status",
+                "does not use job priority",
+                "does not use queue priority",
+                "does not use created_at",
+                "does not use scheduled_at",
+                "does not use retry or attempt counts",
+                "does not evaluate worker health",
+                "does not evaluate worker capability",
+                "does not evaluate worker capacity",
+                "does not evaluate worker availability",
+                "does not evaluate queue capacity",
+                "does not evaluate backpressure",
+                "does not evaluate lease availability",
+                "does not transition orchestration state",
+                "does not perform runtime handoff",
+                "does not coordinate actual fan-out",
+                "does not coordinate actual fan-in",
+                "does not evaluate conditional branches",
+                "does not enqueue jobs",
+                "does not dequeue jobs",
+                "does not claim jobs",
+                "does not assign workers",
+                "does not acquire worker leases",
+                "does not register runtime handlers",
+                "does not dispatch runtime handlers",
+                "does not execute runtime handlers",
+                "does not execute jobs",
+                "does not access Runtime State Store",
+                "does not persist readiness",
+                "does not import Universal Coordination Framework",
+                "does not invoke pipeline coordinators",
+                "does not use wall clock",
+                "does not perform filesystem I/O",
+                "does not perform network I/O",
+            ),
+        }
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: is_ready
+LINES: 410-417
+----------------------------------------------------------------------------------------------------------------
+    def is_ready(
+        self,
+    ) -> bool:
+
+        return (
+            self.classification
+            is UniversalOrchestrationStageReadinessClassification.READY
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: satisfied_dependency_ids
+LINES: 440-446
+----------------------------------------------------------------------------------------------------------------
+    def satisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution.satisfied_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: unresolved_dependency_ids
+LINES: 449-455
+----------------------------------------------------------------------------------------------------------------
+    def unresolved_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution.unresolved_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: terminal_unsatisfied_dependency_ids
+LINES: 458-465
+----------------------------------------------------------------------------------------------------------------
+    def terminal_unsatisfied_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution
+            .terminal_unsatisfied_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: missing_dependency_ids
+LINES: 468-474
+----------------------------------------------------------------------------------------------------------------
+    def missing_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.dependency_resolution.missing_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: blocking_dependency_ids
+LINES: 477-483
+----------------------------------------------------------------------------------------------------------------
+    def blocking_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        return (
+            self.terminal_unsatisfied_dependency_ids
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: waiting_dependency_ids
+LINES: 486-509
+----------------------------------------------------------------------------------------------------------------
+    def waiting_dependency_ids(
+        self,
+    ) -> tuple[str, ...]:
+
+        unresolved = frozenset(
+            self.unresolved_dependency_ids
+        )
+
+        missing = frozenset(
+            self.missing_dependency_ids
+        )
+
+        return tuple(
+            dependency_job_id
+            for dependency_job_id
+            in self.dependency_resolution.dependency_job_ids
+            if (
+                dependency_job_id
+                in unresolved
+                or
+                dependency_job_id
+                in missing
+            )
+        )
+
+RELEVANT LINES:
+    8: from backend.server.runtime.universal_orchestration.dependency_resolution import (
+   54:     READY = "ready"
+   58:     BLOCKED = "blocked"
+   71:         "dependency_evidence_pending"
+   75:         "terminal_dependency_failure"
+   79: def _require_dependency_resolution(
+   90:                 "dependency_resolution must be a "
+   93:             code="invalid_stage_readiness_dependency_resolution",
+  123:     dependency_resolution: (
+  130:         dependency_resolution.identity
+  141:                 dependency_resolution.identity.orchestration_run_id,
+  147:         dependency_resolution.job_id
+  172:         != dependency_resolution.target_job
+  185:         execution_plan.dependency_map[
+  192:         != dependency_resolution.dependency_job_ids
+  197:                 "Dependency Resolution dependency structure "
+  200:             code="stage_readiness_dependency_structure_mismatch",
+  206:     dependency_resolution: Any,
+  210:         _require_dependency_resolution(
+  211:             dependency_resolution
+  216:         resolution.has_terminal_dependency_failure
+  227:         resolution.has_missing_dependency_evidence
+  255:     dependency_resolution: Any,
+  260:             dependency_resolution
+  296:     dependency_resolution: (
+  312:         dependency_resolution = (
+  313:             _require_dependency_resolution(
+  314:                 self.dependency_resolution
+  337:             dependency_resolution=dependency_resolution,
+  343:             "dependency_resolution",
+  344:             dependency_resolution,
+  359:             self.dependency_resolution.identity
+  368:             self.dependency_resolution.target_job
+  377:             self.dependency_resolution.job_id
+  387:                 self.dependency_resolution
+  398:                 self.dependency_resolution
+  410:     def is_ready(
+  430:     def is_blocked(
+  440:     def satisfied_dependency_ids(
+  445:             self.dependency_resolution.satisfied_dependency_ids
+  449:     def unresolved_dependency_ids(
+  454:             self.dependency_resolution.unresolved_dependency_ids
+  458:     def terminal_unsatisfied_dependency_ids(
+  463:             self.dependency_resolution
+  464:             .terminal_unsatisfied_dependency_ids
+  468:     def missing_dependency_ids(
+  473:             self.dependency_resolution.missing_dependency_ids
+  477:     def blocking_dependency_ids(
+  482:             self.terminal_unsatisfied_dependency_ids
+  486:     def waiting_dependency_ids(
+  491:             self.unresolved_dependency_ids
+  495:             self.missing_dependency_ids
+  499:             dependency_job_id
+  500:             for dependency_job_id
+  501:             in self.dependency_resolution.dependency_job_ids
+  503:                 dependency_job_id
+  506:                 dependency_job_id
+  514:     dependency_resolution: Any,
+  519:         dependency_resolution=(
+  520:             _require_dependency_resolution(
+  521:                 dependency_resolution
+  550:                 "dependency_resolution",
+  556:                 "ready",
+  558:                 "blocked",
+  565:             "blocked_rule": (
+  566:                 "Any terminally-unsatisfied dependency evidence "
+  571:                 "Without terminal dependency failure, unresolved "
+  572:                 "or missing dependency evidence classifies the "
+  576:             "ready_rule": (
+  582:             "zero_dependency_rule": (
+  583:                 "A zero-dependency target is READY because its "
+  584:                 "dependency prerequisites are vacuously satisfied."
+  589:                 "readiness is dependency-prerequisite evidence, not "
+  602:             "dependency_boundary": (
+  615:                 "UniversalJob/dependency structure."
+
+================================================================================================================
+backend\server\runtime\universal_orchestration\execution_planning.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _build_dependency_map
+LINES: 254-272
+----------------------------------------------------------------------------------------------------------------
+def _build_dependency_map(
+    jobs: tuple[
+        UniversalJob,
+        ...,
+    ],
+) -> dict[
+    str,
+    tuple[
+        str,
+        ...,
+    ],
+]:
+
+    return {
+        job.job_id: tuple(
+            job.dependency_job_ids
+        )
+        for job in jobs
+    }
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _build_dependent_map
+LINES: 275-323
+----------------------------------------------------------------------------------------------------------------
+def _build_dependent_map(
+    *,
+    job_ids: tuple[
+        str,
+        ...,
+    ],
+    dependency_map: Mapping[
+        str,
+        tuple[
+            str,
+            ...,
+        ],
+    ],
+) -> dict[
+    str,
+    tuple[
+        str,
+        ...,
+    ],
+]:
+
+    mutable = {
+        job_id: []
+        for job_id in job_ids
+    }
+
+    for dependent_job_id in job_ids:
+
+        for dependency_job_id in (
+            dependency_map[
+                dependent_job_id
+            ]
+        ):
+
+            mutable[
+                dependency_job_id
+            ].append(
+                dependent_job_id
+            )
+
+    return {
+        job_id: tuple(
+            sorted(
+                dependent_ids
+            )
+        )
+        for job_id, dependent_ids
+        in mutable.items()
+    }
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: dependency_map
+LINES: 573-587
+----------------------------------------------------------------------------------------------------------------
+    def dependency_map(
+        self,
+    ) -> Mapping[
+        str,
+        tuple[
+            str,
+            ...,
+        ],
+    ]:
+
+        return MappingProxyType(
+            _build_dependency_map(
+                self.jobs
+            )
+        )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: dependent_map
+LINES: 590-605
+----------------------------------------------------------------------------------------------------------------
+    def dependent_map(
+        self,
+    ) -> Mapping[
+        str,
+        tuple[
+            str,
+            ...,
+        ],
+    ]:
+
+        return MappingProxyType(
+            _build_dependent_map(
+                job_ids=self.job_ids,
+                dependency_map=self.dependency_map,
+            )
+        )
+
+RELEVANT LINES:
+  232:             dependency_job_id
+  233:             for dependency_job_id
+  234:             in job.dependency_job_ids
+  235:             if dependency_job_id
+  243:                     "Execution-plan dependency is outside the "
+  246:                 code="execution_plan_dependency_outside_contract",
+  254: def _build_dependency_map(
+  269:             job.dependency_job_ids
+  281:     dependency_map: Mapping[
+  303:         for dependency_job_id in (
+  304:             dependency_map[
+  310:                 dependency_job_id
+  332:     dependency_map: Mapping[
+  356:             dependency_map[
+  390:         for completed_job_id in frontier:
+  394:                     completed_job_id
+  438:                 "contains a dependency cycle."
+  440:             code="execution_plan_dependency_cycle",
+  498:         dependency_map = (
+  499:             _build_dependency_map(
+  510:                 dependency_map=dependency_map,
+  519:             dependency_map=dependency_map,
+  573:     def dependency_map(
+  584:             _build_dependency_map(
+  603:                 dependency_map=self.dependency_map,
+  619:             if not self.dependency_map[
+  651:             in self.dependency_map.values()
+  667:             dependency_map=self.dependency_map,
+  768:                 "Each dependency_job_id creates a directed edge "
+  769:                 "from dependency job to dependent job."
+  778:                 "Cross-job dependency cycles are rejected by 5.1.5."
+  794:                 "present in dependency_job_ids."
+  803:                 "A root job has zero dependency_job_ids."
+  815:                 "Execution waves represent structural dependency levels "
+  819:             "dependency_status_boundary": (
+  849:                 "does not evaluate dependency statuses",
+
+================================================================================================================
+backend\server\runtime\universal_jobs\contract.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+NONE
+
+RELEVANT LINES:
+   65:     "dependency_job_ids",
+   79:     "completed_at",
+  110:     "completed_at",
+  526:     completed_units: Optional[int] = None
+  560:         completed = (
+  562:             if self.completed_units is None
+  564:                 self.completed_units,
+  565:                 name="progress.completed_units",
+  569:         if total is not None and completed is not None and completed > total:
+  571:                 "progress.completed_units must not exceed progress.total_units"
+  574:         set_(self, "completed_units", completed)
+  596:             "completed_units": self.completed_units,
+  726:     dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+  752:     completed_at: Optional[str] = None
+  841:         set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+  842:             self.dependency_job_ids, name="dependency_job_ids",
+  844:         if self.job_id and self.job_id in self.dependency_job_ids:
+  845:             violations.append("dependency_job_ids must not contain job_id")
+  974:             "dependency_job_ids": list(self.dependency_job_ids),
+  988:             "completed_at": self.completed_at,
+ 1203:         Construction already guarantees a valid instance; this method exists so
+
+================================================================================================================
+backend\server\runtime\universal_job_submission.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+NONE
+
+RELEVANT LINES:
+   55:     Project an already-normalized Universal Job priority into the
+  130:         "canonical_job": dict(
+  174:     dependency_job_ids: Optional[
+  248:             dependency_job_ids=(
+  249:                 dependency_job_ids
+  278:     canonical_job = dict(
+  285:     canonical_job_id = str(
+  286:         canonical_job.get(
+  292:     if not canonical_job_id:
+  298:             code="missing_canonical_job_id",
+  302:         canonical_job.get(
+  309:     canonical_job_type = str(
+  310:         canonical_job.get(
+  319:             canonical_job.get(
+  340:                 canonical_job_type
+  355:                 canonical_job_id
+  367:         != canonical_job_id
+  395:         canonical_job
+
+================================================================================================================
+backend\server\orchestration\queue.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _queued_jobs
+LINES: 108-114
+----------------------------------------------------------------------------------------------------------------
+def _queued_jobs(jobs: Optional[Dict[str, OrchestrationJob]] = None) -> List[OrchestrationJob]:
+    """All jobs currently persisted as queued, in service order."""
+    if jobs is None:
+        jobs = load_jobs()
+    queued = [job for job in jobs.values() if job.status == JOB_STATUS_QUEUED]
+    queued.sort(key=_sort_key)
+    return queued
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: is_job_queued
+LINES: 195-197
+----------------------------------------------------------------------------------------------------------------
+def is_job_queued(job_id: str) -> bool:
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+RELEVANT LINES:
+NONE
+
+================================================================================================================
+backend\server\orchestration\job_store.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _read_json
+LINES: 34-41
+----------------------------------------------------------------------------------------------------------------
+def _read_json(path: Path, default: Any) -> Any:
+    _ensure_dir()
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: _job_from_dict
+LINES: 63-94
+----------------------------------------------------------------------------------------------------------------
+def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
+    return OrchestrationJob(
+        job_id=str(data.get("job_id", "")),
+        workspace_id=str(data.get("workspace_id", "")),
+        job_type=str(data.get("job_type", "")),
+        status=str(data.get("status", "queued")),
+        priority=int(data.get("priority", 5)),
+        created_at=_parse_datetime(data.get("created_at")) or utc_now(),
+        updated_at=_parse_datetime(data.get("updated_at")) or utc_now(),
+        payload=data.get("payload") or {},
+        metadata=data.get("metadata") or {},
+        assigned_worker_id=data.get("assigned_worker_id"),
+        progress_percent=float(data.get("progress_percent", 0.0)),
+        current_step=str(data.get("current_step", "")),
+        total_steps=int(data.get("total_steps", 0)),
+        processed_count=int(data.get("processed_count", 0)),
+        failed_count=int(data.get("failed_count", 0)),
+        warning_count=int(data.get("warning_count", 0)),
+
+        total_documents=int(data.get("total_documents", 0)),
+        processed_documents=int(data.get("processed_documents", 0)),
+        failed_documents=int(data.get("failed_documents", 0)),
+        skipped_documents=int(data.get("skipped_documents", 0)),
+
+        current_document_id=str(data.get("current_document_id", "")),
+        current_document_name=str(data.get("current_document_name", "")),
+
+        progress_message=str(data.get("progress_message", "")),
+        started_at=_parse_datetime(data.get("started_at")),
+        completed_at=_parse_datetime(data.get("completed_at")),
+        error_message=data.get("error_message"),
+    )
+
+----------------------------------------------------------------------------------------------------------------
+DECLARATION: load_jobs
+LINES: 97-105
+----------------------------------------------------------------------------------------------------------------
+def load_jobs() -> Dict[str, OrchestrationJob]:
+    raw = _read_json(JOBS_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        job_id: _job_from_dict(item)
+        for job_id, item in raw.items()
+        if isinstance(item, dict)
+    }
+
+RELEVANT LINES:
+   92:         completed_at=_parse_datetime(data.get("completed_at")),
+  139:     canonical_job_id = str(
+  144:     if not canonical_job_id:
+  150:         canonical_job_id
+  155:             "Job already exists: "
+  156:             + canonical_job_id
+  160:         job_id=canonical_job_id,
+  169:         canonical_job_id
+  177:         canonical_job_id,
+
+================================================================================================================
+backend\server\orchestration\models.py
+================================================================================================================
+EXISTS: True
+SYNTAX: PASS
+
+RELEVANT DECLARATIONS:
+NONE
+
+RELEVANT LINES:
+   11: JOB_STATUS_COMPLETED = "completed"
+   58:     completed_at: Optional[datetime] = None
+   72:     completed_at: Optional[datetime] = None
+  110:     completed_jobs: int = 0
+
+================================================================================================================
+ACTIVE DEPENDENCY CALL SITES
+================================================================================================================
+
+SYMBOL: resolve_universal
+MATCHES: 28
+  backend/server/runtime/universal_jobs/creation_engine.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine.py:669: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:635: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:659: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:634: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:622: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:621: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:631: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:30: resolve_universal_job_id,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:610: job_id = resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/identity.py:159: def resolve_universal_job_id(
+  backend/server/runtime/universal_jobs/identity.py:309: "resolve_universal_job_id",
+  backend/server/runtime/universal_jobs/payload_reference_before_universal_cleanup.py:237: def resolve_universal_job_payload_reference(
+  backend/server/runtime/universal_jobs/payload_reference_before_universal_cleanup.py:488: "resolve_universal_job_payload_reference",
+  backend/server/runtime/universal_orchestration/cancellation_termination.py:914: def resolve_universal_orchestration_cancellation_termination(
+  backend/server/runtime/universal_orchestration/cancellation_termination.py:1086: "resolve_universal_orchestration_cancellation_termination",
+  backend/server/runtime/universal_orchestration/cancellation_termination_before_annotation_fix_2026_09_13.py:916: def resolve_universal_orchestration_cancellation_termination(
+  backend/server/runtime/universal_orchestration/cancellation_termination_before_annotation_fix_2026_09_13.py:1088: "resolve_universal_orchestration_cancellation_termination",
+  backend/server/runtime/universal_orchestration/completion_resolution.py:781: def resolve_universal_orchestration_completion(
+  backend/server/runtime/universal_orchestration/completion_resolution.py:932: "resolve_universal_orchestration_completion",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:682: def resolve_universal_orchestration_dependencies(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:871: "resolve_universal_orchestration_dependencies",
+
+SYMBOL: dependency_resolution
+MATCHES: 47
+  backend/server/runtime/universal_orchestration/certification.py:139: "dependency_resolution_authority_unique",
+  backend/server/runtime/universal_orchestration/certification_before_5_1_4_fingerprint_fix.py:139: "dependency_resolution_authority_unique",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:23: "universal_orchestration_dependency_resolution_v5.1.4"
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:27: "universal_orchestration_dependency_resolution_schema_v1"
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:117: code="invalid_dependency_resolution_identity",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:135: code="invalid_dependency_resolution_target_job",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:440: code="invalid_dependency_resolution_schema_version",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:717: def explain_universal_orchestration_dependency_resolution_v1(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:872: "explain_universal_orchestration_dependency_resolution_v1",
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:491: "dependency_resolution_boundary": (
+  backend/server/runtime/universal_orchestration/stage_readiness.py:8: from backend.server.runtime.universal_orchestration.dependency_resolution import (
+  backend/server/runtime/universal_orchestration/stage_readiness.py:79: def _require_dependency_resolution(
+  backend/server/runtime/universal_orchestration/stage_readiness.py:90: "dependency_resolution must be a "
+  backend/server/runtime/universal_orchestration/stage_readiness.py:93: code="invalid_stage_readiness_dependency_resolution",
+  backend/server/runtime/universal_orchestration/stage_readiness.py:123: dependency_resolution: (
+  backend/server/runtime/universal_orchestration/stage_readiness.py:130: dependency_resolution.identity
+  backend/server/runtime/universal_orchestration/stage_readiness.py:141: dependency_resolution.identity.orchestration_run_id,
+  backend/server/runtime/universal_orchestration/stage_readiness.py:147: dependency_resolution.job_id
+  backend/server/runtime/universal_orchestration/stage_readiness.py:172: != dependency_resolution.target_job
+  backend/server/runtime/universal_orchestration/stage_readiness.py:192: != dependency_resolution.dependency_job_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:206: dependency_resolution: Any,
+  backend/server/runtime/universal_orchestration/stage_readiness.py:210: _require_dependency_resolution(
+  backend/server/runtime/universal_orchestration/stage_readiness.py:211: dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:255: dependency_resolution: Any,
+  backend/server/runtime/universal_orchestration/stage_readiness.py:260: dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:296: dependency_resolution: (
+  backend/server/runtime/universal_orchestration/stage_readiness.py:312: dependency_resolution = (
+  backend/server/runtime/universal_orchestration/stage_readiness.py:313: _require_dependency_resolution(
+  backend/server/runtime/universal_orchestration/stage_readiness.py:314: self.dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:337: dependency_resolution=dependency_resolution,
+  backend/server/runtime/universal_orchestration/stage_readiness.py:343: "dependency_resolution",
+  backend/server/runtime/universal_orchestration/stage_readiness.py:344: dependency_resolution,
+  backend/server/runtime/universal_orchestration/stage_readiness.py:359: self.dependency_resolution.identity
+  backend/server/runtime/universal_orchestration/stage_readiness.py:368: self.dependency_resolution.target_job
+  backend/server/runtime/universal_orchestration/stage_readiness.py:377: self.dependency_resolution.job_id
+  backend/server/runtime/universal_orchestration/stage_readiness.py:387: self.dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:398: self.dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:445: self.dependency_resolution.satisfied_dependency_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:454: self.dependency_resolution.unresolved_dependency_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:463: self.dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:473: self.dependency_resolution.missing_dependency_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:501: in self.dependency_resolution.dependency_job_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:514: dependency_resolution: Any,
+  backend/server/runtime/universal_orchestration/stage_readiness.py:519: dependency_resolution=(
+  backend/server/runtime/universal_orchestration/stage_readiness.py:520: _require_dependency_resolution(
+  backend/server/runtime/universal_orchestration/stage_readiness.py:521: dependency_resolution
+  backend/server/runtime/universal_orchestration/stage_readiness.py:550: "dependency_resolution",
+
+SYMBOL: dependency_job_ids
+MATCHES: 149
+  backend/server/runtime/universal_job_submission.py:174: dependency_job_ids: Optional[
+  backend/server/runtime/universal_job_submission.py:248: dependency_job_ids=(
+  backend/server/runtime/universal_job_submission.py:249: dependency_job_ids
+  backend/server/runtime/universal_jobs/contract.py:65: "dependency_job_ids",
+  backend/server/runtime/universal_jobs/contract.py:726: dependency_job_ids: Tuple[str, ...] = _EMPTY_TUPLE
+  backend/server/runtime/universal_jobs/contract.py:841: set_(self, "dependency_job_ids", _normalize_identifier_tuple(
+  backend/server/runtime/universal_jobs/contract.py:842: self.dependency_job_ids, name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/contract.py:844: if self.job_id and self.job_id in self.dependency_job_ids:
+  backend/server/runtime/universal_jobs/contract.py:845: violations.append("dependency_job_ids must not contain job_id")
+  backend/server/runtime/universal_jobs/contract.py:974: "dependency_job_ids": list(self.dependency_job_ids),
+  backend/server/runtime/universal_jobs/creation_engine.py:62: normalize_dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine.py:468: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine.py:567: dependencies = normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/creation_engine.py:568: request.dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine.py:683: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine.py:721: dependency_job_ids=lineage.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine.py:749: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine.py:776: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine.py:778: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine.py:779: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine.py:828: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:455: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:550: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:551: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:657: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:684: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:710: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:712: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:713: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_attempts_integration.py:761: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:62: normalize_dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:463: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:561: dependencies = normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:562: request.dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:673: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:697: dependency_job_ids=lineage.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:724: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:750: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:752: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:753: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_idempotency_key_integration.py:801: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:454: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:549: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:550: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:656: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:683: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:709: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:711: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:712: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_lineage_integration.py:760: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:437: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:532: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:533: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:644: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:671: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:697: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:699: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:700: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_payload_reference_integration.py:750: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:441: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:536: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:537: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:643: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:670: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:696: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:698: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:699: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_priority_integration.py:749: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:451: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:546: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:547: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:653: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:680: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:706: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:708: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:709: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_before_status_integration.py:759: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:467: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:553: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:554: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:650: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:677: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:703: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:705: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:706: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_2_before_identity_integration.py:756: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:431: dependency_job_ids: Tuple[str, ...] = ()
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:520: request.dependency_job_ids,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:521: field_name="dependency_job_ids",
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:632: dependency_job_ids=dependencies,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:659: dependency_job_ids: Optional[Iterable[Any]] = None,
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:685: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:687: if dependency_job_ids is None
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:688: else dependency_job_ids
+  backend/server/runtime/universal_jobs/creation_engine_phase_2_1_3_before_metadata_integration.py:738: dependency_job_ids=normalized.dependency_job_ids,
+  backend/server/runtime/universal_jobs/lineage.py:77: def normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/lineage.py:99: "dependency_job_ids must be an "
+  backend/server/runtime/universal_jobs/lineage.py:102: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:114: "dependency_job_ids must be an "
+  backend/server/runtime/universal_jobs/lineage.py:117: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:131: "dependency_job_ids must contain "
+  backend/server/runtime/universal_jobs/lineage.py:134: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:143: "dependency_job_ids must not "
+  backend/server/runtime/universal_jobs/lineage.py:146: code="invalid_dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:193: dependency_job_ids: tuple[str, ...]
+  backend/server/runtime/universal_jobs/lineage.py:208: self.dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:216: self.dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:229: "dependency_job_ids":
+  backend/server/runtime/universal_jobs/lineage.py:231: self.dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:250: dependency_job_ids: Any = (),
+  backend/server/runtime/universal_jobs/lineage.py:288: normalize_dependency_job_ids(
+  backend/server/runtime/universal_jobs/lineage.py:289: dependency_job_ids
+  backend/server/runtime/universal_jobs/lineage.py:324: "dependency_job_ids must not "
+  backend/server/runtime/universal_jobs/lineage.py:334: dependency_job_ids=(
+  backend/server/runtime/universal_jobs/lineage.py:359: "dependency_job_ids",
+  backend/server/runtime/universal_jobs/lineage.py:366: "dependency_job_ids are "
+  backend/server/runtime/universal_jobs/lineage.py:374: "dependency_job_ids must not "
+  backend/server/runtime/universal_jobs/lineage.py:402: "normalize_dependency_job_ids",
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:144: dependency_job_ids: tuple[str, ...],
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:170: dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:402: in target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:420: dependency_job_ids=(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:421: target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:470: def dependency_job_ids(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:475: self.target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:484: self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:513: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:537: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:561: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:585: in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:651: not in self.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:703: dependency_job_ids=(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:704: canonical_target_job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:778: "dependency_job_ids come only from the canonical "
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:830: "does not redefine dependency_job_ids",
+  backend/server/runtime/universal_orchestration/execution_planning.py:234: in job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/execution_planning.py:269: job.dependency_job_ids
+  backend/server/runtime/universal_orchestration/execution_planning.py:794: "present in dependency_job_ids."
+  backend/server/runtime/universal_orchestration/execution_planning.py:803: "A root job has zero dependency_job_ids."
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:133: def _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:186: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:231: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:300: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:336: def direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:341: _direct_dependency_job_ids(
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:357: in self.direct_dependency_job_ids
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:366: self.direct_dependency_job_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:192: != dependency_resolution.dependency_job_ids
+  backend/server/runtime/universal_orchestration/stage_readiness.py:501: in self.dependency_resolution.dependency_job_ids
+
+SYMBOL: is_dependency
+MATCHES: 0
+
+SYMBOL: dependencies_satisfied
+MATCHES: 5
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:591: def all_dependencies_satisfied(
+  backend/server/runtime/universal_orchestration/dependency_resolution.py:805: "all_dependencies_satisfied=True."
+  backend/server/runtime/universal_orchestration/fan_in_coordination.py:536: "does not evaluate all_dependencies_satisfied",
+  backend/server/runtime/universal_orchestration/stage_readiness.py:67: "all_dependencies_satisfied"
+  backend/server/runtime/universal_orchestration/stage_readiness.py:236: resolution.all_dependencies_satisfied
+
+SYMBOL: JOB_STATUS_COMPLETED
+MATCHES: 13
+  backend/server/runtime/universal_runtime_worker_v1.py:47: JOB_STATUS_COMPLETED,
+  backend/server/runtime/universal_runtime_worker_v1.py:595: != JOB_STATUS_COMPLETED
+  backend/server/orchestration/models.py:11: JOB_STATUS_COMPLETED = "completed"
+  backend/server/orchestration/models.py:19: JOB_STATUS_COMPLETED,
+  backend/server/orchestration/service.py:17: JOB_STATUS_COMPLETED,
+  backend/server/orchestration/service.py:118: return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+  backend/server/orchestration/service.py:183: JOB_STATUS_COMPLETED: 0,
+  backend/server/orchestration/service_before_canonical_job_identity_ingress.py:17: JOB_STATUS_COMPLETED,
+  backend/server/orchestration/service_before_canonical_job_identity_ingress.py:110: return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+  backend/server/orchestration/service_before_canonical_job_identity_ingress.py:175: JOB_STATUS_COMPLETED: 0,
+  backend/server/orchestration/service_before_package_import_hardening.py:17: JOB_STATUS_COMPLETED,
+  backend/server/orchestration/service_before_package_import_hardening.py:118: return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+  backend/server/orchestration/service_before_package_import_hardening.py:183: JOB_STATUS_COMPLETED: 0,
+
+================================================================================================================
+A1.5-Q4 DECISION QUESTIONS
+================================================================================================================
+1. Which existing function is the canonical dependency authority?
+2. What input type does dependency resolution require?
+3. Can it operate from the persisted canonical job projections?
+4. Which terminal status satisfies a dependency?
+5. What happens when a dependency job is missing?
+6. What happens when a dependency failed or was cancelled?
+7. Can dependency-blocked jobs remain QUEUED?
+8. Can independent jobs remain immediately eligible?
+9. Can malformed dependency data fail closed?
+10. Can dequeue_job(worker_id=...) remain unchanged?

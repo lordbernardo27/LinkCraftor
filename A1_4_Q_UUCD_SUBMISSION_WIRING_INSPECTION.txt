@@ -1,0 +1,1200 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.4-Q UUCD UNIVERSAL SUBMISSION WIRING INSPECTION
+Generated: 2026-09-29T10:57:56.468648+00:00
+Project root: C:\Users\HP\Documents\LinkCraftor
+Mode: READ-ONLY ? NO PRODUCTION FILES MODIFIED
+
+==============================================================================================================
+FILE AND SYNTAX STATUS
+==============================================================================================================
+
+FILE: backend/server/runtime/uucd_runtime_handoff_v1.py
+EXISTS: True
+SYNTAX: PASS
+LINES: 1179
+
+FILE: backend/server/runtime/universal_job_submission.py
+EXISTS: True
+SYNTAX: PASS
+LINES: 516
+
+FILE: backend/server/runtime/universal_jobs/creation_engine.py
+EXISTS: True
+SYNTAX: PASS
+LINES: 908
+
+FILE: backend/server/runtime/universal_runtime_registration.py
+EXISTS: True
+SYNTAX: PASS
+LINES: 1134
+
+FILE: backend/server/orchestration/service.py
+EXISTS: True
+SYNTAX: PASS
+LINES: 196
+
+==============================================================================================================
+UUCD HANDOFF IMPORTS
+==============================================================================================================
+51: backend.server.orchestration.job_store.create_job as create_orchestration_job
+51: backend.server.orchestration.job_store.load_jobs as load_orchestration_jobs
+55: backend.server.runtime.universal_jobs.creation_engine.create_universal_job
+58: backend.server.runtime.universal_runtime_registration.get_runtime_registration
+
+==============================================================================================================
+DIRECT create_universal_job CALL
+==============================================================================================================
+Assignments detected: 1
+
+CALL LINE: 806
+ASSIGNED TO: creation_result
+ENCLOSING DECLARATION: handoff_persisted_uucd_to_runtime_v1
+DECLARATION LINES: 610-1091
+
+def handoff_persisted_uucd_to_runtime_v1(
+    persisted_uucd_record: Mapping[str, Any],
+    *,
+    runtime_registration: Mapping[str, Any] | None = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    priority: int = 5,
+) -> dict[str, Any]:
+    """
+    Create and persist one canonical Universal Job for a persisted UUCD.
+
+    The Universal Job Creation Engine remains I/O-free.
+
+    The resulting canonical Universal Job job_id is then supplied to the
+    orchestration store through Stage 10.5's caller-owned identity ingress.
+    """
+
+    validated = _validate_persisted_uucd(
+        persisted_uucd_record
+    )
+
+    payload = build_uucd_runtime_payload_v1(
+        persisted_uucd_record
+    )
+
+    idempotency_key = (
+        build_uucd_runtime_idempotency_key_v1(
+            workspace_id=validated[
+                "workspace_id"
+            ],
+            document_id=validated[
+                "document_id"
+            ],
+            content_hash=validated[
+                "content_hash"
+            ],
+            persistence_fingerprint=validated[
+                "persistence_fingerprint"
+            ],
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+        )
+    )
+
+    registration = (
+        _resolve_runtime_registration(
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    existing_orchestration_job = (
+        _find_existing_orchestration_job_by_idempotency_key_v1(
+            workspace_id=validated[
+                "workspace_id"
+            ],
+            job_type=UUCD_RUNTIME_JOB_TYPE,
+            idempotency_key=idempotency_key,
+        )
+    )
+
+    if existing_orchestration_job is not None:
+
+        existing_metadata = (
+            existing_orchestration_job.metadata
+            if isinstance(
+                existing_orchestration_job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        existing_canonical_job = (
+            existing_metadata.get(
+                "canonical_universal_job"
+            )
+        )
+
+        if not isinstance(
+            existing_canonical_job,
+            Mapping,
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing idempotent orchestration job does not "
+                "contain canonical_universal_job metadata."
+            )
+
+        existing_job_id = (
+            _require_non_empty_string(
+                existing_orchestration_job.job_id,
+                field_name="existing_orchestration_job.job_id",
+            )
+        )
+
+        if (
+            existing_canonical_job.get(
+                "job_id"
+            )
+            != existing_job_id
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing idempotent job violates canonical "
+                "job identity preservation."
+            )
+
+        if (
+            existing_canonical_job.get(
+                "idempotency_key"
+            )
+            != idempotency_key
+        ):
+            raise UUCDRuntimeHandoffPersistenceError(
+                "Existing canonical Universal Job idempotency_key "
+                "does not match orchestration metadata."
+            )
+
+        return {
+            "schema_version":
+                UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+
+            "handoff_version":
+                UUCD_RUNTIME_HANDOFF_VERSION,
+
+            "handoff_status":
+                "IDEMPOTENT_REUSE",
+
+            "job_id":
+                existing_job_id,
+
+            "canonical_universal_job":
+                deepcopy(
+                    dict(
+                        existing_canonical_job
+                    )
+                ),
+
+            "orchestration_job": {
+                "job_id":
+                    existing_orchestration_job.job_id,
+
+                "workspace_id":
+                    existing_orchestration_job.workspace_id,
+
+                "job_type":
+                    existing_orchestration_job.job_type,
+
+                "status":
+                    existing_orchestration_job.status,
+
+                "priority":
+                    existing_orchestration_job.priority,
+
+                "payload":
+                    deepcopy(
+                        existing_orchestration_job.payload
+                    ),
+
+                "metadata":
+                    deepcopy(
+                        existing_orchestration_job.metadata
+                    ),
+
+                "assigned_worker_id":
+                    existing_orchestration_job.assigned_worker_id,
+            },
+
+            "idempotency_key":
+                idempotency_key,
+
+            "idempotent_reuse":
+                True,
+
+            "new_universal_job_created":
+                False,
+
+            "new_orchestration_job_created":
+                False,
+
+            "body_content_in_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+
+            "worker_executed":
+                False,
+
+            "handler_dispatched":
+                False,
+
+            "semantic_processing_performed":
+                False,
+
+            "next_stage":
+                "universal_runtime_worker",
+        }
+
+    creation_result = create_universal_job(
+        workspace_id=validated[
+            "workspace_id"
+        ],
+        job_type=UUCD_RUNTIME_JOB_TYPE,
+        payload=payload,
+        metadata={
+            "source_component":
+                "Canonical UUCD Persistence",
+
+            "handoff_adapter":
+                UUCD_RUNTIME_HANDOFF_VERSION,
+
+            "document_id":
+                validated[
+                    "document_id"
+                ],
+
+            "persistence_fingerprint":
+                validated[
+                    "persistence_fingerprint"
+                ],
+
+            "body_content_in_job":
+                False,
+        },
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=UUCD_RUNTIME_PIPELINE,
+        stage=UUCD_RUNTIME_STAGE,
+        payload_reference=validated[
+            "content_ref"
+        ],
+        idempotency_key=idempotency_key,
+        enqueue=True,
+        runtime_registration=registration,
+    )
+
+    universal_job = (
+        creation_result.job
+    )
+
+    canonical_job = (
+        universal_job.to_canonical_dict()
+    )
+
+    canonical_job_id = (
+        _require_non_empty_string(
+            canonical_job.get(
+                "job_id"
+            ),
+            field_name="canonical_job.job_id",
+        )
+    )
+
+    if (
+        canonical_job.get(
+            "workspace_id"
+        )
+        != validated[
+            "workspace_id"
+        ]
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "Universal Job workspace_id drifted "
+            "from the persisted UUCD."
+        )
+
+    if (
+        canonical_job.get(
+            "payload_reference"
+        )
+        != validated[
+            "content_ref"
+        ]
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "Universal Job payload_reference drifted "
+            "from canonical UUCD content_ref."
+        )
+
+    if (
+        canonical_job.get(
+            "idempotency_key"
+        )
+        != idempotency_key
+    ):
+        raise UUCDRuntimeHandoffContractError(
+            "Universal Job idempotency_key drifted."
+        )
+
+    try:
+
+        orchestration_job = (
+            create_orchestration_job(
+                workspace_id=validated[
+                    "workspace_id"
+                ],
+                job_type=UUCD_RUNTIME_JOB_TYPE,
+                payload=deepcopy(
+                    payload
+                ),
+                metadata={
+                    "canonical_universal_job":
+                        canonical_job,
+
+                    "universal_job_contract_version":
+                        canonical_job.get(
+                            "contract_version"
+                        ),
+
+                    "payload_reference":
+                        validated[
+                            "content_ref"
+                        ],
+
+                    "idempotency_key":
+                        idempotency_key,
+
+                    "persistence_fingerprint":
+                        validated[
+                            "persistence_fingerprint"
+                        ],
+
+                    "handoff_adapter":
+                        UUCD_RUNTIME_HANDOFF_VERSION,
+
+                    "body_content_in_job":
+                        False,
+                },
+                priority=priority,
+                job_id=canonical_job_id,
+            )
+        )
+
+    except Exception as exc:
+        raise UUCDRuntimeHandoffPersistenceError(
+            "Canonical orchestration ingress failed."
+        ) from exc
+
+    if (
+        orchestration_job.job_id
+        != canonical_job_id
+    ):
+        raise UUCDRuntimeHandoffPersistenceError(
+            "Orchestration layer changed the "
+            "canonical Universal Job identity."
+        )
+
+    if (
+        orchestration_job.status
+        != "queued"
+    ):
+        raise UUCDRuntimeHandoffPersistenceError(
+            "New orchestration job must enter "
+            "the canonical queue as status=queued."
+        )
+
+    certificate = {
+        "certificate_schema_version":
+            UUCD_RUNTIME_HANDOFF_CERTIFICATE_SCHEMA_VERSION,
+
+        "certificate_status":
+            "CERTIFIED",
+
+        "handoff_version":
+            UUCD_RUNTIME_HANDOFF_VERSION,
+
+        "workspace_id":
+            validated[
+                "workspace_id"
+            ],
+
+        "document_id":
+            validated[
+                "document_id"
+            ],
+
+        "job_id":
+            canonical_job_id,
+
+        "job_type":
+            UUCD_RUNTIME_JOB_TYPE,
+
+        "pipeline":
+            UUCD_RUNTIME_PIPELINE,
+
+        "stage":
+            UUCD_RUNTIME_STAGE,
+
+        "payload_reference":
+            validated[
+                "content_ref"
+            ],
+
+        "body_ref":
+            validated[
+                "body_ref"
+            ],
+
+        "content_hash":
+            validated[
+                "content_hash"
+            ],
+
+        "persistence_fingerprint":
+            validated[
+                "persistence_fingerprint"
+            ],
+
+        "idempotency_key":
+            idempotency_key,
+
+        "job_identity_preserved":
+            True,
+
+        "orchestration_status":
+            orchestration_job.status,
+
+        "body_content_in_job":
+            False,
+
+        "old_universal_knowledge_jsonl_used":
+            False,
+
+        "runtime_registration_modified":
+            False,
+
+        "worker_executed":
+            False,
+
+        "handler_dispatched":
+            False,
+
+        "semantic_processing_performed":
+            False,
+
+        "certified_at":
+            _utc_now_iso(),
+    }
+
+    return {
+        "schema_version":
+            UUCD_RUNTIME_HANDOFF_SCHEMA_VERSION,
+
+        "handoff_status":
+            "QUEUED",
+
+        "job_id":
+            canonical_job_id,
+
+        "job_type":
+            UUCD_RUNTIME_JOB_TYPE,
+
+        "payload":
+            deepcopy(
+                payload
+            ),
+
+        "canonical_universal_job":
+            canonical_job,
+
+        "orchestration_job":
+            {
+                "job_id":
+                    orchestration_job.job_id,
+
+                "workspace_id":
+                    orchestration_job.workspace_id,
+
+                "job_type":
+                    orchestration_job.job_type,
+
+                "status":
+                    orchestration_job.status,
+
+                "priority":
+                    orchestration_job.priority,
+            },
+
+        "handoff_certificate":
+            certificate,
+
+        "next_stage":
+            "universal_runtime_worker",
+    }
+
+USAGES OF VARIABLE: creation_result
+  806: creation_result = create_universal_job(
+  845: creation_result.job
+
+==============================================================================================================
+CANONICAL submit_universal_job IMPLEMENTATION
+==============================================================================================================
+FUNCTION LINES: 154-456
+
+def submit_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[
+        Mapping[str, Any]
+    ] = None,
+    metadata: Optional[
+        Mapping[str, Any]
+    ] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = 5,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[
+        Iterable[Any]
+    ] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    job_id: Optional[str] = None,
+    created_at: Optional[str] = None,
+    supported_job_types: Optional[
+        Iterable[Any]
+    ] = None,
+    runtime_registration: Optional[
+        Mapping[str, Any]
+    ] = None,
+    enqueue: bool = True,
+) -> dict[str, Any]:
+    """
+    Create one canonical Universal Job and submit that SAME identity
+    into the LinkCraftor orchestration store.
+
+    This is an I/O boundary.
+
+    Creation authority:
+        Universal Job Creation Engine
+
+    Registration authority:
+        Universal Runtime Registration
+
+    Persistence / queue authority:
+        orchestration.service -> orchestration.job_store
+
+    The Creation Engine remains I/O-free.
+    """
+
+    if not enqueue:
+        raise UniversalJobSubmissionError(
+            (
+                "Universal job submission currently represents the "
+                "persisted queued ingress and therefore requires "
+                "enqueue=True."
+            ),
+            code="submission_requires_enqueue",
+        )
+
+    effective_registration = (
+        runtime_registration
+    )
+
+    if effective_registration is None:
+        effective_registration = (
+            get_runtime_registration(
+                job_type
+            )
+        )
+
+    creation_result = (
+        create_universal_job(
+            workspace_id=workspace_id,
+            job_type=job_type,
+            payload=payload,
+            metadata=metadata,
+            user_id=user_id,
+            product_id=product_id,
+            pipeline=pipeline,
+            stage=stage,
+            payload_reference=(
+                payload_reference
+            ),
+            priority=priority,
+            parent_job_id=(
+                parent_job_id
+            ),
+            dependency_job_ids=(
+                dependency_job_ids
+            ),
+            batch_id=batch_id,
+            pipeline_run_id=(
+                pipeline_run_id
+            ),
+            idempotency_key=(
+                idempotency_key
+            ),
+            maximum_attempts=(
+                maximum_attempts
+            ),
+            enqueue=True,
+            job_id=job_id,
+            created_at=created_at,
+            supported_job_types=(
+                supported_job_types
+            ),
+            runtime_registration=(
+                effective_registration
+            ),
+        )
+    )
+
+    creation_document = (
+        creation_result.to_dict()
+    )
+
+    canonical_job = dict(
+        creation_document.get(
+            "job"
+        )
+        or {}
+    )
+
+    canonical_job_id = str(
+        canonical_job.get(
+            "job_id"
+        )
+        or ""
+    ).strip()
+
+    if not canonical_job_id:
+        raise UniversalJobSubmissionError(
+            (
+                "Universal Job Creation Engine returned "
+                "no canonical job_id."
+            ),
+            code="missing_canonical_job_id",
+        )
+
+    canonical_workspace_id = str(
+        canonical_job.get(
+            "workspace_id"
+        )
+        or workspace_id
+        or ""
+    ).strip()
+
+    canonical_job_type = str(
+        canonical_job.get(
+            "job_type"
+        )
+        or job_type
+        or ""
+    ).strip()
+
+    orchestration_priority = (
+        _canonical_orchestration_priority(
+            canonical_job.get(
+                "priority",
+                priority,
+            )
+        )
+    )
+
+    orchestration_metadata = (
+        _build_orchestration_metadata(
+            creation_result=(
+                creation_result
+            )
+        )
+    )
+
+    orchestration_job = (
+        create_orchestration_job(
+            workspace_id=(
+                canonical_workspace_id
+            ),
+            job_type=(
+                canonical_job_type
+            ),
+            payload=dict(
+                creation_document.get(
+                    "payload"
+                )
+                or {}
+            ),
+            metadata=(
+                orchestration_metadata
+            ),
+            priority=(
+                orchestration_priority
+            ),
+            job_id=(
+                canonical_job_id
+            ),
+        )
+    )
+
+    persisted_job_id = str(
+        orchestration_job.job_id
+        or ""
+    ).strip()
+
+    if (
+        persisted_job_id
+        != canonical_job_id
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Orchestration persisted a different job identity "
+                "than the canonical Universal Job identity."
+            ),
+            code="orchestration_identity_mismatch",
+        )
+
+    persisted_status = str(
+        orchestration_job.status
+        or ""
+    ).strip()
+
+    if (
+        persisted_status
+        != "queued"
+    ):
+        raise UniversalJobSubmissionError(
+            (
+                "Submitted Universal Job was not persisted "
+                "with queued orchestration status."
+            ),
+            code="orchestration_not_queued",
+        )
+
+    result = dict(
+        canonical_job
+    )
+
+    # Preserve the payload and creation metadata in the familiar
+    # job-shaped result consumed by existing pipeline callers.
+    result[
+        "payload"
+    ] = dict(
+        creation_document.get(
+            "payload"
+        )
+        or {}
+    )
+
+    result[
+        "metadata"
+    ] = dict(
+        creation_document.get(
+            "metadata"
+        )
+        or {}
+    )
+
+    result[
+        "registration"
+    ] = (
+        creation_document.get(
+            "registration"
+        )
+    )
+
+    result[
+        "identity_fingerprint"
+    ] = creation_document.get(
+        "identity_fingerprint"
+    )
+
+    result[
+        "contract_fingerprint"
+    ] = creation_document.get(
+        "contract_fingerprint"
+    )
+
+    result[
+        "content_fingerprint"
+    ] = creation_document.get(
+        "content_fingerprint"
+    )
+
+    result[
+        "orchestration"
+    ] = asdict(
+        orchestration_job
+    )
+
+    result[
+        "submission"
+    ] = {
+        "submission_version": (
+            UNIVERSAL_JOB_SUBMISSION_VERSION
+        ),
+        "persisted": True,
+        "queued": True,
+        "canonical_identity_preserved": True,
+    }
+
+    return result
+
+==============================================================================================================
+UniversalJobCreationResult SHAPE
+==============================================================================================================
+CLASS LINES: 480-508
+
+class UniversalJobCreationResult:
+    job: UniversalJob
+    payload: Mapping[str, Any]
+    metadata: Mapping[str, Any]
+    registration: Optional[Mapping[str, Any]]
+    enqueue_requested: bool
+    job_type_source: str
+    creation_engine_version: str = UNIVERSAL_JOB_CREATION_ENGINE_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": UNIVERSAL_JOB_CREATION_RESULT_VERSION,
+            "ok": True,
+            "creation_engine_version": self.creation_engine_version,
+            "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+            "enqueue_requested": self.enqueue_requested,
+            "job_type_source": self.job_type_source,
+            "job": self.job.to_canonical_dict(),
+            "payload": _thaw_json(self.payload),
+            "metadata": thaw_universal_job_metadata(self.metadata),
+            "registration": (
+                _thaw_json(self.registration)
+                if self.registration is not None
+                else None
+            ),
+            "identity_fingerprint": self.job.identity_fingerprint(),
+            "contract_fingerprint": self.job.contract_fingerprint(),
+            "content_fingerprint": self.job.content_fingerprint(),
+        }
+
+==============================================================================================================
+RUNTIME REGISTRATION LOOKUP
+==============================================================================================================
+def get_runtime_registration(
+    job_type: str,
+) -> dict[str, Any] | None:
+    ensure_persisted_runtime_registrations_loaded()
+
+    canonical_job_type = _normalize_name(
+        job_type,
+        field_name="job_type",
+    )
+
+    with _REGISTRY_LOCK:
+        registration = (
+            _RUNTIME_HANDLER_REGISTRY.get(
+                canonical_job_type
+            )
+        )
+
+    if registration is None:
+        return None
+
+    return registration.to_public_dict()
+
+==============================================================================================================
+UUCD JOB-TYPE AND REGISTRATION REFERENCES
+==============================================================================================================
+
+TERM: uucd
+MATCHES: 1724
+  backend/server/jobs/universal_knowledge_orchestrator.py:38: "build_uucd_from_uduc",
+  backend/server/jobs/universal_knowledge_orchestrator.py:49: "build_uucd_from_website",
+  backend/server/jobs/universal_knowledge_orchestrator.py:52: "build_uucd",
+  backend/server/jobs/universal_knowledge_orchestrator.py:58: "certify_uucd_body_store",
+  backend/server/jobs/universal_knowledge_orchestrator.py:398: "build_uucd_from_uduc",
+  backend/server/jobs/universal_knowledge_orchestrator.py:404: "certify_uucd_body_store",
+  backend/server/jobs/universal_knowledge_orchestrator.py:413: "build_uucd_from_website",
+  backend/server/jobs/universal_knowledge_orchestrator.py:419: "certify_uucd_body_store",
+  backend/server/pipelines/connect_domain/website_knowledge_pipeline/coordinator.py:15: -> UUCD
+  backend/server/pipelines/upload_document/coordinator.py:31: from backend.server.universal_unified_content_document.uucd_engine_v1 import (
+  backend/server/pipelines/upload_document/coordinator.py:32: build_transient_uucd_from_uduc_v1,
+  backend/server/pipelines/upload_document/coordinator.py:34: from backend.server.pipelines.upload_document.uploaded_document_uucd_convergence_v1 import (
+  backend/server/pipelines/upload_document/coordinator.py:35: converge_uploaded_document_uucd_v1,
+  backend/server/pipelines/upload_document/coordinator.py:313: # Canonical Uploaded Document -> permanent UUCD convergence.
+  backend/server/pipelines/upload_document/coordinator.py:317: # 3. Persist + verify permanent bodyless UUCD.
+  backend/server/pipelines/upload_document/coordinator.py:329: uucd_envelope = build_transient_uucd_from_uduc_v1(
+  backend/server/pipelines/upload_document/coordinator.py:334: uucd_envelope,
+  backend/server/pipelines/upload_document/coordinator.py:338: "Uploaded Document U9 UUCD builder returned "
+  backend/server/pipelines/upload_document/coordinator.py:343: uucd_envelope.get(
+  backend/server/pipelines/upload_document/coordinator.py:349: "Uploaded Document U9 UUCD envelope is not "
+  backend/server/pipelines/upload_document/coordinator.py:353: uucd_convergence = (
+  backend/server/pipelines/upload_document/coordinator.py:354: converge_uploaded_document_uucd_v1(
+  backend/server/pipelines/upload_document/coordinator.py:355: uucd_envelope,
+  backend/server/pipelines/upload_document/coordinator.py:362: uucd_convergence,
+  backend/server/pipelines/upload_document/coordinator.py:366: "Uploaded Document UUCD convergence returned "
+  backend/server/pipelines/upload_document/coordinator.py:371: uucd_convergence.get(
+  backend/server/pipelines/upload_document/coordinator.py:374: != "UPLOADED_DOCUMENT_UUCD_CONVERGENCE_COMPLETE"
+  backend/server/pipelines/upload_document/coordinator.py:377: "Uploaded Document UUCD convergence did not complete."
+  backend/server/pipelines/upload_document/coordinator.py:421: and uucd_envelope.get(
+  backend/server/pipelines/upload_document/coordinator.py:424: and uucd_convergence.get(
+  backend/server/pipelines/upload_document/coordinator.py:427: == "UPLOADED_DOCUMENT_UUCD_CONVERGENCE_COMPLETE"
+  backend/server/pipelines/upload_document/coordinator.py:467: "uploaded_document_to_current_canonical_uucd",
+  backend/server/pipelines/upload_document/coordinator.py:468: "uploaded_document_uucd_convergence",
+  backend/server/pipelines/upload_document/coordinator.py:477: "uploaded_document_to_current_canonical_uucd": {
+  backend/server/pipelines/upload_document/coordinator.py:480: "envelope": uucd_envelope,
+  backend/server/pipelines/upload_document/coordinator.py:482: "uploaded_document_uucd_convergence": {
+  backend/server/pipelines/upload_document/coordinator.py:484: "status": uucd_convergence.get(
+  backend/server/pipelines/upload_document/coordinator.py:487: "result": uucd_convergence,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:2: Canonical Uploaded Document UUCD Convergence Coordinator v1.
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:7: pipeline has produced a READY_FOR_BODY_STORE UUCD handoff envelope.
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:14: -> READY_FOR_UUCD_PERSISTENCE
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:15: -> Canonical UUCD Persistence
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:33: from backend.server.stores.persisted_uucd_source_governance_v1 import (
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:34: govern_persisted_uucd_source_v1,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:39: from backend.server.universal_unified_content_document.uucd_persistence_v1 import (
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:40: persist_finalized_uucd_v1,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:44: UPLOADED_DOCUMENT_UUCD_CONVERGENCE_VERSION = (
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:45: "uploaded_document_uucd_convergence_v1"
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:55: class UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:61: def converge_uploaded_document_uucd_v1(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:71: The input envelope remains owned by the UUCD creation stage.
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:80: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:81: "UUCD envelope must be a mapping."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:90: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:91: "UUCD envelope must be READY_FOR_BODY_STORE."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:114: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:124: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:128: finalized_uucd_record = (
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:130: "finalized_uucd_record"
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:135: finalized_uucd_record,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:138: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:139: "Body Store result does not contain finalized_uucd_record."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:143: finalized_uucd_record.get(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:148: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:149: "Finalized UUCD body_status is not STORED_AND_VERIFIED."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:153: finalized_uucd_record.get(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:166: != "READY_FOR_UUCD_PERSISTENCE"
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:168: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:169: "Finalized UUCD is not READY_FOR_UUCD_PERSISTENCE."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:173: finalized_uucd_record.get(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:184: "eligible_for_uucd_persistence"
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:192: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:193: "Finalized UUCD persistence handoff is invalid."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:197: # 2. Canonical UUCD Persistence
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:201: persist_finalized_uucd_v1(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:202: finalized_uucd_record,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:212: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:213: "UUCD persistence returned a non-mapping result."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:222: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:223: "UUCD persistence did not reach PERSISTED_AND_VERIFIED."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:226: persisted_uucd_record = (
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:228: "persisted_uucd_record"
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:233: persisted_uucd_record,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:236: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:237: "Persistence result does not contain persisted_uucd_record."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:241: persisted_uucd_record.get(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:256: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:257: "Persisted UUCD record is not PERSISTED_AND_VERIFIED."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:261: persisted_uucd_record.get(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:266: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:267: "Persisted UUCD body_status is not STORED_AND_VERIFIED."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:272: in persisted_uucd_record
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:274: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:275: "Permanent UUCD must not contain content_body."
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:283: govern_persisted_uucd_source_v1(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:284: persisted_uucd_record,
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:293: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:303: raise UploadedDocumentUUCDConvergenceError(
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:309: "uploaded_document_uucd_convergence_result_v1",
+  backend/server/pipelines/upload_document/uploaded_document_uucd_convergence_v1.py:312: UPLOADED_DOCUMENT_UUCD_CONVERGENCE_VERSION,
+
+TERM: job_type
+MATCHES: 99
+  backend/server/runtime/universal_job_submission.py:157: job_type: str,
+  backend/server/runtime/universal_job_submission.py:180: supported_job_types: Optional[
+  backend/server/runtime/universal_job_submission.py:223: job_type
+  backend/server/runtime/universal_job_submission.py:230: job_type=job_type,
+  backend/server/runtime/universal_job_submission.py:260: supported_job_types=(
+  backend/server/runtime/universal_job_submission.py:261: supported_job_types
+  backend/server/runtime/universal_job_submission.py:304: canonical_job_type = str(
+  backend/server/runtime/universal_job_submission.py:306: "job_type"
+  backend/server/runtime/universal_job_submission.py:308: or job_type
+  backend/server/runtime/universal_job_submission.py:334: job_type=(
+  backend/server/runtime/universal_job_submission.py:335: canonical_job_type
+  backend/server/runtime/universal_runtime_registration.py:295: job_type: str
+  backend/server/runtime/universal_runtime_registration.py:327: "job_type": self.job_type,
+  backend/server/runtime/universal_runtime_registration.py:363: key=lambda item: item.job_type,
+  backend/server/runtime/universal_runtime_registration.py:393: job_type: str,
+  backend/server/runtime/universal_runtime_registration.py:409: canonical_job_type = _normalize_name(
+  backend/server/runtime/universal_runtime_registration.py:410: job_type,
+  backend/server/runtime/universal_runtime_registration.py:411: field_name="job_type",
+  backend/server/runtime/universal_runtime_registration.py:425: fallback=canonical_job_type,
+  backend/server/runtime/universal_runtime_registration.py:451: job_type=canonical_job_type,
+  backend/server/runtime/universal_runtime_registration.py:497: canonical_job_type
+  backend/server/runtime/universal_runtime_registration.py:507: f"job_type: {canonical_job_type}"
+  backend/server/runtime/universal_runtime_registration.py:511: canonical_job_type
+  backend/server/runtime/universal_runtime_registration.py:522: job_type: str,
+  backend/server/runtime/universal_runtime_registration.py:543: job_type=job_type,
+  backend/server/runtime/universal_runtime_registration.py:575: job_type: str,
+  backend/server/runtime/universal_runtime_registration.py:579: canonical_job_type = _normalize_name(
+  backend/server/runtime/universal_runtime_registration.py:580: job_type,
+  backend/server/runtime/universal_runtime_registration.py:581: field_name="job_type",
+  backend/server/runtime/universal_runtime_registration.py:587: canonical_job_type,
+  backend/server/runtime/universal_runtime_registration.py:630: persistent_job_types = [
+  backend/server/runtime/universal_runtime_registration.py:631: job_type
+  backend/server/runtime/universal_runtime_registration.py:632: for job_type, registration
+  backend/server/runtime/universal_runtime_registration.py:637: for job_type in persistent_job_types:
+  backend/server/runtime/universal_runtime_registration.py:639: job_type,
+  backend/server/runtime/universal_runtime_registration.py:675: loaded_job_types: list[str] = []
+  backend/server/runtime/universal_runtime_registration.py:685: job_type=record.get(
+  backend/server/runtime/universal_runtime_registration.py:686: "job_type",
+  backend/server/runtime/universal_runtime_registration.py:748: loaded_job_types.append(
+  backend/server/runtime/universal_runtime_registration.py:749: public_record["job_type"]
+  backend/server/runtime/universal_runtime_registration.py:759: loaded_job_types
+  backend/server/runtime/universal_runtime_registration.py:761: "job_types": sorted(
+  backend/server/runtime/universal_runtime_registration.py:762: loaded_job_types
+  backend/server/runtime/universal_runtime_registration.py:774: job_type: Any,
+  backend/server/runtime/universal_runtime_registration.py:779: job_type or ""
+  backend/server/runtime/universal_runtime_registration.py:792: def is_runtime_job_type_registered(
+  backend/server/runtime/universal_runtime_registration.py:793: job_type: Any,
+  backend/server/runtime/universal_runtime_registration.py:796: job_type
+  backend/server/runtime/universal_runtime_registration.py:801: job_type: str,
+  backend/server/runtime/universal_runtime_registration.py:805: canonical_job_type = _normalize_name(
+  backend/server/runtime/universal_runtime_registration.py:806: job_type,
+  backend/server/runtime/universal_runtime_registration.py:807: field_name="job_type",
+  backend/server/runtime/universal_runtime_registration.py:813: canonical_job_type
+  backend/server/runtime/universal_runtime_registration.py:831: key=lambda item: item.job_type,
+  backend/server/runtime/universal_runtime_registration.py:955: job_type = str(
+  backend/server/runtime/universal_runtime_registration.py:956: job.get("job_type")
+  backend/server/runtime/universal_runtime_registration.py:961: if not job_type:
+  backend/server/runtime/universal_runtime_registration.py:963: "Universal runtime job has no job_type."
+  backend/server/runtime/universal_runtime_registration.py:969: job_type
+  backend/server/runtime/universal_runtime_registration.py:975: f"No runtime handler registered for: {job_type}"
+  backend/server/runtime/universal_runtime_registration.py:1014: "job_type": job_type,
+  backend/server/runtime/universal_runtime_registration.py:1043: job_type = str(
+  backend/server/runtime/universal_runtime_registration.py:1044: job.get("job_type")
+  backend/server/runtime/universal_runtime_registration.py:1064: f"for {job_type}."
+  backend/server/runtime/universal_runtime_registration.py:1109: "job_type": job_type,
+  backend/server/runtime/universal_runtime_registration.py:1120: job_type=job_type,
+  backend/server/runtime/universal_runtime_registration.py:1129: "job_type": job_type,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:75: UUCD_RUNTIME_JOB_TYPE = (
+  backend/server/runtime/uucd_runtime_handoff_v1.py:397: job_type: str = UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:418: "job_type":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:419: job_type,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:499: job_type: str,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:516: job_type
+  backend/server/runtime/uucd_runtime_handoff_v1.py:523: f"job_type={job_type!r}."
+  backend/server/runtime/uucd_runtime_handoff_v1.py:526: registered_job_type = (
+  backend/server/runtime/uucd_runtime_handoff_v1.py:529: "job_type"
+  backend/server/runtime/uucd_runtime_handoff_v1.py:532: "runtime_registration.job_type"
+  backend/server/runtime/uucd_runtime_handoff_v1.py:537: if registered_job_type != job_type:
+  backend/server/runtime/uucd_runtime_handoff_v1.py:539: "Runtime Registration job_type does not "
+  backend/server/runtime/uucd_runtime_handoff_v1.py:549: job_type: str,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:572: candidate.job_type
+  backend/server/runtime/uucd_runtime_handoff_v1.py:573: != job_type
+  backend/server/runtime/uucd_runtime_handoff_v1.py:649: job_type=UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:655: job_type=UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:665: job_type=UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:752: "job_type":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:753: existing_orchestration_job.job_type,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:810: job_type=UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:904: job_type=UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:987: "job_type":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:988: UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1057: "job_type":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1058: UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1076: "job_type":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1077: orchestration_job.job_type,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1104: "job_type":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1105: UUCD_RUNTIME_JOB_TYPE,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1129: "job_type",
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1166: "UUCD_RUNTIME_JOB_TYPE",
+
+TERM: runtime_registration
+MATCHES: 42
+  backend/server/runtime/universal_job_submission.py:17: from backend.server.runtime.universal_runtime_registration import (
+  backend/server/runtime/universal_job_submission.py:18: get_runtime_registration,
+  backend/server/runtime/universal_job_submission.py:183: runtime_registration: Optional[
+  backend/server/runtime/universal_job_submission.py:217: runtime_registration
+  backend/server/runtime/universal_job_submission.py:222: get_runtime_registration(
+  backend/server/runtime/universal_job_submission.py:263: runtime_registration=(
+  backend/server/runtime/universal_runtime_registration.py:27: "universal_runtime_registration_v1"
+  backend/server/runtime/universal_runtime_registration.py:34: / "universal_runtime_registration"
+  backend/server/runtime/universal_runtime_registration.py:39: / "runtime_registration_registry.json"
+  backend/server/runtime/universal_runtime_registration.py:601: def clear_runtime_registration_memory() -> None:
+  backend/server/runtime/universal_runtime_registration.py:609: def load_persisted_runtime_registrations(
+  backend/server/runtime/universal_runtime_registration.py:767: def ensure_persisted_runtime_registrations_loaded() -> None:
+  backend/server/runtime/universal_runtime_registration.py:768: load_persisted_runtime_registrations(
+  backend/server/runtime/universal_runtime_registration.py:776: ensure_persisted_runtime_registrations_loaded()
+  backend/server/runtime/universal_runtime_registration.py:800: def get_runtime_registration(
+  backend/server/runtime/universal_runtime_registration.py:803: ensure_persisted_runtime_registrations_loaded()
+  backend/server/runtime/universal_runtime_registration.py:823: def list_runtime_registrations() -> list[
+  backend/server/runtime/universal_runtime_registration.py:826: ensure_persisted_runtime_registrations_loaded()
+  backend/server/runtime/universal_runtime_registration.py:840: def runtime_registration_snapshot() -> dict[str, Any]:
+  backend/server/runtime/universal_runtime_registration.py:842: list_runtime_registrations()
+  backend/server/runtime/universal_runtime_registration.py:948: ensure_persisted_runtime_registrations_loaded()
+  backend/server/runtime/universal_runtime_registration.py:1012: "universal_runtime_registration"
+  backend/server/runtime/universal_runtime_registration.py:1076: step="runtime_registration_dispatch",
+  backend/server/runtime/universal_runtime_registration.py:1092: step="runtime_registration_completed",
+  backend/server/runtime/universal_runtime_registration.py:1111: "universal_runtime_registration"
+  backend/server/runtime/universal_runtime_registration.py:1131: "universal_runtime_registration"
+  backend/server/runtime/uucd_runtime_handoff_v1.py:58: from backend.server.runtime.universal_runtime_registration import (
+  backend/server/runtime/uucd_runtime_handoff_v1.py:59: get_runtime_registration,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:497: def _resolve_runtime_registration(
+  backend/server/runtime/uucd_runtime_handoff_v1.py:500: runtime_registration: Mapping[str, Any] | None,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:505: if runtime_registration is not None:
+  backend/server/runtime/uucd_runtime_handoff_v1.py:508: runtime_registration,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:509: field_name="runtime_registration",
+  backend/server/runtime/uucd_runtime_handoff_v1.py:515: get_runtime_registration(
+  backend/server/runtime/uucd_runtime_handoff_v1.py:532: "runtime_registration.job_type"
+  backend/server/runtime/uucd_runtime_handoff_v1.py:613: runtime_registration: Mapping[str, Any] | None = None,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:654: _resolve_runtime_registration(
+  backend/server/runtime/uucd_runtime_handoff_v1.py:656: runtime_registration=runtime_registration,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:841: runtime_registration=registration,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1031: "runtime_registration_modified":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1139: "runtime_registration_required":
+  backend/server/runtime/uucd_runtime_handoff_v1.py:1142: "runtime_registration_mutated":
+
+TERM: supported_job_types
+MATCHES: 3
+  backend/server/runtime/universal_job_submission.py:180: supported_job_types: Optional[
+  backend/server/runtime/universal_job_submission.py:260: supported_job_types=(
+  backend/server/runtime/universal_job_submission.py:261: supported_job_types
+
+TERM: submit_universal_job
+MATCHES: 3
+  backend/server/runtime/universal_job_submission.py:154: def submit_universal_job(
+  backend/server/runtime/universal_job_submission.py:470: "submit_universal_job"
+  backend/server/runtime/universal_job_submission.py:513: "submit_universal_job",
+
+TERM: create_universal_job
+MATCHES: 4
+  backend/server/runtime/universal_job_submission.py:11: create_universal_job,
+  backend/server/runtime/universal_job_submission.py:228: create_universal_job(
+  backend/server/runtime/uucd_runtime_handoff_v1.py:56: create_universal_job,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:806: creation_result = create_universal_job(
+
+TERM: create_orchestration_job
+MATCHES: 4
+  backend/server/runtime/universal_job_submission.py:7: create_orchestration_job,
+  backend/server/runtime/universal_job_submission.py:330: create_orchestration_job(
+  backend/server/runtime/uucd_runtime_handoff_v1.py:52: create_job as create_orchestration_job,
+  backend/server/runtime/uucd_runtime_handoff_v1.py:900: create_orchestration_job(
+
+==============================================================================================================
+PRE-PATCH DECISION QUESTIONS
+==============================================================================================================
+1. Which UUCD function currently creates the job?
+2. Which UniversalJobCreationResult fields does it consume?
+3. Does submit_universal_job return equivalent information?
+4. Is the UUCD job type already present in Runtime Registration?
+5. Does submission enqueue through the current orchestration service?
+6. Can the direct call be replaced without changing the UUCD handoff contract?
+
+No production patch should be applied until these questions are answered from this report.

@@ -1,0 +1,231 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.4-Q UUCD CANONICAL SUBMISSION WIRING PATCH
+Generated: 2026-09-29T11:01:20.274886+00:00
+Target: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\uucd_runtime_handoff_v1.py
+Patch mode: STRICT FAIL-CLOSED
+
+=========================================================================================================
+PRE-PATCH VALIDATION
+=========================================================================================================
+Direct create_universal_job calls: 1
+Direct create_orchestration_job calls: 1
+
+=========================================================================================================
+ATTRIBUTE CONVERSION COUNTS
+=========================================================================================================
+orchestration_job.job_id: 2
+orchestration_job.workspace_id: 1
+orchestration_job.job_type: 1
+orchestration_job.status: 3
+orchestration_job.priority: 1
+
+=========================================================================================================
+PATCH DIFF
+=========================================================================================================
+--- uucd_runtime_handoff_v1.py.before
++++ uucd_runtime_handoff_v1.py.after
+@@ -41,6 +41,10 @@
+ 
+ from __future__ import annotations
+ 
++from backend.server.runtime.universal_jobs.contract import (
++    REQUIRED_UNIVERSAL_JOB_FIELDS,
++)
++
+ import hashlib
+ import json
+ import re
+@@ -49,11 +53,10 @@
+ from typing import Any, Mapping
+ 
+ from backend.server.orchestration.job_store import (
+-    create_job as create_orchestration_job,
+     load_jobs as load_orchestration_jobs,
+ )
+-from backend.server.runtime.universal_jobs.creation_engine import (
+-    create_universal_job,
++from backend.server.runtime.universal_job_submission import (
++    submit_universal_job,
+ )
+ from backend.server.runtime.universal_runtime_registration import (
+     get_runtime_registration,
+@@ -803,7 +806,7 @@
+                 "universal_runtime_worker",
+         }
+ 
+-    creation_result = create_universal_job(
++    submission_result = submit_universal_job(
+         workspace_id=validated[
+             "workspace_id"
+         ],
+@@ -837,17 +840,30 @@
+             "content_ref"
+         ],
+         idempotency_key=idempotency_key,
++        priority=priority,
+         enqueue=True,
+         runtime_registration=registration,
+     )
+ 
+-    universal_job = (
+-        creation_result.job
+-    )
+-
+-    canonical_job = (
+-        universal_job.to_canonical_dict()
+-    )
++    missing_canonical_fields = [
++        field_name
++        for field_name in REQUIRED_UNIVERSAL_JOB_FIELDS
++        if field_name not in submission_result
++    ]
++
++    if missing_canonical_fields:
++        raise UUCDRuntimeHandoffContractError(
++            "Universal submission result is missing canonical "
++            "Universal Job fields: "
++            + ", ".join(missing_canonical_fields)
++        )
++
++    canonical_job = {
++        field_name: deepcopy(
++            submission_result[field_name]
++        )
++        for field_name in REQUIRED_UNIVERSAL_JOB_FIELDS
++    }
+ 
+     canonical_job_id = (
+         _require_non_empty_string(
+@@ -894,57 +910,23 @@
+             "Universal Job idempotency_key drifted."
+         )
+ 
+-    try:
+-
+-        orchestration_job = (
+-            create_orchestration_job(
+-                workspace_id=validated[
+-                    "workspace_id"
+-                ],
+-                job_type=UUCD_RUNTIME_JOB_TYPE,
+-                payload=deepcopy(
+-                    payload
+-                ),
+-                metadata={
+-                    "canonical_universal_job":
+-                        canonical_job,
+-
+-                    "universal_job_contract_version":
+-                        canonical_job.get(
+-                            "contract_version"
+-                        ),
+-
+-                    "payload_reference":
+-                        validated[
+-                            "content_ref"
+-                        ],
+-
+-                    "idempotency_key":
+-                        idempotency_key,
+-
+-                    "persistence_fingerprint":
+-                        validated[
+-                            "persistence_fingerprint"
+-                        ],
+-
+-                    "handoff_adapter":
+-                        UUCD_RUNTIME_HANDOFF_VERSION,
+-
+-                    "body_content_in_job":
+-                        False,
+-                },
+-                priority=priority,
+-                job_id=canonical_job_id,
+-            )
+-        )
+-
+-    except Exception as exc:
++    orchestration_job = (
++        submission_result.get(
++            "orchestration"
++        )
++    )
++
++    if not isinstance(
++        orchestration_job,
++        Mapping,
++    ):
+         raise UUCDRuntimeHandoffPersistenceError(
+-            "Canonical orchestration ingress failed."
+-        ) from exc
++            "Universal submission did not return a valid "
++            "orchestration record."
++        )
+ 
+     if (
+-        orchestration_job.job_id
++        orchestration_job.get("job_id")
+         != canonical_job_id
+     ):
+         raise UUCDRuntimeHandoffPersistenceError(
+@@ -953,7 +935,7 @@
+         )
+ 
+     if (
+-        orchestration_job.status
++        orchestration_job.get("status")
+         != "queued"
+     ):
+         raise UUCDRuntimeHandoffPersistenceError(
+@@ -1020,7 +1002,7 @@
+             True,
+ 
+         "orchestration_status":
+-            orchestration_job.status,
++            orchestration_job.get("status"),
+ 
+         "body_content_in_job":
+             False,
+@@ -1068,19 +1050,19 @@
+         "orchestration_job":
+             {
+                 "job_id":
+-                    orchestration_job.job_id,
++                    orchestration_job.get("job_id"),
+ 
+                 "workspace_id":
+-                    orchestration_job.workspace_id,
++                    orchestration_job.get("workspace_id"),
+ 
+                 "job_type":
+-                    orchestration_job.job_type,
++                    orchestration_job.get("job_type"),
+ 
+                 "status":
+-                    orchestration_job.status,
++                    orchestration_job.get("status"),
+ 
+                 "priority":
+-                    orchestration_job.priority,
++                    orchestration_job.get("priority"),
+             },
+ 
+         "handoff_certificate":
+
+=========================================================================================================
+POST-PATCH VERIFICATION
+=========================================================================================================
+[PASS] Target syntax passes
+[PASS] Canonical submission imported
+[PASS] Canonical submission called once
+[PASS] Direct creation call removed
+[PASS] Direct orchestration creation removed
+[PASS] Runtime Registration retained
+[PASS] Idempotency protection retained
+[PASS] Canonical field verification added
+[PASS] Existing handoff function retained
+
+=========================================================================================================
+FINAL RESULT
+=========================================================================================================
+STATUS: PATCH APPLIED ? READY FOR A1.4 REGRESSION

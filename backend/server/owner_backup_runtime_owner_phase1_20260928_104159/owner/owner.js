@@ -12,8 +12,7 @@
     settings:["Settings","Manage owner preferences, branding, notifications, and feature flags."],
     decision:["Decision Intelligence","Inspect decision logs, learning signals, confidence, and explainability."],
     ledger:["Global Ledger","Unified revenue, usage, API, workspace, subscription, and event ledger."],
-    runtime:["Universal Runtime","Monitor and govern jobs, queues, workers, orchestration, execution, recovery, resources, APIs, security, observability, and persistent runtime state."],
-queues:["Universal Runtime","Monitor and govern jobs, queues, workers, orchestration, execution, recovery, resources, APIs, security, observability, and persistent runtime state."],
+    queues:["Orchestration & Queues","Monitor jobs, workers, queues, batch tasks, and retries."],
     cloud:["Infrastructure & Cloud","Track AWS, storage, database, server health, and cloud cost."],
     security:["Security & Access","Monitor logins, permissions, tokens, encryption, and threats."],
     tms:["TMS Intelligence","Support ticket health, SLA risk, escalations, and support AI monitoring."],
@@ -39,19 +38,20 @@ queues:["Universal Runtime","Monitor and govern jobs, queues, workers, orchestra
       sla:["SLA & Escalation Monitor","SLA compliance, escalation routing, breach detection, and service monitoring."],
 
       incident:["Incident & Status Management","Incidents, outages, status pages, service disruptions, and recovery tracking."],
-selfhealing:["Runtime Reliability & Recovery","Legacy Self-Healing Ops route absorbed into Universal Runtime reliability and recovery governance."],
+
+      selfhealing:["Self-Healing Operations Center","Repair execution, rebuild execution, reloads, validation, and autonomous recovery."],
 
       governance:["Governance & Event Intelligence Center","Governance events, event contracts, routing, decision logs, and event audits."],
 
-      jobs:["Runtime Jobs","Legacy route for Universal Runtime job monitoring and governed job controls."],
+      jobs:["Async Job & Queue Monitor","Async jobs, queue depth, running jobs, failed jobs, slow jobs, and retry controls."],
 
-      workers:["Runtime Workers & Leases","Legacy route for Universal Runtime worker, capacity, assignment, lease, and recovery monitoring."],
+      workers:["Worker & Cluster Monitor","Worker health, workload, speed, errors, clusters, listeners, and processing routes."],
 
       billinggate:["Billing Gate & Usage Enforcement Center","AU limits, document limits, API usage, ceiling events, paused jobs, and resume logic."],
 
       sovereignty:["Founder Sovereignty Center","Founder authority, sovereignty events, override history, trust status, and founder controls."],
 
-      recovery:["Runtime Reliability & Recovery","Legacy route for Universal Runtime retry, recovery, dead-letter, checkpoint, crash-restart, and owner intervention controls."],
+      recovery:["Recovery Vault Center","Recovery assets, recovery tokens, recovery certificates, key rotation, and vault monitoring."],
 
       lockdown:["Emergency Lockdown Center","Global lockdown, selective lockdown, session kill switch, access freeze, and emergency overrides."],
 
@@ -67,17 +67,7 @@ selfhealing:["Runtime Reliability & Recovery","Legacy Self-Healing Ops route abs
   const genericTitle = document.getElementById("genericTitle");
   const genericDesc = document.getElementById("genericDesc");
 
-  function normalizeOwnerPageKey(key){
-  if(key === "queues") return "runtime";
-  if(key === "jobs") return "runtime";
-  if(key === "workers") return "runtime";
-  if(key === "recovery") return "runtime";
-  if(key === "selfhealing") return "runtime";
-  return key;
-}
-
-function showPage(key){
-  key = normalizeOwnerPageKey(key);
+  function showPage(key){
     document.querySelectorAll(".nav-item").forEach(b=>b.classList.toggle("active", b.dataset.page === key));
     const meta = titles[key] || titles.dashboard;
     pageTitle.textContent = meta[0];
@@ -96,8 +86,7 @@ function showPage(key){
       settings: "settingsPage",
       decision: "decisionPage",
       ledger: "ledgerPage",
-      runtime: "runtimePage",
-    queues: "runtimePage",
+      queues: "queuesPage",
       cloud: "cloudPage",
       security: "securityPage",
       tms: "tmsPage",
@@ -117,13 +106,13 @@ function showPage(key){
         staff: "genericPage",
         sla: "genericPage",
         incident: "genericPage",
-        selfhealing: "runtimePage",
+        selfhealing: "genericPage",
         governance: "genericPage",
-        jobs: "runtimePage",
-        workers: "runtimePage",
+        jobs: "genericPage",
+        workers: "genericPage",
         billinggate: "genericPage",
         sovereignty: "genericPage",
-        recovery: "runtimePage",
+        recovery: "genericPage",
         lockdown: "genericPage",
         threatintel: "genericPage",
 
@@ -301,9 +290,3 @@ function showPage(key){
 
   showPage(localStorage.getItem("LC_OWNER_LAST_PAGE") || "dashboard");
 })();
-
-
-
-
-
-

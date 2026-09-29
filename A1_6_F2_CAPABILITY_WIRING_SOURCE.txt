@@ -1,0 +1,2356 @@
+﻿LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.6-F2 WORKER CAPABILITY WIRING SOURCE
+
+Generated: 2026-09-29T14:16:44.1906685+00:00
+Mode: READ-ONLY - NO PRODUCTION FILES MODIFIED
+Project root: C:\Users\HP\Documents\LinkCraftor
+
+================================================================================================================
+PRODUCTION WORKER IMPORTS AND CONTRACT HELPERS
+================================================================================================================
+FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+LINES: 1-360
+
+     1: """
+     2: Canonical Universal Runtime Worker v1.
+     3: 
+     4: Canonical position:
+     5: 
+     6:     Canonical Orchestration Job Store
+     7:         ->
+     8:     dequeue_job(worker_id=...)
+     9:         ->
+    10:     atomic QUEUED -> RUNNING claim
+    11:         ->
+    12:     Universal Runtime Worker
+    13:         ->
+    14:     Runtime Registration Dispatcher
+    15:         ->
+    16:     registered handler
+    17:         ->
+    18:     COMPLETED or FAILED
+    19: 
+    20: This worker is intentionally one-shot.
+    21: 
+    22: It does:
+    23: - atomically claim at most one queued orchestration job;
+    24: - preserve the existing canonical job_id;
+    25: - convert OrchestrationJob into the Runtime Registration dispatch mapping;
+    26: - invoke the canonical Runtime Registration dispatcher;
+    27: - mark successful execution COMPLETED;
+    28: - mark exceptions FAILED;
+    29: - return an auditable worker result.
+    30: 
+    31: It does NOT:
+    32: - create jobs;
+    33: - mint replacement job identities;
+    34: - write the retired Universal Knowledge JSONL queue;
+    35: - use the older Universal Knowledge status/progress files;
+    36: - run an infinite polling loop;
+    37: - perform Runtime Registration mutation.
+    38: """
+    39: 
+    40: from __future__ import annotations
+    41: 
+    42: from copy import deepcopy
+    43: from datetime import datetime
+    44: from typing import Any, Callable, Mapping
+    45: 
+    46: from backend.server.orchestration.models import (
+    47:     JOB_STATUS_COMPLETED,
+    48:     JOB_STATUS_FAILED,
+    49:     JOB_STATUS_QUEUED,
+    50:     JOB_STATUS_RUNNING,
+    51:     OrchestrationJob,
+    52: )
+    53: from backend.server.orchestration.queue import (
+    54:     dequeue_job,
+    55: )
+    56: from backend.server.orchestration.service import (
+    57:     mark_job_completed,
+    58:     mark_job_failed,
+    59: )
+    60: 
+    61: from backend.server.orchestration.job_store import (
+    62:     update_job_status,
+    63: )
+    64: from backend.server.runtime.universal_runtime_registration import (
+    65:     dispatch_registered_runtime_handler,
+    66:     get_runtime_registration,
+    67: )
+    68: 
+    69: 
+    70: UNIVERSAL_RUNTIME_WORKER_VERSION = (
+    71:     "universal_runtime_worker_v1"
+    72: )
+    73: 
+    74: UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION = (
+    75:     "universal_runtime_worker_result_v1"
+    76: )
+    77: 
+    78: 
+    79: class UniversalRuntimeWorkerError(
+    80:     RuntimeError
+    81: ):
+    82:     """Base error for canonical Universal Runtime Worker."""
+    83: 
+    84: 
+    85: class UniversalRuntimeWorkerContractError(
+    86:     UniversalRuntimeWorkerError
+    87: ):
+    88:     """Raised when a claimed orchestration job violates the worker contract."""
+    89: 
+    90: 
+    91: class UniversalRuntimeWorkerFinalizationError(
+    92:     UniversalRuntimeWorkerError
+    93: ):
+    94:     """Raised when canonical terminal-state persistence fails."""
+    95: 
+    96: 
+    97: def _datetime_value(
+    98:     value: Any,
+    99: ) -> Any:
+   100:     if isinstance(
+   101:         value,
+   102:         datetime,
+   103:     ):
+   104:         return value.isoformat()
+   105: 
+   106:     return value
+   107: 
+   108: 
+   109: def orchestration_job_to_runtime_mapping_v1(
+   110:     job: OrchestrationJob,
+   111: ) -> dict[str, Any]:
+   112:     """
+   113:     Convert one claimed OrchestrationJob into the canonical Runtime
+   114:     Registration dispatch mapping.
+   115: 
+   116:     This preserves job identity and does not reconstruct a new job.
+   117:     """
+   118: 
+   119:     if not isinstance(
+   120:         job,
+   121:         OrchestrationJob,
+   122:     ):
+   123:         raise UniversalRuntimeWorkerContractError(
+   124:             "job must be an OrchestrationJob."
+   125:         )
+   126: 
+   127:     job_id = str(
+   128:         job.job_id
+   129:         or ""
+   130:     ).strip()
+   131: 
+   132:     if not job_id:
+   133:         raise UniversalRuntimeWorkerContractError(
+   134:             "Claimed orchestration job has no job_id."
+   135:         )
+   136: 
+   137:     workspace_id = str(
+   138:         job.workspace_id
+   139:         or ""
+   140:     ).strip()
+   141: 
+   142:     if not workspace_id:
+   143:         raise UniversalRuntimeWorkerContractError(
+   144:             "Claimed orchestration job has no workspace_id."
+   145:         )
+   146: 
+   147:     job_type = str(
+   148:         job.job_type
+   149:         or ""
+   150:     ).strip()
+   151: 
+   152:     if not job_type:
+   153:         raise UniversalRuntimeWorkerContractError(
+   154:             "Claimed orchestration job has no job_type."
+   155:         )
+   156: 
+   157:     if job.status != JOB_STATUS_RUNNING:
+   158:         raise UniversalRuntimeWorkerContractError(
+   159:             "Worker may execute only a job already atomically "
+   160:             "claimed as RUNNING."
+   161:         )
+   162: 
+   163:     payload = job.payload
+   164: 
+   165:     if not isinstance(
+   166:         payload,
+   167:         Mapping,
+   168:     ):
+   169:         raise UniversalRuntimeWorkerContractError(
+   170:             "Claimed orchestration job payload must be a mapping."
+   171:         )
+   172: 
+   173:     metadata = job.metadata
+   174: 
+   175:     if not isinstance(
+   176:         metadata,
+   177:         Mapping,
+   178:     ):
+   179:         raise UniversalRuntimeWorkerContractError(
+   180:             "Claimed orchestration job metadata must be a mapping."
+   181:         )
+   182: 
+   183:     return {
+   184:         "job_id":
+   185:             job_id,
+   186: 
+   187:         "workspace_id":
+   188:             workspace_id,
+   189: 
+   190:         "job_type":
+   191:             job_type,
+   192: 
+   193:         "status":
+   194:             job.status,
+   195: 
+   196:         "priority":
+   197:             job.priority,
+   198: 
+   199:         "created_at":
+   200:             _datetime_value(
+   201:                 job.created_at
+   202:             ),
+   203: 
+   204:         "updated_at":
+   205:             _datetime_value(
+   206:                 job.updated_at
+   207:             ),
+   208: 
+   209:         "started_at":
+   210:             _datetime_value(
+   211:                 job.started_at
+   212:             ),
+   213: 
+   214:         "payload":
+   215:             deepcopy(
+   216:                 dict(
+   217:                     payload
+   218:                 )
+   219:             ),
+   220: 
+   221:         "metadata":
+   222:             deepcopy(
+   223:                 dict(
+   224:                     metadata
+   225:                 )
+   226:             ),
+   227:     }
+   228: 
+   229: 
+   230: def _runtime_retry_policy_v1(
+   231:     *,
+   232:     job_type: str,
+   233: ) -> dict[str, Any]:
+   234:     """
+   235:     Resolve executable retry policy from Runtime Registration.
+   236: 
+   237:     Supports both:
+   238:       - maximum_attempts
+   239:       - max_attempts
+   240:     """
+   241: 
+   242:     registration = get_runtime_registration(
+   243:         job_type
+   244:     )
+   245: 
+   246:     if not isinstance(
+   247:         registration,
+   248:         Mapping,
+   249:     ):
+   250:         return {
+   251:             "maximum_attempts": 1,
+   252:             "retry_on_handler_error": False,
+   253:             "retry_on_contract_error": False,
+   254:         }
+   255: 
+   256:     raw_policy = registration.get(
+   257:         "retry_policy"
+   258:     )
+   259: 
+   260:     policy = (
+   261:         raw_policy
+   262:         if isinstance(
+   263:             raw_policy,
+   264:             Mapping,
+   265:         )
+   266:         else {}
+   267:     )
+   268: 
+   269:     raw_maximum_attempts = policy.get(
+   270:         "maximum_attempts",
+   271:         policy.get(
+   272:             "max_attempts",
+   273:             1,
+   274:         ),
+   275:     )
+   276: 
+   277:     try:
+   278:         maximum_attempts = int(
+   279:             raw_maximum_attempts
+   280:         )
+   281:     except (
+   282:         TypeError,
+   283:         ValueError,
+   284:     ):
+   285:         maximum_attempts = 1
+   286: 
+   287:     maximum_attempts = max(
+   288:         1,
+   289:         maximum_attempts,
+   290:     )
+   291: 
+   292:     retry_on_handler_error = bool(
+   293:         policy.get(
+   294:             "retry_on_handler_error",
+   295:             policy.get(
+   296:                 "retryable",
+   297:                 False,
+   298:             ),
+   299:         )
+   300:     )
+   301: 
+   302:     retry_on_contract_error = bool(
+   303:         policy.get(
+   304:             "retry_on_contract_error",
+   305:             False,
+   306:         )
+   307:     )
+   308: 
+   309:     return {
+   310:         "maximum_attempts":
+   311:             maximum_attempts,
+   312: 
+   313:         "retry_on_handler_error":
+   314:             retry_on_handler_error,
+   315: 
+   316:         "retry_on_contract_error":
+   317:             retry_on_contract_error,
+   318:     }
+   319: 
+   320: 
+   321: def _runtime_failure_is_contract_error_v1(
+   322:     exc: Exception,
+   323: ) -> bool:
+   324:     """
+   325:     Classify canonical contract failures without coupling the
+   326:     universal worker to individual stage exception classes.
+   327:     """
+   328: 
+   329:     return type(
+   330:         exc
+   331:     ).__name__.endswith(
+   332:         "ContractError"
+   333:     )
+   334: 
+   335: 
+   336: def _runtime_failure_attempt_number_v1(
+   337:     metadata: Mapping[str, Any],
+   338: ) -> int:
+   339:     """
+   340:     Return this failure's 1-based attempt number.
+   341:     """
+   342: 
+   343:     raw_previous = metadata.get(
+   344:         "runtime_failure_attempt_count",
+   345:         0,
+   346:     )
+   347: 
+   348:     try:
+   349:         previous = int(
+   350:             raw_previous
+   351:         )
+   352:     except (
+   353:         TypeError,
+   354:         ValueError,
+   355:     ):
+   356:         previous = 0
+   357: 
+   358:     previous = max(
+   359:         0,
+   360:         previous,
+
+================================================================================================================
+PRODUCTION WORKER CLAIM, DISPATCH AND FINALIZATION PATH
+================================================================================================================
+FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+LINES: 360-950
+
+   360:         previous,
+   361:     )
+   362: 
+   363:     return previous + 1
+   364: 
+   365: 
+   366: def _requeue_same_runtime_job_v1(
+   367:     *,
+   368:     job_id: str,
+   369:     worker_id: str,
+   370:     error: Exception,
+   371:     attempt_number: int,
+   372:     maximum_attempts: int,
+   373: ) -> OrchestrationJob:
+   374:     """
+   375:     Requeue the SAME canonical orchestration record.
+   376: 
+   377:     This function MUST NOT create a new Universal Job or a new
+   378:     orchestration job_id.
+   379:     """
+   380: 
+   381:     requeued = update_job_status(
+   382:         job_id,
+   383:         JOB_STATUS_QUEUED,
+   384:         metadata={
+   385:             "worker_id":
+   386:                 worker_id,
+   387: 
+   388:             "runtime_worker_version":
+   389:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+   390: 
+   391:             "runtime_dispatch_completed":
+   392:                 False,
+   393: 
+   394:             "runtime_dispatch_failed":
+   395:                 True,
+   396: 
+   397:             "runtime_retry_scheduled":
+   398:                 True,
+   399: 
+   400:             "runtime_failure_attempt_count":
+   401:                 attempt_number,
+   402: 
+   403:             "runtime_maximum_attempts":
+   404:                 maximum_attempts,
+   405: 
+   406:             "runtime_retry_remaining":
+   407:                 max(
+   408:                     0,
+   409:                     maximum_attempts
+   410:                     - attempt_number,
+   411:                 ),
+   412: 
+   413:             "runtime_dispatch_error_type":
+   414:                 type(
+   415:                     error
+   416:                 ).__name__,
+   417: 
+   418:             "runtime_dispatch_error_message":
+   419:                 str(
+   420:                     error
+   421:                 ),
+   422: 
+   423:             "canonical_job_id_preserved":
+   424:                 True,
+   425: 
+   426:             "retry_created_new_job":
+   427:                 False,
+   428: 
+   429:             "old_universal_knowledge_jsonl_used":
+   430:                 False,
+   431:         },
+   432: 
+   433:         error_message=None,
+   434:     )
+   435: 
+   436:     if requeued.job_id != job_id:
+   437:         raise UniversalRuntimeWorkerFinalizationError(
+   438:             "Same-job retry changed canonical job identity."
+   439:         )
+   440: 
+   441:     if requeued.status != JOB_STATUS_QUEUED:
+   442:         raise UniversalRuntimeWorkerFinalizationError(
+   443:             "Same-job retry did not persist QUEUED status."
+   444:         )
+   445: 
+   446:     return requeued
+   447: 
+   448: 
+   449: def run_one_universal_runtime_job_v1(
+   450:     *,
+   451:     worker_id: str = "universal_runtime_worker_v1",
+   452:     dispatcher: Callable[
+   453:         [Mapping[str, Any]],
+   454:         dict[str, Any],
+   455:     ] = dispatch_registered_runtime_handler,
+   456: ) -> dict[str, Any]:
+   457:     """
+   458:     Claim and execute at most one canonical orchestration job.
+   459: 
+   460:     Returns IDLE when no queued work exists.
+   461: 
+   462:     The dequeue operation itself owns QUEUED -> RUNNING.
+   463:     """
+   464: 
+   465:     canonical_worker_id = str(
+   466:         worker_id
+   467:         or ""
+   468:     ).strip()
+   469: 
+   470:     if not canonical_worker_id:
+   471:         raise UniversalRuntimeWorkerContractError(
+   472:             "worker_id must not be empty."
+   473:         )
+   474: 
+   475:     if not callable(
+   476:         dispatcher
+   477:     ):
+   478:         raise UniversalRuntimeWorkerContractError(
+   479:             "dispatcher must be callable."
+   480:         )
+   481: 
+   482:     claimed_job = dequeue_job(
+   483:         worker_id=canonical_worker_id
+   484:     )
+   485: 
+   486:     if claimed_job is None:
+   487:         return {
+   488:             "schema_version":
+   489:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+   490: 
+   491:             "worker_version":
+   492:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+   493: 
+   494:             "worker_id":
+   495:                 canonical_worker_id,
+   496: 
+   497:             "worker_status":
+   498:                 "IDLE",
+   499: 
+   500:             "job_claimed":
+   501:                 False,
+   502: 
+   503:             "job_id":
+   504:                 None,
+   505: 
+   506:             "dispatch_performed":
+   507:                 False,
+   508: 
+   509:             "terminal_status":
+   510:                 None,
+   511:         }
+   512: 
+   513:     job_id = str(
+   514:         claimed_job.job_id
+   515:         or ""
+   516:     ).strip()
+   517: 
+   518:     if not job_id:
+   519:         raise UniversalRuntimeWorkerContractError(
+   520:             "dequeue_job returned a claimed job without job_id."
+   521:         )
+   522: 
+   523:     if claimed_job.status != JOB_STATUS_RUNNING:
+   524:         raise UniversalRuntimeWorkerContractError(
+   525:             "dequeue_job returned a job that is not RUNNING."
+   526:         )
+   527: 
+   528:     runtime_job = (
+   529:         orchestration_job_to_runtime_mapping_v1(
+   530:             claimed_job
+   531:         )
+   532:     )
+   533: 
+   534:     if runtime_job[
+   535:         "job_id"
+   536:     ] != job_id:
+   537:         raise UniversalRuntimeWorkerContractError(
+   538:             "Runtime mapping changed canonical job identity."
+   539:         )
+   540: 
+   541:     try:
+   542:         dispatch_result = dispatcher(
+   543:             runtime_job
+   544:         )
+   545: 
+   546:         if dispatch_result is None:
+   547:             dispatch_result = {}
+   548: 
+   549:         if not isinstance(
+   550:             dispatch_result,
+   551:             Mapping,
+   552:         ):
+   553:             dispatch_result = {
+   554:                 "value":
+   555:                     dispatch_result,
+   556:             }
+   557: 
+   558:         completed_job = mark_job_completed(
+   559:             job_id,
+   560:             metadata={
+   561:                 "worker_id":
+   562:                     canonical_worker_id,
+   563: 
+   564:                 "runtime_worker_version":
+   565:                     UNIVERSAL_RUNTIME_WORKER_VERSION,
+   566: 
+   567:                 "runtime_dispatch_completed":
+   568:                     True,
+   569: 
+   570:                 "runtime_dispatch_result":
+   571:                     deepcopy(
+   572:                         dict(
+   573:                             dispatch_result
+   574:                         )
+   575:                     ),
+   576: 
+   577:                 "canonical_job_id_preserved":
+   578:                     True,
+   579: 
+   580:                 "old_universal_knowledge_jsonl_used":
+   581:                     False,
+   582:             },
+   583:         )
+   584: 
+   585:         if (
+   586:             completed_job.job_id
+   587:             != job_id
+   588:         ):
+   589:             raise UniversalRuntimeWorkerFinalizationError(
+   590:                 "Completion changed canonical job identity."
+   591:             )
+   592: 
+   593:         if (
+   594:             completed_job.status
+   595:             != JOB_STATUS_COMPLETED
+   596:         ):
+   597:             raise UniversalRuntimeWorkerFinalizationError(
+   598:                 "Completion did not persist COMPLETED status."
+   599:             )
+   600: 
+   601:         return {
+   602:             "schema_version":
+   603:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+   604: 
+   605:             "worker_version":
+   606:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+   607: 
+   608:             "worker_id":
+   609:                 canonical_worker_id,
+   610: 
+   611:             "worker_status":
+   612:                 "COMPLETED",
+   613: 
+   614:             "job_claimed":
+   615:                 True,
+   616: 
+   617:             "job_id":
+   618:                 job_id,
+   619: 
+   620:             "job_type":
+   621:                 claimed_job.job_type,
+   622: 
+   623:             "claimed_status":
+   624:                 JOB_STATUS_RUNNING,
+   625: 
+   626:             "dispatch_performed":
+   627:                 True,
+   628: 
+   629:             "dispatch_result":
+   630:                 deepcopy(
+   631:                     dict(
+   632:                         dispatch_result
+   633:                     )
+   634:                 ),
+   635: 
+   636:             "terminal_status":
+   637:                 completed_job.status,
+   638: 
+   639:             "canonical_job_id_preserved":
+   640:                 True,
+   641: 
+   642:             "old_universal_knowledge_jsonl_used":
+   643:                 False,
+   644:         }
+   645: 
+   646:     except UniversalRuntimeWorkerFinalizationError:
+   647:         raise
+   648: 
+   649:     except Exception as exc:
+   650: 
+   651:         error_message = (
+   652:             f"{type(exc).__name__}: {exc}"
+   653:         )
+   654: 
+   655:         claimed_metadata = (
+   656:             claimed_job.metadata
+   657:             if isinstance(
+   658:                 claimed_job.metadata,
+   659:                 Mapping,
+   660:             )
+   661:             else {}
+   662:         )
+   663: 
+   664:         attempt_number = (
+   665:             _runtime_failure_attempt_number_v1(
+   666:                 claimed_metadata
+   667:             )
+   668:         )
+   669: 
+   670:         retry_policy = (
+   671:             _runtime_retry_policy_v1(
+   672:                 job_type=
+   673:                     claimed_job.job_type
+   674:             )
+   675:         )
+   676: 
+   677:         maximum_attempts = int(
+   678:             retry_policy[
+   679:                 "maximum_attempts"
+   680:             ]
+   681:         )
+   682: 
+   683:         contract_error = (
+   684:             _runtime_failure_is_contract_error_v1(
+   685:                 exc
+   686:             )
+   687:         )
+   688: 
+   689:         if contract_error:
+   690:             retry_type_allowed = bool(
+   691:                 retry_policy[
+   692:                     "retry_on_contract_error"
+   693:                 ]
+   694:             )
+   695:         else:
+   696:             retry_type_allowed = bool(
+   697:                 retry_policy[
+   698:                     "retry_on_handler_error"
+   699:                 ]
+   700:             )
+   701: 
+   702:         retry_ceiling_allows = (
+   703:             attempt_number
+   704:             < maximum_attempts
+   705:         )
+   706: 
+   707:         retry_allowed = (
+   708:             retry_type_allowed
+   709:             and retry_ceiling_allows
+   710:         )
+   711: 
+   712:         # ====================================================
+   713:         # RETRY PATH
+   714:         # SAME canonical job_id -> QUEUED
+   715:         # ====================================================
+   716: 
+   717:         if retry_allowed:
+   718: 
+   719:             try:
+   720:                 requeued_job = (
+   721:                     _requeue_same_runtime_job_v1(
+   722:                         job_id=
+   723:                             job_id,
+   724: 
+   725:                         worker_id=
+   726:                             canonical_worker_id,
+   727: 
+   728:                         error=
+   729:                             exc,
+   730: 
+   731:                         attempt_number=
+   732:                             attempt_number,
+   733: 
+   734:                         maximum_attempts=
+   735:                             maximum_attempts,
+   736:                     )
+   737:                 )
+   738: 
+   739:             except Exception as finalization_exc:
+   740:                 raise UniversalRuntimeWorkerFinalizationError(
+   741:                     "Runtime dispatch failed and same-job retry "
+   742:                     "could not be persisted."
+   743:                 ) from finalization_exc
+   744: 
+   745:             return {
+   746:                 "schema_version":
+   747:                     UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+   748: 
+   749:                 "worker_version":
+   750:                     UNIVERSAL_RUNTIME_WORKER_VERSION,
+   751: 
+   752:                 "worker_id":
+   753:                     canonical_worker_id,
+   754: 
+   755:                 "worker_status":
+   756:                     "RETRY_QUEUED",
+   757: 
+   758:                 "job_claimed":
+   759:                     True,
+   760: 
+   761:                 "job_id":
+   762:                     job_id,
+   763: 
+   764:                 "job_type":
+   765:                     claimed_job.job_type,
+   766: 
+   767:                 "claimed_status":
+   768:                     JOB_STATUS_RUNNING,
+   769: 
+   770:                 "dispatch_performed":
+   771:                     True,
+   772: 
+   773:                 "dispatch_succeeded":
+   774:                     False,
+   775: 
+   776:                 "dispatch_error_type":
+   777:                     type(
+   778:                         exc
+   779:                     ).__name__,
+   780: 
+   781:                 "dispatch_error":
+   782:                     str(
+   783:                         exc
+   784:                     ),
+   785: 
+   786:                 "contract_error":
+   787:                     contract_error,
+   788: 
+   789:                 "retry_type_allowed":
+   790:                     retry_type_allowed,
+   791: 
+   792:                 "retry_ceiling_allows":
+   793:                     retry_ceiling_allows,
+   794: 
+   795:                 "retry_allowed":
+   796:                     True,
+   797: 
+   798:                 "retry_scheduled":
+   799:                     True,
+   800: 
+   801:                 "attempt_number":
+   802:                     attempt_number,
+   803: 
+   804:                 "maximum_attempts":
+   805:                     maximum_attempts,
+   806: 
+   807:                 "queue_status":
+   808:                     requeued_job.status,
+   809: 
+   810:                 "terminal_status":
+   811:                     None,
+   812: 
+   813:                 "canonical_job_id_preserved":
+   814:                     True,
+   815: 
+   816:                 "retry_created_new_job":
+   817:                     False,
+   818: 
+   819:                 "old_universal_knowledge_jsonl_used":
+   820:                     False,
+   821:             }
+   822: 
+   823:         # ====================================================
+   824:         # TERMINAL FAILURE PATH
+   825:         # SAME canonical job_id -> FAILED
+   826:         # ====================================================
+   827: 
+   828:         try:
+   829:             failed_job = mark_job_failed(
+   830:                 job_id,
+   831:                 error_message,
+   832:                 metadata={
+   833:                     "worker_id":
+   834:                         canonical_worker_id,
+   835: 
+   836:                     "runtime_worker_version":
+   837:                         UNIVERSAL_RUNTIME_WORKER_VERSION,
+   838: 
+   839:                     "runtime_dispatch_completed":
+   840:                         False,
+   841: 
+   842:                     "runtime_dispatch_failed":
+   843:                         True,
+   844: 
+   845:                     "runtime_retry_scheduled":
+   846:                         False,
+   847: 
+   848:                     "runtime_failure_attempt_count":
+   849:                         attempt_number,
+   850: 
+   851:                     "runtime_maximum_attempts":
+   852:                         maximum_attempts,
+   853: 
+   854:                     "runtime_retry_type_allowed":
+   855:                         retry_type_allowed,
+   856: 
+   857:                     "runtime_retry_exhausted":
+   858:                         (
+   859:                             retry_type_allowed
+   860:                             and not retry_ceiling_allows
+   861:                         ),
+   862: 
+   863:                     "runtime_contract_error":
+   864:                         contract_error,
+   865: 
+   866:                     "runtime_dispatch_error_type":
+   867:                         type(
+   868:                             exc
+   869:                         ).__name__,
+   870: 
+   871:                     "canonical_job_id_preserved":
+   872:                         True,
+   873: 
+   874:                     "retry_created_new_job":
+   875:                         False,
+   876: 
+   877:                     "old_universal_knowledge_jsonl_used":
+   878:                         False,
+   879:                 },
+   880:             )
+   881: 
+   882:         except Exception as finalization_exc:
+   883:             raise UniversalRuntimeWorkerFinalizationError(
+   884:                 "Runtime dispatch failed and FAILED status "
+   885:                 "could not be persisted."
+   886:             ) from finalization_exc
+   887: 
+   888:         if failed_job.job_id != job_id:
+   889:             raise UniversalRuntimeWorkerFinalizationError(
+   890:                 "Failure finalization changed canonical job identity."
+   891:             )
+   892: 
+   893:         if failed_job.status != JOB_STATUS_FAILED:
+   894:             raise UniversalRuntimeWorkerFinalizationError(
+   895:                 "Failure finalization did not persist FAILED status."
+   896:             )
+   897: 
+   898:         return {
+   899:             "schema_version":
+   900:                 UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+   901: 
+   902:             "worker_version":
+   903:                 UNIVERSAL_RUNTIME_WORKER_VERSION,
+   904: 
+   905:             "worker_id":
+   906:                 canonical_worker_id,
+   907: 
+   908:             "worker_status":
+   909:                 "FAILED",
+   910: 
+   911:             "job_claimed":
+   912:                 True,
+   913: 
+   914:             "job_id":
+   915:                 job_id,
+   916: 
+   917:             "job_type":
+   918:                 claimed_job.job_type,
+   919: 
+   920:             "claimed_status":
+   921:                 JOB_STATUS_RUNNING,
+   922: 
+   923:             "dispatch_performed":
+   924:                 True,
+   925: 
+   926:             "dispatch_succeeded":
+   927:                 False,
+   928: 
+   929:             "dispatch_error_type":
+   930:                 type(
+   931:                     exc
+   932:                 ).__name__,
+   933: 
+   934:             "dispatch_error":
+   935:                 str(
+   936:                     exc
+   937:                 ),
+   938: 
+   939:             "contract_error":
+   940:                 contract_error,
+   941: 
+   942:             "retry_type_allowed":
+   943:                 retry_type_allowed,
+   944: 
+   945:             "retry_ceiling_allows":
+   946:                 retry_ceiling_allows,
+   947: 
+   948:             "retry_allowed":
+   949:                 False,
+   950: 
+
+================================================================================================================
+RUNTIME REGISTRATION CAPABILITY FIELDS
+================================================================================================================
+FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_registration.py
+
+MATCH AROUND LINE 131
+----------------------------------------------------------------------------------------------------------------
+   126:     if value is None:
+   127:         return {}
+   128: 
+   129:     if not isinstance(value, Mapping):
+   130:         raise TypeError(
+   131:             "Registration metadata must be a mapping."
+   132:         )
+   133: 
+   134:     return {
+   135:         str(key): item
+   136:         for key, item in value.items()
+   137:     }
+   138: 
+   139: 
+   140: def _handler_reference(
+   141:     handler: Callable[..., Any],
+   142: ) -> str:
+   143:     module_name = str(
+   144:         getattr(
+   145:             handler,
+   146:             "__module__",
+   147:             "",
+   148:         )
+   149:         or ""
+   150:     ).strip()
+   151: 
+   152:     qualified_name = str(
+   153:         getattr(
+   154:             handler,
+   155:             "__qualname__",
+   156:             "",
+   157:         )
+   158:         or getattr(
+   159:             handler,
+   160:             "__name__",
+   161:             "",
+   162:         )
+   163:         or ""
+   164:     ).strip()
+   165: 
+   166:     if not module_name or not qualified_name:
+
+MATCH AROUND LINE 294
+----------------------------------------------------------------------------------------------------------------
+   289:             missing_ok=True,
+   290:         )
+   291: 
+   292: 
+   293: @dataclass(frozen=True)
+   294: class RuntimeHandlerRegistration:
+   295:     job_type: str
+   296:     pipeline: str
+   297:     stage: str
+   298:     handler_ref: str
+   299:     handler: Callable[..., Any] = field(
+   300:         repr=False,
+   301:         compare=False,
+   302:     )
+   303:     description: str = ""
+   304:     required_payload_fields: tuple[str, ...] = ()
+   305:     predecessor_stages: tuple[str, ...] = ()
+   306:     successor_stages: tuple[str, ...] = ()
+   307:     idempotency_fields: tuple[str, ...] = ()
+   308:     retry_policy: dict[str, Any] = field(
+   309:         default_factory=dict
+   310:     )
+   311:     concurrency_policy: dict[str, Any] = field(
+   312:         default_factory=dict
+   313:     )
+   314:     metadata: dict[str, Any] = field(
+   315:         default_factory=dict
+   316:     )
+   317:     persistent: bool = False
+   318:     registered_at: str = ""
+   319: 
+   320:     def to_public_dict(
+   321:         self,
+   322:     ) -> dict[str, Any]:
+   323:         return {
+   324:             "schema_version": (
+   325:                 REGISTRATION_SCHEMA_VERSION
+   326:             ),
+   327:             "job_type": self.job_type,
+   328:             "pipeline": self.pipeline,
+   329:             "stage": self.stage,
+
+MATCH AROUND LINE 311
+----------------------------------------------------------------------------------------------------------------
+   306:     successor_stages: tuple[str, ...] = ()
+   307:     idempotency_fields: tuple[str, ...] = ()
+   308:     retry_policy: dict[str, Any] = field(
+   309:         default_factory=dict
+   310:     )
+   311:     concurrency_policy: dict[str, Any] = field(
+   312:         default_factory=dict
+   313:     )
+   314:     metadata: dict[str, Any] = field(
+   315:         default_factory=dict
+   316:     )
+   317:     persistent: bool = False
+   318:     registered_at: str = ""
+   319: 
+   320:     def to_public_dict(
+   321:         self,
+   322:     ) -> dict[str, Any]:
+   323:         return {
+   324:             "schema_version": (
+   325:                 REGISTRATION_SCHEMA_VERSION
+   326:             ),
+   327:             "job_type": self.job_type,
+   328:             "pipeline": self.pipeline,
+   329:             "stage": self.stage,
+   330:             "handler_ref": self.handler_ref,
+   331:             "description": self.description,
+   332:             "required_payload_fields": list(
+   333:                 self.required_payload_fields
+   334:             ),
+   335:             "predecessor_stages": list(
+   336:                 self.predecessor_stages
+   337:             ),
+   338:             "successor_stages": list(
+   339:                 self.successor_stages
+   340:             ),
+   341:             "idempotency_fields": list(
+   342:                 self.idempotency_fields
+   343:             ),
+   344:             "retry_policy": dict(
+   345:                 self.retry_policy
+   346:             ),
+
+MATCH AROUND LINE 314
+----------------------------------------------------------------------------------------------------------------
+   309:         default_factory=dict
+   310:     )
+   311:     concurrency_policy: dict[str, Any] = field(
+   312:         default_factory=dict
+   313:     )
+   314:     metadata: dict[str, Any] = field(
+   315:         default_factory=dict
+   316:     )
+   317:     persistent: bool = False
+   318:     registered_at: str = ""
+   319: 
+   320:     def to_public_dict(
+   321:         self,
+   322:     ) -> dict[str, Any]:
+   323:         return {
+   324:             "schema_version": (
+   325:                 REGISTRATION_SCHEMA_VERSION
+   326:             ),
+   327:             "job_type": self.job_type,
+   328:             "pipeline": self.pipeline,
+   329:             "stage": self.stage,
+   330:             "handler_ref": self.handler_ref,
+   331:             "description": self.description,
+   332:             "required_payload_fields": list(
+   333:                 self.required_payload_fields
+   334:             ),
+   335:             "predecessor_stages": list(
+   336:                 self.predecessor_stages
+   337:             ),
+   338:             "successor_stages": list(
+   339:                 self.successor_stages
+   340:             ),
+   341:             "idempotency_fields": list(
+   342:                 self.idempotency_fields
+   343:             ),
+   344:             "retry_policy": dict(
+   345:                 self.retry_policy
+   346:             ),
+   347:             "concurrency_policy": dict(
+   348:                 self.concurrency_policy
+   349:             ),
+
+MATCH AROUND LINE 347
+----------------------------------------------------------------------------------------------------------------
+   342:                 self.idempotency_fields
+   343:             ),
+   344:             "retry_policy": dict(
+   345:                 self.retry_policy
+   346:             ),
+   347:             "concurrency_policy": dict(
+   348:                 self.concurrency_policy
+   349:             ),
+   350:             "metadata": dict(
+   351:                 self.metadata
+   352:             ),
+   353:             "persistent": self.persistent,
+   354:             "registered_at": self.registered_at,
+   355:         }
+   356: 
+   357: 
+   358: def _persist_registry_snapshot() -> None:
+   359:     persistent_records = [
+   360:         registration.to_public_dict()
+   361:         for registration in sorted(
+   362:             _RUNTIME_HANDLER_REGISTRY.values(),
+   363:             key=lambda item: item.job_type,
+   364:         )
+   365:         if registration.persistent
+   366:     ]
+   367: 
+   368:     document = {
+   369:         "schema_version": (
+   370:             REGISTRATION_SCHEMA_VERSION
+   371:         ),
+   372:         "updated_at": utc_now(),
+   373:         "registration_count": len(
+   374:             persistent_records
+   375:         ),
+   376:         "registrations": persistent_records,
+   377:     }
+   378: 
+   379:     _atomic_write_text(
+   380:         REGISTRY_PATH,
+   381:         json.dumps(
+   382:             document,
+
+MATCH AROUND LINE 348
+----------------------------------------------------------------------------------------------------------------
+   343:             ),
+   344:             "retry_policy": dict(
+   345:                 self.retry_policy
+   346:             ),
+   347:             "concurrency_policy": dict(
+   348:                 self.concurrency_policy
+   349:             ),
+   350:             "metadata": dict(
+   351:                 self.metadata
+   352:             ),
+   353:             "persistent": self.persistent,
+   354:             "registered_at": self.registered_at,
+   355:         }
+   356: 
+   357: 
+   358: def _persist_registry_snapshot() -> None:
+   359:     persistent_records = [
+   360:         registration.to_public_dict()
+   361:         for registration in sorted(
+   362:             _RUNTIME_HANDLER_REGISTRY.values(),
+   363:             key=lambda item: item.job_type,
+   364:         )
+   365:         if registration.persistent
+   366:     ]
+   367: 
+   368:     document = {
+   369:         "schema_version": (
+   370:             REGISTRATION_SCHEMA_VERSION
+   371:         ),
+   372:         "updated_at": utc_now(),
+   373:         "registration_count": len(
+   374:             persistent_records
+   375:         ),
+   376:         "registrations": persistent_records,
+   377:     }
+   378: 
+   379:     _atomic_write_text(
+   380:         REGISTRY_PATH,
+   381:         json.dumps(
+   382:             document,
+   383:             indent=2,
+
+MATCH AROUND LINE 350
+----------------------------------------------------------------------------------------------------------------
+   345:                 self.retry_policy
+   346:             ),
+   347:             "concurrency_policy": dict(
+   348:                 self.concurrency_policy
+   349:             ),
+   350:             "metadata": dict(
+   351:                 self.metadata
+   352:             ),
+   353:             "persistent": self.persistent,
+   354:             "registered_at": self.registered_at,
+   355:         }
+   356: 
+   357: 
+   358: def _persist_registry_snapshot() -> None:
+   359:     persistent_records = [
+   360:         registration.to_public_dict()
+   361:         for registration in sorted(
+   362:             _RUNTIME_HANDLER_REGISTRY.values(),
+   363:             key=lambda item: item.job_type,
+   364:         )
+   365:         if registration.persistent
+   366:     ]
+   367: 
+   368:     document = {
+   369:         "schema_version": (
+   370:             REGISTRATION_SCHEMA_VERSION
+   371:         ),
+   372:         "updated_at": utc_now(),
+   373:         "registration_count": len(
+   374:             persistent_records
+   375:         ),
+   376:         "registrations": persistent_records,
+   377:     }
+   378: 
+   379:     _atomic_write_text(
+   380:         REGISTRY_PATH,
+   381:         json.dumps(
+   382:             document,
+   383:             indent=2,
+   384:             ensure_ascii=False,
+   385:             sort_keys=True,
+
+MATCH AROUND LINE 351
+----------------------------------------------------------------------------------------------------------------
+   346:             ),
+   347:             "concurrency_policy": dict(
+   348:                 self.concurrency_policy
+   349:             ),
+   350:             "metadata": dict(
+   351:                 self.metadata
+   352:             ),
+   353:             "persistent": self.persistent,
+   354:             "registered_at": self.registered_at,
+   355:         }
+   356: 
+   357: 
+   358: def _persist_registry_snapshot() -> None:
+   359:     persistent_records = [
+   360:         registration.to_public_dict()
+   361:         for registration in sorted(
+   362:             _RUNTIME_HANDLER_REGISTRY.values(),
+   363:             key=lambda item: item.job_type,
+   364:         )
+   365:         if registration.persistent
+   366:     ]
+   367: 
+   368:     document = {
+   369:         "schema_version": (
+   370:             REGISTRATION_SCHEMA_VERSION
+   371:         ),
+   372:         "updated_at": utc_now(),
+   373:         "registration_count": len(
+   374:             persistent_records
+   375:         ),
+   376:         "registrations": persistent_records,
+   377:     }
+   378: 
+   379:     _atomic_write_text(
+   380:         REGISTRY_PATH,
+   381:         json.dumps(
+   382:             document,
+   383:             indent=2,
+   384:             ensure_ascii=False,
+   385:             sort_keys=True,
+   386:         )
+
+MATCH AROUND LINE 403
+----------------------------------------------------------------------------------------------------------------
+   398:     required_payload_fields: Iterable[Any] | None = None,
+   399:     predecessor_stages: Iterable[Any] | None = None,
+   400:     successor_stages: Iterable[Any] | None = None,
+   401:     idempotency_fields: Iterable[Any] | None = None,
+   402:     retry_policy: Mapping[str, Any] | None = None,
+   403:     concurrency_policy: Mapping[str, Any] | None = None,
+   404:     metadata: Mapping[str, Any] | None = None,
+   405:     replace: bool = False,
+   406:     persist: bool = False,
+   407:     _loaded_from_persistence: bool = False,
+   408: ) -> dict[str, Any]:
+   409:     canonical_job_type = _normalize_name(
+   410:         job_type,
+   411:         field_name="job_type",
+   412:     )
+   413: 
+   414:     canonical_pipeline = (
+   415:         _normalize_optional_name(
+   416:             pipeline,
+   417:             fallback="universal_knowledge",
+   418:             field_name="pipeline",
+   419:         )
+   420:     )
+   421: 
+   422:     canonical_stage = (
+   423:         _normalize_optional_name(
+   424:             stage,
+   425:             fallback=canonical_job_type,
+   426:             field_name="stage",
+   427:         )
+   428:     )
+   429: 
+   430:     resolved_handler, handler_ref = (
+   431:         _resolve_handler(
+   432:             handler
+   433:         )
+   434:     )
+   435: 
+   436:     if (
+   437:         persist
+   438:         and "<locals>" in handler_ref
+
+MATCH AROUND LINE 404
+----------------------------------------------------------------------------------------------------------------
+   399:     predecessor_stages: Iterable[Any] | None = None,
+   400:     successor_stages: Iterable[Any] | None = None,
+   401:     idempotency_fields: Iterable[Any] | None = None,
+   402:     retry_policy: Mapping[str, Any] | None = None,
+   403:     concurrency_policy: Mapping[str, Any] | None = None,
+   404:     metadata: Mapping[str, Any] | None = None,
+   405:     replace: bool = False,
+   406:     persist: bool = False,
+   407:     _loaded_from_persistence: bool = False,
+   408: ) -> dict[str, Any]:
+   409:     canonical_job_type = _normalize_name(
+   410:         job_type,
+   411:         field_name="job_type",
+   412:     )
+   413: 
+   414:     canonical_pipeline = (
+   415:         _normalize_optional_name(
+   416:             pipeline,
+   417:             fallback="universal_knowledge",
+   418:             field_name="pipeline",
+   419:         )
+   420:     )
+   421: 
+   422:     canonical_stage = (
+   423:         _normalize_optional_name(
+   424:             stage,
+   425:             fallback=canonical_job_type,
+   426:             field_name="stage",
+   427:         )
+   428:     )
+   429: 
+   430:     resolved_handler, handler_ref = (
+   431:         _resolve_handler(
+   432:             handler
+   433:         )
+   434:     )
+   435: 
+   436:     if (
+   437:         persist
+   438:         and "<locals>" in handler_ref
+   439:     ):
+
+MATCH AROUND LINE 482
+----------------------------------------------------------------------------------------------------------------
+   477:             )
+   478:         ),
+   479:         retry_policy=_normalize_mapping(
+   480:             retry_policy
+   481:         ),
+   482:         concurrency_policy=(
+   483:             _normalize_mapping(
+   484:                 concurrency_policy
+   485:             )
+   486:         ),
+   487:         metadata=_normalize_mapping(
+   488:             metadata
+   489:         ),
+   490:         persistent=persistent,
+   491:         registered_at=utc_now(),
+   492:     )
+   493: 
+   494:     with _REGISTRY_LOCK:
+   495:         existing = (
+   496:             _RUNTIME_HANDLER_REGISTRY.get(
+   497:                 canonical_job_type
+   498:             )
+   499:         )
+   500: 
+   501:         if (
+   502:             existing is not None
+   503:             and not replace
+   504:         ):
+   505:             raise ValueError(
+   506:                 "Runtime handler already registered for "
+   507:                 f"job_type: {canonical_job_type}"
+   508:             )
+   509: 
+   510:         _RUNTIME_HANDLER_REGISTRY[
+   511:             canonical_job_type
+   512:         ] = registration
+   513: 
+   514:         if persist:
+   515:             _persist_registry_snapshot()
+   516: 
+   517:     return registration.to_public_dict()
+
+MATCH AROUND LINE 484
+----------------------------------------------------------------------------------------------------------------
+   479:         retry_policy=_normalize_mapping(
+   480:             retry_policy
+   481:         ),
+   482:         concurrency_policy=(
+   483:             _normalize_mapping(
+   484:                 concurrency_policy
+   485:             )
+   486:         ),
+   487:         metadata=_normalize_mapping(
+   488:             metadata
+   489:         ),
+   490:         persistent=persistent,
+   491:         registered_at=utc_now(),
+   492:     )
+   493: 
+   494:     with _REGISTRY_LOCK:
+   495:         existing = (
+   496:             _RUNTIME_HANDLER_REGISTRY.get(
+   497:                 canonical_job_type
+   498:             )
+   499:         )
+   500: 
+   501:         if (
+   502:             existing is not None
+   503:             and not replace
+   504:         ):
+   505:             raise ValueError(
+   506:                 "Runtime handler already registered for "
+   507:                 f"job_type: {canonical_job_type}"
+   508:             )
+   509: 
+   510:         _RUNTIME_HANDLER_REGISTRY[
+   511:             canonical_job_type
+   512:         ] = registration
+   513: 
+   514:         if persist:
+   515:             _persist_registry_snapshot()
+   516: 
+   517:     return registration.to_public_dict()
+   518: 
+   519: 
+
+MATCH AROUND LINE 487
+----------------------------------------------------------------------------------------------------------------
+   482:         concurrency_policy=(
+   483:             _normalize_mapping(
+   484:                 concurrency_policy
+   485:             )
+   486:         ),
+   487:         metadata=_normalize_mapping(
+   488:             metadata
+   489:         ),
+   490:         persistent=persistent,
+   491:         registered_at=utc_now(),
+   492:     )
+   493: 
+   494:     with _REGISTRY_LOCK:
+   495:         existing = (
+   496:             _RUNTIME_HANDLER_REGISTRY.get(
+   497:                 canonical_job_type
+   498:             )
+   499:         )
+   500: 
+   501:         if (
+   502:             existing is not None
+   503:             and not replace
+   504:         ):
+   505:             raise ValueError(
+   506:                 "Runtime handler already registered for "
+   507:                 f"job_type: {canonical_job_type}"
+   508:             )
+   509: 
+   510:         _RUNTIME_HANDLER_REGISTRY[
+   511:             canonical_job_type
+   512:         ] = registration
+   513: 
+   514:         if persist:
+   515:             _persist_registry_snapshot()
+   516: 
+   517:     return registration.to_public_dict()
+   518: 
+   519: 
+   520: def runtime_handler(
+   521:     *,
+   522:     job_type: str,
+
+MATCH AROUND LINE 488
+----------------------------------------------------------------------------------------------------------------
+   483:             _normalize_mapping(
+   484:                 concurrency_policy
+   485:             )
+   486:         ),
+   487:         metadata=_normalize_mapping(
+   488:             metadata
+   489:         ),
+   490:         persistent=persistent,
+   491:         registered_at=utc_now(),
+   492:     )
+   493: 
+   494:     with _REGISTRY_LOCK:
+   495:         existing = (
+   496:             _RUNTIME_HANDLER_REGISTRY.get(
+   497:                 canonical_job_type
+   498:             )
+   499:         )
+   500: 
+   501:         if (
+   502:             existing is not None
+   503:             and not replace
+   504:         ):
+   505:             raise ValueError(
+   506:                 "Runtime handler already registered for "
+   507:                 f"job_type: {canonical_job_type}"
+   508:             )
+   509: 
+   510:         _RUNTIME_HANDLER_REGISTRY[
+   511:             canonical_job_type
+   512:         ] = registration
+   513: 
+   514:         if persist:
+   515:             _persist_registry_snapshot()
+   516: 
+   517:     return registration.to_public_dict()
+   518: 
+   519: 
+   520: def runtime_handler(
+   521:     *,
+   522:     job_type: str,
+   523:     pipeline: str = "",
+
+MATCH AROUND LINE 531
+----------------------------------------------------------------------------------------------------------------
+   526:     required_payload_fields: Iterable[Any] | None = None,
+   527:     predecessor_stages: Iterable[Any] | None = None,
+   528:     successor_stages: Iterable[Any] | None = None,
+   529:     idempotency_fields: Iterable[Any] | None = None,
+   530:     retry_policy: Mapping[str, Any] | None = None,
+   531:     concurrency_policy: Mapping[str, Any] | None = None,
+   532:     metadata: Mapping[str, Any] | None = None,
+   533:     replace: bool = False,
+   534:     persist: bool = False,
+   535: ) -> Callable[
+   536:     [Callable[..., Any]],
+   537:     Callable[..., Any],
+   538: ]:
+   539:     def decorator(
+   540:         handler: Callable[..., Any],
+   541:     ) -> Callable[..., Any]:
+   542:         register_runtime_handler(
+   543:             job_type=job_type,
+   544:             handler=handler,
+   545:             pipeline=pipeline,
+   546:             stage=stage,
+   547:             description=description,
+   548:             required_payload_fields=(
+   549:                 required_payload_fields
+   550:             ),
+   551:             predecessor_stages=(
+   552:                 predecessor_stages
+   553:             ),
+   554:             successor_stages=(
+   555:                 successor_stages
+   556:             ),
+   557:             idempotency_fields=(
+   558:                 idempotency_fields
+   559:             ),
+   560:             retry_policy=retry_policy,
+   561:             concurrency_policy=(
+   562:                 concurrency_policy
+   563:             ),
+   564:             metadata=metadata,
+   565:             replace=replace,
+   566:             persist=persist,
+
+MATCH AROUND LINE 532
+----------------------------------------------------------------------------------------------------------------
+   527:     predecessor_stages: Iterable[Any] | None = None,
+   528:     successor_stages: Iterable[Any] | None = None,
+   529:     idempotency_fields: Iterable[Any] | None = None,
+   530:     retry_policy: Mapping[str, Any] | None = None,
+   531:     concurrency_policy: Mapping[str, Any] | None = None,
+   532:     metadata: Mapping[str, Any] | None = None,
+   533:     replace: bool = False,
+   534:     persist: bool = False,
+   535: ) -> Callable[
+   536:     [Callable[..., Any]],
+   537:     Callable[..., Any],
+   538: ]:
+   539:     def decorator(
+   540:         handler: Callable[..., Any],
+   541:     ) -> Callable[..., Any]:
+   542:         register_runtime_handler(
+   543:             job_type=job_type,
+   544:             handler=handler,
+   545:             pipeline=pipeline,
+   546:             stage=stage,
+   547:             description=description,
+   548:             required_payload_fields=(
+   549:                 required_payload_fields
+   550:             ),
+   551:             predecessor_stages=(
+   552:                 predecessor_stages
+   553:             ),
+   554:             successor_stages=(
+   555:                 successor_stages
+   556:             ),
+   557:             idempotency_fields=(
+   558:                 idempotency_fields
+   559:             ),
+   560:             retry_policy=retry_policy,
+   561:             concurrency_policy=(
+   562:                 concurrency_policy
+   563:             ),
+   564:             metadata=metadata,
+   565:             replace=replace,
+   566:             persist=persist,
+   567:         )
+
+MATCH AROUND LINE 561
+----------------------------------------------------------------------------------------------------------------
+   556:             ),
+   557:             idempotency_fields=(
+   558:                 idempotency_fields
+   559:             ),
+   560:             retry_policy=retry_policy,
+   561:             concurrency_policy=(
+   562:                 concurrency_policy
+   563:             ),
+   564:             metadata=metadata,
+   565:             replace=replace,
+   566:             persist=persist,
+   567:         )
+   568: 
+   569:         return handler
+   570: 
+   571:     return decorator
+   572: 
+   573: 
+   574: def unregister_runtime_handler(
+   575:     job_type: str,
+   576:     *,
+   577:     persist: bool = False,
+   578: ) -> dict[str, Any] | None:
+   579:     canonical_job_type = _normalize_name(
+   580:         job_type,
+   581:         field_name="job_type",
+   582:     )
+   583: 
+   584:     with _REGISTRY_LOCK:
+   585:         registration = (
+   586:             _RUNTIME_HANDLER_REGISTRY.pop(
+   587:                 canonical_job_type,
+   588:                 None,
+   589:             )
+   590:         )
+   591: 
+   592:         if persist:
+   593:             _persist_registry_snapshot()
+   594: 
+   595:     if registration is None:
+   596:         return None
+
+MATCH AROUND LINE 562
+----------------------------------------------------------------------------------------------------------------
+   557:             idempotency_fields=(
+   558:                 idempotency_fields
+   559:             ),
+   560:             retry_policy=retry_policy,
+   561:             concurrency_policy=(
+   562:                 concurrency_policy
+   563:             ),
+   564:             metadata=metadata,
+   565:             replace=replace,
+   566:             persist=persist,
+   567:         )
+   568: 
+   569:         return handler
+   570: 
+   571:     return decorator
+   572: 
+   573: 
+   574: def unregister_runtime_handler(
+   575:     job_type: str,
+   576:     *,
+   577:     persist: bool = False,
+   578: ) -> dict[str, Any] | None:
+   579:     canonical_job_type = _normalize_name(
+   580:         job_type,
+   581:         field_name="job_type",
+   582:     )
+   583: 
+   584:     with _REGISTRY_LOCK:
+   585:         registration = (
+   586:             _RUNTIME_HANDLER_REGISTRY.pop(
+   587:                 canonical_job_type,
+   588:                 None,
+   589:             )
+   590:         )
+   591: 
+   592:         if persist:
+   593:             _persist_registry_snapshot()
+   594: 
+   595:     if registration is None:
+   596:         return None
+   597: 
+
+MATCH AROUND LINE 564
+----------------------------------------------------------------------------------------------------------------
+   559:             ),
+   560:             retry_policy=retry_policy,
+   561:             concurrency_policy=(
+   562:                 concurrency_policy
+   563:             ),
+   564:             metadata=metadata,
+   565:             replace=replace,
+   566:             persist=persist,
+   567:         )
+   568: 
+   569:         return handler
+   570: 
+   571:     return decorator
+   572: 
+   573: 
+   574: def unregister_runtime_handler(
+   575:     job_type: str,
+   576:     *,
+   577:     persist: bool = False,
+   578: ) -> dict[str, Any] | None:
+   579:     canonical_job_type = _normalize_name(
+   580:         job_type,
+   581:         field_name="job_type",
+   582:     )
+   583: 
+   584:     with _REGISTRY_LOCK:
+   585:         registration = (
+   586:             _RUNTIME_HANDLER_REGISTRY.pop(
+   587:                 canonical_job_type,
+   588:                 None,
+   589:             )
+   590:         )
+   591: 
+   592:         if persist:
+   593:             _persist_registry_snapshot()
+   594: 
+   595:     if registration is None:
+   596:         return None
+   597: 
+   598:     return registration.to_public_dict()
+   599: 
+
+MATCH AROUND LINE 733
+----------------------------------------------------------------------------------------------------------------
+   728:                 ),
+   729:                 retry_policy=record.get(
+   730:                     "retry_policy",
+   731:                     {},
+   732:                 ),
+   733:                 concurrency_policy=(
+   734:                     record.get(
+   735:                         "concurrency_policy",
+   736:                         {},
+   737:                     )
+   738:                 ),
+   739:                 metadata=record.get(
+   740:                     "metadata",
+   741:                     {},
+   742:                 ),
+   743:                 replace=True,
+   744:                 persist=False,
+   745:                 _loaded_from_persistence=True,
+   746:             )
+   747: 
+   748:             loaded_job_types.append(
+   749:                 public_record["job_type"]
+   750:             )
+   751: 
+   752:         _PERSISTED_REGISTRY_LOADED = True
+   753: 
+   754:         return {
+   755:             "ok": True,
+   756:             "loaded": True,
+   757:             "reason": "registry_loaded",
+   758:             "registration_count": len(
+   759:                 loaded_job_types
+   760:             ),
+   761:             "job_types": sorted(
+   762:                 loaded_job_types
+   763:             ),
+   764:         }
+   765: 
+   766: 
+   767: def ensure_persisted_runtime_registrations_loaded() -> None:
+   768:     load_persisted_runtime_registrations(
+
+MATCH AROUND LINE 735
+----------------------------------------------------------------------------------------------------------------
+   730:                     "retry_policy",
+   731:                     {},
+   732:                 ),
+   733:                 concurrency_policy=(
+   734:                     record.get(
+   735:                         "concurrency_policy",
+   736:                         {},
+   737:                     )
+   738:                 ),
+   739:                 metadata=record.get(
+   740:                     "metadata",
+   741:                     {},
+   742:                 ),
+   743:                 replace=True,
+   744:                 persist=False,
+   745:                 _loaded_from_persistence=True,
+   746:             )
+   747: 
+   748:             loaded_job_types.append(
+   749:                 public_record["job_type"]
+   750:             )
+   751: 
+   752:         _PERSISTED_REGISTRY_LOADED = True
+   753: 
+   754:         return {
+   755:             "ok": True,
+   756:             "loaded": True,
+   757:             "reason": "registry_loaded",
+   758:             "registration_count": len(
+   759:                 loaded_job_types
+   760:             ),
+   761:             "job_types": sorted(
+   762:                 loaded_job_types
+   763:             ),
+   764:         }
+   765: 
+   766: 
+   767: def ensure_persisted_runtime_registrations_loaded() -> None:
+   768:     load_persisted_runtime_registrations(
+   769:         force=False
+   770:     )
+
+MATCH AROUND LINE 739
+----------------------------------------------------------------------------------------------------------------
+   734:                     record.get(
+   735:                         "concurrency_policy",
+   736:                         {},
+   737:                     )
+   738:                 ),
+   739:                 metadata=record.get(
+   740:                     "metadata",
+   741:                     {},
+   742:                 ),
+   743:                 replace=True,
+   744:                 persist=False,
+   745:                 _loaded_from_persistence=True,
+   746:             )
+   747: 
+   748:             loaded_job_types.append(
+   749:                 public_record["job_type"]
+   750:             )
+   751: 
+   752:         _PERSISTED_REGISTRY_LOADED = True
+   753: 
+   754:         return {
+   755:             "ok": True,
+   756:             "loaded": True,
+   757:             "reason": "registry_loaded",
+   758:             "registration_count": len(
+   759:                 loaded_job_types
+   760:             ),
+   761:             "job_types": sorted(
+   762:                 loaded_job_types
+   763:             ),
+   764:         }
+   765: 
+   766: 
+   767: def ensure_persisted_runtime_registrations_loaded() -> None:
+   768:     load_persisted_runtime_registrations(
+   769:         force=False
+   770:     )
+   771: 
+   772: 
+   773: def has_runtime_handler(
+   774:     job_type: Any,
+
+MATCH AROUND LINE 740
+----------------------------------------------------------------------------------------------------------------
+   735:                         "concurrency_policy",
+   736:                         {},
+   737:                     )
+   738:                 ),
+   739:                 metadata=record.get(
+   740:                     "metadata",
+   741:                     {},
+   742:                 ),
+   743:                 replace=True,
+   744:                 persist=False,
+   745:                 _loaded_from_persistence=True,
+   746:             )
+   747: 
+   748:             loaded_job_types.append(
+   749:                 public_record["job_type"]
+   750:             )
+   751: 
+   752:         _PERSISTED_REGISTRY_LOADED = True
+   753: 
+   754:         return {
+   755:             "ok": True,
+   756:             "loaded": True,
+   757:             "reason": "registry_loaded",
+   758:             "registration_count": len(
+   759:                 loaded_job_types
+   760:             ),
+   761:             "job_types": sorted(
+   762:                 loaded_job_types
+   763:             ),
+   764:         }
+   765: 
+   766: 
+   767: def ensure_persisted_runtime_registrations_loaded() -> None:
+   768:     load_persisted_runtime_registrations(
+   769:         force=False
+   770:     )
+   771: 
+   772: 
+   773: def has_runtime_handler(
+   774:     job_type: Any,
+   775: ) -> bool:
+
+MATCH AROUND LINE 800
+----------------------------------------------------------------------------------------------------------------
+   795:     return has_runtime_handler(
+   796:         job_type
+   797:     )
+   798: 
+   799: 
+   800: def get_runtime_registration(
+   801:     job_type: str,
+   802: ) -> dict[str, Any] | None:
+   803:     ensure_persisted_runtime_registrations_loaded()
+   804: 
+   805:     canonical_job_type = _normalize_name(
+   806:         job_type,
+   807:         field_name="job_type",
+   808:     )
+   809: 
+   810:     with _REGISTRY_LOCK:
+   811:         registration = (
+   812:             _RUNTIME_HANDLER_REGISTRY.get(
+   813:                 canonical_job_type
+   814:             )
+   815:         )
+   816: 
+   817:     if registration is None:
+   818:         return None
+   819: 
+   820:     return registration.to_public_dict()
+   821: 
+   822: 
+   823: def list_runtime_registrations() -> list[
+   824:     dict[str, Any]
+   825: ]:
+   826:     ensure_persisted_runtime_registrations_loaded()
+   827: 
+   828:     with _REGISTRY_LOCK:
+   829:         registrations = sorted(
+   830:             _RUNTIME_HANDLER_REGISTRY.values(),
+   831:             key=lambda item: item.job_type,
+   832:         )
+   833: 
+   834:     return [
+   835:         registration.to_public_dict()
+
+================================================================================================================
+CANONICAL WORKER CAPABILITY AUTHORITIES
+================================================================================================================
+FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\capability.py
+
+MATCH AROUND LINE 43
+----------------------------------------------------------------------------------------------------------------
+    38: _CAPABILITY_PATTERN = re.compile(
+    39:     r"^[a-z0-9][a-z0-9_.:-]*$"
+    40: )
+    41: 
+    42: 
+    43: class UniversalWorkerCapabilityError(
+    44:     ValueError
+    45: ):
+    46: 
+    47:     def __init__(
+    48:         self,
+    49:         message: str,
+    50:         *,
+    51:         code: str,
+    52:         value: Any = None,
+    53:     ) -> None:
+    54: 
+    55:         super().__init__(
+    56:             message
+    57:         )
+    58: 
+    59:         self.code = str(
+    60:             code
+    61:         )
+    62: 
+    63:         self.value = value
+    64: 
+    65: 
+    66: def normalize_universal_worker_capability(
+    67:     value: Any,
+    68: ) -> str:
+    69: 
+    70:     if not isinstance(
+    71:         value,
+    72:         str,
+    73:     ):
+    74: 
+    75:         raise UniversalWorkerCapabilityError(
+    76:             "Worker capability must be a string.",
+    77:             code="invalid_worker_capability",
+    78:             value=value,
+
+MATCH AROUND LINE 66
+----------------------------------------------------------------------------------------------------------------
+    61:         )
+    62: 
+    63:         self.value = value
+    64: 
+    65: 
+    66: def normalize_universal_worker_capability(
+    67:     value: Any,
+    68: ) -> str:
+    69: 
+    70:     if not isinstance(
+    71:         value,
+    72:         str,
+    73:     ):
+    74: 
+    75:         raise UniversalWorkerCapabilityError(
+    76:             "Worker capability must be a string.",
+    77:             code="invalid_worker_capability",
+    78:             value=value,
+    79:         )
+    80: 
+    81:     normalized = (
+    82:         value
+    83:         .strip()
+    84:         .lower()
+    85:     )
+    86: 
+    87:     if not (
+    88:         MIN_UNIVERSAL_WORKER_CAPABILITY_LENGTH
+    89:         <= len(normalized)
+    90:         <= MAX_UNIVERSAL_WORKER_CAPABILITY_LENGTH
+    91:     ):
+    92: 
+    93:         raise UniversalWorkerCapabilityError(
+    94:             (
+    95:                 "Worker capability length must be "
+    96:                 "between 2 and 128 characters."
+    97:             ),
+    98:             code="invalid_worker_capability_length",
+    99:             value=value,
+   100:         )
+   101: 
+
+MATCH AROUND LINE 291
+----------------------------------------------------------------------------------------------------------------
+   286: 
+   287: @dataclass(
+   288:     frozen=True,
+   289:     slots=True,
+   290: )
+   291: class UniversalWorkerCapabilitySnapshot:
+   292: 
+   293:     worker_id: str
+   294: 
+   295:     worker_instance_id: str
+   296: 
+   297:     worker_type: str
+   298: 
+   299:     capabilities: tuple[str, ...]
+   300: 
+   301:     schema_version: str = (
+   302:         UNIVERSAL_WORKER_CAPABILITY_SNAPSHOT_SCHEMA_VERSION
+   303:     )
+   304: 
+   305:     def __post_init__(
+   306:         self,
+   307:     ) -> None:
+   308: 
+   309:         (
+   310:             worker_id,
+   311:             worker_instance_id,
+   312:             worker_type,
+   313:         ) = _normalize_worker_identity(
+   314:             worker_id=self.worker_id,
+   315:             worker_instance_id=self.worker_instance_id,
+   316:             worker_type=self.worker_type,
+   317:         )
+   318: 
+   319:         capabilities = (
+   320:             normalize_universal_worker_capabilities(
+   321:                 self.capabilities,
+   322:                 field_name="capabilities",
+   323:             )
+   324:         )
+   325: 
+   326:         if (
+
+MATCH AROUND LINE 392
+----------------------------------------------------------------------------------------------------------------
+   387: 
+   388: @dataclass(
+   389:     frozen=True,
+   390:     slots=True,
+   391: )
+   392: class UniversalWorkerCapabilityMatchResult:
+   393: 
+   394:     worker_id: str
+   395: 
+   396:     worker_instance_id: str
+   397: 
+   398:     worker_type: str
+   399: 
+   400:     worker_capabilities: tuple[str, ...]
+   401: 
+   402:     required_capabilities: tuple[str, ...]
+   403: 
+   404:     missing_capabilities: tuple[str, ...]
+   405: 
+   406:     compatible: bool
+   407: 
+   408:     schema_version: str = (
+   409:         UNIVERSAL_WORKER_CAPABILITY_MATCH_SCHEMA_VERSION
+   410:     )
+   411: 
+   412:     def __post_init__(
+   413:         self,
+   414:     ) -> None:
+   415: 
+   416:         (
+   417:             worker_id,
+   418:             worker_instance_id,
+   419:             worker_type,
+   420:         ) = _normalize_worker_identity(
+   421:             worker_id=self.worker_id,
+   422:             worker_instance_id=self.worker_instance_id,
+   423:             worker_type=self.worker_type,
+   424:         )
+   425: 
+   426:         worker_capabilities = (
+   427:             normalize_universal_worker_capabilities(
+
+MATCH AROUND LINE 589
+----------------------------------------------------------------------------------------------------------------
+   584:     ) -> bool:
+   585: 
+   586:         return self.compatible
+   587: 
+   588: 
+   589: def create_universal_worker_capability_snapshot(
+   590:     *,
+   591:     registration: UniversalWorkerRegistration,
+   592:     capabilities: Any,
+   593: ) -> UniversalWorkerCapabilitySnapshot:
+   594: 
+   595:     resolved_registration = (
+   596:         _validate_registration(
+   597:             registration
+   598:         )
+   599:     )
+   600: 
+   601:     return UniversalWorkerCapabilitySnapshot(
+   602:         worker_id=(
+   603:             resolved_registration.worker_id
+   604:         ),
+   605:         worker_instance_id=(
+   606:             resolved_registration.worker_instance_id
+   607:         ),
+   608:         worker_type=(
+   609:             resolved_registration.worker_type
+   610:         ),
+   611:         capabilities=(
+   612:             normalize_universal_worker_capabilities(
+   613:                 capabilities
+   614:             )
+   615:         ),
+   616:     )
+   617: 
+   618: 
+   619: def supports_universal_worker_capability(
+   620:     *,
+   621:     snapshot: UniversalWorkerCapabilitySnapshot,
+   622:     capability: Any,
+   623: ) -> bool:
+   624: 
+
+MATCH AROUND LINE 619
+----------------------------------------------------------------------------------------------------------------
+   614:             )
+   615:         ),
+   616:     )
+   617: 
+   618: 
+   619: def supports_universal_worker_capability(
+   620:     *,
+   621:     snapshot: UniversalWorkerCapabilitySnapshot,
+   622:     capability: Any,
+   623: ) -> bool:
+   624: 
+   625:     if not isinstance(
+   626:         snapshot,
+   627:         UniversalWorkerCapabilitySnapshot,
+   628:     ):
+   629: 
+   630:         raise UniversalWorkerCapabilityError(
+   631:             (
+   632:                 "snapshot must be canonical "
+   633:                 "UniversalWorkerCapabilitySnapshot."
+   634:             ),
+   635:             code="invalid_worker_capability_snapshot",
+   636:             value=snapshot,
+   637:         )
+   638: 
+   639:     required = (
+   640:         normalize_universal_worker_capability(
+   641:             capability
+   642:         )
+   643:     )
+   644: 
+   645:     return required in snapshot.capabilities
+   646: 
+   647: 
+   648: def match_universal_worker_capabilities(
+   649:     *,
+   650:     snapshot: UniversalWorkerCapabilitySnapshot,
+   651:     required_capabilities: Any,
+   652: ) -> UniversalWorkerCapabilityMatchResult:
+   653: 
+   654:     if not isinstance(
+
+MATCH AROUND LINE 648
+----------------------------------------------------------------------------------------------------------------
+   643:     )
+   644: 
+   645:     return required in snapshot.capabilities
+   646: 
+   647: 
+   648: def match_universal_worker_capabilities(
+   649:     *,
+   650:     snapshot: UniversalWorkerCapabilitySnapshot,
+   651:     required_capabilities: Any,
+   652: ) -> UniversalWorkerCapabilityMatchResult:
+   653: 
+   654:     if not isinstance(
+   655:         snapshot,
+   656:         UniversalWorkerCapabilitySnapshot,
+   657:     ):
+   658: 
+   659:         raise UniversalWorkerCapabilityError(
+   660:             (
+   661:                 "snapshot must be canonical "
+   662:                 "UniversalWorkerCapabilitySnapshot."
+   663:             ),
+   664:             code="invalid_worker_capability_snapshot",
+   665:             value=snapshot,
+   666:         )
+   667: 
+   668:     required = (
+   669:         normalize_universal_worker_capabilities(
+   670:             required_capabilities,
+   671:             field_name="required_capabilities",
+   672:         )
+   673:     )
+   674: 
+   675:     missing = tuple(
+   676:         capability
+   677:         for capability in required
+   678:         if capability
+   679:         not in snapshot.capabilities
+   680:     )
+   681: 
+   682:     compatible = (
+   683:         len(
+
+================================================================================================================
+A1.6-F2 DECISION TARGET
+================================================================================================================
+1. Identify the actual dispatcher variable used by the worker.
+2. Identify where Runtime Registration can declare required worker capabilities.
+3. Identify the canonical capability-matching function.
+4. Select the exact pre-dispatch insertion point.
+5. Preserve dequeue_job(worker_id=...) and the existing public worker contract.
+
+No production files were modified.

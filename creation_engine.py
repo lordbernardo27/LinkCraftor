@@ -474,7 +474,6 @@ class UniversalJobCreationRequest:
     job_id: Optional[str] = None
     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX
     created_at: Optional[str] = None
-    scheduled_at: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -660,10 +659,6 @@ def normalize_universal_job_creation_request(
         )
 
     created_at = _clean_text(request.created_at) or _utc_now()
-    scheduled_at = (
-        _clean_text(request.scheduled_at)
-        or None
-    )
 
     try:
         job_id = resolve_universal_job_id(
@@ -727,7 +722,6 @@ def normalize_universal_job_creation_request(
         job_id=job_id,
         job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
         created_at=created_at,
-        scheduled_at=scheduled_at,
     )
 
     return normalized, source, registration
@@ -755,7 +749,6 @@ def create_universal_job(
     job_id: Optional[str] = None,
     job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
     created_at: Optional[str] = None,
-    scheduled_at: Optional[str] = None,
     supported_job_types: Optional[Iterable[Any]] = None,
     runtime_registration: Optional[Mapping[str, Any]] = None,
 ) -> UniversalJobCreationResult:
@@ -786,7 +779,6 @@ def create_universal_job(
         job_id=job_id,
         job_id_prefix=job_id_prefix,
         created_at=created_at,
-        scheduled_at=scheduled_at,
     )
 
     normalized, source, registration = (
@@ -842,7 +834,7 @@ def create_universal_job(
             AU_consumed=0,
             cost_record=UniversalJobCostRecord(),
             created_at=normalized.created_at,
-            scheduled_at=normalized.scheduled_at,
+            scheduled_at=None,
             started_at=None,
             completed_at=None,
             failed_at=None,

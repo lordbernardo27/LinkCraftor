@@ -17,10 +17,6 @@ from backend.server.runtime.universal_queue.scheduling import (
 from backend.server.runtime.universal_orchestration.dependency_resolution import (
     classify_universal_orchestration_dependency_status,
 )
-from backend.server.runtime.universal_queue.fairness import (
-    create_universal_queue_fairness_candidate,
-    select_universal_queue_fairness_candidate,
-)
 
 from .job_store import get_job, load_jobs, update_job_status
 from .models import JOB_STATUS_QUEUED, JOB_STATUS_RUNNING, OrchestrationJob
@@ -396,174 +392,6 @@ def _are_job_dependencies_satisfied(
     except Exception:
         return False
 
-def _workspace_service_counts(
-    jobs: Dict[str, OrchestrationJob],
-) -> Dict[str, int]:
-    """
-    Derive fairness evidence from persisted successful queue claims.
-
-    update_job_status() preserves metadata, so claimed_by_dequeue remains
-    available after running, completion or failure transitions.
-    """
-    counts: Dict[str, int] = {}
-
-    for persisted_job in jobs.values():
-        workspace_id = str(
-            persisted_job.workspace_id
-            or ""
-        ).strip()
-
-        if not workspace_id:
-            continue
-
-        metadata = (
-            persisted_job.metadata
-            if isinstance(
-                persisted_job.metadata,
-                dict,
-            )
-            else {}
-        )
-
-        if metadata.get(
-            "claimed_by_dequeue"
-        ) is not True:
-            continue
-
-        counts[workspace_id] = (
-            counts.get(
-                workspace_id,
-                0,
-            )
-            + 1
-        )
-
-    return counts
-
-
-def _apply_workspace_fairness(
-    *,
-    queued: List[OrchestrationJob],
-    jobs: Dict[str, OrchestrationJob],
-) -> List[OrchestrationJob]:
-    """
-    Apply fairness within each canonical priority class.
-
-    Priority classes are never mixed. For each priority class, exactly
-    one current head candidate per workspace is supplied to the existing
-    Universal Queue Fairness authority.
-    """
-    if len(queued) < 2:
-        return queued
-
-    service_counts = (
-        _workspace_service_counts(
-            jobs
-        )
-    )
-
-    priority_groups: Dict[
-        int,
-        List[OrchestrationJob],
-    ] = {}
-
-    for job in queued:
-        priority_groups.setdefault(
-            job.priority,
-            [],
-        ).append(
-            job
-        )
-
-    ordered: List[
-        OrchestrationJob
-    ] = []
-
-    for priority in sorted(
-        priority_groups
-    ):
-        remaining = list(
-            priority_groups[
-                priority
-            ]
-        )
-
-        while remaining:
-            workspace_heads: Dict[
-                str,
-                OrchestrationJob,
-            ] = {}
-
-            for candidate in remaining:
-                workspace_id = str(
-                    candidate.workspace_id
-                    or ""
-                ).strip()
-
-                if not workspace_id:
-                    raise ValueError(
-                        "Queued job workspace_id must not be blank."
-                    )
-
-                if workspace_id not in workspace_heads:
-                    workspace_heads[
-                        workspace_id
-                    ] = candidate
-
-            fairness_candidates = [
-                create_universal_queue_fairness_candidate(
-                    workspace_id=workspace_id,
-                    job_id=head.job_id,
-                    priority=head.priority,
-                    created_at=head.created_at,
-                    service_count=service_counts.get(
-                        workspace_id,
-                        0,
-                    ),
-                )
-                for workspace_id, head
-                in workspace_heads.items()
-            ]
-
-            decision = (
-                select_universal_queue_fairness_candidate(
-                    candidates=fairness_candidates,
-                )
-            )
-
-            selected_job = next(
-                candidate
-                for candidate in remaining
-                if (
-                    candidate.job_id
-                    == decision.selected_job_id
-                )
-            )
-
-            ordered.append(
-                selected_job
-            )
-
-            remaining.remove(
-                selected_job
-            )
-
-            selected_workspace = (
-                selected_job.workspace_id
-            )
-
-            service_counts[
-                selected_workspace
-            ] = (
-                service_counts.get(
-                    selected_workspace,
-                    0,
-                )
-                + 1
-            )
-
-    return ordered
-
 def _queued_jobs(
     jobs: Optional[
         Dict[str, OrchestrationJob]
@@ -602,10 +430,7 @@ def _queued_jobs(
         key=_sort_key
     )
 
-    return _apply_workspace_fairness(
-        queued=queued,
-        jobs=jobs,
-    )
+    return queued
 
 
 def enqueue_job(job_id: str) -> bool:

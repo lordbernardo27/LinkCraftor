@@ -180,7 +180,6 @@ def submit_universal_job(
     maximum_attempts: Optional[int] = None,
     job_id: Optional[str] = None,
     created_at: Optional[str] = None,
-    scheduled_at: Optional[str] = None,
     supported_job_types: Optional[
         Iterable[Any]
     ] = None,
@@ -261,7 +260,6 @@ def submit_universal_job(
             enqueue=True,
             job_id=job_id,
             created_at=created_at,
-            scheduled_at=scheduled_at,
             supported_job_types=(
                 supported_job_types
             ),
