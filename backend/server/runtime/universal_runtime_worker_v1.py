@@ -1,4 +1,4 @@
-﻿"""
+"""
 Canonical Universal Runtime Worker v1.
 
 Canonical position:
@@ -41,7 +41,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import datetime
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from backend.server.orchestration.models import (
     JOB_STATUS_COMPLETED,
@@ -64,6 +64,13 @@ from backend.server.orchestration.job_store import (
 from backend.server.runtime.universal_runtime_registration import (
     dispatch_registered_runtime_handler,
     get_runtime_registration,
+)
+from backend.server.runtime.universal_worker.capability import (
+    UniversalWorkerCapabilitySnapshot,
+    match_universal_worker_capabilities,
+)
+from backend.server.runtime.universal_worker.lifecycle_gateway import (
+    admit_universal_runtime_worker,
 )
 
 
@@ -449,6 +456,9 @@ def _requeue_same_runtime_job_v1(
 def run_one_universal_runtime_job_v1(
     *,
     worker_id: str = "universal_runtime_worker_v1",
+    worker_capabilities: Iterable[Any] = (
+        "universal_runtime",
+    ),
     dispatcher: Callable[
         [Mapping[str, Any]],
         dict[str, Any],
@@ -477,6 +487,20 @@ def run_one_universal_runtime_job_v1(
     ):
         raise UniversalRuntimeWorkerContractError(
             "dispatcher must be callable."
+        )
+
+    lifecycle_admission = admit_universal_runtime_worker(
+        worker_id=canonical_worker_id,
+        runtime_version=UNIVERSAL_RUNTIME_WORKER_VERSION,
+        capabilities=worker_capabilities,
+        capacity_limit=1,
+        active_work_count=0,
+        heartbeat_sequence=1,
+    )
+
+    if not lifecycle_admission.get("admitted"):
+        raise UniversalRuntimeWorkerContractError(
+            "Worker lifecycle admission failed."
         )
 
     claimed_job = dequeue_job(
@@ -539,6 +563,54 @@ def run_one_universal_runtime_job_v1(
         )
 
     try:
+        registration = get_runtime_registration(
+            claimed_job.job_type
+        )
+
+        if not isinstance(registration, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration did not return a mapping."
+            )
+
+        registration_metadata = registration.get("metadata", {})
+
+        if not isinstance(registration_metadata, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration metadata must be a mapping."
+            )
+
+        required_worker_capabilities = registration_metadata.get(
+            "required_worker_capabilities",
+            (),
+        )
+
+        if required_worker_capabilities is None:
+            required_worker_capabilities = ()
+
+        if isinstance(required_worker_capabilities, str):
+            raise UniversalRuntimeWorkerContractError(
+                "required_worker_capabilities must be a collection, "
+                "not a string."
+            )
+
+        worker_capability_snapshot = UniversalWorkerCapabilitySnapshot(
+            worker_id=canonical_worker_id,
+            worker_instance_id=canonical_worker_id,
+            worker_type="universal_runtime_worker",
+            capabilities=tuple(worker_capabilities),
+        )
+
+        capability_match = match_universal_worker_capabilities(
+            snapshot=worker_capability_snapshot,
+            required_capabilities=required_worker_capabilities,
+        )
+
+        if not capability_match.compatible:
+            raise UniversalRuntimeWorkerContractError(
+                "Worker lacks required runtime capabilities: "
+                + ", ".join(capability_match.missing_capabilities)
+            )
+
         dispatch_result = dispatcher(
             runtime_job
         )
@@ -566,6 +638,15 @@ def run_one_universal_runtime_job_v1(
 
                 "runtime_dispatch_completed":
                     True,
+
+                "worker_capability_admitted":
+                    True,
+
+                "worker_capabilities":
+                    list(worker_capability_snapshot.capabilities),
+
+                "required_worker_capabilities":
+                    list(capability_match.required_capabilities),
 
                 "runtime_dispatch_result":
                     deepcopy(
@@ -625,6 +706,15 @@ def run_one_universal_runtime_job_v1(
 
             "dispatch_performed":
                 True,
+
+            "worker_capability_admitted":
+                True,
+
+            "worker_capabilities":
+                list(worker_capability_snapshot.capabilities),
+
+            "required_worker_capabilities":
+                list(capability_match.required_capabilities),
 
             "dispatch_result":
                 deepcopy(

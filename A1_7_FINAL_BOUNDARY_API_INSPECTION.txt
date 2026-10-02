@@ -1,0 +1,2592 @@
+﻿LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.7 FINAL LIFECYCLE BOUNDARY API INSPECTION
+
+Generated: 2026-10-02T11:21:41.2226258+00:00
+Mode: READ-ONLY - NO PRODUCTION FILES MODIFIED
+INSPECTION STATUS: COMPLETE
+
+=========================================================================================================
+INSPECTION OUTPUT
+=========================================================================================================
+A1.7 FINAL BOUNDARY API INSPECTION
+==============================================================================================================
+
+==============================================================================================================
+backend.server.runtime.runtime_boot_process
+==============================================================================================================
+MODULE_FILE=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_boot_process.py
+
+--------------------------------------------------------------------------------------------------------------
+RuntimeBootProcess
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None, service_registrars: 'Sequence[RuntimeServiceRegistrar]' = (), event_limit: 'int' = 500) -> 'None'
+SOURCE:
+class RuntimeBootProcess:
+    """
+    Compose and start the Universal Runtime foundation.
+
+    Composition order:
+
+    1. Load Runtime Configuration.
+    2. Validate Runtime Environment.
+    3. Create Universal Runtime Kernel.
+    4. Create and bind Runtime Service Registry.
+    5. Execute controlled service registrars.
+    6. Create and bind Runtime Lifecycle Manager.
+    7. Validate required kernel components.
+    8. Seal the service registry.
+    9. Initialize services.
+    10. Start services.
+    11. Publish immutable boot context.
+
+    Concurrent boot requests are serialized through one asyncio lock.
+    Once running, repeated boot requests return the existing context.
+    """
+
+    __slots__ = (
+        "_project_root",
+        "_environ",
+        "_overrides",
+        "_registrars",
+        "_event_limit",
+        "_status",
+        "_attempt",
+        "_boot_id",
+        "_stage",
+        "_generation",
+        "_events",
+        "_context",
+        "_failure_reason",
+        "_lock",
+    )
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        environ: Mapping[str, str] | None = None,
+        overrides: Mapping[str, Any] | None = None,
+        service_registrars: Sequence[
+            RuntimeServiceRegistrar
+        ] = (),
+        event_limit: int = 500,
+    ) -> None:
+        resolved_root = (
+            Path(project_root)
+            .expanduser()
+            .resolve()
+        )
+
+        if (
+            not resolved_root.exists()
+            or not resolved_root.is_dir()
+        ):
+            raise RuntimeBootConfigurationError(
+                "project_root must be an existing "
+                f"directory: {resolved_root}"
+            )
+
+        if isinstance(event_limit, bool):
+            raise RuntimeBootConfigurationError(
+                "event_limit must be an integer."
+            )
+
+        resolved_event_limit = int(event_limit)
+
+        if not 10 <= resolved_event_limit <= 100000:
+            raise RuntimeBootConfigurationError(
+                "event_limit must be between 10 and 100000."
+            )
+
+        registrars = tuple(service_registrars)
+
+        invalid_registrar_indexes = tuple(
+            index
+            for index, registrar in enumerate(registrars)
+            if not callable(registrar)
+        )
+
+        if invalid_registrar_indexes:
+            raise RuntimeBootConfigurationError(
+                "All service registrars must be callable. "
+                "Invalid indexes: "
+                + ", ".join(
+                    str(index)
+                    for index in invalid_registrar_indexes
+                )
+            )
+
+        self._project_root = resolved_root
+
+        self._environ = (
+            None
+            if environ is None
+            else MappingProxyType(
+                dict(environ)
+            )
+        )
+
+        self._overrides = MappingProxyType(
+            dict(overrides or {})
+        )
+
+        self._registrars = registrars
+        self._event_limit = resolved_event_limit
+        self._status = RuntimeBootStatus.IDLE
+        self._attempt = 0
+        self._boot_id: str | None = None
+        self._stage = "idle"
+        self._generation = 0
+        self._events: list[RuntimeBootEvent] = []
+        self._context: RuntimeBootContext | None = None
+        self._failure_reason: str | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def status(self) -> RuntimeBootStatus:
+        return self._status
+
+    @property
+    def current_context(
+        self,
+    ) -> RuntimeBootContext | None:
+        return self._context
+
+    def _record_event(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        detail: str | None = None,
+    ) -> RuntimeBootEvent:
+        self._generation += 1
+        self._stage = str(stage)
+
+        event = RuntimeBootEvent(
+            sequence=self._generation,
+            timestamp=_utc_now(),
+            status=self._status,
+            stage=self._stage,
+            outcome=str(outcome),
+            detail=detail,
+        )
+
+        self._events.append(event)
+
+        if len(self._events) > self._event_limit:
+            overflow = (
+                len(self._events)
+                - self._event_limit
+            )
+
+            del self._events[:overflow]
+
+        return event
+
+    @staticmethod
+    def _registrar_name(
+        registrar: RuntimeServiceRegistrar,
+    ) -> str:
+        return str(
+            getattr(
+                registrar,
+                "__qualname__",
+                None,
+            )
+            or getattr(
+                registrar,
+                "__name__",
+                None,
+            )
+            or type(registrar).__qualname__
+        )
+
+    async def _cleanup_failed_boot(
+        self,
+        *,
+        kernel: UniversalRuntimeKernel | None,
+        lifecycle_manager: (
+            RuntimeLifecycleManager | None
+        ),
+    ) -> tuple[str, ...]:
+        """
+        Perform best-effort cleanup after failed composition or startup.
+        """
+
+        failures: list[str] = []
+
+        if (
+            lifecycle_manager is not None
+            and lifecycle_manager.phase
+            not in {
+                RuntimeLifecyclePhase.CREATED,
+                RuntimeLifecyclePhase.STOPPED,
+            }
+        ):
+            try:
+                await lifecycle_manager.stop()
+            except Exception as exc:
+                failures.append(
+                    "lifecycle_cleanup="
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        elif (
+            kernel is not None
+            and kernel.state.value
+            not in {
+                "failed",
+                "stopped",
+                "stopping",
+            }
+        ):
+            try:
+                kernel.mark_failed(
+                    self._failure_reason
+                    or "runtime boot failure"
+                )
+            except Exception as exc:
+                failures.append(
+                    "kernel_failure_mark="
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        return tuple(failures)
+
+    async def boot(
+        self,
+    ) -> RuntimeBootContext:
+        """
+        Compose and start the runtime.
+
+        The asyncio lock creates a single-flight boot boundary. A second
+        caller waits for the first caller and then receives the same
+        successful context.
+        """
+
+        async with self._lock:
+            if (
+                self._status
+                is RuntimeBootStatus.SHUTTING_DOWN
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime boot is unavailable while "
+                    "shutdown is in progress."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.RUNNING
+                and self._context is not None
+            ):
+                self._record_event(
+                    stage="boot",
+                    outcome="already_running",
+                    detail=self._context.boot_id,
+                )
+
+                return self._context
+
+            self._attempt += 1
+            self._boot_id = (
+                f"runtime_boot_{uuid4().hex}"
+            )
+            self._status = RuntimeBootStatus.BOOTING
+            self._failure_reason = None
+            self._context = None
+
+            self._record_event(
+                stage="boot",
+                outcome="started",
+                detail=f"attempt={self._attempt}",
+            )
+
+            kernel: UniversalRuntimeKernel | None = None
+
+            lifecycle_manager: (
+                RuntimeLifecycleManager | None
+            ) = None
+
+            stage = "configuration"
+
+            try:
+                loader = RuntimeConfigurationLoader(
+                    project_root=self._project_root
+                )
+
+                configuration = loader.load(
+                    environ=self._environ,
+                    overrides=self._overrides,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.fingerprint(),
+                )
+
+                stage = "environment"
+
+                environment = RuntimeEnvironmentManager(
+                    configuration
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=environment.name.value,
+                )
+
+                stage = "kernel"
+
+                kernel = UniversalRuntimeKernel(
+                    runtime_id=configuration.runtime_id,
+                    product_name=configuration.product_name,
+                )
+
+                kernel.bind_component(
+                    "configuration",
+                    configuration,
+                )
+
+                kernel.bind_component(
+                    "environment",
+                    environment,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.runtime_id,
+                )
+
+                stage = "service_registry"
+
+                service_registry = (
+                    RuntimeServiceRegistry()
+                )
+
+                kernel.bind_component(
+                    "service_registry",
+                    service_registry,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="created",
+                )
+
+                stage = "service_registration"
+
+                composition = RuntimeBootComposition(
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=service_registry,
+                )
+
+                for registrar in self._registrars:
+                    registrar_name = (
+                        self._registrar_name(
+                            registrar
+                        )
+                    )
+
+                    registrar(composition)
+
+                    self._record_event(
+                        stage=stage,
+                        outcome="registrar_completed",
+                        detail=registrar_name,
+                    )
+
+                stage = "lifecycle_manager"
+
+                lifecycle_manager = (
+                    RuntimeLifecycleManager(
+                        kernel=kernel,
+                        service_registry=(
+                            service_registry
+                        ),
+                        startup_timeout_seconds=(
+                            configuration
+                            .startup_timeout_seconds
+                        ),
+                        shutdown_timeout_seconds=(
+                            configuration
+                            .shutdown_timeout_seconds
+                        ),
+                    )
+                )
+
+                kernel.bind_component(
+                    "lifecycle_manager",
+                    lifecycle_manager,
+                )
+
+                kernel.require_components(
+                    list(
+                        BOOT_REQUIRED_COMPONENT_KEYS
+                    )
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "registry_seal"
+
+                registry_snapshot = (
+                    service_registry.seal()
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=(
+                        "services="
+                        f"{registry_snapshot.service_count}"
+                    ),
+                )
+
+                stage = "lifecycle_initialize"
+
+                await lifecycle_manager.initialize()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "lifecycle_start"
+
+                await lifecycle_manager.start()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "finalize"
+
+                service_keys = (
+                    service_registry
+                    .dependency_order()
+                )
+
+                context = RuntimeBootContext(
+                    boot_id=self._boot_id,
+                    attempt=self._attempt,
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=(
+                        service_registry
+                    ),
+                    lifecycle_manager=(
+                        lifecycle_manager
+                    ),
+                    service_keys=service_keys,
+                    booted_at=_utc_now(),
+                )
+
+                self._context = context
+                self._status = (
+                    RuntimeBootStatus.RUNNING
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=self._boot_id,
+                )
+
+                return context
+
+            except Exception as exc:
+                self._status = (
+                    RuntimeBootStatus.FAILED
+                )
+
+                self._failure_reason = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="failed",
+                    detail=self._failure_reason,
+                )
+
+                cleanup_failures = (
+                    await self._cleanup_failed_boot(
+                        kernel=kernel,
+                        lifecycle_manager=(
+                            lifecycle_manager
+                        ),
+                    )
+                )
+
+                if cleanup_failures:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome=(
+                            "completed_with_failures"
+                        ),
+                        detail="; ".join(
+                            cleanup_failures
+                        ),
+                    )
+                else:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome="completed",
+                    )
+
+                raise RuntimeBootFailureError(
+                    stage=stage,
+                    cause=exc,
+                ) from exc
+
+    async def begin_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+    ) -> None:
+        """Lock the boot controller into SHUTTING_DOWN."""
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.STOPPED
+            ):
+                return
+
+            if (
+                self._status
+                is not RuntimeBootStatus.RUNNING
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown can begin only while "
+                    f"boot status is 'running', not "
+                    f"{self._status.value!r}."
+                )
+
+            self._status = (
+                RuntimeBootStatus.SHUTTING_DOWN
+            )
+
+            self._record_event(
+                stage="shutdown",
+                outcome="started",
+                detail=context.boot_id,
+            )
+
+    async def complete_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+        failure_reason: str | None = None,
+    ) -> None:
+        """Publish a completed runtime shutdown."""
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            if (
+                context.lifecycle_manager.phase.value
+                != "stopped"
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown cannot be completed "
+                    "before the lifecycle reaches STOPPED."
+                )
+
+            if self._status not in {
+                RuntimeBootStatus.SHUTTING_DOWN,
+                RuntimeBootStatus.STOPPED,
+            }:
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown completion is invalid "
+                    f"while boot status is "
+                    f"{self._status.value!r}."
+                )
+
+            self._status = RuntimeBootStatus.STOPPED
+            self._failure_reason = failure_reason
+
+            self._record_event(
+                stage="shutdown",
+                outcome=(
+                    "completed_with_failures"
+                    if failure_reason
+                    else "completed"
+                ),
+                detail=(
+                    failure_reason
+                    or context.boot_id
+                ),
+            )
+
+    async def fail_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+        reason: str,
+    ) -> None:
+        """Publish an incomplete or failed shutdown."""
+
+        normalized_reason = str(reason or "").strip()
+
+        if not normalized_reason:
+            raise RuntimeBootConfigurationError(
+                "A shutdown-failure reason is required."
+            )
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            self._status = RuntimeBootStatus.FAILED
+            self._failure_reason = normalized_reason
+
+            self._record_event(
+                stage="shutdown",
+                outcome="failed",
+                detail=normalized_reason,
+            )
+
+    def snapshot(
+        self,
+    ) -> RuntimeBootSnapshot:
+        context = self._context
+
+        kernel = (
+            None
+            if context is None
+            else context.kernel
+        )
+
+        lifecycle = (
+            None
+            if context is None
+            else context.lifecycle_manager
+        )
+
+        configuration = (
+            None
+            if context is None
+            else context.configuration
+        )
+
+        registry = (
+            None
+            if context is None
+            else context.service_registry
+        )
+
+        return RuntimeBootSnapshot(
+            status=self._status,
+            attempt=self._attempt,
+            boot_id=self._boot_id,
+            stage=self._stage,
+            generation=self._generation,
+            event_count=len(self._events),
+            events=tuple(self._events),
+            runtime_id=(
+                None
+                if configuration is None
+                else configuration.runtime_id
+            ),
+            environment=(
+                None
+                if configuration is None
+                else configuration.environment
+            ),
+            service_count=(
+                0
+                if registry is None
+                else registry.service_count
+            ),
+            kernel_state=(
+                None
+                if kernel is None
+                else kernel.state.value
+            ),
+            lifecycle_phase=(
+                None
+                if lifecycle is None
+                else lifecycle.phase.value
+            ),
+            missing_foundation_components=(
+                ()
+                if kernel is None
+                else (
+                    kernel
+                    .missing_foundation_components()
+                )
+            ),
+            failure_reason=self._failure_reason,
+        )
+
+
+--------------------------------------------------------------------------------------------------------------
+boot_runtime
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None, service_registrars: 'Sequence[RuntimeServiceRegistrar]' = ()) -> 'tuple[RuntimeBootProcess, RuntimeBootContext]'
+ANNOTATIONS={'project_root': 'Path', 'environ': 'Mapping[str, str] | None', 'overrides': 'Mapping[str, Any] | None', 'service_registrars': 'Sequence[RuntimeServiceRegistrar]', 'return': 'tuple[RuntimeBootProcess, RuntimeBootContext]'}
+SOURCE:
+async def boot_runtime(
+    *,
+    project_root: Path,
+    environ: Mapping[str, str] | None = None,
+    overrides: Mapping[str, Any] | None = None,
+    service_registrars: Sequence[
+        RuntimeServiceRegistrar
+    ] = (),
+) -> tuple[
+    RuntimeBootProcess,
+    RuntimeBootContext,
+]:
+    """
+    Convenience entry point returning both controller and context.
+    """
+
+    process = RuntimeBootProcess(
+        project_root=project_root,
+        environ=environ,
+        overrides=overrides,
+        service_registrars=service_registrars,
+    )
+
+    context = await process.boot()
+
+    return process, context
+
+
+==============================================================================================================
+backend.server.runtime.runtime_shutdown_process
+==============================================================================================================
+MODULE_FILE=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_shutdown_process.py
+
+--------------------------------------------------------------------------------------------------------------
+RuntimeBootProcess
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None, service_registrars: 'Sequence[RuntimeServiceRegistrar]' = (), event_limit: 'int' = 500) -> 'None'
+SOURCE:
+class RuntimeBootProcess:
+    """
+    Compose and start the Universal Runtime foundation.
+
+    Composition order:
+
+    1. Load Runtime Configuration.
+    2. Validate Runtime Environment.
+    3. Create Universal Runtime Kernel.
+    4. Create and bind Runtime Service Registry.
+    5. Execute controlled service registrars.
+    6. Create and bind Runtime Lifecycle Manager.
+    7. Validate required kernel components.
+    8. Seal the service registry.
+    9. Initialize services.
+    10. Start services.
+    11. Publish immutable boot context.
+
+    Concurrent boot requests are serialized through one asyncio lock.
+    Once running, repeated boot requests return the existing context.
+    """
+
+    __slots__ = (
+        "_project_root",
+        "_environ",
+        "_overrides",
+        "_registrars",
+        "_event_limit",
+        "_status",
+        "_attempt",
+        "_boot_id",
+        "_stage",
+        "_generation",
+        "_events",
+        "_context",
+        "_failure_reason",
+        "_lock",
+    )
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        environ: Mapping[str, str] | None = None,
+        overrides: Mapping[str, Any] | None = None,
+        service_registrars: Sequence[
+            RuntimeServiceRegistrar
+        ] = (),
+        event_limit: int = 500,
+    ) -> None:
+        resolved_root = (
+            Path(project_root)
+            .expanduser()
+            .resolve()
+        )
+
+        if (
+            not resolved_root.exists()
+            or not resolved_root.is_dir()
+        ):
+            raise RuntimeBootConfigurationError(
+                "project_root must be an existing "
+                f"directory: {resolved_root}"
+            )
+
+        if isinstance(event_limit, bool):
+            raise RuntimeBootConfigurationError(
+                "event_limit must be an integer."
+            )
+
+        resolved_event_limit = int(event_limit)
+
+        if not 10 <= resolved_event_limit <= 100000:
+            raise RuntimeBootConfigurationError(
+                "event_limit must be between 10 and 100000."
+            )
+
+        registrars = tuple(service_registrars)
+
+        invalid_registrar_indexes = tuple(
+            index
+            for index, registrar in enumerate(registrars)
+            if not callable(registrar)
+        )
+
+        if invalid_registrar_indexes:
+            raise RuntimeBootConfigurationError(
+                "All service registrars must be callable. "
+                "Invalid indexes: "
+                + ", ".join(
+                    str(index)
+                    for index in invalid_registrar_indexes
+                )
+            )
+
+        self._project_root = resolved_root
+
+        self._environ = (
+            None
+            if environ is None
+            else MappingProxyType(
+                dict(environ)
+            )
+        )
+
+        self._overrides = MappingProxyType(
+            dict(overrides or {})
+        )
+
+        self._registrars = registrars
+        self._event_limit = resolved_event_limit
+        self._status = RuntimeBootStatus.IDLE
+        self._attempt = 0
+        self._boot_id: str | None = None
+        self._stage = "idle"
+        self._generation = 0
+        self._events: list[RuntimeBootEvent] = []
+        self._context: RuntimeBootContext | None = None
+        self._failure_reason: str | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def status(self) -> RuntimeBootStatus:
+        return self._status
+
+    @property
+    def current_context(
+        self,
+    ) -> RuntimeBootContext | None:
+        return self._context
+
+    def _record_event(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        detail: str | None = None,
+    ) -> RuntimeBootEvent:
+        self._generation += 1
+        self._stage = str(stage)
+
+        event = RuntimeBootEvent(
+            sequence=self._generation,
+            timestamp=_utc_now(),
+            status=self._status,
+            stage=self._stage,
+            outcome=str(outcome),
+            detail=detail,
+        )
+
+        self._events.append(event)
+
+        if len(self._events) > self._event_limit:
+            overflow = (
+                len(self._events)
+                - self._event_limit
+            )
+
+            del self._events[:overflow]
+
+        return event
+
+    @staticmethod
+    def _registrar_name(
+        registrar: RuntimeServiceRegistrar,
+    ) -> str:
+        return str(
+            getattr(
+                registrar,
+                "__qualname__",
+                None,
+            )
+            or getattr(
+                registrar,
+                "__name__",
+                None,
+            )
+            or type(registrar).__qualname__
+        )
+
+    async def _cleanup_failed_boot(
+        self,
+        *,
+        kernel: UniversalRuntimeKernel | None,
+        lifecycle_manager: (
+            RuntimeLifecycleManager | None
+        ),
+    ) -> tuple[str, ...]:
+        """
+        Perform best-effort cleanup after failed composition or startup.
+        """
+
+        failures: list[str] = []
+
+        if (
+            lifecycle_manager is not None
+            and lifecycle_manager.phase
+            not in {
+                RuntimeLifecyclePhase.CREATED,
+                RuntimeLifecyclePhase.STOPPED,
+            }
+        ):
+            try:
+                await lifecycle_manager.stop()
+            except Exception as exc:
+                failures.append(
+                    "lifecycle_cleanup="
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        elif (
+            kernel is not None
+            and kernel.state.value
+            not in {
+                "failed",
+                "stopped",
+                "stopping",
+            }
+        ):
+            try:
+                kernel.mark_failed(
+                    self._failure_reason
+                    or "runtime boot failure"
+                )
+            except Exception as exc:
+                failures.append(
+                    "kernel_failure_mark="
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        return tuple(failures)
+
+    async def boot(
+        self,
+    ) -> RuntimeBootContext:
+        """
+        Compose and start the runtime.
+
+        The asyncio lock creates a single-flight boot boundary. A second
+        caller waits for the first caller and then receives the same
+        successful context.
+        """
+
+        async with self._lock:
+            if (
+                self._status
+                is RuntimeBootStatus.SHUTTING_DOWN
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime boot is unavailable while "
+                    "shutdown is in progress."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.RUNNING
+                and self._context is not None
+            ):
+                self._record_event(
+                    stage="boot",
+                    outcome="already_running",
+                    detail=self._context.boot_id,
+                )
+
+                return self._context
+
+            self._attempt += 1
+            self._boot_id = (
+                f"runtime_boot_{uuid4().hex}"
+            )
+            self._status = RuntimeBootStatus.BOOTING
+            self._failure_reason = None
+            self._context = None
+
+            self._record_event(
+                stage="boot",
+                outcome="started",
+                detail=f"attempt={self._attempt}",
+            )
+
+            kernel: UniversalRuntimeKernel | None = None
+
+            lifecycle_manager: (
+                RuntimeLifecycleManager | None
+            ) = None
+
+            stage = "configuration"
+
+            try:
+                loader = RuntimeConfigurationLoader(
+                    project_root=self._project_root
+                )
+
+                configuration = loader.load(
+                    environ=self._environ,
+                    overrides=self._overrides,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.fingerprint(),
+                )
+
+                stage = "environment"
+
+                environment = RuntimeEnvironmentManager(
+                    configuration
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=environment.name.value,
+                )
+
+                stage = "kernel"
+
+                kernel = UniversalRuntimeKernel(
+                    runtime_id=configuration.runtime_id,
+                    product_name=configuration.product_name,
+                )
+
+                kernel.bind_component(
+                    "configuration",
+                    configuration,
+                )
+
+                kernel.bind_component(
+                    "environment",
+                    environment,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.runtime_id,
+                )
+
+                stage = "service_registry"
+
+                service_registry = (
+                    RuntimeServiceRegistry()
+                )
+
+                kernel.bind_component(
+                    "service_registry",
+                    service_registry,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="created",
+                )
+
+                stage = "service_registration"
+
+                composition = RuntimeBootComposition(
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=service_registry,
+                )
+
+                for registrar in self._registrars:
+                    registrar_name = (
+                        self._registrar_name(
+                            registrar
+                        )
+                    )
+
+                    registrar(composition)
+
+                    self._record_event(
+                        stage=stage,
+                        outcome="registrar_completed",
+                        detail=registrar_name,
+                    )
+
+                stage = "lifecycle_manager"
+
+                lifecycle_manager = (
+                    RuntimeLifecycleManager(
+                        kernel=kernel,
+                        service_registry=(
+                            service_registry
+                        ),
+                        startup_timeout_seconds=(
+                            configuration
+                            .startup_timeout_seconds
+                        ),
+                        shutdown_timeout_seconds=(
+                            configuration
+                            .shutdown_timeout_seconds
+                        ),
+                    )
+                )
+
+                kernel.bind_component(
+                    "lifecycle_manager",
+                    lifecycle_manager,
+                )
+
+                kernel.require_components(
+                    list(
+                        BOOT_REQUIRED_COMPONENT_KEYS
+                    )
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "registry_seal"
+
+                registry_snapshot = (
+                    service_registry.seal()
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=(
+                        "services="
+                        f"{registry_snapshot.service_count}"
+                    ),
+                )
+
+                stage = "lifecycle_initialize"
+
+                await lifecycle_manager.initialize()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "lifecycle_start"
+
+                await lifecycle_manager.start()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "finalize"
+
+                service_keys = (
+                    service_registry
+                    .dependency_order()
+                )
+
+                context = RuntimeBootContext(
+                    boot_id=self._boot_id,
+                    attempt=self._attempt,
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=(
+                        service_registry
+                    ),
+                    lifecycle_manager=(
+                        lifecycle_manager
+                    ),
+                    service_keys=service_keys,
+                    booted_at=_utc_now(),
+                )
+
+                self._context = context
+                self._status = (
+                    RuntimeBootStatus.RUNNING
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=self._boot_id,
+                )
+
+                return context
+
+            except Exception as exc:
+                self._status = (
+                    RuntimeBootStatus.FAILED
+                )
+
+                self._failure_reason = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="failed",
+                    detail=self._failure_reason,
+                )
+
+                cleanup_failures = (
+                    await self._cleanup_failed_boot(
+                        kernel=kernel,
+                        lifecycle_manager=(
+                            lifecycle_manager
+                        ),
+                    )
+                )
+
+                if cleanup_failures:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome=(
+                            "completed_with_failures"
+                        ),
+                        detail="; ".join(
+                            cleanup_failures
+                        ),
+                    )
+                else:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome="completed",
+                    )
+
+                raise RuntimeBootFailureError(
+                    stage=stage,
+                    cause=exc,
+                ) from exc
+
+    async def begin_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+    ) -> None:
+        """Lock the boot controller into SHUTTING_DOWN."""
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.STOPPED
+            ):
+                return
+
+            if (
+                self._status
+                is not RuntimeBootStatus.RUNNING
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown can begin only while "
+                    f"boot status is 'running', not "
+                    f"{self._status.value!r}."
+                )
+
+            self._status = (
+                RuntimeBootStatus.SHUTTING_DOWN
+            )
+
+            self._record_event(
+                stage="shutdown",
+                outcome="started",
+                detail=context.boot_id,
+            )
+
+    async def complete_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+        failure_reason: str | None = None,
+    ) -> None:
+        """Publish a completed runtime shutdown."""
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            if (
+                context.lifecycle_manager.phase.value
+                != "stopped"
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown cannot be completed "
+                    "before the lifecycle reaches STOPPED."
+                )
+
+            if self._status not in {
+                RuntimeBootStatus.SHUTTING_DOWN,
+                RuntimeBootStatus.STOPPED,
+            }:
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown completion is invalid "
+                    f"while boot status is "
+                    f"{self._status.value!r}."
+                )
+
+            self._status = RuntimeBootStatus.STOPPED
+            self._failure_reason = failure_reason
+
+            self._record_event(
+                stage="shutdown",
+                outcome=(
+                    "completed_with_failures"
+                    if failure_reason
+                    else "completed"
+                ),
+                detail=(
+                    failure_reason
+                    or context.boot_id
+                ),
+            )
+
+    async def fail_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+        reason: str,
+    ) -> None:
+        """Publish an incomplete or failed shutdown."""
+
+        normalized_reason = str(reason or "").strip()
+
+        if not normalized_reason:
+            raise RuntimeBootConfigurationError(
+                "A shutdown-failure reason is required."
+            )
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            self._status = RuntimeBootStatus.FAILED
+            self._failure_reason = normalized_reason
+
+            self._record_event(
+                stage="shutdown",
+                outcome="failed",
+                detail=normalized_reason,
+            )
+
+    def snapshot(
+        self,
+    ) -> RuntimeBootSnapshot:
+        context = self._context
+
+        kernel = (
+            None
+            if context is None
+            else context.kernel
+        )
+
+        lifecycle = (
+            None
+            if context is None
+            else context.lifecycle_manager
+        )
+
+        configuration = (
+            None
+            if context is None
+            else context.configuration
+        )
+
+        registry = (
+            None
+            if context is None
+            else context.service_registry
+        )
+
+        return RuntimeBootSnapshot(
+            status=self._status,
+            attempt=self._attempt,
+            boot_id=self._boot_id,
+            stage=self._stage,
+            generation=self._generation,
+            event_count=len(self._events),
+            events=tuple(self._events),
+            runtime_id=(
+                None
+                if configuration is None
+                else configuration.runtime_id
+            ),
+            environment=(
+                None
+                if configuration is None
+                else configuration.environment
+            ),
+            service_count=(
+                0
+                if registry is None
+                else registry.service_count
+            ),
+            kernel_state=(
+                None
+                if kernel is None
+                else kernel.state.value
+            ),
+            lifecycle_phase=(
+                None
+                if lifecycle is None
+                else lifecycle.phase.value
+            ),
+            missing_foundation_components=(
+                ()
+                if kernel is None
+                else (
+                    kernel
+                    .missing_foundation_components()
+                )
+            ),
+            failure_reason=self._failure_reason,
+        )
+
+
+--------------------------------------------------------------------------------------------------------------
+shutdown_runtime
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, boot_process: 'RuntimeBootProcess', drain_before_stop: 'bool' = True, timeout_seconds: 'float | None' = None, raise_on_failure: 'bool' = True) -> 'tuple[RuntimeShutdownProcess, RuntimeShutdownContext]'
+ANNOTATIONS={'boot_process': 'RuntimeBootProcess', 'drain_before_stop': 'bool', 'timeout_seconds': 'float | None', 'raise_on_failure': 'bool', 'return': 'tuple[RuntimeShutdownProcess, RuntimeShutdownContext]'}
+SOURCE:
+async def shutdown_runtime(
+    *,
+    boot_process: RuntimeBootProcess,
+    drain_before_stop: bool = True,
+    timeout_seconds: float | None = None,
+    raise_on_failure: bool = True,
+) -> tuple[
+    RuntimeShutdownProcess,
+    RuntimeShutdownContext,
+]:
+    """Convenience entry point for graceful runtime shutdown."""
+
+    process = RuntimeShutdownProcess(
+        boot_process=boot_process,
+        drain_before_stop=drain_before_stop,
+        timeout_seconds=timeout_seconds,
+        raise_on_failure=raise_on_failure,
+    )
+
+    context = await process.shutdown()
+
+    return process, context
+
+
+==============================================================================================================
+backend.server.runtime.universal_queue.recovery
+==============================================================================================================
+MODULE_FILE=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\recovery.py
+
+--------------------------------------------------------------------------------------------------------------
+UniversalJobStatus
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*values)
+SOURCE:
+class UniversalJobStatus(str, enum.Enum):
+    """Canonical lifecycle states. Transition rules belong to a later phase."""
+
+    CREATED = "created"
+    QUEUED = "queued"
+    SCHEDULED = "scheduled"
+    LEASED = "leased"
+    RUNNING = "running"
+    SUSPENDED = "suspended"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    DEAD_LETTER = "dead_letter"
+    EXPIRED = "expired"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def coerce(cls, value: Any) -> "UniversalJobStatus":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            text = value.strip().lower()
+            for member in cls:
+                if member.value == text:
+                    return member
+        raise UniversalJobContractError(
+            "invalid job status: " + repr(value),
+            violations=("status must be one of " + ", ".join(m.value for m in cls),),
+        )
+
+
+==============================================================================================================
+backend.server.runtime.universal_worker.assignment
+==============================================================================================================
+MODULE_FILE=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\assignment.py
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerAssignmentResult
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(job_id: 'str', status: 'UniversalWorkerAssignmentStatus', worker: 'UniversalWorkerRegistration | None', candidate_count: 'int', schema_version: 'str' = 'universal_worker_assignment_result_schema_v1') -> None
+ANNOTATIONS={'job_id': 'str', 'status': 'UniversalWorkerAssignmentStatus', 'worker': 'UniversalWorkerRegistration | None', 'candidate_count': 'int', 'schema_version': 'str'}
+SOURCE:
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalWorkerAssignmentResult:
+
+    job_id: str
+    status: UniversalWorkerAssignmentStatus
+    worker: UniversalWorkerRegistration | None
+    candidate_count: int
+
+    schema_version: str = (
+        UNIVERSAL_WORKER_ASSIGNMENT_RESULT_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "job_id",
+            normalize_universal_worker_assignment_job_id(
+                self.job_id
+            ),
+        )
+
+        if not isinstance(
+            self.status,
+            UniversalWorkerAssignmentStatus,
+        ):
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "status must be a "
+                    "UniversalWorkerAssignmentStatus."
+                ),
+                code="invalid_assignment_status",
+                value=self.status,
+            )
+
+        if (
+            type(self.candidate_count)
+            is not int
+            or self.candidate_count < 0
+        ):
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "candidate_count must be a "
+                    "non-negative integer."
+                ),
+                code="invalid_assignment_candidate_count",
+                value=self.candidate_count,
+            )
+
+        if (
+            self.status
+            is UniversalWorkerAssignmentStatus.ASSIGNED
+        ):
+
+            if self.worker is None:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "ASSIGNED requires a selected "
+                        "worker."
+                    ),
+                    code="assigned_worker_required",
+                    value=self.worker,
+                )
+
+            _validate_worker(
+                self.worker
+            )
+
+            if self.candidate_count < 1:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "ASSIGNED requires candidate_count "
+                        "of at least one."
+                    ),
+                    code="assigned_candidate_count_invalid",
+                    value=self.candidate_count,
+                )
+
+        else:
+
+            if self.worker is not None:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "NO_ASSIGNMENT must not contain "
+                        "a worker."
+                    ),
+                    code="no_assignment_worker_forbidden",
+                    value=self.worker,
+                )
+
+            if self.candidate_count != 0:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "NO_ASSIGNMENT requires "
+                        "candidate_count=0."
+                    ),
+                    code=(
+                        "no_assignment_candidate_count_"
+                        "must_be_zero"
+                    ),
+                    value=self.candidate_count,
+                )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_WORKER_ASSIGNMENT_RESULT_SCHEMA_VERSION
+        ):
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "Invalid Worker Assignment "
+                    "result schema_version."
+                ),
+                code=(
+                    "invalid_worker_assignment_"
+                    "result_schema_version"
+                ),
+                value=self.schema_version,
+            )
+
+    @property
+    def assigned(
+        self,
+    ) -> bool:
+
+        return (
+            self.status
+            is UniversalWorkerAssignmentStatus.ASSIGNED
+        )
+
+    @property
+    def worker_id(
+        self,
+    ) -> str | None:
+
+        if self.worker is None:
+
+            return None
+
+        return self.worker.worker_id
+
+    @property
+    def worker_instance_id(
+        self,
+    ) -> str | None:
+
+        if self.worker is None:
+
+            return None
+
+        return self.worker.worker_instance_id
+
+    @property
+    def worker_identity(
+        self,
+    ) -> tuple[str, str] | None:
+
+        if self.worker is None:
+
+            return None
+
+        return self.worker.canonical_identity
+
+
+--------------------------------------------------------------------------------------------------------------
+assign_universal_worker
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, job_id: 'str', eligible_workers: 'Iterable[UniversalWorkerRegistration]') -> 'UniversalWorkerAssignmentResult'
+ANNOTATIONS={'job_id': 'str', 'eligible_workers': 'Iterable[UniversalWorkerRegistration]', 'return': 'UniversalWorkerAssignmentResult'}
+SOURCE:
+def assign_universal_worker(
+    *,
+    job_id: str,
+    eligible_workers: Iterable[
+        UniversalWorkerRegistration
+    ],
+) -> UniversalWorkerAssignmentResult:
+
+    canonical_job_id = (
+        normalize_universal_worker_assignment_job_id(
+            job_id
+        )
+    )
+
+    if isinstance(
+        eligible_workers,
+        (
+            str,
+            bytes,
+            Mapping,
+        ),
+    ):
+
+        raise UniversalWorkerAssignmentError(
+            (
+                "eligible_workers must be an iterable "
+                "of UniversalWorkerRegistration records."
+            ),
+            code="invalid_eligible_workers",
+            value=eligible_workers,
+        )
+
+    try:
+
+        materialized = tuple(
+            eligible_workers
+        )
+
+    except TypeError as exc:
+
+        raise UniversalWorkerAssignmentError(
+            (
+                "eligible_workers must be an iterable "
+                "of UniversalWorkerRegistration records."
+            ),
+            code="invalid_eligible_workers",
+            value=eligible_workers,
+        ) from exc
+
+    validated = []
+
+    seen_identities = set()
+
+    for worker in materialized:
+
+        validated_worker = (
+            _validate_worker(
+                worker
+            )
+        )
+
+        identity = (
+            validated_worker.canonical_identity
+        )
+
+        if identity in seen_identities:
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "Duplicate eligible worker "
+                    "identity."
+                ),
+                code=(
+                    "duplicate_eligible_worker_"
+                    "identity"
+                ),
+                value=identity,
+            )
+
+        seen_identities.add(
+            identity
+        )
+
+        validated.append(
+            validated_worker
+        )
+
+    if not validated:
+
+        return UniversalWorkerAssignmentResult(
+            job_id=canonical_job_id,
+            status=(
+                UniversalWorkerAssignmentStatus.NO_ASSIGNMENT
+            ),
+            worker=None,
+            candidate_count=0,
+        )
+
+    ordered = tuple(
+        sorted(
+            validated,
+            key=lambda worker: (
+                worker.worker_id,
+                worker.worker_instance_id,
+            ),
+        )
+    )
+
+    selected = ordered[0]
+
+    return UniversalWorkerAssignmentResult(
+        job_id=canonical_job_id,
+        status=(
+            UniversalWorkerAssignmentStatus.ASSIGNED
+        ),
+        worker=selected,
+        candidate_count=len(
+            ordered
+        ),
+    )
+
+
+==============================================================================================================
+backend.server.runtime.universal_worker.leasing
+==============================================================================================================
+MODULE_FILE=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\leasing.py
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerAssignmentResult
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(job_id: 'str', status: 'UniversalWorkerAssignmentStatus', worker: 'UniversalWorkerRegistration | None', candidate_count: 'int', schema_version: 'str' = 'universal_worker_assignment_result_schema_v1') -> None
+ANNOTATIONS={'job_id': 'str', 'status': 'UniversalWorkerAssignmentStatus', 'worker': 'UniversalWorkerRegistration | None', 'candidate_count': 'int', 'schema_version': 'str'}
+SOURCE:
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalWorkerAssignmentResult:
+
+    job_id: str
+    status: UniversalWorkerAssignmentStatus
+    worker: UniversalWorkerRegistration | None
+    candidate_count: int
+
+    schema_version: str = (
+        UNIVERSAL_WORKER_ASSIGNMENT_RESULT_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "job_id",
+            normalize_universal_worker_assignment_job_id(
+                self.job_id
+            ),
+        )
+
+        if not isinstance(
+            self.status,
+            UniversalWorkerAssignmentStatus,
+        ):
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "status must be a "
+                    "UniversalWorkerAssignmentStatus."
+                ),
+                code="invalid_assignment_status",
+                value=self.status,
+            )
+
+        if (
+            type(self.candidate_count)
+            is not int
+            or self.candidate_count < 0
+        ):
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "candidate_count must be a "
+                    "non-negative integer."
+                ),
+                code="invalid_assignment_candidate_count",
+                value=self.candidate_count,
+            )
+
+        if (
+            self.status
+            is UniversalWorkerAssignmentStatus.ASSIGNED
+        ):
+
+            if self.worker is None:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "ASSIGNED requires a selected "
+                        "worker."
+                    ),
+                    code="assigned_worker_required",
+                    value=self.worker,
+                )
+
+            _validate_worker(
+                self.worker
+            )
+
+            if self.candidate_count < 1:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "ASSIGNED requires candidate_count "
+                        "of at least one."
+                    ),
+                    code="assigned_candidate_count_invalid",
+                    value=self.candidate_count,
+                )
+
+        else:
+
+            if self.worker is not None:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "NO_ASSIGNMENT must not contain "
+                        "a worker."
+                    ),
+                    code="no_assignment_worker_forbidden",
+                    value=self.worker,
+                )
+
+            if self.candidate_count != 0:
+
+                raise UniversalWorkerAssignmentError(
+                    (
+                        "NO_ASSIGNMENT requires "
+                        "candidate_count=0."
+                    ),
+                    code=(
+                        "no_assignment_candidate_count_"
+                        "must_be_zero"
+                    ),
+                    value=self.candidate_count,
+                )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_WORKER_ASSIGNMENT_RESULT_SCHEMA_VERSION
+        ):
+
+            raise UniversalWorkerAssignmentError(
+                (
+                    "Invalid Worker Assignment "
+                    "result schema_version."
+                ),
+                code=(
+                    "invalid_worker_assignment_"
+                    "result_schema_version"
+                ),
+                value=self.schema_version,
+            )
+
+    @property
+    def assigned(
+        self,
+    ) -> bool:
+
+        return (
+            self.status
+            is UniversalWorkerAssignmentStatus.ASSIGNED
+        )
+
+    @property
+    def worker_id(
+        self,
+    ) -> str | None:
+
+        if self.worker is None:
+
+            return None
+
+        return self.worker.worker_id
+
+    @property
+    def worker_instance_id(
+        self,
+    ) -> str | None:
+
+        if self.worker is None:
+
+            return None
+
+        return self.worker.worker_instance_id
+
+    @property
+    def worker_identity(
+        self,
+    ) -> tuple[str, str] | None:
+
+        if self.worker is None:
+
+            return None
+
+        return self.worker.canonical_identity
+
+
+--------------------------------------------------------------------------------------------------------------
+acquire_universal_worker_lease
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, assignment: 'UniversalWorkerAssignmentResult', lease_id: 'str', lease_started_at: 'str', lease_expires_at: 'str', existing_lease: 'UniversalWorkerLease | None' = None) -> 'UniversalWorkerLease'
+ANNOTATIONS={'assignment': 'UniversalWorkerAssignmentResult', 'lease_id': 'str', 'lease_started_at': 'str', 'lease_expires_at': 'str', 'existing_lease': 'UniversalWorkerLease | None', 'return': 'UniversalWorkerLease'}
+SOURCE:
+def acquire_universal_worker_lease(
+    *,
+    assignment: UniversalWorkerAssignmentResult,
+    lease_id: str,
+    lease_started_at: str,
+    lease_expires_at: str,
+    existing_lease: UniversalWorkerLease | None = None,
+) -> UniversalWorkerLease:
+
+    if not isinstance(
+        assignment,
+        UniversalWorkerAssignmentResult,
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "assignment must be a "
+                "UniversalWorkerAssignmentResult."
+            ),
+            code="invalid_worker_assignment",
+            value=assignment,
+        )
+
+    if (
+        assignment.status
+        is not UniversalWorkerAssignmentStatus.ASSIGNED
+        or assignment.worker is None
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "A worker lease requires an "
+                "ASSIGNED Worker Assignment result."
+            ),
+            code="worker_assignment_required",
+            value=assignment.status,
+        )
+
+    if existing_lease is not None:
+
+        if not isinstance(
+            existing_lease,
+            UniversalWorkerLease,
+        ):
+
+            raise UniversalWorkerLeasingError(
+                (
+                    "existing_lease must be a "
+                    "UniversalWorkerLease or None."
+                ),
+                code="invalid_existing_lease",
+                value=existing_lease,
+            )
+
+        raise UniversalWorkerLeasingError(
+            (
+                "A lease already exists for this "
+                "acquisition boundary and must be "
+                "resolved before another lease "
+                "can be acquired."
+            ),
+            code="lease_conflict",
+            value=existing_lease.lease_id,
+        )
+
+    owner = (
+        create_universal_worker_lease_owner(
+            assignment
+        )
+    )
+
+    return UniversalWorkerLease(
+        job_id=assignment.job_id,
+        lease_owner=owner,
+        lease_id=lease_id,
+        lease_started_at=lease_started_at,
+        lease_expires_at=lease_expires_at,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+renew_universal_worker_lease
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, lease: 'UniversalWorkerLease', expected_lease_owner: 'str', expected_lease_id: 'str', renewed_at: 'str', new_lease_expires_at: 'str') -> 'UniversalWorkerLease'
+ANNOTATIONS={'lease': 'UniversalWorkerLease', 'expected_lease_owner': 'str', 'expected_lease_id': 'str', 'renewed_at': 'str', 'new_lease_expires_at': 'str', 'return': 'UniversalWorkerLease'}
+SOURCE:
+def renew_universal_worker_lease(
+    *,
+    lease: UniversalWorkerLease,
+    expected_lease_owner: str,
+    expected_lease_id: str,
+    renewed_at: str,
+    new_lease_expires_at: str,
+) -> UniversalWorkerLease:
+
+    if not isinstance(
+        lease,
+        UniversalWorkerLease,
+    ):
+
+        raise UniversalWorkerLeasingError(
+            "lease must be a UniversalWorkerLease.",
+            code="invalid_worker_lease",
+            value=lease,
+        )
+
+    if (
+        not isinstance(
+            expected_lease_owner,
+            str,
+        )
+        or
+        expected_lease_owner.strip()
+        != lease.lease_owner
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease renewal owner does not "
+                "match the current lease owner."
+            ),
+            code="lease_owner_mismatch",
+            value=expected_lease_owner,
+        )
+
+    canonical_lease_id = (
+        normalize_universal_worker_lease_id(
+            expected_lease_id
+        )
+    )
+
+    if (
+        canonical_lease_id
+        != lease.lease_id
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease renewal lease_id does not "
+                "match the current lease."
+            ),
+            code="lease_id_mismatch",
+            value=expected_lease_id,
+        )
+
+    canonical_renewed_at = (
+        normalize_universal_worker_lease_timestamp(
+            renewed_at,
+            field_name="renewed_at",
+        )
+    )
+
+    if (
+        evaluate_universal_worker_lease_state(
+            lease=lease,
+            evaluation_at=canonical_renewed_at,
+        )
+        is not UniversalWorkerLeaseState.ACTIVE
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "An expired lease cannot "
+                "be renewed."
+            ),
+            code="expired_lease_cannot_renew",
+            value=lease.lease_id,
+        )
+
+    canonical_new_expiry = (
+        normalize_universal_worker_lease_timestamp(
+            new_lease_expires_at,
+            field_name="new_lease_expires_at",
+        )
+    )
+
+    if (
+        _timestamp_key(
+            canonical_new_expiry
+        )
+        <=
+        _timestamp_key(
+            canonical_renewed_at
+        )
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "new_lease_expires_at must be "
+                "later than renewed_at."
+            ),
+            code="invalid_renewal_interval",
+            value=canonical_new_expiry,
+        )
+
+    if (
+        _timestamp_key(
+            canonical_new_expiry
+        )
+        <=
+        _timestamp_key(
+            lease.lease_expires_at
+        )
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease renewal must extend "
+                "the current expiration."
+            ),
+            code="lease_renewal_not_extended",
+            value=canonical_new_expiry,
+        )
+
+    return UniversalWorkerLease(
+        job_id=lease.job_id,
+        lease_owner=lease.lease_owner,
+        lease_id=lease.lease_id,
+        lease_started_at=lease.lease_started_at,
+        lease_expires_at=canonical_new_expiry,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+release_universal_worker_lease
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, lease: 'UniversalWorkerLease', expected_lease_owner: 'str', expected_lease_id: 'str', released_at: 'str') -> 'UniversalWorkerLeaseRelease'
+ANNOTATIONS={'lease': 'UniversalWorkerLease', 'expected_lease_owner': 'str', 'expected_lease_id': 'str', 'released_at': 'str', 'return': 'UniversalWorkerLeaseRelease'}
+SOURCE:
+def release_universal_worker_lease(
+    *,
+    lease: UniversalWorkerLease,
+    expected_lease_owner: str,
+    expected_lease_id: str,
+    released_at: str,
+) -> UniversalWorkerLeaseRelease:
+
+    if not isinstance(
+        lease,
+        UniversalWorkerLease,
+    ):
+
+        raise UniversalWorkerLeasingError(
+            "lease must be a UniversalWorkerLease.",
+            code="invalid_worker_lease",
+            value=lease,
+        )
+
+    if (
+        not isinstance(
+            expected_lease_owner,
+            str,
+        )
+        or
+        expected_lease_owner.strip()
+        != lease.lease_owner
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease release owner does not "
+                "match the current lease owner."
+            ),
+            code="lease_owner_mismatch",
+            value=expected_lease_owner,
+        )
+
+    canonical_lease_id = (
+        normalize_universal_worker_lease_id(
+            expected_lease_id
+        )
+    )
+
+    if (
+        canonical_lease_id
+        != lease.lease_id
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease release lease_id does not "
+                "match the current lease."
+            ),
+            code="lease_id_mismatch",
+            value=expected_lease_id,
+        )
+
+    canonical_released_at = (
+        normalize_universal_worker_lease_timestamp(
+            released_at,
+            field_name="released_at",
+        )
+    )
+
+    if (
+        _timestamp_key(
+            canonical_released_at
+        )
+        <
+        _timestamp_key(
+            lease.lease_started_at
+        )
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "released_at must not precede "
+                "lease_started_at."
+            ),
+            code="release_precedes_lease",
+            value=canonical_released_at,
+        )
+
+    return UniversalWorkerLeaseRelease(
+        job_id=lease.job_id,
+        lease_owner=lease.lease_owner,
+        lease_id=lease.lease_id,
+        released_at=canonical_released_at,
+    )
+
+
+==============================================================================================================
+backend.server.runtime.universal_worker.recovery
+==============================================================================================================
+MODULE_FILE=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\recovery.py
+
+--------------------------------------------------------------------------------------------------------------
+UniversalJobStatus
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*values)
+SOURCE:
+class UniversalJobStatus(str, enum.Enum):
+    """Canonical lifecycle states. Transition rules belong to a later phase."""
+
+    CREATED = "created"
+    QUEUED = "queued"
+    SCHEDULED = "scheduled"
+    LEASED = "leased"
+    RUNNING = "running"
+    SUSPENDED = "suspended"
+    SUCCEEDED = "succeeded"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    DEAD_LETTER = "dead_letter"
+    EXPIRED = "expired"
+
+    def __str__(self) -> str:
+        return self.value
+
+    @classmethod
+    def coerce(cls, value: Any) -> "UniversalJobStatus":
+        if isinstance(value, cls):
+            return value
+        if isinstance(value, str):
+            text = value.strip().lower()
+            for member in cls:
+                if member.value == text:
+                    return member
+        raise UniversalJobContractError(
+            "invalid job status: " + repr(value),
+            violations=("status must be one of " + ", ".join(m.value for m in cls),),
+        )
+
+
+--------------------------------------------------------------------------------------------------------------
+create_universal_worker_recovery_evidence
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(*, job_id: 'str', job_status: 'UniversalJobStatus', worker_ownership_lost: 'bool', retry_permitted: 'bool', duplicate_execution_safe: 'bool', lease_state: 'UniversalWorkerLeaseState | None' = None) -> 'UniversalWorkerRecoveryEvidence'
+ANNOTATIONS={'job_id': 'str', 'job_status': 'UniversalJobStatus', 'worker_ownership_lost': 'bool', 'retry_permitted': 'bool', 'duplicate_execution_safe': 'bool', 'lease_state': 'UniversalWorkerLeaseState | None', 'return': 'UniversalWorkerRecoveryEvidence'}
+SOURCE:
+def create_universal_worker_recovery_evidence(
+    *,
+    job_id: str,
+    job_status: UniversalJobStatus,
+    worker_ownership_lost: bool,
+    retry_permitted: bool,
+    duplicate_execution_safe: bool,
+    lease_state: UniversalWorkerLeaseState | None = None,
+) -> UniversalWorkerRecoveryEvidence:
+
+    return UniversalWorkerRecoveryEvidence(
+        job_id=job_id,
+        job_status=job_status,
+        worker_ownership_lost=worker_ownership_lost,
+        retry_permitted=retry_permitted,
+        duplicate_execution_safe=duplicate_execution_safe,
+        lease_state=lease_state,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+evaluate_universal_worker_recovery
+--------------------------------------------------------------------------------------------------------------
+SIGNATURE=(evidence: 'UniversalWorkerRecoveryEvidence') -> 'UniversalWorkerRecoveryResult'
+ANNOTATIONS={'evidence': 'UniversalWorkerRecoveryEvidence', 'return': 'UniversalWorkerRecoveryResult'}
+SOURCE:
+def evaluate_universal_worker_recovery(
+    evidence: UniversalWorkerRecoveryEvidence,
+) -> UniversalWorkerRecoveryResult:
+
+    if not isinstance(
+        evidence,
+        UniversalWorkerRecoveryEvidence,
+    ):
+
+        raise UniversalWorkerRecoveryError(
+            (
+                "evidence must be "
+                "UniversalWorkerRecoveryEvidence."
+            ),
+            code="invalid_worker_recovery_evidence",
+            value=evidence,
+        )
+
+    (
+        disposition,
+        reason,
+    ) = decide_universal_worker_recovery(
+        evidence
+    )
+
+    return UniversalWorkerRecoveryResult(
+        job_id=evidence.job_id,
+        original_status=evidence.job_status,
+        disposition=disposition,
+        reason=reason,
+        worker_ownership_lost=(
+            evidence.worker_ownership_lost
+        ),
+        retry_permitted=(
+            evidence.retry_permitted
+        ),
+        duplicate_execution_safe=(
+            evidence.duplicate_execution_safe
+        ),
+        lease_state=evidence.lease_state,
+    )
+
+
+==============================================================================================================
+SYMBOL RESOLUTION
+==============================================================================================================
+UniversalWorkerAssignmentResult=FOUND:backend.server.runtime.universal_worker.assignment,backend.server.runtime.universal_worker.leasing
+assign_universal_worker=FOUND:backend.server.runtime.universal_worker.assignment
+create_universal_worker_assignment=NOT_FOUND
+select_universal_worker=NOT_FOUND
+acquire_universal_worker_lease=FOUND:backend.server.runtime.universal_worker.leasing
+renew_universal_worker_lease=FOUND:backend.server.runtime.universal_worker.leasing
+release_universal_worker_lease=FOUND:backend.server.runtime.universal_worker.leasing
+UniversalJobStatus=FOUND:backend.server.runtime.universal_queue.recovery,backend.server.runtime.universal_worker.recovery
+create_universal_worker_recovery_evidence=FOUND:backend.server.runtime.universal_worker.recovery
+evaluate_universal_worker_recovery=FOUND:backend.server.runtime.universal_worker.recovery
+RuntimeBootProcess=FOUND:backend.server.runtime.runtime_boot_process,backend.server.runtime.runtime_shutdown_process
+boot_runtime=FOUND:backend.server.runtime.runtime_boot_process
+shutdown_runtime=FOUND:backend.server.runtime.runtime_shutdown_process
+
+==============================================================================================================
+IMPORT FAILURES
+==============================================================================================================
+NONE
+
+==============================================================================================================
+BOUNDARY READINESS
+==============================================================================================================
+ASSIGNMENT_RESULT=READY
+LEASE_ACQUISITION=READY
+LEASE_RELEASE=READY
+JOB_STATUS=READY
+RECOVERY_EVIDENCE=READY
+RECOVERY_EVALUATION=READY
+BOOT_PROCESS=READY
+SHUTDOWN=READY
+
+INSPECTION_COMPLETE=PASS
+
+
+=========================================================================================================
+STANDARD ERROR
+=========================================================================================================
+
+
+=========================================================================================================
+PURPOSE
+=========================================================================================================
+Resolve the exact canonical contracts for:
+
+- Worker pool assignment
+- Lease acquisition, renewal and release
+- Universal Job status
+- Interrupted-job recovery
+- Runtime boot ownership
+- Graceful runtime shutdown
+
+These contracts will be used by one combined production-wiring patch.
+
+FINAL RESULT: A1.7 FINAL BOUNDARY INSPECTION COMPLETE

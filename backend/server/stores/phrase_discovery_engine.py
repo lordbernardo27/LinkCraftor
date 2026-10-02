@@ -1221,7 +1221,7 @@ class _DocumentModel:
             return False
         if last.low in TRAILING_BAN or last.low in AUX_VERBS:
             return False
-        if not _spe._head_is_noun_like(last.low, self.head_tag(last)):
+        if (e - 1) not in free and not _spe._head_is_noun_like(last.low, self.head_tag(last)):
             return False
         for k in range(s, e):
             t = toks[k]
@@ -1419,7 +1419,7 @@ class _DocumentModel:
             k = 0
             while k < n:
                 t = toks[k]
-                if not (t.cap or t.acronym) or t.low in FUNCTION_WORDS:
+                if not (t.cap or t.acronym) or (t.low in FUNCTION_WORDS and not t.acronym):
                     k += 1
                     continue
                 if k == 0 and not t.acronym and (t.low in lowercase_words or t.low in marker_words):
@@ -1537,7 +1537,7 @@ class _DocumentModel:
                         k + 1 >= len(toks) or self.gap(sent, k, k + 1).strip().startswith(")")
                         or sent.text[t.le:t.le + 1] == ")"):
                     for s in range(k - 1, max(-1, k - 1 - (L + 4)), -1):
-                        if s < k - 1 and not self.joinable(sent, s, s + 1):
+                        if s < k - 1 and not self.joinable(sent, s, s + 1) and not re.fullmatch(r"\s*,\s*", self.gap(sent, s, s + 1)):
                             break
                         if toks[s].low in _INITIAL_SKIP:
                             continue
@@ -1548,7 +1548,7 @@ class _DocumentModel:
                 # ACRO (Expansion)
                 if k + 1 < len(toks) and self.gap(sent, k, k + 1).strip() == "(":
                     for e in range(k + 2, min(len(toks), k + 2 + L + 4) + 1):
-                        if e - 1 > k + 1 and not self.joinable(sent, e - 2, e - 1):
+                        if e - 1 > k + 1 and not self.joinable(sent, e - 2, e - 1) and not re.fullmatch(r"\s*,\s*", self.gap(sent, e - 2, e - 1)):
                             break
                         if toks[e - 1].low in _INITIAL_SKIP:
                             continue
@@ -2570,6 +2570,78 @@ def pattern_discovery(model: _DocumentModel, run: _ComponentRun) -> None:
             pid = register("list_leading_np", f"list{gi}", len(leading), len(leading), True)
             for sp in leading:
                 run.propose(sp, "section_list_pattern", 0.5, {"pattern_id": pid, "list_size": len(group)})
+    # 7.3b inline parallel action enumerations inside normal body sentences.
+    # The first member may have an explicit subject before the action, while
+    # later comma-separated members begin directly with the parallel action.
+    for sent in model.sentences:
+        toks = sent.tokens
+        if len(toks) < 5:
+            continue
+        cuts = [0]
+        for i in range(len(toks) - 1):
+            if "," in model.gap(sent, i, i + 1):
+                cuts.append(i + 1)
+        cuts.append(len(toks))
+        if len(cuts) < 4:
+            continue
+
+        segments = []
+        for a, b in zip(cuts, cuts[1:]):
+            while a < b and toks[a].low in ("and", "or"):
+                a += 1
+            if a < b:
+                segments.append((a, b))
+        if len(segments) < 3:
+            continue
+
+        fas, fbe = segments[0]
+        first_verb = next((
+            q for q in range(fas + 1, fbe)
+            if (toks[q].tag == "VERB" or _is_bare_lemma_verb(toks[q].low) or toks[q].low in ALL_VERB_LEMMAS) and toks[q].low not in AUX_VERBS
+        ), None)
+        if first_verb is None or first_verb + 1 >= fbe:
+            continue
+        first_tail_free = set()
+        if fbe - first_verb >= 3 and toks[fbe - 1].tag == "VERB" and _is_plural_like(toks[fbe - 1].low) and toks[fbe - 2].tag in ("NOUN", "ADJ"):
+            first_tail_free.add(fbe - 1)
+        if not model.coherent(sent, first_verb + 1, fbe, allow_articles=True,
+                              free_positions=first_tail_free, max_tokens=6):
+            continue
+
+        anchors = 1
+        for a, b in segments[1:]:
+            if a < b and (toks[a].tag == "VERB" or _is_bare_lemma_verb(toks[a].low)
+                          or toks[a].low in ALL_VERB_LEMMAS):
+                anchors += 1
+        if anchors < 2 or anchors * 2 < len(segments):
+            continue
+
+        members = []
+        first = model.span(sent, first_verb, fbe, "action")
+        if model.coherent(sent, first_verb + 1, fbe, allow_articles=True,
+                          free_positions=first_tail_free, max_tokens=6):
+            members.append(first)
+        for a, b in segments[1:]:
+            if b - a < 2 or b - a > 7:
+                continue
+            tail_free = set()
+            if b - a >= 3 and toks[b - 1].tag == "VERB" and _is_plural_like(toks[b - 1].low) and toks[b - 2].tag in ("NOUN", "ADJ"):
+                tail_free.add(b - 1)
+            suffix_ok = model.coherent(sent, a + 1, b, allow_articles=True,
+                                       free_positions=tail_free, max_tokens=6)
+            if not suffix_ok:
+                continue
+            members.append(model.span(sent, a, b, "action"))
+
+        if len(members) < 3:
+            continue
+        pid = register("inline_parallel_action", f"sent{sent.index}",
+                       len(members), 1, True)
+        for sp in members:
+            run.propose(sp, "parallel_phrase_pattern", 0.6, {
+                "pattern_id": pid, "family_size": len(members),
+                "source": "inline_action_enumeration"})
+
     # paragraph "Label: ..." pattern across the document
     body_labels = [(s, _label_span(model, s)) for s in model.sentences if s.role == "body"]
     body_labels = [(s, sp) for s, sp in body_labels if sp is not None and sp.length >= 2]
@@ -2665,6 +2737,76 @@ def _normative_category(sp: _Span) -> Optional[str]:
     return None
 
 
+_C8_WEAK_SAFETY_MARKERS = frozenset({"risk", "risks", "safety"})
+_C8_DIRECTIVE_NORMATIVE = frozenset({"must", "mandatory", "shall", "prohibited", "permitted", "comply", "complies", "compliance", "mandated", "recommended", "recommends", "recommendation", "recommendations"})
+_C8_EVIDENCE_SUPPORT_WORDS = frozenset({"show", "shows", "showed", "shown", "suggest", "suggests", "suggested", "indicate", "indicates", "indicated", "demonstrate", "demonstrates", "demonstrated", "support", "supports", "supported", "find", "finds", "found"})
+_C8_WEAK_EVIDENCE_MARKERS = frozenset({"evidence", "findings", "percent", "percentage"})
+_C8_CONTEXTUAL_NORMATIVE_HEADS = frozenset({"rule", "requirement", "recommendation", "program", "programme", "initiative", "scheme", "benchmark"})
+_C8_CLAUSE_BARRIERS = frozenset({"when", "where", "while", "because", "although", "though", "unless", "if", "whether", "whereas"})
+
+def _c8_local_marker_attached(sent: _Sentence, sp: _Span, markers: frozenset, *, max_gap: int = 4) -> bool:
+    positions = [i for i,t in enumerate(sent.tokens) if t.low in markers]
+    for i in positions:
+        if sp.s <= i < sp.e:
+            return True
+        if i < sp.s and sp.s - i <= max_gap:
+            between = sent.lows[i + 1:sp.s]
+            if not any(w in _C8_CLAUSE_BARRIERS for w in between):
+                return True
+        if i >= sp.e and i - (sp.e - 1) <= max_gap:
+            between = sent.lows[sp.e:i]
+            if not any(w in _C8_CLAUSE_BARRIERS for w in between):
+                return True
+    return False
+
+def _c8_local_safety(sent: _Sentence, sp: _Span) -> List[str]:
+    strong = frozenset(w for w in _SAFETY_WORDS if w not in _C8_WEAK_SAFETY_MARKERS)
+    return sorted({t.low for t in sent.tokens if t.low in strong and _c8_local_marker_attached(sent, sp, frozenset({t.low}))})
+
+def _c8_local_normative(sent: _Sentence, sp: _Span, effective_normative: Sequence[str]) -> List[str]:
+    markers = frozenset(w for w in effective_normative if w in _C8_DIRECTIVE_NORMATIVE)
+    return sorted(w for w in markers if _c8_local_marker_attached(sent, sp, frozenset({w})))
+
+def _c8_normative_context_ok(sp: _Span, cat: str, sig: Dict[str, Any], sentence_named_authority: bool, sentence_source_intro: bool, effective_normative: Sequence[str]) -> bool:
+    heads = [(_stem(w), w) for w in sp.lows if _stem(w) in _NORMATIVE_CATEGORY or w in _NORMATIVE_CATEGORY]
+    if not heads:
+        return False
+    st, raw = heads[-1]
+    key = st if st in _NORMATIVE_CATEGORY else raw
+    if key not in _C8_CONTEXTUAL_NORMATIVE_HEADS:
+        return True
+    if cat == "recommendations":
+        return bool(effective_normative or sentence_named_authority or sentence_source_intro)
+    if key == "benchmark" and sig["statistic"]:
+        return True
+    return bool(sentence_named_authority or sentence_source_intro or _c8_local_marker_attached(sp.sent, sp, frozenset(effective_normative)))
+
+
+def _c8_valid_source_target(model: _DocumentModel, sent: _Sentence, sp: Optional[_Span]) -> bool:
+    if sp is None:
+        return False
+    first = sent.tokens[sp.s]
+    if first.cap or first.acronym:
+        return True
+    return any(e["sent"] is sent and e["s"] == sp.s and e["e"] == sp.e for e in model.entities)
+
+def _c8_has_valid_source_intro(model: _DocumentModel, sent: _Sentence) -> bool:
+    lows = sent.lows
+    n = len(lows)
+    for m in _SOURCE_INTRODUCERS:
+        L = len(m)
+        for k in range(n - L + 1):
+            if tuple(lows[k:k + L]) != m:
+                continue
+            j = k + L
+            while j < n and lows[j] in _ARTICLES:
+                j += 1
+            exp = next((x for x in model.acronym_expansions if x["sent"] is sent and x["s"] == j), None)
+            sp = model.span(sent, exp["s"], exp["e"], "acronym_expansion") if exp is not None else model.unit_starting_at(sent, j, kinds=("np_of", "np", "single"))
+            if _c8_valid_source_target(model, sent, sp):
+                return True
+    return False
+
 def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> None:
     """Authority-Worthy Concept Detection, Claim-Linked Phrases, Named
     Authorities/Institutions, Standards/Guidelines/Regulations,
@@ -2686,7 +2828,10 @@ def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> N
                 d["authority_category_counts"][c] = d["authority_category_counts"].get(c, 0) + 1
 
     # 8.3 named authorities / institutions / named standards
+    validated_expansions = [(x["sent"], x["s"], x["e"]) for x in model.acronym_expansions]
     for ent in model.entities:
+        if any(es is ent["sent"] and xs <= ent["s"] and ent["e"] <= xe and (xs, xe) != (ent["s"], ent["e"]) for es, xs, xe in validated_expansions):
+            continue
         sent = ent["sent"]
         sig = model.signals(sent)
         sp = model.span(sent, ent["s"], ent["e"], "entity")
@@ -2695,7 +2840,13 @@ def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> N
         if cat == "recognized_entities" and cap_tokens < 2 and not (
                 sig["any_authority"] or ent["frequency"] >= 2 or ent["acronym"]):
             continue
-        if ent["single"] and ent["acronym"] and ent["frequency"] < 2 and not any(
+        parenthetical_authority_alias = False
+        if ent["single"] and ent["acronym"] and ent["s"] > 0:
+            prev_named = any(e["sent"] is sent and e["e"] == ent["s"] and e["category"] == "named_institutions" for e in model.entities)
+            open_paren = model.gap(sent, ent["s"] - 1, ent["s"]).strip() == "("
+            close_paren = sent.text[sent.tokens[ent["s"]].le:sent.tokens[ent["s"]].le + 1] == ")"
+            parenthetical_authority_alias = prev_named and open_paren and close_paren
+        if ent["single"] and ent["acronym"] and ent["frequency"] < 2 and not parenthetical_authority_alias and not any(
                 x["acronym_index"] == ent["s"] and x["sent"] is sent for x in model.acronym_expansions):
             continue
         emit(sp, "named_authority_detection", [cat], 0.7 if cat != "recognized_entities" else 0.5,
@@ -2703,9 +2854,15 @@ def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> N
              allow_single=ent["single"])
     for exp in model.acronym_expansions:
         sp = model.span(exp["sent"], exp["s"], exp["e"], "acronym_expansion")
-        if not model.coherent(sp.sent, sp.s, sp.e, allow_preps={"of", "for", "and", "in", "on", "to"},
-                              allow_conj={"and"}, allow_articles=True, max_tokens=12):
-            continue
+        coherent = model.coherent(sp.sent, sp.s, sp.e, allow_preps={"of", "for", "and", "in", "on", "to"},
+                                  allow_conj={"and"}, allow_articles=True, max_tokens=12)
+        if not coherent:
+            nonjoinable = [q for q in range(sp.s + 1, sp.e) if not model.joinable(sp.sent, q - 1, q)]
+            comma_name_shape = bool(nonjoinable) and all(
+                re.fullmatch(r"\s*,\s*", model.gap(sp.sent, q - 1, q)) for q in nonjoinable
+            ) and all(t.cap or t.acronym or t.low in _INITIAL_SKIP or t.low in _ENTITY_CONNECTORS for t in sp.sent.tokens[sp.s:sp.e])
+            if not comma_name_shape:
+                continue
         cat = "named_institutions" if any(w in _INSTITUTION_HEADS for w in sp.lows) else (
             _normative_category(sp) or "recognized_entities")
         emit(sp, "named_authority_detection", [cat, "definitions"], 0.75, {"acronym": exp["acronym"]})
@@ -2715,13 +2872,31 @@ def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> N
         toks = sent.tokens
         lows = sent.lows
         n = len(toks)
+        independent_normative = [w for w in sig["normative"] if not w.startswith("recommend")]
+        recommendation_markers = [w for w in sig["normative"] if w.startswith("recommend")]
+        sentence_named_authority = any(e["sent"] is sent and e["category"] == "named_institutions" for e in model.entities)
+        sentence_source_intro = _c8_has_valid_source_intro(model, sent)
+        c8_evidence = [e for e in sig["evidence"] if e != "according to" or sentence_source_intro]
+        if c8_evidence and all(e in _C8_WEAK_EVIDENCE_MARKERS for e in c8_evidence) and not any(w in _C8_EVIDENCE_SUPPORT_WORDS for w in lows) and not sig["statistic"]:
+            c8_evidence = []
+        c8_any_claim = bool(c8_evidence) or sig["statistic"]
+        contextual_recommendation = recommendation_markers if (independent_normative or sentence_named_authority or sentence_source_intro) else []
+        effective_normative = independent_normative + contextual_recommendation
         # 8.4 standards / guidelines / regulations / formal references
         for u in model.units(sent):
             cat = _normative_category(u)
             if cat and len(u.content) >= 2:
-                emit(u, "standard_guideline_regulation", [cat], 0.65 + 0.1 * sig["any_authority"],
-                     {"normative_head": next((w for w in reversed(u.lows)
-                                              if _stem(w) in _NORMATIVE_CATEGORY or w in _NORMATIVE_CATEGORY), "")})
+                if not _c8_normative_context_ok(u, cat, sig, sentence_named_authority, sentence_source_intro, effective_normative):
+                    continue
+                if cat == "recommendations" and not effective_normative:
+                    continue
+                head_rel = max(i for i,w in enumerate(u.lows) if _stem(w) in _NORMATIVE_CATEGORY or w in _NORMATIVE_CATEGORY)
+                sp = u
+                if head_rel + 1 < u.length and _spe._is_inflected_verb(u.lows[head_rel + 1]):
+                    sp = model.span(sent, u.s, u.s + head_rel + 1, "normative_trim")
+                if len(sp.content) >= 2:
+                    emit(sp, "standard_guideline_regulation", [cat], 0.65 + 0.1 * sig["any_authority"],
+                         {"normative_head": u.lows[head_rel]})
         for k in range(n - 1):
             if lows[k] in _REFERENCE_WORDS and toks[k].cap and toks[k + 1].numeric and model.joinable(sent, k, k + 1):
                 sp = model.span(sent, k, k + 2, "reference")
@@ -2737,22 +2912,28 @@ def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> N
                 j = k + L
                 while j < n and lows[j] in _ARTICLES:
                     j += 1
-                u = model.unit_starting_at(sent, j, kinds=("np_of", "np", "single"))
-                if u is not None and (toks[u.s].cap or toks[u.s].acronym or u.length >= 2):
+                exp_match = next((x for x in model.acronym_expansions if x["sent"] is sent and x["s"] == j), None)
+                if exp_match is not None:
+                    u = model.span(sent, exp_match["s"], exp_match["e"], "acronym_expansion")
+                else:
+                    u = model.unit_starting_at(sent, j, kinds=("np_of", "np", "single"))
+                if _c8_valid_source_target(model, sent, u):
                     emit(u, "claim_linked_phrase", ["research_findings" if sig["science"] else "official_guidance"],
                          0.7, {"claim_role": "cited_source", "introducer": " ".join(m)},
                          allow_single=toks[u.s].acronym or toks[u.s].cap)
         # 8.2 claim-linked topics & thresholds
-        if sig["any_claim"]:
+        if c8_any_claim:
             cats = []
             if sig["statistic"]:
                 cats.append("statistics")
             if sig["science"]:
                 cats += ["research_findings", "scientific_claims"]
-            if sig["evidence"] and not cats:
+            if c8_evidence and not cats:
                 cats.append("research_findings")
             emitted = 0
             for u in model.units(sent):
+                if any(es is u.sent and xs <= u.s and u.e <= xe for es, xs, xe in validated_expansions):
+                    continue
                 if emitted >= 3:
                     break
                 if model.span_salient(u) or len(u.content) >= 3:
@@ -2764,16 +2945,17 @@ def external_authority_discovery(model: _DocumentModel, run: _ComponentRun) -> N
                 if any(_stem(w) in _LIMIT_STEMS for w in u.content) and len(u.content) >= 2:
                     emit(u, "claim_linked_phrase", ["thresholds_limits"], 0.6, {"claim_role": "threshold"})
         # 8.5 evidence-sensitive topics (safety / normative modality)
-        if sig["safety"] or sig["normative"]:
-            cats = (["safety_warnings"] if sig["safety"] else []) + \
-                   (["official_guidance", "recommendations"] if sig["normative"] else [])
+        if sig["safety"] or effective_normative:
             emitted = 0
             for u in model.units(sent):
                 if emitted >= 3:
                     break
-                if model.span_salient(u):
-                    emit(u, "evidence_sensitive_topic", cats, 0.55,
-                         {"sensitivity_markers": sig["safety"] + sig["normative"]})
+                local_safety = _c8_local_safety(sent, u)
+                local_normative = _c8_local_normative(sent, u, effective_normative)
+                if model.span_salient(u) and (local_safety or local_normative):
+                    local_cats = (["safety_warnings"] if local_safety else []) + (["official_guidance", "recommendations"] if local_normative else [])
+                    emit(u, "evidence_sensitive_topic", local_cats, 0.55,
+                         {"sensitivity_markers": local_safety + local_normative})
                     emitted += 1
         # definitions are reference-worthy
         for sp, role in _definitional_spans(model, sent):
@@ -2962,5 +3144,8 @@ if __name__ == "__main__":  # pragma: no cover
                               document_id="demo", diagnostics=diag):
         print(f'{c["provenance"]["component"]:<30} {c["provenance"]["capability"]:<32} {c["phrase"]}')
     print(json.dumps({k: v["summary"] for k, v in diag["components"].items()}, indent=1))
+
+
+
 
 

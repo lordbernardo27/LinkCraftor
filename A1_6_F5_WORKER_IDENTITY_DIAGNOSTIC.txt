@@ -1,0 +1,585 @@
+﻿LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.6-F5 WORKER MODULE IDENTITY DIAGNOSTIC
+
+Generated: 2026-10-02T09:49:56.2385285+00:00
+Expected target: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+Mode: READ-ONLY - NO PRODUCTION FILES MODIFIED
+
+=========================================================================================================
+DIAGNOSTIC OUTPUT
+=========================================================================================================
+CURRENT_WORKING_DIRECTORY=C:\Users\HP\Documents\LinkCraftor
+PYTHON_EXECUTABLE=C:\Users\HP\Documents\LinkCraftor\.venv\Scripts\python.exe
+EXPECTED_MODULE_PATH=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+IMPORTED_MODULE_PATH=C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+MODULE_PATHS_MATCH=True
+EXPECTED_SHA256=fb89d72017b81b1ae93bb2dfc38ee63f04ef75b292646c4e2e6aefbe5421217a
+IMPORTED_SHA256=fb89d72017b81b1ae93bb2dfc38ee63f04ef75b292646c4e2e6aefbe5421217a
+SOURCE_HASHES_MATCH=True
+RUNTIME_SIGNATURE=(*, worker_id: 'str' = 'universal_runtime_worker_v1', dispatcher: 'Callable[[Mapping[str, Any]], dict[str, Any]]' = <function dispatch_registered_runtime_handler at 0x0000022806236C00>) -> 'dict[str, Any]'
+RUNTIME_HAS_WORKER_CAPABILITIES=False
+EXPECTED_DEFINITION_COUNT=1
+IMPORTED_DEFINITION_COUNT=1
+EXPECTED_CAPABILITY_PARAMETER_COUNT=0
+IMPORTED_CAPABILITY_PARAMETER_COUNT=0
+EXPECTED_CAPABILITY_IMPORT=False
+IMPORTED_CAPABILITY_IMPORT=False
+EXPECTED_CAPABILITY_ERROR=False
+IMPORTED_CAPABILITY_ERROR=False
+
+FUNCTION_SOURCE
+====================================================================================================
+def run_one_universal_runtime_job_v1(
+    *,
+    worker_id: str = "universal_runtime_worker_v1",
+    dispatcher: Callable[
+        [Mapping[str, Any]],
+        dict[str, Any],
+    ] = dispatch_registered_runtime_handler,
+) -> dict[str, Any]:
+    """
+    Claim and execute at most one canonical orchestration job.
+
+    Returns IDLE when no queued work exists.
+
+    The dequeue operation itself owns QUEUED -> RUNNING.
+    """
+
+    canonical_worker_id = str(
+        worker_id
+        or ""
+    ).strip()
+
+    if not canonical_worker_id:
+        raise UniversalRuntimeWorkerContractError(
+            "worker_id must not be empty."
+        )
+
+    if not callable(
+        dispatcher
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "dispatcher must be callable."
+        )
+
+    claimed_job = dequeue_job(
+        worker_id=canonical_worker_id
+    )
+
+    if claimed_job is None:
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "IDLE",
+
+            "job_claimed":
+                False,
+
+            "job_id":
+                None,
+
+            "dispatch_performed":
+                False,
+
+            "terminal_status":
+                None,
+        }
+
+    job_id = str(
+        claimed_job.job_id
+        or ""
+    ).strip()
+
+    if not job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a claimed job without job_id."
+        )
+
+    if claimed_job.status != JOB_STATUS_RUNNING:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a job that is not RUNNING."
+        )
+
+    runtime_job = (
+        orchestration_job_to_runtime_mapping_v1(
+            claimed_job
+        )
+    )
+
+    if runtime_job[
+        "job_id"
+    ] != job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "Runtime mapping changed canonical job identity."
+        )
+
+    try:
+        dispatch_result = dispatcher(
+            runtime_job
+        )
+
+        if dispatch_result is None:
+            dispatch_result = {}
+
+        if not isinstance(
+            dispatch_result,
+            Mapping,
+        ):
+            dispatch_result = {
+                "value":
+                    dispatch_result,
+            }
+
+        completed_job = mark_job_completed(
+            job_id,
+            metadata={
+                "worker_id":
+                    canonical_worker_id,
+
+                "runtime_worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "runtime_dispatch_completed":
+                    True,
+
+                "runtime_dispatch_result":
+                    deepcopy(
+                        dict(
+                            dispatch_result
+                        )
+                    ),
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            },
+        )
+
+        if (
+            completed_job.job_id
+            != job_id
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion changed canonical job identity."
+            )
+
+        if (
+            completed_job.status
+            != JOB_STATUS_COMPLETED
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion did not persist COMPLETED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "COMPLETED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "dispatch_result":
+                deepcopy(
+                    dict(
+                        dispatch_result
+                    )
+                ),
+
+            "terminal_status":
+                completed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+    except UniversalRuntimeWorkerFinalizationError:
+        raise
+
+    except Exception as exc:
+
+        error_message = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        claimed_metadata = (
+            claimed_job.metadata
+            if isinstance(
+                claimed_job.metadata,
+                Mapping,
+            )
+            else {}
+        )
+
+        attempt_number = (
+            _runtime_failure_attempt_number_v1(
+                claimed_metadata
+            )
+        )
+
+        retry_policy = (
+            _runtime_retry_policy_v1(
+                job_type=
+                    claimed_job.job_type
+            )
+        )
+
+        maximum_attempts = int(
+            retry_policy[
+                "maximum_attempts"
+            ]
+        )
+
+        contract_error = (
+            _runtime_failure_is_contract_error_v1(
+                exc
+            )
+        )
+
+        if contract_error:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_contract_error"
+                ]
+            )
+        else:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_handler_error"
+                ]
+            )
+
+        retry_ceiling_allows = (
+            attempt_number
+            < maximum_attempts
+        )
+
+        retry_allowed = (
+            retry_type_allowed
+            and retry_ceiling_allows
+        )
+
+        # ====================================================
+        # RETRY PATH
+        # SAME canonical job_id -> QUEUED
+        # ====================================================
+
+        if retry_allowed:
+
+            try:
+                requeued_job = (
+                    _requeue_same_runtime_job_v1(
+                        job_id=
+                            job_id,
+
+                        worker_id=
+                            canonical_worker_id,
+
+                        error=
+                            exc,
+
+                        attempt_number=
+                            attempt_number,
+
+                        maximum_attempts=
+                            maximum_attempts,
+                    )
+                )
+
+            except Exception as finalization_exc:
+                raise UniversalRuntimeWorkerFinalizationError(
+                    "Runtime dispatch failed and same-job retry "
+                    "could not be persisted."
+                ) from finalization_exc
+
+            return {
+                "schema_version":
+                    UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+                "worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "worker_id":
+                    canonical_worker_id,
+
+                "worker_status":
+                    "RETRY_QUEUED",
+
+                "job_claimed":
+                    True,
+
+                "job_id":
+                    job_id,
+
+                "job_type":
+                    claimed_job.job_type,
+
+                "claimed_status":
+                    JOB_STATUS_RUNNING,
+
+                "dispatch_performed":
+                    True,
+
+                "dispatch_succeeded":
+                    False,
+
+                "dispatch_error_type":
+                    type(
+                        exc
+                    ).__name__,
+
+                "dispatch_error":
+                    str(
+                        exc
+                    ),
+
+                "contract_error":
+                    contract_error,
+
+                "retry_type_allowed":
+                    retry_type_allowed,
+
+                "retry_ceiling_allows":
+                    retry_ceiling_allows,
+
+                "retry_allowed":
+                    True,
+
+                "retry_scheduled":
+                    True,
+
+                "attempt_number":
+                    attempt_number,
+
+                "maximum_attempts":
+                    maximum_attempts,
+
+                "queue_status":
+                    requeued_job.status,
+
+                "terminal_status":
+                    None,
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "retry_created_new_job":
+                    False,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            }
+
+        # ====================================================
+        # TERMINAL FAILURE PATH
+        # SAME canonical job_id -> FAILED
+        # ====================================================
+
+        try:
+            failed_job = mark_job_failed(
+                job_id,
+                error_message,
+                metadata={
+                    "worker_id":
+                        canonical_worker_id,
+
+                    "runtime_worker_version":
+                        UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                    "runtime_dispatch_completed":
+                        False,
+
+                    "runtime_dispatch_failed":
+                        True,
+
+                    "runtime_retry_scheduled":
+                        False,
+
+                    "runtime_failure_attempt_count":
+                        attempt_number,
+
+                    "runtime_maximum_attempts":
+                        maximum_attempts,
+
+                    "runtime_retry_type_allowed":
+                        retry_type_allowed,
+
+                    "runtime_retry_exhausted":
+                        (
+                            retry_type_allowed
+                            and not retry_ceiling_allows
+                        ),
+
+                    "runtime_contract_error":
+                        contract_error,
+
+                    "runtime_dispatch_error_type":
+                        type(
+                            exc
+                        ).__name__,
+
+                    "canonical_job_id_preserved":
+                        True,
+
+                    "retry_created_new_job":
+                        False,
+
+                    "old_universal_knowledge_jsonl_used":
+                        False,
+                },
+            )
+
+        except Exception as finalization_exc:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Runtime dispatch failed and FAILED status "
+                "could not be persisted."
+            ) from finalization_exc
+
+        if failed_job.job_id != job_id:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization changed canonical job identity."
+            )
+
+        if failed_job.status != JOB_STATUS_FAILED:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization did not persist FAILED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "FAILED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "dispatch_succeeded":
+                False,
+
+            "dispatch_error_type":
+                type(
+                    exc
+                ).__name__,
+
+            "dispatch_error":
+                str(
+                    exc
+                ),
+
+            "contract_error":
+                contract_error,
+
+            "retry_type_allowed":
+                retry_type_allowed,
+
+            "retry_ceiling_allows":
+                retry_ceiling_allows,
+
+            "retry_allowed":
+                False,
+
+            "retry_scheduled":
+                False,
+
+            "attempt_number":
+                attempt_number,
+
+            "maximum_attempts":
+                maximum_attempts,
+
+            "retry_exhausted":
+                (
+                    retry_type_allowed
+                    and not retry_ceiling_allows
+                ),
+
+            "terminal_status":
+                failed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "retry_created_new_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+
+
+=========================================================================================================
+STANDARD ERROR
+=========================================================================================================
+
+
+=========================================================================================================
+PROCESS RESULT
+=========================================================================================================
+Exit code: 0
+
+=========================================================================================================
+DECISION PURPOSE
+=========================================================================================================
+This report determines whether:
+
+1. Python imported the intended production worker file.
+2. The expected and imported files have identical hashes.
+3. The production source still contains the capability patch.
+4. More than one run_one_universal_runtime_job_v1 definition exists.
+5. The executable function signature matches the patched source.
+
+FINAL RESULT: DIAGNOSTIC COMPLETE

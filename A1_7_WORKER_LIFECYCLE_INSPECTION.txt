@@ -1,0 +1,1848 @@
+﻿LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.7 UNIVERSAL WORKER EXECUTION AND LIFECYCLE INSPECTION
+
+Generated: 2026-10-02T10:29:08.7099387+00:00
+Mode: READ-ONLY - NO PRODUCTION FILES MODIFIED
+INSPECTION STATUS: COMPLETE
+
+=========================================================================================================
+INSPECTION OUTPUT
+=========================================================================================================
+A1.7 UNIVERSAL WORKER EXECUTION AND LIFECYCLE INSPECTION
+==============================================================================================================
+FILES_EXPECTED=13
+FILES_FOUND=9
+FILES_MISSING=4
+SYNTAX_FAILURES=1
+
+EXISTING FILES
+==============================================================================================================
+backend/server/runtime/universal_runtime_worker_v1.py
+backend/server/runtime/runtime_shutdown_process.py
+backend/server/runtime/universal_worker/registration.py
+backend/server/runtime/universal_worker/health.py
+backend/server/runtime/universal_worker/heartbeat.py
+backend/server/runtime/universal_worker/capacity.py
+backend/server/runtime/universal_worker/leasing.py
+backend/server/runtime/universal_worker/pool.py
+backend/server/runtime/universal_worker/recovery.py
+
+MISSING FILES
+==============================================================================================================
+backend/server/runtime/runtime_boot_controller.py
+backend/server/runtime/universal_worker/identity.py
+backend/server/runtime/universal_worker/lifecycle.py
+backend/server/runtime/universal_worker/status.py
+
+SYNTAX FAILURES
+==============================================================================================================
+backend/server/runtime/universal_runtime_worker_v1.py: invalid non-printable character U+FEFF (universal_runtime_worker_v1.py, line 1)
+
+==============================================================================================================
+backend/server/runtime/universal_runtime_worker_v1.py
+==============================================================================================================
+CLASSES:
+  NONE
+FUNCTIONS:
+  NONE
+RELEVANT SOURCE LINES:
+  NONE
+
+==============================================================================================================
+backend/server/runtime/runtime_shutdown_process.py
+==============================================================================================================
+CLASSES:
+  RuntimeShutdownError
+  RuntimeShutdownConfigurationError
+  RuntimeShutdownTimeoutError
+  RuntimeShutdownFailureError
+  RuntimeShutdownStatus
+  RuntimeShutdownEvent
+  RuntimeShutdownContext
+  RuntimeShutdownSnapshot
+  RuntimeShutdownProcess
+FUNCTIONS:
+  _utc_now
+  shutdown_runtime
+RELEVANT SOURCE LINES:
+     4: Universal Runtime Shutdown Process.
+     7: shutdown, cleanup, timeout enforcement, and final boot-state
+    10: It does not execute jobs, implement pipeline stages, register product
+    24: from backend.server.runtime.runtime_lifecycle_manager import (
+    25:     RuntimeLifecyclePhase,
+    26:     RuntimeLifecycleShutdownError,
+    31:     "RuntimeShutdownConfigurationError",
+    32:     "RuntimeShutdownContext",
+    33:     "RuntimeShutdownError",
+    34:     "RuntimeShutdownEvent",
+    35:     "RuntimeShutdownFailureError",
+    36:     "RuntimeShutdownProcess",
+    37:     "RuntimeShutdownSnapshot",
+    38:     "RuntimeShutdownStatus",
+    39:     "RuntimeShutdownTimeoutError",
+    40:     "shutdown_runtime",
+    48: class RuntimeShutdownError(RuntimeError):
+    49:     """Base runtime-shutdown failure."""
+    52: class RuntimeShutdownConfigurationError(
+    53:     RuntimeShutdownError
+    55:     """Raised when shutdown cannot identify an active runtime."""
+    58: class RuntimeShutdownTimeoutError(
+    59:     RuntimeShutdownError
+    61:     """Raised when the global shutdown deadline is exceeded."""
+    71:             "Runtime shutdown exceeded the global timeout "
+    76: class RuntimeShutdownFailureError(
+    77:     RuntimeShutdownError
+    80:     Raised after shutdown reaches STOPPED with recorded failures.
+    82:     context remains available so callers can inspect all cleanup
+    83:     failures without losing the final shutdown result.
+    88:         context: "RuntimeShutdownContext",
+    93:             "Runtime shutdown completed with failures: "
+    98: class RuntimeShutdownStatus(str, Enum):
+   106: class RuntimeShutdownEvent:
+   107:     """Immutable shutdown-event record."""
+   111:     status: RuntimeShutdownStatus
+   118: class RuntimeShutdownContext:
+   119:     """Immutable result of a completed runtime shutdown."""
+   121:     shutdown_id: str
+   131:     lifecycle_phase: str
+   136: class RuntimeShutdownSnapshot:
+   137:     """Immutable point-in-time shutdown inspection record."""
+   139:     status: RuntimeShutdownStatus
+   141:     shutdown_id: str | None
+   145:     events: tuple[RuntimeShutdownEvent, ...]
+   149:     lifecycle_phase: str | None
+   154: class RuntimeShutdownProcess:
+   156:     Coordinate graceful shutdown for one RuntimeBootProcess.
+   158:     Shutdown order:
+   166:     7. Return an immutable shutdown context.
+   168:     Repeated and concurrent shutdown requests return the same context.
+   179:         "_shutdown_id",
+   198:             raise RuntimeShutdownConfigurationError(
+   206:                 raise RuntimeShutdownConfigurationError(
+   214:             raise RuntimeShutdownConfigurationError(
+   221:             raise RuntimeShutdownConfigurationError(
+   230:         self._status = RuntimeShutdownStatus.IDLE
+   232:         self._shutdown_id: str | None = None
+   235:         self._events: list[RuntimeShutdownEvent] = []
+   236:         self._context: RuntimeShutdownContext | None = None
+   241:     def status(self) -> RuntimeShutdownStatus:
+   247:     ) -> RuntimeShutdownContext | None:
+   256:     ) -> RuntimeShutdownEvent:
+   260:         event = RuntimeShutdownEvent(
+   285:             context.configuration.shutdown_timeout_seconds
+   299:     async def _perform_shutdown(
+   305:         lifecycle = context.lifecycle_manager
+   310:             and lifecycle.phase
+   311:             is RuntimeLifecyclePhase.RUNNING
+   319:                 await lifecycle.drain()
+   341:             lifecycle.phase
+   342:             is RuntimeLifecyclePhase.DRAINING
+   348:                 outcome="already_draining",
+   356:                     f"phase={lifecycle.phase.value}; "
+   362:             lifecycle.phase
+   363:             is not RuntimeLifecyclePhase.STOPPED
+   371:                 await lifecycle.stop()
+   372:             except RuntimeLifecycleShutdownError as exc:
+   388:                 outcome="already_stopped",
+   393:     async def shutdown(
+   395:     ) -> RuntimeShutdownContext:
+   399:                 is RuntimeShutdownStatus.STOPPED
+   403:                     stage="shutdown",
+   404:                     outcome="already_stopped",
+   405:                     detail=self._context.shutdown_id,
+   415:                 raise RuntimeShutdownConfigurationError(
+   416:                     "No active runtime boot context is available."
+   420:             self._shutdown_id = (
+   421:                 f"runtime_shutdown_{self._attempt}_"
+   425:                 RuntimeShutdownStatus.SHUTTING_DOWN
+   433:                 stage="shutdown",
+   444:                 await self._boot_process.begin_shutdown(
+   449:                     self._perform_shutdown(
+   464:                 await self._boot_process.complete_shutdown(
+   469:                 shutdown_context = RuntimeShutdownContext(
+   470:                     shutdown_id=self._shutdown_id,
+   488:                     lifecycle_phase=(
+   490:                         .lifecycle_manager
+   501:                 self._context = shutdown_context
+   503:                     RuntimeShutdownStatus.STOPPED
+   508:                     stage="shutdown",
+   521:                     raise RuntimeShutdownFailureError(
+   522:                         shutdown_context
+   525:                 return shutdown_context
+   527:             except RuntimeShutdownFailureError:
+   532:                     RuntimeShutdownStatus.FAILED
+   535:                     "Runtime shutdown exceeded "
+   539:                 await self._boot_process.fail_shutdown(
+   545:                     stage="shutdown",
+   550:                 raise RuntimeShutdownTimeoutError(
+   556:                     RuntimeShutdownStatus.FAILED
+   563:                     await self._boot_process.fail_shutdown(
+   569:                         stage="shutdown",
+   574:                 raise RuntimeShutdownError(
+   575:                     "Runtime shutdown failed: "
+   581:     ) -> RuntimeShutdownSnapshot:
+   586:         lifecycle = (
+   589:             else boot_context.lifecycle_manager
+   598:         return RuntimeShutdownSnapshot(
+   601:             shutdown_id=self._shutdown_id,
+   619:             lifecycle_phase=(
+   621:                 if lifecycle is None
+   622:                 else lifecycle.phase.value
+   633: async def shutdown_runtime(
+   640:     RuntimeShutdownProcess,
+   641:     RuntimeShutdownContext,
+   643:     """Convenience entry point for graceful runtime shutdown."""
+   645:     process = RuntimeShutdownProcess(
+   652:     context = await process.shutdown()
+
+==============================================================================================================
+backend/server/runtime/universal_worker/registration.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerRegistrationError
+  UniversalWorkerRegistration
+FUNCTIONS:
+  _normalize_required_text
+  normalize_universal_worker_id
+  normalize_universal_worker_type
+  normalize_universal_worker_instance_id
+  normalize_universal_worker_runtime_version
+  normalize_universal_worker_host_id
+  normalize_universal_worker_registered_at
+  create_universal_worker_registration
+  is_same_universal_worker_registration_identity
+  explain_universal_worker_registration_v1
+RELEVANT SOURCE LINES:
+     9: UNIVERSAL_WORKER_REGISTRATION_VERSION = (
+    10:     "universal_worker_registration_v4.1.1"
+    13: UNIVERSAL_WORKER_REGISTRATION_SCHEMA_VERSION = (
+    14:     "universal_worker_registration_schema_v1"
+    17: MAX_UNIVERSAL_WORKER_ID_LENGTH = 160
+    18: MAX_UNIVERSAL_WORKER_TYPE_LENGTH = 120
+    19: MAX_UNIVERSAL_WORKER_INSTANCE_ID_LENGTH = 200
+    20: MAX_UNIVERSAL_WORKER_RUNTIME_VERSION_LENGTH = 120
+    21: MAX_UNIVERSAL_WORKER_HOST_ID_LENGTH = 200
+    24: class UniversalWorkerRegistrationError(
+    54:         raise UniversalWorkerRegistrationError(
+    64:         raise UniversalWorkerRegistrationError(
+    72:         raise UniversalWorkerRegistrationError(
+    84: def normalize_universal_worker_id(
+    90:         field_name="worker_id",
+    91:         maximum_length=MAX_UNIVERSAL_WORKER_ID_LENGTH,
+    95: def normalize_universal_worker_type(
+   101:         field_name="worker_type",
+   102:         maximum_length=MAX_UNIVERSAL_WORKER_TYPE_LENGTH,
+   106: def normalize_universal_worker_instance_id(
+   112:         field_name="worker_instance_id",
+   114:             MAX_UNIVERSAL_WORKER_INSTANCE_ID_LENGTH
+   119: def normalize_universal_worker_runtime_version(
+   127:             MAX_UNIVERSAL_WORKER_RUNTIME_VERSION_LENGTH
+   132: def normalize_universal_worker_host_id(
+   139:         maximum_length=MAX_UNIVERSAL_WORKER_HOST_ID_LENGTH,
+   143: def normalize_universal_worker_registered_at(
+   152:         raise UniversalWorkerRegistrationError(
+   162:         raise UniversalWorkerRegistrationError(
+   185:         raise UniversalWorkerRegistrationError(
+   196:         raise UniversalWorkerRegistrationError(
+   224: class UniversalWorkerRegistration:
+   226:     worker_id: str
+   227:     worker_type: str
+   228:     worker_instance_id: str
+   234:         UNIVERSAL_WORKER_REGISTRATION_SCHEMA_VERSION
+   243:             "worker_id",
+   244:             normalize_universal_worker_id(
+   245:                 self.worker_id
+   251:             "worker_type",
+   252:             normalize_universal_worker_type(
+   253:                 self.worker_type
+   259:             "worker_instance_id",
+   260:             normalize_universal_worker_instance_id(
+   261:                 self.worker_instance_id
+   268:             normalize_universal_worker_runtime_version(
+   276:             normalize_universal_worker_host_id(
+   284:             normalize_universal_worker_registered_at(
+   291:             != UNIVERSAL_WORKER_REGISTRATION_SCHEMA_VERSION
+   294:             raise UniversalWorkerRegistrationError(
+   296:                     "Invalid Worker Registration "
+   300:                     "invalid_worker_registration_"
+   307:     def canonical_identity(
+   312:             self.worker_id,
+   313:             self.worker_instance_id,
+   324:             "worker_id":
+   325:                 self.worker_id,
+   327:             "worker_type":
+   328:                 self.worker_type,
+   330:             "worker_instance_id":
+   331:                 self.worker_instance_id,
+   344: def create_universal_worker_registration(
+   346:     worker_id: str,
+   347:     worker_type: str,
+   348:     worker_instance_id: str,
+   352: ) -> UniversalWorkerRegistration:
+   354:     return UniversalWorkerRegistration(
+   355:         worker_id=worker_id,
+   356:         worker_type=worker_type,
+   357:         worker_instance_id=worker_instance_id,
+   364: def is_same_universal_worker_registration_identity(
+   366:     left: UniversalWorkerRegistration,
+   367:     right: UniversalWorkerRegistration,
+   372:         UniversalWorkerRegistration,
+   375:         raise UniversalWorkerRegistrationError(
+   378:                 "UniversalWorkerRegistration."
+   380:             code="invalid_left_worker_registration",
+   386:         UniversalWorkerRegistration,
+   389:         raise UniversalWorkerRegistrationError(
+   392:                 "UniversalWorkerRegistration."
+   394:             code="invalid_right_worker_registration",
+   399:         left.canonical_identity
+   400:         == right.canonical_identity
+   404: def explain_universal_worker_registration_v1(
+   413:                 "Universal Worker Registration",
+   416:                 UNIVERSAL_WORKER_REGISTRATION_VERSION,
+   419:                 UNIVERSAL_WORKER_REGISTRATION_SCHEMA_VERSION,
+   421:             "canonical_identity": (
+   422:                 "worker_id",
+   423:                 "worker_instance_id",
+   426:             "identity_semantics": (
+   427:                 "worker_id identifies the logical worker; "
+   428:                 "worker_instance_id identifies one concrete "
+   429:                 "running instance of that logical worker"
+   433:                 "worker_id",
+   434:                 "worker_type",
+   435:                 "worker_instance_id",
+   442:                 "registered_at is caller-supplied registration "
+   447:                 "a Worker Registration record is immutable"
+   451:                 "4.1.1 validates and represents registration "
+   453:                 "assign, lease, heartbeat or execute workers"
+   457:                 "does not create worker pools",
+   458:                 "does not declare worker capabilities",
+   459:                 "does not determine worker health",
+   460:                 "does not determine worker availability",
+   461:                 "does not determine worker capacity",
+   464:                 "does not lease jobs",
+   465:                 "does not renew leases",
+   466:                 "does not release leases",
+   467:                 "does not emit heartbeats",
+   468:                 "does not detect stale workers",
+   469:                 "does not recover workers",
+   470:                 "does not scale workers",
+   471:                 "does not drain workers",
+   472:                 "does not shut down workers",
+   474:                 "does not execute jobs",
+   487:     "UNIVERSAL_WORKER_REGISTRATION_VERSION",
+   488:     "UNIVERSAL_WORKER_REGISTRATION_SCHEMA_VERSION",
+   489:     "MAX_UNIVERSAL_WORKER_ID_LENGTH",
+   490:     "MAX_UNIVERSAL_WORKER_TYPE_LENGTH",
+   491:     "MAX_UNIVERSAL_WORKER_INSTANCE_ID_LENGTH",
+   492:     "MAX_UNIVERSAL_WORKER_RUNTIME_VERSION_LENGTH",
+   493:     "MAX_UNIVERSAL_WORKER_HOST_ID_LENGTH",
+   494:     "UniversalWorkerRegistrationError",
+   495:     "UniversalWorkerRegistration",
+   496:     "normalize_universal_worker_id",
+   497:     "normalize_universal_worker_type",
+   498:     "normalize_universal_worker_instance_id",
+   499:     "normalize_universal_worker_runtime_version",
+   500:     "normalize_universal_worker_host_id",
+   501:     "normalize_universal_worker_registered_at",
+   502:     "create_universal_worker_registration",
+   503:     "is_same_universal_worker_registration_identity",
+   504:     "explain_universal_worker_registration_v1",
+
+==============================================================================================================
+backend/server/runtime/universal_worker/health.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerHealthError
+  UniversalWorkerHealthState
+  UniversalWorkerHealthEvidence
+  UniversalWorkerHealthResult
+FUNCTIONS:
+  _validate_optional_health_bool
+  _validate_worker_registration
+  create_universal_worker_health_evidence
+  classify_universal_worker_health_evidence
+  evaluate_universal_worker_health
+  explain_universal_worker_health_v1
+RELEVANT SOURCE LINES:
+     8: from backend.server.runtime.universal_worker.registration import (
+     9:     UniversalWorkerRegistration,
+    13: UNIVERSAL_WORKER_HEALTH_VERSION = (
+    14:     "universal_worker_health_v4.1.5"
+    17: UNIVERSAL_WORKER_HEALTH_EVIDENCE_SCHEMA_VERSION = (
+    18:     "universal_worker_health_evidence_schema_v1"
+    21: UNIVERSAL_WORKER_HEALTH_RESULT_SCHEMA_VERSION = (
+    22:     "universal_worker_health_result_schema_v1"
+    26: class UniversalWorkerHealthError(
+    49: class UniversalWorkerHealthState(
+    54:     HEALTHY = "HEALTHY"
+    56:     UNHEALTHY = "UNHEALTHY"
+    60: def _validate_optional_health_bool(
+    72:         raise UniversalWorkerHealthError(
+    77:             code="invalid_worker_health_signal",
+    87: def _validate_worker_registration(
+    89: ) -> UniversalWorkerRegistration:
+    93:         UniversalWorkerRegistration,
+    96:         raise UniversalWorkerHealthError(
+    98:                 "worker must be a "
+    99:                 "UniversalWorkerRegistration."
+   101:             code="invalid_worker_registration",
+   112: class UniversalWorkerHealthEvidence:
+   114:     health_check_passed: bool | None = None
+   121:         UNIVERSAL_WORKER_HEALTH_EVIDENCE_SCHEMA_VERSION
+   130:             "health_check_passed",
+   131:             _validate_optional_health_bool(
+   132:                 self.health_check_passed,
+   133:                 field_name="health_check_passed",
+   140:             _validate_optional_health_bool(
+   149:             _validate_optional_health_bool(
+   157:             != UNIVERSAL_WORKER_HEALTH_EVIDENCE_SCHEMA_VERSION
+   160:             raise UniversalWorkerHealthError(
+   162:                     "Invalid Worker Health Evidence "
+   166:                     "invalid_worker_health_"
+   180:                 self.health_check_passed,
+   191: class UniversalWorkerHealthResult:
+   193:     worker_id: str
+   195:     worker_instance_id: str
+   197:     state: UniversalWorkerHealthState
+   199:     evidence: UniversalWorkerHealthEvidence
+   202:         UNIVERSAL_WORKER_HEALTH_RESULT_SCHEMA_VERSION
+   211:                 self.worker_id,
+   215:             not self.worker_id
+   218:             raise UniversalWorkerHealthError(
+   220:                     "worker_id must be a "
+   223:                 code="invalid_health_worker_id",
+   224:                 value=self.worker_id,
+   229:                 self.worker_instance_id,
+   233:             not self.worker_instance_id
+   236:             raise UniversalWorkerHealthError(
+   238:                     "worker_instance_id must be a "
+   242:                     "invalid_health_"
+   243:                     "worker_instance_id"
+   245:                 value=self.worker_instance_id,
+   250:             UniversalWorkerHealthState,
+   253:             raise UniversalWorkerHealthError(
+   256:                     "UniversalWorkerHealthState."
+   258:                 code="invalid_worker_health_state",
+   264:             UniversalWorkerHealthEvidence,
+   267:             raise UniversalWorkerHealthError(
+   270:                     "UniversalWorkerHealthEvidence."
+   272:                 code="invalid_worker_health_evidence",
+   277:             classify_universal_worker_health_evidence(
+   284:             raise UniversalWorkerHealthError(
+   286:                     "Worker Health result state is "
+   290:                     "inconsistent_worker_"
+   291:                     "health_result"
+   304:             != UNIVERSAL_WORKER_HEALTH_RESULT_SCHEMA_VERSION
+   307:             raise UniversalWorkerHealthError(
+   309:                     "Invalid Worker Health Result "
+   313:                     "invalid_worker_health_"
+   320:     def worker_identity(
+   325:             self.worker_id,
+   326:             self.worker_instance_id,
+   330:     def healthy(
+   336:             is UniversalWorkerHealthState.HEALTHY
+   340: def create_universal_worker_health_evidence(
+   342:     health_check_passed: bool | None = None,
+   345: ) -> UniversalWorkerHealthEvidence:
+   347:     return UniversalWorkerHealthEvidence(
+   348:         health_check_passed=health_check_passed,
+   354: def classify_universal_worker_health_evidence(
+   355:     evidence: UniversalWorkerHealthEvidence,
+   356: ) -> UniversalWorkerHealthState:
+   360:         UniversalWorkerHealthEvidence,
+   363:         raise UniversalWorkerHealthError(
+   366:                 "UniversalWorkerHealthEvidence."
+   368:             code="invalid_worker_health_evidence",
+   378:             UniversalWorkerHealthState.UNHEALTHY
+   382:         evidence.health_check_passed
+   387:             UniversalWorkerHealthState.UNHEALTHY
+   396:             UniversalWorkerHealthState.DEGRADED
+   400:         evidence.health_check_passed
+   405:             UniversalWorkerHealthState.HEALTHY
+   409:         UniversalWorkerHealthState.UNKNOWN
+   413: def evaluate_universal_worker_health(
+   415:     worker: UniversalWorkerRegistration,
+   416:     evidence: UniversalWorkerHealthEvidence,
+   417: ) -> UniversalWorkerHealthResult:
+   419:     canonical_worker = (
+   420:         _validate_worker_registration(
+   421:             worker
+   427:         UniversalWorkerHealthEvidence,
+   430:         raise UniversalWorkerHealthError(
+   433:                 "UniversalWorkerHealthEvidence."
+   435:             code="invalid_worker_health_evidence",
+   440:         classify_universal_worker_health_evidence(
+   445:     return UniversalWorkerHealthResult(
+   446:         worker_id=canonical_worker.worker_id,
+   447:         worker_instance_id=(
+   448:             canonical_worker.worker_instance_id
+   455: def explain_universal_worker_health_v1(
+   464:                 "Universal Worker Health",
+   467:                 UNIVERSAL_WORKER_HEALTH_VERSION,
+   470:                 UNIVERSAL_WORKER_HEALTH_EVIDENCE_SCHEMA_VERSION,
+   473:                 UNIVERSAL_WORKER_HEALTH_RESULT_SCHEMA_VERSION,
+   476:                 "HEALTHY",
+   478:                 "UNHEALTHY",
+   484:                 "UniversalWorkerRegistration and "
+   485:                 "caller-supplied health evidence"
+   489:                 "health_check_passed, "
+   497:                 "critical failure -> UNHEALTHY; "
+   498:                 "failed health check -> UNHEALTHY; "
+   500:                 "passed health check -> HEALTHY; "
+   505:                 "absence of positive health evidence "
+   506:                 "must not be interpreted as HEALTHY"
+   511:                 "operational states are not Worker "
+   512:                 "Health states"
+   515:             "heartbeat_boundary": (
+   516:                 "heartbeat production, freshness, "
+   517:                 "liveness and stale-worker detection "
+   522:                 "Worker Health does not decide whether "
+   523:                 "a worker is available, eligible or "
+   528:                 "4.1.5 does not invent worker CPU, "
+   533:             "recovery_boundary": (
+   534:                 "UNHEALTHY classification does not "
+   536:                 "replace a worker"
+   540:                 "Worker Health is deterministic over "
+   547:                 "does not emit worker heartbeats",
+   548:                 "does not read worker heartbeats",
+   549:                 "does not calculate heartbeat freshness",
+   550:                 "does not detect stale workers",
+   551:                 "does not determine worker liveness",
+   552:                 "does not determine worker readiness",
+   554:                 "does not determine worker availability",
+   556:                 "does not assign workers",
+   557:                 "does not acquire leases",
+   558:                 "does not renew leases",
+   559:                 "does not release leases",
+   560:                 "does not inspect worker capacity",
+   561:                 "does not inspect worker capabilities",
+   562:                 "does not inspect worker pools",
+   567:                 "does not restart workers",
+   568:                 "does not recover workers",
+   569:                 "does not scale workers",
+   570:                 "does not drain workers",
+   571:                 "does not shut down workers",
+   575:                 "does not persist health results",
+   584:     "UNIVERSAL_WORKER_HEALTH_VERSION",
+   585:     "UNIVERSAL_WORKER_HEALTH_EVIDENCE_SCHEMA_VERSION",
+   586:     "UNIVERSAL_WORKER_HEALTH_RESULT_SCHEMA_VERSION",
+   587:     "UniversalWorkerHealthError",
+   588:     "UniversalWorkerHealthState",
+   589:     "UniversalWorkerHealthEvidence",
+   590:     "UniversalWorkerHealthResult",
+   591:     "create_universal_worker_health_evidence",
+   592:     "classify_universal_worker_health_evidence",
+   593:     "evaluate_universal_worker_health",
+   594:     "explain_universal_worker_health_v1",
+
+==============================================================================================================
+backend/server/runtime/universal_worker/heartbeat.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerHeartbeatError
+  UniversalWorkerHeartbeat
+FUNCTIONS:
+  normalize_universal_worker_heartbeat_timestamp
+  _parse_canonical_heartbeat_timestamp
+  normalize_universal_worker_heartbeat_sequence
+  validate_universal_worker_heartbeat_progression
+  create_universal_worker_heartbeat
+  explain_universal_worker_heartbeat_v1
+RELEVANT SOURCE LINES:
+     8: from backend.server.runtime.universal_worker.registration import (
+     9:     UniversalWorkerRegistration,
+    10:     normalize_universal_worker_id,
+    11:     normalize_universal_worker_instance_id,
+    12:     normalize_universal_worker_type,
+    16: UNIVERSAL_WORKER_HEARTBEAT_VERSION = (
+    17:     "universal_worker_heartbeat_v4.1.10"
+    20: UNIVERSAL_WORKER_HEARTBEAT_SCHEMA_VERSION = (
+    21:     "universal_worker_heartbeat_schema_v1"
+    24: MAX_UNIVERSAL_WORKER_HEARTBEAT_SEQUENCE = (
+    28: UNIVERSAL_WORKER_HEARTBEAT_IDENTITY_SEPARATOR = (
+    33: class UniversalWorkerHeartbeatError(
+    56: def normalize_universal_worker_heartbeat_timestamp(
+    65:         raise UniversalWorkerHeartbeatError(
+    66:             "heartbeat_at must be str.",
+    67:             code="invalid_worker_heartbeat_timestamp_type",
+    75:         raise UniversalWorkerHeartbeatError(
+    76:             "heartbeat_at must not be empty.",
+    77:             code="empty_worker_heartbeat_timestamp",
+   100:         raise UniversalWorkerHeartbeatError(
+   102:                 "heartbeat_at must be a valid "
+   105:             code="invalid_worker_heartbeat_timestamp",
+   115:         raise UniversalWorkerHeartbeatError(
+   117:                 "heartbeat_at must be "
+   120:             code="naive_worker_heartbeat_timestamp",
+   126:         raise UniversalWorkerHeartbeatError(
+   128:                 "heartbeat_at must use UTC."
+   130:             code="non_utc_worker_heartbeat_timestamp",
+   144: def _parse_canonical_heartbeat_timestamp(
+   153: def normalize_universal_worker_heartbeat_sequence(
+   163:         raise UniversalWorkerHeartbeatError(
+   168:             code="invalid_worker_heartbeat_sequence",
+   174:         > MAX_UNIVERSAL_WORKER_HEARTBEAT_SEQUENCE
+   177:         raise UniversalWorkerHeartbeatError(
+   182:             code="worker_heartbeat_sequence_too_large",
+   193: class UniversalWorkerHeartbeat:
+   195:     worker_id: str
+   197:     worker_instance_id: str
+   199:     worker_type: str
+   201:     heartbeat_at: str
+   206:         UNIVERSAL_WORKER_HEARTBEAT_SCHEMA_VERSION
+   215:             "worker_id",
+   216:             normalize_universal_worker_id(
+   217:                 self.worker_id
+   223:             "worker_instance_id",
+   224:             normalize_universal_worker_instance_id(
+   225:                 self.worker_instance_id
+   231:             "worker_type",
+   232:             normalize_universal_worker_type(
+   233:                 self.worker_type
+   239:             "heartbeat_at",
+   240:             normalize_universal_worker_heartbeat_timestamp(
+   241:                 self.heartbeat_at
+   248:             normalize_universal_worker_heartbeat_sequence(
+   255:             != UNIVERSAL_WORKER_HEARTBEAT_SCHEMA_VERSION
+   258:             raise UniversalWorkerHeartbeatError(
+   260:                     "Invalid Universal Worker "
+   261:                     "Heartbeat schema_version."
+   264:                     "invalid_worker_heartbeat_"
+   271:     def worker_identity(
+   276:             self.worker_id
+   277:             + UNIVERSAL_WORKER_HEARTBEAT_IDENTITY_SEPARATOR
+   278:             + self.worker_instance_id
+   282: def validate_universal_worker_heartbeat_progression(
+   284:     previous: UniversalWorkerHeartbeat,
+   285:     current: UniversalWorkerHeartbeat,
+   290:         UniversalWorkerHeartbeat,
+   293:         raise UniversalWorkerHeartbeatError(
+   296:                 "UniversalWorkerHeartbeat."
+   298:             code="invalid_previous_worker_heartbeat",
+   304:         UniversalWorkerHeartbeat,
+   307:         raise UniversalWorkerHeartbeatError(
+   310:                 "UniversalWorkerHeartbeat."
+   312:             code="invalid_current_worker_heartbeat",
+   317:         previous.worker_identity
+   318:         != current.worker_identity
+   321:         raise UniversalWorkerHeartbeatError(
+   323:                 "Heartbeat progression requires "
+   324:                 "the same worker identity."
+   326:             code="worker_heartbeat_identity_mismatch",
+   329:                     previous.worker_identity,
+   332:                     current.worker_identity,
+   337:         previous.worker_type
+   338:         != current.worker_type
+   341:         raise UniversalWorkerHeartbeatError(
+   343:                 "Heartbeat progression requires "
+   344:                 "the same worker_type."
+   346:             code="worker_heartbeat_type_mismatch",
+   349:                     previous.worker_type,
+   352:                     current.worker_type,
+   361:         raise UniversalWorkerHeartbeatError(
+   362:             "Duplicate heartbeat sequence.",
+   363:             code="duplicate_worker_heartbeat_sequence",
+   372:         raise UniversalWorkerHeartbeatError(
+   373:             "Out-of-order heartbeat sequence.",
+   374:             code="out_of_order_worker_heartbeat_sequence",
+   385:         _parse_canonical_heartbeat_timestamp(
+   386:             previous.heartbeat_at
+   391:         _parse_canonical_heartbeat_timestamp(
+   392:             current.heartbeat_at
+   401:         raise UniversalWorkerHeartbeatError(
+   403:                 "heartbeat_at must increase "
+   404:                 "across heartbeat progression."
+   406:             code="non_increasing_worker_heartbeat_timestamp",
+   409:                     previous.heartbeat_at,
+   412:                     current.heartbeat_at,
+   417: def create_universal_worker_heartbeat(
+   419:     registration: UniversalWorkerRegistration,
+   420:     heartbeat_at: str,
+   422:     previous_heartbeat: UniversalWorkerHeartbeat | None = None,
+   423: ) -> UniversalWorkerHeartbeat:
+   426:         registration,
+   427:         UniversalWorkerRegistration,
+   430:         raise UniversalWorkerHeartbeatError(
+   432:                 "registration must be "
+   433:                 "UniversalWorkerRegistration."
+   435:             code="invalid_worker_heartbeat_registration",
+   436:             value=registration,
+   439:     heartbeat = (
+   440:         UniversalWorkerHeartbeat(
+   441:             worker_id=(
+   442:                 registration.worker_id
+   444:             worker_instance_id=(
+   445:                 registration.worker_instance_id
+   447:             worker_type=(
+   448:                 registration.worker_type
+   450:             heartbeat_at=heartbeat_at,
+   455:     if previous_heartbeat is not None:
+   457:         validate_universal_worker_heartbeat_progression(
+   458:             previous=previous_heartbeat,
+   459:             current=heartbeat,
+   462:     return heartbeat
+   465: def explain_universal_worker_heartbeat_v1(
+   474:                 "Universal Worker Heartbeats",
+   477:                 UNIVERSAL_WORKER_HEARTBEAT_VERSION,
+   480:                 UNIVERSAL_WORKER_HEARTBEAT_SCHEMA_VERSION,
+   482:             "identity_rule": (
+   483:                 "heartbeat identity is the canonical "
+   484:                 "Worker Registration identity "
+   485:                 "(worker_id, worker_instance_id)"
+   488:             "registration_rule": (
+   489:                 "canonical heartbeat creation consumes "
+   490:                 "immutable UniversalWorkerRegistration "
+   491:                 "identity evidence"
+   495:                 "heartbeat_at is caller-supplied, "
+   501:                 "heartbeat sequence is caller-supplied "
+   503:                 "heartbeat evidence is supplied"
+   508:                 "supplied prior heartbeat is rejected "
+   514:                 "heartbeat timestamp relative to the "
+   515:                 "supplied prior heartbeat is rejected"
+   520:                 "against caller-supplied prior heartbeat "
+   521:                 "evidence for the same worker identity"
+   525:                 "heartbeat emission interval and "
+   531:                 "4.1.11 Stale Worker Detection owns "
+   532:                 "heartbeat age, freshness and stale "
+   536:             "health_boundary": (
+   537:                 "4.1.5 Worker Health remains separate; "
+   538:                 "heartbeat evidence does not classify "
+   539:                 "HEALTHY, DEGRADED, UNHEALTHY or UNKNOWN"
+   542:             "recovery_boundary": (
+   543:                 "4.1.6 Worker Recovery remains separate; "
+   544:                 "heartbeat evidence does not authorize "
+   545:                 "or initiate recovery"
+   551:                 "worker_heartbeat filesystem publisher"
+   556:                 "existing orchestration WorkerHeartbeat "
+   557:                 "or TMS WorkerStatus mechanisms"
+   561:                 "canonical heartbeat evidence does not "
+   562:                 "carry workspace, current job, lease, "
+   563:                 "pool, health, capability or capacity "
+   568:                 "4.1.10 does not persist heartbeat "
+   573:                 "Worker Heartbeats is deterministic over "
+   580:                 "does not generate heartbeat timestamps",
+   582:                 "does not define heartbeat interval",
+   583:                 "does not sleep between heartbeats",
+   584:                 "does not run a heartbeat loop",
+   585:                 "does not start heartbeat threads",
+   586:                 "does not publish heartbeat over network",
+   587:                 "does not write heartbeat files",
+   589:                 "does not persist heartbeat evidence",
+   590:                 "does not calculate heartbeat age",
+   591:                 "does not calculate heartbeat freshness",
+   592:                 "does not detect stale workers",
+   593:                 "does not determine worker liveness",
+   594:                 "does not determine worker health",
+   595:                 "does not initiate worker recovery",
+   596:                 "does not release worker leases",
+   599:                 "does not mutate Worker Registration",
+   600:                 "does not modify Worker Pool membership",
+   601:                 "does not discover workers",
+   602:                 "does not assign workers",
+   603:                 "does not scale workers",
+   604:                 "does not shut down workers",
+   605:                 "does not drain workers",
+   606:                 "does not inspect worker capabilities",
+   607:                 "does not calculate worker capacity",
+   610:                 "does not invoke legacy runtime heartbeat publisher",
+   611:                 "does not mutate orchestration heartbeat models",
+   620:     "UNIVERSAL_WORKER_HEARTBEAT_VERSION",
+   621:     "UNIVERSAL_WORKER_HEARTBEAT_SCHEMA_VERSION",
+   622:     "MAX_UNIVERSAL_WORKER_HEARTBEAT_SEQUENCE",
+   623:     "UNIVERSAL_WORKER_HEARTBEAT_IDENTITY_SEPARATOR",
+   624:     "UniversalWorkerHeartbeatError",
+   625:     "UniversalWorkerHeartbeat",
+   626:     "normalize_universal_worker_heartbeat_timestamp",
+   627:     "normalize_universal_worker_heartbeat_sequence",
+   628:     "validate_universal_worker_heartbeat_progression",
+   629:     "create_universal_worker_heartbeat",
+   630:     "explain_universal_worker_heartbeat_v1",
+
+==============================================================================================================
+backend/server/runtime/universal_worker/capacity.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerCapacityError
+  UniversalWorkerCapacitySnapshot
+FUNCTIONS:
+  normalize_universal_worker_capacity_count
+  _normalize_worker_identity
+  _validate_registration
+  calculate_universal_worker_available_capacity
+  create_universal_worker_capacity_snapshot
+  explain_universal_worker_capacity_v1
+RELEVANT SOURCE LINES:
+     7: from backend.server.runtime.universal_worker.registration import (
+     8:     UniversalWorkerRegistration,
+     9:     normalize_universal_worker_id,
+    10:     normalize_universal_worker_instance_id,
+    11:     normalize_universal_worker_type,
+    15: UNIVERSAL_WORKER_CAPACITY_VERSION = (
+    16:     "universal_worker_capacity_v4.1.14"
+    19: UNIVERSAL_WORKER_CAPACITY_SNAPSHOT_SCHEMA_VERSION = (
+    20:     "universal_worker_capacity_snapshot_schema_v1"
+    23: MAX_UNIVERSAL_WORKER_CAPACITY_COUNT = 2_147_483_647
+    25: UNIVERSAL_WORKER_CAPACITY_IDENTITY_SEPARATOR = "::"
+    28: class UniversalWorkerCapacityError(
+    51: def normalize_universal_worker_capacity_count(
+    61:         raise UniversalWorkerCapacityError(
+    66:             code="invalid_worker_capacity_count",
+    72:         raise UniversalWorkerCapacityError(
+    77:             code="invalid_worker_capacity_count",
+    83:         > MAX_UNIVERSAL_WORKER_CAPACITY_COUNT
+    86:         raise UniversalWorkerCapacityError(
+    89:                 + " exceeds the supported worker "
+    90:                 "capacity count."
+    92:             code="worker_capacity_count_too_large",
+    99: def _normalize_worker_identity(
+   101:     worker_id: Any,
+   102:     worker_instance_id: Any,
+   103:     worker_type: Any,
+   108:         normalized_worker_id = (
+   109:             normalize_universal_worker_id(
+   110:                 worker_id
+   115:             normalize_universal_worker_instance_id(
+   116:                 worker_instance_id
+   120:         normalized_worker_type = (
+   121:             normalize_universal_worker_type(
+   122:                 worker_type
+   128:         raise UniversalWorkerCapacityError(
+   130:                 "Invalid canonical worker identity "
+   131:                 "for Worker Capacity."
+   133:             code="invalid_worker_capacity_identity",
+   135:                 "worker_id":
+   136:                     worker_id,
+   138:                 "worker_instance_id":
+   139:                     worker_instance_id,
+   141:                 "worker_type":
+   142:                     worker_type,
+   147:         normalized_worker_id,
+   149:         normalized_worker_type,
+   153: def _validate_registration(
+   155: ) -> UniversalWorkerRegistration:
+   159:         UniversalWorkerRegistration,
+   162:         raise UniversalWorkerCapacityError(
+   164:                 "registration must be canonical "
+   165:                 "UniversalWorkerRegistration."
+   167:             code="invalid_worker_capacity_registration",
+   174: def calculate_universal_worker_available_capacity(
+   176:     capacity_limit: Any,
+   181:         normalize_universal_worker_capacity_count(
+   182:             capacity_limit,
+   183:             field_name="capacity_limit",
+   188:         normalize_universal_worker_capacity_count(
+   196:         raise UniversalWorkerCapacityError(
+   199:                 "capacity_limit."
+   201:             code="worker_capacity_active_work_exceeds_limit",
+   203:                 "capacity_limit":
+   221: class UniversalWorkerCapacitySnapshot:
+   223:     worker_id: str
+   225:     worker_instance_id: str
+   227:     worker_type: str
+   229:     capacity_limit: int
+   234:         UNIVERSAL_WORKER_CAPACITY_SNAPSHOT_SCHEMA_VERSION
+   242:             worker_id,
+   243:             worker_instance_id,
+   244:             worker_type,
+   245:         ) = _normalize_worker_identity(
+   246:             worker_id=self.worker_id,
+   247:             worker_instance_id=self.worker_instance_id,
+   248:             worker_type=self.worker_type,
+   251:         capacity_limit = (
+   252:             normalize_universal_worker_capacity_count(
+   253:                 self.capacity_limit,
+   254:                 field_name="capacity_limit",
+   259:             normalize_universal_worker_capacity_count(
+   265:         calculate_universal_worker_available_capacity(
+   266:             capacity_limit=capacity_limit,
+   272:             != UNIVERSAL_WORKER_CAPACITY_SNAPSHOT_SCHEMA_VERSION
+   275:             raise UniversalWorkerCapacityError(
+   277:                     "Invalid Worker Capacity Snapshot "
+   281:                     "invalid_worker_capacity_"
+   289:             "worker_id",
+   290:             worker_id,
+   295:             "worker_instance_id",
+   296:             worker_instance_id,
+   301:             "worker_type",
+   302:             worker_type,
+   307:             "capacity_limit",
+   308:             capacity_limit,
+   318:     def worker_identity(
+   323:             self.worker_id
+   324:             + UNIVERSAL_WORKER_CAPACITY_IDENTITY_SEPARATOR
+   325:             + self.worker_instance_id
+   329:     def available_capacity(
+   334:             self.capacity_limit
+   339:     def has_available_capacity(
+   344:             self.available_capacity
+   354:             self.available_capacity
+   359: def create_universal_worker_capacity_snapshot(
+   361:     registration: UniversalWorkerRegistration,
+   362:     capacity_limit: Any,
+   364: ) -> UniversalWorkerCapacitySnapshot:
+   366:     resolved_registration = (
+   367:         _validate_registration(
+   368:             registration
+   372:     return UniversalWorkerCapacitySnapshot(
+   373:         worker_id=(
+   374:             resolved_registration.worker_id
+   376:         worker_instance_id=(
+   377:             resolved_registration.worker_instance_id
+   379:         worker_type=(
+   380:             resolved_registration.worker_type
+   382:         capacity_limit=capacity_limit,
+   387: def explain_universal_worker_capacity_v1(
+   396:                 "Universal Worker Capacity Management",
+   399:                 UNIVERSAL_WORKER_CAPACITY_VERSION,
+   402:                 UNIVERSAL_WORKER_CAPACITY_SNAPSHOT_SCHEMA_VERSION,
+   405:                 "4.1.14 owns immutable individual-worker "
+   406:                 "generic work-slot capacity evidence"
+   409:             "identity_rule": (
+   410:                 "Worker Capacity preserves canonical "
+   411:                 "Worker Registration identity "
+   412:                 "(worker_id, worker_instance_id)"
+   415:             "capacity_limit_rule": (
+   416:                 "capacity_limit is caller-supplied maximum "
+   417:                 "simultaneous capacity-consuming work units "
+   418:                 "for this worker snapshot"
+   423:                 "already-composed capacity-consuming work "
+   428:             "available_capacity_rule": (
+   429:                 "available_capacity equals capacity_limit "
+   434:             "zero_capacity_rule": (
+   435:                 "capacity_limit=0 with active_work_count=0 "
+   436:                 "is valid and represents a saturated worker "
+   437:                 "with zero available capacity"
+   442:                 "capacity_limit is contradictory evidence "
+   446:             "lease_boundary": (
+   447:                 "active leases are separate ownership "
+   449:                 "Worker Capacity inside 4.1.14"
+   453:                 "capacity evidence does not perform Worker "
+   454:                 "Assignment; callers may compose capacity "
+   455:                 "before supplying eligible workers to 4.1.3"
+   459:                 "4.1.14 does not scale workers; callers may "
+   460:                 "aggregate Worker Capacity evidence into the "
+   461:                 "caller-composed available_capacity consumed "
+   462:                 "by 4.1.7 Worker Scaling"
+   471:             "queue_capacity_boundary": (
+   472:                 "3.1.11 Queue Capacity Limits is separate "
+   477:                 "Worker Capability defines what a worker can "
+   478:                 "perform; Worker Capacity defines how much "
+   479:                 "capacity-consuming work it can accept"
+   483:                 "Worker Drain determines new-work acceptance; "
+   484:                 "Capacity does not inspect or apply drain state"
+   493:                 "utilization and historical worker-load "
+   498:                 "4.1.14 does not persist capacity state or "
+   503:                 "Worker Capacity is deterministic over "
+   509:                 "does not mutate Worker Registration",
+   510:                 "does not inspect Worker Capability",
+   511:                 "does not inspect Worker Pool membership",
+   512:                 "does not inspect Worker Health",
+   513:                 "does not inspect Stale Worker Detection",
+   514:                 "does not inspect Worker Drain",
+   515:                 "does not inspect active worker leases",
+   516:                 "does not infer active work from leases",
+   517:                 "does not acquire worker leases",
+   518:                 "does not renew worker leases",
+   519:                 "does not release worker leases",
+   520:                 "does not perform Worker Assignment",
+   521:                 "does not perform Worker Scaling",
+   522:                 "does not perform Worker Shutdown",
+   523:                 "does not initiate Worker Recovery",
+   527:                 "does not calculate CPU capacity",
+   528:                 "does not calculate memory capacity",
+   529:                 "does not calculate GPU capacity",
+   530:                 "does not enforce Queue Capacity Limits",
+   534:                 "does not persist capacity state",
+   535:                 "does not maintain capacity history",
+   540:                 "does not execute jobs",
+   547:     "UNIVERSAL_WORKER_CAPACITY_VERSION",
+   548:     "UNIVERSAL_WORKER_CAPACITY_SNAPSHOT_SCHEMA_VERSION",
+   549:     "MAX_UNIVERSAL_WORKER_CAPACITY_COUNT",
+   550:     "UNIVERSAL_WORKER_CAPACITY_IDENTITY_SEPARATOR",
+   551:     "UniversalWorkerCapacityError",
+   552:     "UniversalWorkerCapacitySnapshot",
+   553:     "normalize_universal_worker_capacity_count",
+   554:     "calculate_universal_worker_available_capacity",
+   555:     "create_universal_worker_capacity_snapshot",
+   556:     "explain_universal_worker_capacity_v1",
+
+==============================================================================================================
+backend/server/runtime/universal_worker/leasing.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerLeasingError
+  UniversalWorkerLeaseState
+  UniversalWorkerLease
+  UniversalWorkerLeaseRelease
+FUNCTIONS:
+  normalize_universal_worker_lease_id
+  normalize_universal_worker_lease_timestamp
+  _timestamp_key
+  create_universal_worker_lease_owner
+  acquire_universal_worker_lease
+  evaluate_universal_worker_lease_state
+  renew_universal_worker_lease
+  release_universal_worker_lease
+  explain_universal_worker_leasing_v1
+RELEVANT SOURCE LINES:
+     9: from backend.server.runtime.universal_worker.assignment import (
+    10:     UniversalWorkerAssignmentResult,
+    11:     UniversalWorkerAssignmentStatus,
+    15: UNIVERSAL_WORKER_LEASING_VERSION = (
+    16:     "universal_worker_leasing_v4.1.4"
+    19: UNIVERSAL_WORKER_LEASE_SCHEMA_VERSION = (
+    20:     "universal_worker_lease_schema_v1"
+    23: UNIVERSAL_WORKER_LEASE_RELEASE_SCHEMA_VERSION = (
+    24:     "universal_worker_lease_release_schema_v1"
+    27: MAX_UNIVERSAL_WORKER_LEASE_ID_LENGTH = 200
+    29: UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR = "::"
+    32: class UniversalWorkerLeasingError(
+    55: class UniversalWorkerLeaseState(
+    64: def normalize_universal_worker_lease_id(
+    73:         raise UniversalWorkerLeasingError(
+    74:             "lease_id must be a string.",
+    75:             code="invalid_lease_id_type",
+    83:         raise UniversalWorkerLeasingError(
+    84:             "lease_id must not be empty.",
+    85:             code="empty_lease_id",
+    91:         > MAX_UNIVERSAL_WORKER_LEASE_ID_LENGTH
+    94:         raise UniversalWorkerLeasingError(
+    96:                 "lease_id exceeds maximum "
+    99:             code="lease_id_too_long",
+   106: def normalize_universal_worker_lease_timestamp(
+   117:         raise UniversalWorkerLeasingError(
+   122:             code="invalid_lease_timestamp_type",
+   130:         raise UniversalWorkerLeasingError(
+   135:             code="empty_lease_timestamp",
+   158:         raise UniversalWorkerLeasingError(
+   163:             code="invalid_lease_timestamp",
+   169:         raise UniversalWorkerLeasingError(
+   174:             code="naive_lease_timestamp",
+   206: def create_universal_worker_lease_owner(
+   207:     assignment: UniversalWorkerAssignmentResult,
+   212:         UniversalWorkerAssignmentResult,
+   215:         raise UniversalWorkerLeasingError(
+   218:                 "UniversalWorkerAssignmentResult."
+   220:             code="invalid_worker_assignment",
+   226:         is not UniversalWorkerAssignmentStatus.ASSIGNED
+   227:         or assignment.worker is None
+   230:         raise UniversalWorkerLeasingError(
+   232:                 "A worker lease requires an "
+   233:                 "ASSIGNED Worker Assignment result."
+   235:             code="worker_assignment_required",
+   239:     worker_id = (
+   240:         assignment.worker.worker_id
+   243:     worker_instance_id = (
+   244:         assignment.worker.worker_instance_id
+   248:         UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR
+   249:         in worker_id
+   251:         UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR
+   252:         in worker_instance_id
+   255:         raise UniversalWorkerLeasingError(
+   257:                 "worker identity contains the "
+   258:                 "reserved lease-owner separator."
+   260:             code="invalid_lease_owner_identity",
+   262:                 worker_id,
+   263:                 worker_instance_id,
+   268:         worker_id
+   269:         + UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR
+   270:         + worker_instance_id
+   278: class UniversalWorkerLease:
+   281:     lease_owner: str
+   282:     lease_id: str
+   283:     lease_started_at: str
+   284:     lease_expires_at: str
+   287:         UNIVERSAL_WORKER_LEASE_SCHEMA_VERSION
+   299:             raise UniversalWorkerLeasingError(
+   301:                 code="invalid_lease_job_id_type",
+   311:             raise UniversalWorkerLeasingError(
+   313:                 code="empty_lease_job_id",
+   324:             self.lease_owner,
+   328:             raise UniversalWorkerLeasingError(
+   329:                 "lease_owner must be a string.",
+   330:                 code="invalid_lease_owner_type",
+   331:                 value=self.lease_owner,
+   335:             self.lease_owner.strip()
+   340:             raise UniversalWorkerLeasingError(
+   341:                 "lease_owner must not be empty.",
+   342:                 code="empty_lease_owner",
+   343:                 value=self.lease_owner,
+   348:                 UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR
+   353:             raise UniversalWorkerLeasingError(
+   355:                     "lease_owner must encode exactly "
+   356:                     "one worker_id and worker_instance_id."
+   358:                 code="invalid_lease_owner",
+   359:                 value=self.lease_owner,
+   363:             UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR,
+   372:             raise UniversalWorkerLeasingError(
+   374:                     "lease_owner contains an "
+   375:                     "invalid worker identity."
+   377:                 code="invalid_lease_owner",
+   378:                 value=self.lease_owner,
+   383:             "lease_owner",
+   389:             "lease_id",
+   390:             normalize_universal_worker_lease_id(
+   391:                 self.lease_id
+   396:             normalize_universal_worker_lease_timestamp(
+   397:                 self.lease_started_at,
+   398:                 field_name="lease_started_at",
+   403:             normalize_universal_worker_lease_timestamp(
+   404:                 self.lease_expires_at,
+   405:                 field_name="lease_expires_at",
+   419:             raise UniversalWorkerLeasingError(
+   421:                     "lease_expires_at must be "
+   422:                     "strictly later than lease_started_at."
+   424:                 code="invalid_lease_interval",
+   433:             "lease_started_at",
+   439:             "lease_expires_at",
+   445:             != UNIVERSAL_WORKER_LEASE_SCHEMA_VERSION
+   448:             raise UniversalWorkerLeasingError(
+   450:                     "Invalid Worker Lease "
+   454:                     "invalid_worker_lease_"
+   461:     def worker_identity(
+   465:         worker_id, worker_instance_id = (
+   466:             self.lease_owner.split(
+   467:                 UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR,
+   473:             worker_id,
+   474:             worker_instance_id,
+   477:     def to_job_lease_fields(
+   483:                 "lease_owner":
+   484:                     self.lease_owner,
+   486:                 "lease_id":
+   487:                     self.lease_id,
+   489:                 "lease_started_at":
+   490:                     self.lease_started_at,
+   492:                 "lease_expires_at":
+   493:                     self.lease_expires_at,
+   502: class UniversalWorkerLeaseRelease:
+   505:     lease_owner: str
+   506:     lease_id: str
+   507:     released_at: str
+   510:         UNIVERSAL_WORKER_LEASE_RELEASE_SCHEMA_VERSION
+   522:             raise UniversalWorkerLeasingError(
+   524:                 code="invalid_release_job_id",
+   535:             self.lease_owner,
+   537:         ) or not self.lease_owner.strip():
+   539:             raise UniversalWorkerLeasingError(
+   541:                     "lease_owner must be "
+   544:                 code="invalid_release_lease_owner",
+   545:                 value=self.lease_owner,
+   550:             "lease_owner",
+   551:             self.lease_owner.strip(),
+   556:             "lease_id",
+   557:             normalize_universal_worker_lease_id(
+   558:                 self.lease_id
+   564:             "released_at",
+   565:             normalize_universal_worker_lease_timestamp(
+   566:                 self.released_at,
+   567:                 field_name="released_at",
+   573:             != UNIVERSAL_WORKER_LEASE_RELEASE_SCHEMA_VERSION
+   576:             raise UniversalWorkerLeasingError(
+   578:                     "Invalid Worker Lease Release "
+   582:                     "invalid_worker_lease_release_"
+   589: def acquire_universal_worker_lease(
+   591:     assignment: UniversalWorkerAssignmentResult,
+   592:     lease_id: str,
+   593:     lease_started_at: str,
+   594:     lease_expires_at: str,
+   595:     existing_lease: UniversalWorkerLease | None = None,
+   596: ) -> UniversalWorkerLease:
+   600:         UniversalWorkerAssignmentResult,
+   603:         raise UniversalWorkerLeasingError(
+   606:                 "UniversalWorkerAssignmentResult."
+   608:             code="invalid_worker_assignment",
+   614:         is not UniversalWorkerAssignmentStatus.ASSIGNED
+   615:         or assignment.worker is None
+   618:         raise UniversalWorkerLeasingError(
+   620:                 "A worker lease requires an "
+   621:                 "ASSIGNED Worker Assignment result."
+   623:             code="worker_assignment_required",
+   627:     if existing_lease is not None:
+   630:             existing_lease,
+   631:             UniversalWorkerLease,
+   634:             raise UniversalWorkerLeasingError(
+   636:                     "existing_lease must be a "
+   637:                     "UniversalWorkerLease or None."
+   639:                 code="invalid_existing_lease",
+   640:                 value=existing_lease,
+   643:         raise UniversalWorkerLeasingError(
+   645:                 "A lease already exists for this "
+   647:                 "resolved before another lease "
+   650:             code="lease_conflict",
+   651:             value=existing_lease.lease_id,
+   655:         create_universal_worker_lease_owner(
+   660:     return UniversalWorkerLease(
+   662:         lease_owner=owner,
+   663:         lease_id=lease_id,
+   664:         lease_started_at=lease_started_at,
+   665:         lease_expires_at=lease_expires_at,
+   669: def evaluate_universal_worker_lease_state(
+   671:     lease: UniversalWorkerLease,
+   673: ) -> UniversalWorkerLeaseState:
+   676:         lease,
+   677:         UniversalWorkerLease,
+   680:         raise UniversalWorkerLeasingError(
+   681:             "lease must be a UniversalWorkerLease.",
+   682:             code="invalid_worker_lease",
+   683:             value=lease,
+   687:         normalize_universal_worker_lease_timestamp(
+   699:             lease.lease_expires_at
+   704:             UniversalWorkerLeaseState.ACTIVE
+   708:         UniversalWorkerLeaseState.EXPIRED
+   712: def renew_universal_worker_lease(
+   714:     lease: UniversalWorkerLease,
+   715:     expected_lease_owner: str,
+   716:     expected_lease_id: str,
+   718:     new_lease_expires_at: str,
+   719: ) -> UniversalWorkerLease:
+   722:         lease,
+   723:         UniversalWorkerLease,
+   726:         raise UniversalWorkerLeasingError(
+   727:             "lease must be a UniversalWorkerLease.",
+   728:             code="invalid_worker_lease",
+   729:             value=lease,
+   734:             expected_lease_owner,
+   738:         expected_lease_owner.strip()
+   739:         != lease.lease_owner
+   742:         raise UniversalWorkerLeasingError(
+   744:                 "Lease renewal owner does not "
+   745:                 "match the current lease owner."
+   747:             code="lease_owner_mismatch",
+   748:             value=expected_lease_owner,
+   751:     canonical_lease_id = (
+   752:         normalize_universal_worker_lease_id(
+   753:             expected_lease_id
+   758:         canonical_lease_id
+   759:         != lease.lease_id
+   762:         raise UniversalWorkerLeasingError(
+   764:                 "Lease renewal lease_id does not "
+   765:                 "match the current lease."
+   767:             code="lease_id_mismatch",
+   768:             value=expected_lease_id,
+   772:         normalize_universal_worker_lease_timestamp(
+   779:         evaluate_universal_worker_lease_state(
+   780:             lease=lease,
+   783:         is not UniversalWorkerLeaseState.ACTIVE
+   786:         raise UniversalWorkerLeasingError(
+   788:                 "An expired lease cannot "
+   791:             code="expired_lease_cannot_renew",
+   792:             value=lease.lease_id,
+   796:         normalize_universal_worker_lease_timestamp(
+   797:             new_lease_expires_at,
+   798:             field_name="new_lease_expires_at",
+   812:         raise UniversalWorkerLeasingError(
+   814:                 "new_lease_expires_at must be "
+   827:             lease.lease_expires_at
+   831:         raise UniversalWorkerLeasingError(
+   833:                 "Lease renewal must extend "
+   836:             code="lease_renewal_not_extended",
+   840:     return UniversalWorkerLease(
+   841:         job_id=lease.job_id,
+   842:         lease_owner=lease.lease_owner,
+   843:         lease_id=lease.lease_id,
+   844:         lease_started_at=lease.lease_started_at,
+   845:         lease_expires_at=canonical_new_expiry,
+   849: def release_universal_worker_lease(
+   851:     lease: UniversalWorkerLease,
+   852:     expected_lease_owner: str,
+   853:     expected_lease_id: str,
+   854:     released_at: str,
+   855: ) -> UniversalWorkerLeaseRelease:
+   858:         lease,
+   859:         UniversalWorkerLease,
+   862:         raise UniversalWorkerLeasingError(
+   863:             "lease must be a UniversalWorkerLease.",
+   864:             code="invalid_worker_lease",
+   865:             value=lease,
+   870:             expected_lease_owner,
+   874:         expected_lease_owner.strip()
+   875:         != lease.lease_owner
+   878:         raise UniversalWorkerLeasingError(
+   880:                 "Lease release owner does not "
+   881:                 "match the current lease owner."
+   883:             code="lease_owner_mismatch",
+   884:             value=expected_lease_owner,
+   887:     canonical_lease_id = (
+   888:         normalize_universal_worker_lease_id(
+   889:             expected_lease_id
+   894:         canonical_lease_id
+   895:         != lease.lease_id
+   898:         raise UniversalWorkerLeasingError(
+   900:                 "Lease release lease_id does not "
+   901:                 "match the current lease."
+   903:             code="lease_id_mismatch",
+   904:             value=expected_lease_id,
+   907:     canonical_released_at = (
+   908:         normalize_universal_worker_lease_timestamp(
+   909:             released_at,
+   910:             field_name="released_at",
+   916:             canonical_released_at
+   920:             lease.lease_started_at
+   924:         raise UniversalWorkerLeasingError(
+   926:                 "released_at must not precede "
+   927:                 "lease_started_at."
+   929:             code="release_precedes_lease",
+   930:             value=canonical_released_at,
+   933:     return UniversalWorkerLeaseRelease(
+   934:         job_id=lease.job_id,
+... 59 additional matches omitted
+
+==============================================================================================================
+backend/server/runtime/universal_worker/pool.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerPoolError
+  UniversalWorkerPoolMember
+  UniversalWorkerPoolSnapshot
+FUNCTIONS:
+  normalize_universal_worker_pool_id
+  create_universal_worker_pool_member
+  _normalize_members
+  create_universal_worker_pool_snapshot
+  create_universal_worker_pool_from_registrations
+  is_universal_worker_pool_member
+  add_universal_worker_pool_member
+  remove_universal_worker_pool_member
+  explain_universal_worker_pool_v1
+RELEVANT SOURCE LINES:
+     7: from backend.server.runtime.universal_worker.registration import (
+     8:     UniversalWorkerRegistration,
+     9:     normalize_universal_worker_id,
+    10:     normalize_universal_worker_instance_id,
+    11:     normalize_universal_worker_type,
+    15: UNIVERSAL_WORKER_POOL_VERSION = (
+    16:     "universal_worker_pool_v4.1.9"
+    19: UNIVERSAL_WORKER_POOL_MEMBER_SCHEMA_VERSION = (
+    20:     "universal_worker_pool_member_schema_v1"
+    23: UNIVERSAL_WORKER_POOL_SNAPSHOT_SCHEMA_VERSION = (
+    24:     "universal_worker_pool_snapshot_schema_v1"
+    27: MAX_UNIVERSAL_WORKER_POOL_ID_LENGTH = 200
+    29: UNIVERSAL_WORKER_POOL_IDENTITY_SEPARATOR = "::"
+    32: class UniversalWorkerPoolError(
+    52: def normalize_universal_worker_pool_id(
+    61:         raise UniversalWorkerPoolError(
+    63:             code="invalid_worker_pool_id_type",
+    71:         raise UniversalWorkerPoolError(
+    73:             code="empty_worker_pool_id",
+    77:     if len(normalized) > MAX_UNIVERSAL_WORKER_POOL_ID_LENGTH:
+    79:         raise UniversalWorkerPoolError(
+    81:             code="worker_pool_id_too_long",
+    85:     if UNIVERSAL_WORKER_POOL_IDENTITY_SEPARATOR in normalized:
+    87:         raise UniversalWorkerPoolError(
+    90:                 "worker identity separator."
+    92:             code="reserved_worker_pool_id_separator",
+   104: class UniversalWorkerPoolMember:
+   106:     worker_id: str
+   107:     worker_instance_id: str
+   108:     worker_type: str
+   111:         UNIVERSAL_WORKER_POOL_MEMBER_SCHEMA_VERSION
+   120:             "worker_id",
+   121:             normalize_universal_worker_id(
+   122:                 self.worker_id
+   128:             "worker_instance_id",
+   129:             normalize_universal_worker_instance_id(
+   130:                 self.worker_instance_id
+   136:             "worker_type",
+   137:             normalize_universal_worker_type(
+   138:                 self.worker_type
+   144:             != UNIVERSAL_WORKER_POOL_MEMBER_SCHEMA_VERSION
+   147:             raise UniversalWorkerPoolError(
+   148:                 "Invalid Worker Pool Member schema_version.",
+   150:                     "invalid_worker_pool_member_"
+   157:     def worker_identity(
+   162:             self.worker_id
+   163:             + UNIVERSAL_WORKER_POOL_IDENTITY_SEPARATOR
+   164:             + self.worker_instance_id
+   168: def create_universal_worker_pool_member(
+   169:     registration: UniversalWorkerRegistration,
+   170: ) -> UniversalWorkerPoolMember:
+   173:         registration,
+   174:         UniversalWorkerRegistration,
+   177:         raise UniversalWorkerPoolError(
+   179:                 "registration must be "
+   180:                 "UniversalWorkerRegistration."
+   182:             code="invalid_worker_pool_registration",
+   183:             value=registration,
+   186:     return UniversalWorkerPoolMember(
+   187:         worker_id=registration.worker_id,
+   188:         worker_instance_id=registration.worker_instance_id,
+   189:         worker_type=registration.worker_type,
+   194:     members: Iterable[UniversalWorkerPoolMember],
+   196:     worker_type: str,
+   197: ) -> tuple[UniversalWorkerPoolMember, ...]:
+   204:         raise UniversalWorkerPoolError(
+   206:             code="invalid_worker_pool_members",
+   218:             UniversalWorkerPoolMember,
+   221:             raise UniversalWorkerPoolError(
+   224:                     "UniversalWorkerPoolMember."
+   226:                 code="invalid_worker_pool_member",
+   230:         if member.worker_type != worker_type:
+   232:             raise UniversalWorkerPoolError(
+   234:                     "worker member type does not match "
+   235:                     "pool worker_type."
+   237:                 code="worker_pool_type_mismatch",
+   239:                     "pool_worker_type":
+   240:                         worker_type,
+   242:                     "member_worker_type":
+   243:                         member.worker_type,
+   245:                     "worker_identity":
+   246:                         member.worker_identity,
+   250:         if member.worker_identity in identities:
+   252:             raise UniversalWorkerPoolError(
+   253:                 "Duplicate worker pool membership.",
+   254:                 code="duplicate_worker_pool_member",
+   255:                 value=member.worker_identity,
+   259:             member.worker_identity
+   268:             item.worker_id,
+   269:             item.worker_instance_id,
+   280: class UniversalWorkerPoolSnapshot:
+   283:     worker_type: str
+   286:         UniversalWorkerPoolMember,
+   291:         UNIVERSAL_WORKER_POOL_SNAPSHOT_SCHEMA_VERSION
+   299:             normalize_universal_worker_pool_id(
+   304:         worker_type = (
+   305:             normalize_universal_worker_type(
+   306:                 self.worker_type
+   313:                 worker_type=worker_type,
+   325:             "worker_type",
+   326:             worker_type,
+   337:             != UNIVERSAL_WORKER_POOL_SNAPSHOT_SCHEMA_VERSION
+   340:             raise UniversalWorkerPoolError(
+   342:                     "Invalid Worker Pool Snapshot "
+   346:                     "invalid_worker_pool_snapshot_"
+   362:     def worker_identities(
+   367:             member.worker_identity
+   372: def create_universal_worker_pool_snapshot(
+   375:     worker_type: str,
+   377:         UniversalWorkerPoolMember
+   379: ) -> UniversalWorkerPoolSnapshot:
+   381:     return UniversalWorkerPoolSnapshot(
+   383:         worker_type=worker_type,
+   388: def create_universal_worker_pool_from_registrations(
+   391:     worker_type: str,
+   392:     registrations: Iterable[
+   393:         UniversalWorkerRegistration
+   395: ) -> UniversalWorkerPoolSnapshot:
+   399:             registrations
+   404:         raise UniversalWorkerPoolError(
+   405:             "registrations must be iterable.",
+   406:             code="invalid_worker_pool_registrations",
+   407:             value=registrations,
+   412:     normalized_pool_worker_type = (
+   413:         normalize_universal_worker_type(
+   414:             worker_type
+   418:     for registration in supplied:
+   421:             create_universal_worker_pool_member(
+   422:                 registration
+   427:             member.worker_type
+   428:             != normalized_pool_worker_type
+   431:             raise UniversalWorkerPoolError(
+   433:                     "registration worker_type does not "
+   434:                     "match pool worker_type."
+   436:                 code="worker_pool_type_mismatch",
+   438:                     "pool_worker_type":
+   439:                         normalized_pool_worker_type,
+   441:                     "registration_worker_type":
+   442:                         member.worker_type,
+   444:                     "worker_identity":
+   445:                         member.worker_identity,
+   453:     return UniversalWorkerPoolSnapshot(
+   455:         worker_type=normalized_pool_worker_type,
+   460: def is_universal_worker_pool_member(
+   461:     pool: UniversalWorkerPoolSnapshot,
+   462:     registration: UniversalWorkerRegistration,
+   467:         UniversalWorkerPoolSnapshot,
+   470:         raise UniversalWorkerPoolError(
+   473:                 "UniversalWorkerPoolSnapshot."
+   475:             code="invalid_worker_pool_snapshot",
+   480:         create_universal_worker_pool_member(
+   481:             registration
+   486:         member.worker_type
+   487:         == pool.worker_type
+   489:         member.worker_identity
+   490:         in pool.worker_identities
+   494: def add_universal_worker_pool_member(
+   495:     pool: UniversalWorkerPoolSnapshot,
+   496:     registration: UniversalWorkerRegistration,
+   497: ) -> UniversalWorkerPoolSnapshot:
+   501:         UniversalWorkerPoolSnapshot,
+   504:         raise UniversalWorkerPoolError(
+   507:                 "UniversalWorkerPoolSnapshot."
+   509:             code="invalid_worker_pool_snapshot",
+   514:         create_universal_worker_pool_member(
+   515:             registration
+   519:     if member.worker_type != pool.worker_type:
+   521:         raise UniversalWorkerPoolError(
+   523:                 "registration worker_type does not "
+   524:                 "match pool worker_type."
+   526:             code="worker_pool_type_mismatch",
+   528:                 "pool_worker_type":
+   529:                     pool.worker_type,
+   531:                 "registration_worker_type":
+   532:                     member.worker_type,
+   534:                 "worker_identity":
+   535:                     member.worker_identity,
+   540:         member.worker_identity
+   541:         in pool.worker_identities
+   544:         raise UniversalWorkerPoolError(
+   545:             "Worker is already a pool member.",
+   546:             code="duplicate_worker_pool_member",
+   547:             value=member.worker_identity,
+   550:     return UniversalWorkerPoolSnapshot(
+   552:         worker_type=pool.worker_type,
+   560: def remove_universal_worker_pool_member(
+   561:     pool: UniversalWorkerPoolSnapshot,
+   562:     registration: UniversalWorkerRegistration,
+   563: ) -> UniversalWorkerPoolSnapshot:
+   567:         UniversalWorkerPoolSnapshot,
+   570:         raise UniversalWorkerPoolError(
+   573:                 "UniversalWorkerPoolSnapshot."
+   575:             code="invalid_worker_pool_snapshot",
+   580:         create_universal_worker_pool_member(
+   581:             registration
+   586:         member.worker_identity
+   587:         not in pool.worker_identities
+   590:         raise UniversalWorkerPoolError(
+   591:             "Worker is not a member of the pool.",
+   592:             code="worker_pool_member_not_found",
+   593:             value=member.worker_identity,
+   600:             existing.worker_identity
+   601:             != member.worker_identity
+   605:     return UniversalWorkerPoolSnapshot(
+   607:         worker_type=pool.worker_type,
+   612: def explain_universal_worker_pool_v1(
+   621:                 "Universal Worker Pool Infrastructure",
+   624:                 UNIVERSAL_WORKER_POOL_VERSION,
+   627:                 UNIVERSAL_WORKER_POOL_MEMBER_SCHEMA_VERSION,
+   630:                 UNIVERSAL_WORKER_POOL_SNAPSHOT_SCHEMA_VERSION,
+   632:             "identity_rule": (
+   634:                 "logical identity"
+   638:                 "worker membership is explicit and "
+   639:                 "is never inferred from worker_type"
+   642:             "worker_type_rule": (
+   643:                 "a pool has one worker_type and every "
+   644:                 "member registration must match it"
+   655:                 "one-pool-per-worker exclusivity"
+   672:             "registration_boundary": (
+   673:                 "4.1.9 consumes immutable Worker "
+   674:                 "Registration identity but does not "
+   675:                 "create, alter or delete registrations"
+   680:                 "workers; callers may provide pool "
+   691:             "shutdown_drain_boundary": (
+   692:                 "shutdown and drain do not implicitly "
+   693:                 "remove Worker Pool membership"
+   696:             "capability_capacity_boundary": (
+   697:                 "Worker Capability and Worker Capacity "
+   707:                 "Worker Pool Infrastructure performs "
+   713:                 "does not infer membership from worker_type",
+   719:                 "does not create worker registrations",
+   720:                 "does not modify worker registrations",
+   721:                 "does not delete worker registrations",
+   722:                 "does not discover workers",
+   723:                 "does not assign workers",
+   724:                 "does not lease workers",
+   725:                 "does not inspect worker health",
+   726:                 "does not inspect worker heartbeats",
+   727:                 "does not detect stale workers",
+   728:                 "does not recover workers",
+   729:                 "does not scale workers",
+   730:                 "does not shut down workers",
+   731:                 "does not drain workers",
+   732:                 "does not inspect worker capabilities",
+   733:                 "does not calculate worker capacity",
+   734:                 "does not provision workers",
+   735:                 "does not terminate workers",
+   748:     "UNIVERSAL_WORKER_POOL_VERSION",
+   749:     "UNIVERSAL_WORKER_POOL_MEMBER_SCHEMA_VERSION",
+   750:     "UNIVERSAL_WORKER_POOL_SNAPSHOT_SCHEMA_VERSION",
+   751:     "MAX_UNIVERSAL_WORKER_POOL_ID_LENGTH",
+   752:     "UNIVERSAL_WORKER_POOL_IDENTITY_SEPARATOR",
+   753:     "UniversalWorkerPoolError",
+   754:     "UniversalWorkerPoolMember",
+   755:     "UniversalWorkerPoolSnapshot",
+   756:     "normalize_universal_worker_pool_id",
+   757:     "create_universal_worker_pool_member",
+   758:     "create_universal_worker_pool_snapshot",
+   759:     "create_universal_worker_pool_from_registrations",
+   760:     "is_universal_worker_pool_member",
+   761:     "add_universal_worker_pool_member",
+   762:     "remove_universal_worker_pool_member",
+   763:     "explain_universal_worker_pool_v1",
+
+==============================================================================================================
+backend/server/runtime/universal_worker/recovery.py
+==============================================================================================================
+CLASSES:
+  UniversalWorkerRecoveryError
+  UniversalWorkerRecoveryDisposition
+  UniversalWorkerRecoveryReason
+  UniversalWorkerRecoveryEvidence
+  UniversalWorkerRecoveryResult
+FUNCTIONS:
+  normalize_universal_worker_recovery_job_id
+  _validate_strict_bool
+  decide_universal_worker_recovery
+  create_universal_worker_recovery_evidence
+  evaluate_universal_worker_recovery
+  explain_universal_worker_recovery_v1
+RELEVANT SOURCE LINES:
+    12: from backend.server.runtime.universal_worker.leasing import (
+    13:     UniversalWorkerLeaseState,
+    17: UNIVERSAL_WORKER_RECOVERY_VERSION = (
+    18:     "universal_worker_recovery_v4.1.6"
+    21: UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION = (
+    22:     "universal_worker_recovery_evidence_schema_v1"
+    25: UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION = (
+    26:     "universal_worker_recovery_result_schema_v1"
+    29: MAX_UNIVERSAL_WORKER_RECOVERY_JOB_ID_LENGTH = 200
+    32: class UniversalWorkerRecoveryError(
+    55: class UniversalWorkerRecoveryDisposition(
+    67: class UniversalWorkerRecoveryReason(
+    72:     STATUS_NOT_WORKER_OWNED = (
+    73:         "STATUS_NOT_WORKER_OWNED"
+    80:     ACTIVE_LEASE = (
+    81:         "ACTIVE_LEASE"
+    97: def normalize_universal_worker_recovery_job_id(
+   106:         raise UniversalWorkerRecoveryError(
+   108:             code="invalid_recovery_job_id_type",
+   116:         raise UniversalWorkerRecoveryError(
+   118:             code="empty_recovery_job_id",
+   124:         > MAX_UNIVERSAL_WORKER_RECOVERY_JOB_ID_LENGTH
+   127:         raise UniversalWorkerRecoveryError(
+   130:                 "Worker Recovery length."
+   132:             code="recovery_job_id_too_long",
+   147:         raise UniversalWorkerRecoveryError(
+   152:             code="invalid_worker_recovery_signal",
+   169: class UniversalWorkerRecoveryEvidence:
+   175:     worker_ownership_lost: bool
+   181:     lease_state: UniversalWorkerLeaseState | None = None
+   184:         UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION
+   194:             normalize_universal_worker_recovery_job_id(
+   204:             raise UniversalWorkerRecoveryError(
+   209:                 code="invalid_worker_recovery_job_status",
+   215:             "worker_ownership_lost",
+   217:                 self.worker_ownership_lost,
+   218:                 field_name="worker_ownership_lost",
+   241:             self.lease_state is not None
+   244:                 self.lease_state,
+   245:                 UniversalWorkerLeaseState,
+   249:             raise UniversalWorkerRecoveryError(
+   251:                     "lease_state must be "
+   252:                     "UniversalWorkerLeaseState or None."
+   254:                 code="invalid_worker_recovery_lease_state",
+   255:                 value=self.lease_state,
+   260:             is UniversalJobStatus.LEASED
+   263:             if self.lease_state is None:
+   265:                 raise UniversalWorkerRecoveryError(
+   267:                         "LEASED Worker Recovery evidence "
+   268:                         "requires lease_state."
+   270:                     code="leased_recovery_requires_lease_state",
+   275:                 self.lease_state
+   276:                 is UniversalWorkerLeaseState.ACTIVE
+   278:                 self.worker_ownership_lost
+   282:                 raise UniversalWorkerRecoveryError(
+   284:                         "ACTIVE lease contradicts "
+   285:                         "worker_ownership_lost=True."
+   287:                     code="active_lease_ownership_contradiction",
+   292:                 self.lease_state
+   293:                 is UniversalWorkerLeaseState.EXPIRED
+   295:                 self.worker_ownership_lost
+   299:                 raise UniversalWorkerRecoveryError(
+   301:                         "EXPIRED lease requires "
+   302:                         "worker_ownership_lost=True."
+   304:                     code="expired_lease_ownership_contradiction",
+   308:         elif self.lease_state is not None:
+   310:             raise UniversalWorkerRecoveryError(
+   312:                     "lease_state is only accepted for "
+   313:                     "LEASED Worker Recovery evidence."
+   315:                 code="lease_state_requires_leased_status",
+   321:             != UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION
+   324:             raise UniversalWorkerRecoveryError(
+   326:                     "Invalid Worker Recovery Evidence "
+   330:                     "invalid_worker_recovery_"
+   337: def decide_universal_worker_recovery(
+   338:     evidence: UniversalWorkerRecoveryEvidence,
+   340:     UniversalWorkerRecoveryDisposition,
+   341:     UniversalWorkerRecoveryReason,
+   346:         UniversalWorkerRecoveryEvidence,
+   349:         raise UniversalWorkerRecoveryError(
+   352:                 "UniversalWorkerRecoveryEvidence."
+   354:             code="invalid_worker_recovery_evidence",
+   359:         UniversalJobStatus.LEASED,
+   364:             UniversalWorkerRecoveryDisposition.NO_ACTION,
+   365:             UniversalWorkerRecoveryReason.STATUS_NOT_WORKER_OWNED,
+   370:         is UniversalJobStatus.LEASED
+   372:         evidence.lease_state
+   373:         is UniversalWorkerLeaseState.ACTIVE
+   377:             UniversalWorkerRecoveryDisposition.NO_ACTION,
+   378:             UniversalWorkerRecoveryReason.ACTIVE_LEASE,
+   382:         evidence.worker_ownership_lost
+   387:             UniversalWorkerRecoveryDisposition.NO_ACTION,
+   388:             UniversalWorkerRecoveryReason.OWNERSHIP_STILL_VALID,
+   397:             UniversalWorkerRecoveryDisposition.NOT_RECOVERABLE,
+   398:             UniversalWorkerRecoveryReason.RETRY_NOT_PERMITTED,
+   407:             UniversalWorkerRecoveryDisposition.NOT_RECOVERABLE,
+   408:             UniversalWorkerRecoveryReason.DUPLICATE_EXECUTION_NOT_SAFE,
+   412:         UniversalWorkerRecoveryDisposition.RECOVERABLE,
+   413:         UniversalWorkerRecoveryReason.OWNERSHIP_LOST_RETRY_PERMITTED,
+   421: class UniversalWorkerRecoveryResult:
+   427:     disposition: UniversalWorkerRecoveryDisposition
+   429:     reason: UniversalWorkerRecoveryReason
+   431:     worker_ownership_lost: bool
+   437:     lease_state: UniversalWorkerLeaseState | None
+   440:         UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION
+   450:             normalize_universal_worker_recovery_job_id(
+   460:             raise UniversalWorkerRecoveryError(
+   465:                 code="invalid_recovery_result_status",
+   471:             UniversalWorkerRecoveryDisposition,
+   474:             raise UniversalWorkerRecoveryError(
+   477:                     "UniversalWorkerRecoveryDisposition."
+   479:                 code="invalid_recovery_disposition",
+   485:             UniversalWorkerRecoveryReason,
+   488:             raise UniversalWorkerRecoveryError(
+   491:                     "UniversalWorkerRecoveryReason."
+   493:                 code="invalid_recovery_reason",
+   499:             "worker_ownership_lost",
+   501:                 self.worker_ownership_lost,
+   502:                 field_name="worker_ownership_lost",
+   525:             self.lease_state is not None
+   528:                 self.lease_state,
+   529:                 UniversalWorkerLeaseState,
+   533:             raise UniversalWorkerRecoveryError(
+   535:                     "lease_state must be "
+   536:                     "UniversalWorkerLeaseState or None."
+   538:                 code="invalid_recovery_result_lease_state",
+   539:                 value=self.lease_state,
+   544:             != UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION
+   547:             raise UniversalWorkerRecoveryError(
+   549:                     "Invalid Worker Recovery Result "
+   553:                     "invalid_worker_recovery_"
+   560:             UniversalWorkerRecoveryEvidence(
+   563:                 worker_ownership_lost=(
+   564:                     self.worker_ownership_lost
+   572:                 lease_state=self.lease_state,
+   579:         ) = decide_universal_worker_recovery(
+   591:             raise UniversalWorkerRecoveryError(
+   593:                     "Worker Recovery result is "
+   596:                 code="inconsistent_worker_recovery_result",
+   619:             is UniversalWorkerRecoveryDisposition.RECOVERABLE
+   629:             is not UniversalWorkerRecoveryDisposition.NO_ACTION
+   633: def create_universal_worker_recovery_evidence(
+   637:     worker_ownership_lost: bool,
+   640:     lease_state: UniversalWorkerLeaseState | None = None,
+   641: ) -> UniversalWorkerRecoveryEvidence:
+   643:     return UniversalWorkerRecoveryEvidence(
+   646:         worker_ownership_lost=worker_ownership_lost,
+   649:         lease_state=lease_state,
+   653: def evaluate_universal_worker_recovery(
+   654:     evidence: UniversalWorkerRecoveryEvidence,
+   655: ) -> UniversalWorkerRecoveryResult:
+   659:         UniversalWorkerRecoveryEvidence,
+   662:         raise UniversalWorkerRecoveryError(
+   665:                 "UniversalWorkerRecoveryEvidence."
+   667:             code="invalid_worker_recovery_evidence",
+   674:     ) = decide_universal_worker_recovery(
+   678:     return UniversalWorkerRecoveryResult(
+   683:         worker_ownership_lost=(
+   684:             evidence.worker_ownership_lost
+   692:         lease_state=evidence.lease_state,
+   696: def explain_universal_worker_recovery_v1(
+   705:                 "Universal Worker Recovery",
+   708:                 UNIVERSAL_WORKER_RECOVERY_VERSION,
+   711:                 UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION,
+   714:                 UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION,
+   722:             "worker_owned_statuses": (
+   723:                 "LEASED",
+   729:                 "worker-ownership-loss, retry-permission "
+   733:             "leased_rule": (
+   734:                 "LEASED recovery requires canonical "
+   735:                 "4.1.4 lease state; ACTIVE means "
+   737:                 "means worker ownership is lost"
+   741:                 "RUNNING recovery requires explicit "
+   742:                 "caller-supplied worker_ownership_lost "
+   746:             "recovery_gate_rule": (
+   747:                 "RECOVERABLE requires worker ownership "
+   767:                 "4.1.6 decides Worker Recovery "
+   772:             "lease_boundary": (
+   773:                 "4.1.6 consumes lease state but does "
+   774:                 "not acquire, renew, release or persist "
+   775:                 "leases"
+   778:             "health_heartbeat_boundary": (
+   779:                 "4.1.6 does not classify worker health, "
+   780:                 "read heartbeats or detect stale workers"
+   784:                 "DEAD_LETTER recovery remains outside "
+   790:                 "only and does not dispatch or execute "
+   795:                 "Worker Recovery is deterministic over "
+   812:                 "does not acquire leases",
+   813:                 "does not renew leases",
+   814:                 "does not release leases",
+   815:                 "does not persist leases",
+   816:                 "does not classify lease expiration",
+   817:                 "does not determine worker health",
+   818:                 "does not read worker heartbeats",
+   819:                 "does not calculate heartbeat freshness",
+   820:                 "does not detect stale workers",
+   821:                 "does not restart workers",
+   822:                 "does not terminate workers",
+   823:                 "does not assign replacement workers",
+   825:                 "does not execute jobs",
+   831:                 "does not persist recovery results",
+   840:     "UNIVERSAL_WORKER_RECOVERY_VERSION",
+   841:     "UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION",
+   842:     "UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION",
+   843:     "MAX_UNIVERSAL_WORKER_RECOVERY_JOB_ID_LENGTH",
+   844:     "UniversalWorkerRecoveryError",
+   845:     "UniversalWorkerRecoveryDisposition",
+   846:     "UniversalWorkerRecoveryReason",
+   847:     "UniversalWorkerRecoveryEvidence",
+   848:     "UniversalWorkerRecoveryResult",
+   849:     "normalize_universal_worker_recovery_job_id",
+   850:     "create_universal_worker_recovery_evidence",
+   851:     "decide_universal_worker_recovery",
+   852:     "evaluate_universal_worker_recovery",
+   853:     "explain_universal_worker_recovery_v1",
+
+==============================================================================================================
+PRODUCTION WORKER BASELINE
+==============================================================================================================
+PRODUCTION_WORKER_IMPORTS: PASS
+QUEUE_CLAIM_BOUND: PASS
+CAPABILITY_ADMISSION_BOUND: PASS
+COMPLETION_FINALIZATION_BOUND: PASS
+FAILURE_FINALIZATION_BOUND: PASS
+RETRY_POLICY_BOUND: PASS
+SAME_JOB_RETRY_BOUND: PASS
+WORKER_ID_RECORDED: PASS
+DISPATCH_RESULT_RECORDED: PASS
+
+==============================================================================================================
+A1.7 DECISION QUESTIONS
+==============================================================================================================
+1. What component owns worker registration?
+2. How is worker identity created and persisted?
+3. What makes a worker READY?
+4. How is worker capacity reserved and released?
+5. Who creates, renews and expires the lease?
+6. How frequently is worker heartbeat persisted?
+7. How is an unhealthy or stale worker excluded?
+8. Does execution update lifecycle state?
+9. Does shutdown stop new claims before active work?
+10. How are interrupted RUNNING jobs recovered?
+11. Are lifecycle components connected to the production worker?
+12. Are duplicate worker lifecycle systems present?
+
+INSPECTION_COMPLETE=PASS
+
+
+=========================================================================================================
+STANDARD ERROR
+=========================================================================================================
+
+
+=========================================================================================================
+NEXT DECISION
+=========================================================================================================
+This report determines which worker lifecycle components already exist,
+which are production-wired, and which require integration or repair.
+
+FINAL RESULT: A1.7-A COMPLETE
