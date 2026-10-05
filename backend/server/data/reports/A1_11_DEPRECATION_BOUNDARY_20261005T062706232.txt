@@ -1,0 +1,1083 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.11 DEPRECATION DECISION-CONSUMER INSPECTION
+
+Generated: 2026-10-05T06:27:07.458600+00:00
+Mode: source inspection only; no application imports
+Production files modified: NO
+
+
+==========================================================================================
+FULL SOURCE: backend/server/runtime/runtime_schema/deprecation.py
+==========================================================================================
+    1: # -*- coding: utf-8 -*-
+    2: """Runtime Schema Lifecycle and Deprecation Policy.
+    3: 
+    4: This module owns:
+    5: 
+    6: * the legal schema lifecycle graph;
+    7: * lifecycle-transition validation;
+    8: * immutable deprecation policies;
+    9: * notice-window and sunset evaluation;
+   10: * feature-flag-staged enforcement;
+   11: * quarantine, suspension, restoration, and retirement rules.
+   12: 
+   13: It does not mutate registry state. The registry invokes this policy layer
+   14: before replacing immutable schema definitions.
+   15: 
+   16: The module remains business-logic agnostic.
+   17: """
+   18: 
+   19: from __future__ import annotations
+   20: 
+   21: from dataclasses import dataclass
+   22: from datetime import datetime, timedelta, timezone
+   23: from types import MappingProxyType
+   24: from typing import Any, Final, Mapping, Protocol, runtime_checkable
+   25: 
+   26: from .fingerprint import validate_schema_coordinate
+   27: from .serialization import structure_fingerprint
+   28: from .types import (
+   29:     EnforcementLevel,
+   30:     SchemaLifecycleState,
+   31:     SchemaRegistryError,
+   32:     is_canonical_timestamp,
+   33:     parse_canonical_timestamp,
+   34:     utc_now_iso,
+   35: )
+   36: 
+   37: 
+   38: DEPRECATION_ENFORCEMENT_FLAG: Final[str] = (
+   39:     "runtime.schema.deprecation_enforcement"
+   40: )
+   41: 
+   42: MAX_NOTICE_PERIOD_DAYS: Final[int] = 3650
+   43: 
+   44: 
+   45: @runtime_checkable
+   46: class FeatureFlagProvider(
+   47:     Protocol
+   48: ):
+   49:     """Minimal feature-flag contract required by deprecation policy."""
+   50: 
+   51:     def is_enabled(
+   52:         self,
+   53:         flag_name: str,
+   54:     ) -> bool:
+   55:         """Return whether one runtime feature flag is enabled."""
+   56: 
+   57: 
+   58: LEGAL_LIFECYCLE_TRANSITIONS: Final[
+   59:     Mapping[
+   60:         SchemaLifecycleState,
+   61:         frozenset[SchemaLifecycleState],
+   62:     ]
+   63: ] = MappingProxyType(
+   64:     {
+   65:         SchemaLifecycleState.DRAFT: frozenset(
+   66:             {
+   67:                 SchemaLifecycleState.REGISTERED,
+   68:                 SchemaLifecycleState.QUARANTINED,
+   69:                 SchemaLifecycleState.RETIRED,
+   70:             }
+   71:         ),
+   72:         SchemaLifecycleState.REGISTERED: frozenset(
+   73:             {
+   74:                 SchemaLifecycleState.ACTIVE,
+   75:                 SchemaLifecycleState.SUSPENDED,
+   76:                 SchemaLifecycleState.QUARANTINED,
+   77:                 SchemaLifecycleState.RETIRED,
+   78:             }
+   79:         ),
+   80:         SchemaLifecycleState.ACTIVE: frozenset(
+   81:             {
+   82:                 SchemaLifecycleState.SUSPENDED,
+   83:                 SchemaLifecycleState.DEPRECATED,
+   84:                 SchemaLifecycleState.QUARANTINED,
+   85:             }
+   86:         ),
+   87:         SchemaLifecycleState.SUSPENDED: frozenset(
+   88:             {
+   89:                 SchemaLifecycleState.ACTIVE,
+   90:                 SchemaLifecycleState.DEPRECATED,
+   91:                 SchemaLifecycleState.QUARANTINED,
+   92:                 SchemaLifecycleState.RETIRED,
+   93:             }
+   94:         ),
+   95:         SchemaLifecycleState.DEPRECATED: frozenset(
+   96:             {
+   97:                 SchemaLifecycleState.ACTIVE,
+   98:                 SchemaLifecycleState.SUSPENDED,
+   99:                 SchemaLifecycleState.QUARANTINED,
+  100:                 SchemaLifecycleState.RETIRED,
+  101:             }
+  102:         ),
+  103:         SchemaLifecycleState.QUARANTINED: frozenset(
+  104:             {
+  105:                 SchemaLifecycleState.REGISTERED,
+  106:                 SchemaLifecycleState.ACTIVE,
+  107:                 SchemaLifecycleState.SUSPENDED,
+  108:                 SchemaLifecycleState.DEPRECATED,
+  109:                 SchemaLifecycleState.RETIRED,
+  110:             }
+  111:         ),
+  112:         SchemaLifecycleState.RETIRED: frozenset(),
+  113:     }
+  114: )
+  115: 
+  116: 
+  117: def _coerce_state(
+  118:     value: SchemaLifecycleState | str,
+  119:     *,
+  120:     field_name: str,
+  121: ) -> SchemaLifecycleState:
+  122:     if isinstance(
+  123:         value,
+  124:         SchemaLifecycleState,
+  125:     ):
+  126:         return value
+  127: 
+  128:     try:
+  129:         return SchemaLifecycleState(
+  130:             value
+  131:         )
+  132:     except (
+  133:         TypeError,
+  134:         ValueError,
+  135:     ) as exc:
+  136:         raise SchemaRegistryError(
+  137:             f"{field_name} is not a valid lifecycle state"
+  138:         ) from exc
+  139: 
+  140: 
+  141: def is_legal_transition(
+  142:     current: SchemaLifecycleState | str,
+  143:     target: SchemaLifecycleState | str,
+  144: ) -> bool:
+  145:     """Return whether one lifecycle transition is legal."""
+  146:     current_state = _coerce_state(
+  147:         current,
+  148:         field_name="current",
+  149:     )
+  150: 
+  151:     target_state = _coerce_state(
+  152:         target,
+  153:         field_name="target",
+  154:     )
+  155: 
+  156:     return target_state in (
+  157:         LEGAL_LIFECYCLE_TRANSITIONS[
+  158:             current_state
+  159:         ]
+  160:     )
+  161: 
+  162: 
+  163: def require_legal_transition(
+  164:     current: SchemaLifecycleState | str,
+  165:     target: SchemaLifecycleState | str,
+  166: ) -> None:
+  167:     """Raise when a lifecycle transition is illegal."""
+  168:     current_state = _coerce_state(
+  169:         current,
+  170:         field_name="current",
+  171:     )
+  172: 
+  173:     target_state = _coerce_state(
+  174:         target,
+  175:         field_name="target",
+  176:     )
+  177: 
+  178:     if current_state is target_state:
+  179:         raise SchemaRegistryError(
+  180:             "lifecycle transition must change state"
+  181:         )
+  182: 
+  183:     if not is_legal_transition(
+  184:         current_state,
+  185:         target_state,
+  186:     ):
+  187:         raise SchemaRegistryError(
+  188:             "illegal lifecycle transition "
+  189:             f"{current_state.value} -> "
+  190:             f"{target_state.value}"
+  191:         )
+  192: 
+  193: 
+  194: @dataclass(
+  195:     frozen=True,
+  196:     slots=True,
+  197: )
+  198: class DeprecationPolicy:
+  199:     """Immutable policy attached to a deprecated schema version."""
+  200: 
+  201:     notice_period_days: int
+  202:     deprecated_at: str = ""
+  203:     sunset_at: str | None = None
+  204:     replacement_coordinate: str | None = None
+  205:     enforcement: EnforcementLevel = EnforcementLevel.WARN
+  206:     reason: str = ""
+  207: 
+  208:     def __post_init__(self) -> None:
+  209:         if (
+  210:             not isinstance(
+  211:                 self.notice_period_days,
+  212:                 int,
+  213:             )
+  214:             or isinstance(
+  215:                 self.notice_period_days,
+  216:                 bool,
+  217:             )
+  218:             or self.notice_period_days < 0
+  219:             or self.notice_period_days
+  220:             > MAX_NOTICE_PERIOD_DAYS
+  221:         ):
+  222:             raise SchemaRegistryError(
+  223:                 "notice_period_days must be an integer "
+  224:                 f"between 0 and {MAX_NOTICE_PERIOD_DAYS}"
+  225:             )
+  226: 
+  227:         if not self.deprecated_at:
+  228:             object.__setattr__(
+  229:                 self,
+  230:                 "deprecated_at",
+  231:                 utc_now_iso(),
+  232:             )
+  233: 
+  234:         if not is_canonical_timestamp(
+  235:             self.deprecated_at
+  236:         ):
+  237:             raise SchemaRegistryError(
+  238:                 "deprecated_at must be a canonical UTC timestamp"
+  239:             )
+  240: 
+  241:         if (
+  242:             self.sunset_at is not None
+  243:             and not is_canonical_timestamp(
+  244:                 self.sunset_at
+  245:             )
+  246:         ):
+  247:             raise SchemaRegistryError(
+  248:                 "sunset_at must be a canonical UTC timestamp"
+  249:             )
+  250: 
+  251:         if (
+  252:             self.replacement_coordinate
+  253:             is not None
+  254:         ):
+  255:             try:
+  256:                 validate_schema_coordinate(
+  257:                     self.replacement_coordinate
+  258:                 )
+  259:             except Exception as exc:
+  260:                 raise SchemaRegistryError(
+  261:                     "replacement_coordinate must be canonical"
+  262:                 ) from exc
+  263: 
+  264:         if not isinstance(
+  265:             self.enforcement,
+  266:             EnforcementLevel,
+  267:         ):
+  268:             try:
+  269:                 object.__setattr__(
+  270:                     self,
+  271:                     "enforcement",
+  272:                     EnforcementLevel(
+  273:                         self.enforcement
+  274:                     ),
+  275:                 )
+  276:             except (
+  277:                 TypeError,
+  278:                 ValueError,
+  279:             ) as exc:
+  280:                 raise SchemaRegistryError(
+  281:                     "invalid deprecation enforcement level"
+  282:                 ) from exc
+  283: 
+  284:         if not isinstance(
+  285:             self.reason,
+  286:             str,
+  287:         ):
+  288:             raise SchemaRegistryError(
+  289:                 "reason must be a string"
+  290:             )
+  291: 
+  292:         deprecated_at = (
+  293:             parse_canonical_timestamp(
+  294:                 self.deprecated_at
+  295:             )
+  296:         )
+  297: 
+  298:         minimum_sunset = (
+  299:             deprecated_at
+  300:             + timedelta(
+  301:                 days=self.notice_period_days
+  302:             )
+  303:         )
+  304: 
+  305:         if self.sunset_at is not None:
+  306:             sunset_at = (
+  307:                 parse_canonical_timestamp(
+  308:                     self.sunset_at
+  309:                 )
+  310:             )
+  311: 
+  312:             if sunset_at < minimum_sunset:
+  313:                 raise SchemaRegistryError(
+  314:                     "sunset_at violates the configured "
+  315:                     "notice period"
+  316:                 )
+  317: 
+  318:     @property
+  319:     def fingerprint(
+  320:         self,
+  321:     ) -> str:
+  322:         """Return deterministic policy fingerprint."""
+  323:         return structure_fingerprint(
+  324:             self.to_canonical_dict()
+  325:         )
+  326: 
+  327:     @property
+  328:     def minimum_sunset_at(
+  329:         self,
+  330:     ) -> str:
+  331:         """Return earliest legal sunset timestamp."""
+  332:         deprecated_at = (
+  333:             parse_canonical_timestamp(
+  334:                 self.deprecated_at
+  335:             )
+  336:         )
+  337: 
+  338:         return (
+  339:             deprecated_at
+  340:             + timedelta(
+  341:                 days=self.notice_period_days
+  342:             )
+  343:         ).strftime(
+  344:             "%Y-%m-%dT%H:%M:%S.%fZ"
+  345:         )
+  346: 
+  347:     def notice_period_satisfied(
+  348:         self,
+  349:         now: datetime,
+  350:     ) -> bool:
+  351:         """Return whether the minimum notice period has elapsed."""
+  352:         effective_now = _require_aware_datetime(
+  353:             now
+  354:         )
+  355: 
+  356:         minimum = (
+  357:             parse_canonical_timestamp(
+  358:                 self.minimum_sunset_at
+  359:             )
+  360:         )
+  361: 
+  362:         return effective_now >= minimum
+  363: 
+  364:     def sunset_passed(
+  365:         self,
+  366:         now: datetime,
+  367:     ) -> bool:
+  368:         """Return whether a configured sunset has passed."""
+  369:         if self.sunset_at is None:
+  370:             return False
+  371: 
+  372:         effective_now = _require_aware_datetime(
+  373:             now
+  374:         )
+  375: 
+  376:         return effective_now >= (
+  377:             parse_canonical_timestamp(
+  378:                 self.sunset_at
+  379:             )
+  380:         )
+  381: 
+  382:     def to_canonical_dict(
+  383:         self,
+  384:     ) -> dict[str, Any]:
+  385:         """Return complete JSON-native policy data."""
+  386:         return {
+  387:             "notice_period_days": (
+  388:                 self.notice_period_days
+  389:             ),
+  390:             "deprecated_at": (
+  391:                 self.deprecated_at
+  392:             ),
+  393:             "minimum_sunset_at": (
+  394:                 self.minimum_sunset_at
+  395:             ),
+  396:             "sunset_at": self.sunset_at,
+  397:             "replacement_coordinate": (
+  398:                 self.replacement_coordinate
+  399:             ),
+  400:             "enforcement": (
+  401:                 self.enforcement.value
+  402:             ),
+  403:             "reason": self.reason,
+  404:         }
+  405: 
+  406: 
+  407: @dataclass(
+  408:     frozen=True,
+  409:     slots=True,
+  410: )
+  411: class DeprecationEvaluation:
+  412:     """Immutable evaluation of one policy at one point in time."""
+  413: 
+  414:     policy_fingerprint: str
+  415:     evaluated_at: str
+  416:     effective_enforcement: EnforcementLevel
+  417:     notice_period_satisfied: bool
+  418:     sunset_passed: bool
+  419:     usage_blocked: bool
+  420: 
+  421:     def __post_init__(self) -> None:
+  422:         if (
+  423:             not isinstance(
+  424:                 self.policy_fingerprint,
+  425:                 str,
+  426:             )
+  427:             or len(
+  428:                 self.policy_fingerprint
+  429:             )
+  430:             != 64
+  431:         ):
+  432:             raise SchemaRegistryError(
+  433:                 "policy_fingerprint must be a "
+  434:                 "64-character digest"
+  435:             )
+  436: 
+  437:         if not is_canonical_timestamp(
+  438:             self.evaluated_at
+  439:         ):
+  440:             raise SchemaRegistryError(
+  441:                 "evaluated_at must be canonical"
+  442:             )
+  443: 
+  444:         if not isinstance(
+  445:             self.effective_enforcement,
+  446:             EnforcementLevel,
+  447:         ):
+  448:             raise SchemaRegistryError(
+  449:                 "effective_enforcement must be "
+  450:                 "an EnforcementLevel"
+  451:             )
+  452: 
+  453:         expected_blocked = (
+  454:             self.effective_enforcement
+  455:             is EnforcementLevel.BLOCK
+  456:             and self.notice_period_satisfied
+  457:             and self.sunset_passed
+  458:         )
+  459: 
+  460:         if (
+  461:             self.usage_blocked
+  462:             != expected_blocked
+  463:         ):
+  464:             raise SchemaRegistryError(
+  465:                 "usage_blocked is inconsistent"
+  466:             )
+  467: 
+  468:     @property
+  469:     def fingerprint(
+  470:         self,
+  471:     ) -> str:
+  472:         return structure_fingerprint(
+  473:             self.to_canonical_dict()
+  474:         )
+  475: 
+  476:     def to_canonical_dict(
+  477:         self,
+  478:     ) -> dict[str, Any]:
+  479:         return {
+  480:             "policy_fingerprint": (
+  481:                 self.policy_fingerprint
+  482:             ),
+  483:             "evaluated_at": (
+  484:                 self.evaluated_at
+  485:             ),
+  486:             "effective_enforcement": (
+  487:                 self.effective_enforcement.value
+  488:             ),
+  489:             "notice_period_satisfied": (
+  490:                 self.notice_period_satisfied
+  491:             ),
+  492:             "sunset_passed": (
+  493:                 self.sunset_passed
+  494:             ),
+  495:             "usage_blocked": (
+  496:                 self.usage_blocked
+  497:             ),
+  498:         }
+  499: 
+  500: 
+  501: def _require_aware_datetime(
+  502:     value: datetime,
+  503: ) -> datetime:
+  504:     if not isinstance(
+  505:         value,
+  506:         datetime,
+  507:     ):
+  508:         raise SchemaRegistryError(
+  509:             "now must be a datetime"
+  510:         )
+  511: 
+  512:     if (
+  513:         value.tzinfo is None
+  514:         or value.utcoffset() is None
+  515:     ):
+  516:         raise SchemaRegistryError(
+  517:             "now must be timezone-aware"
+  518:         )
+  519: 
+  520:     return value.astimezone(
+  521:         timezone.utc
+  522:     )
+  523: 
+  524: 
+  525: class DeprecationEngine:
+  526:     """Evaluate deprecation policies with staged enforcement."""
+  527: 
+  528:     def __init__(
+  529:         self,
+  530:         feature_flags: FeatureFlagProvider | None = None,
+  531:     ) -> None:
+  532:         if (
+  533:             feature_flags is not None
+  534:             and not isinstance(
+  535:                 feature_flags,
+  536:                 FeatureFlagProvider,
+  537:             )
+  538:         ):
+  539:             raise SchemaRegistryError(
+  540:                 "feature_flags does not satisfy "
+  541:                 "FeatureFlagProvider"
+  542:             )
+  543: 
+  544:         self._feature_flags = feature_flags
+  545: 
+  546:     def effective_enforcement(
+  547:         self,
+  548:         policy: DeprecationPolicy,
+  549:     ) -> EnforcementLevel:
+  550:         """Return staged enforcement level.
+  551: 
+  552:         BLOCK degrades to WARN until the runtime feature flag is enabled.
+  553:         """
+  554:         if not isinstance(
+  555:             policy,
+  556:             DeprecationPolicy,
+  557:         ):
+  558:             raise SchemaRegistryError(
+  559:                 "policy must be a DeprecationPolicy"
+  560:             )
+  561: 
+  562:         if (
+  563:             policy.enforcement
+  564:             is EnforcementLevel.WARN
+  565:         ):
+  566:             return EnforcementLevel.WARN
+  567: 
+  568:         if self._feature_flags is None:
+  569:             return EnforcementLevel.WARN
+  570: 
+  571:         try:
+  572:             enabled = bool(
+  573:                 self._feature_flags.is_enabled(
+  574:                     DEPRECATION_ENFORCEMENT_FLAG
+  575:                 )
+  576:             )
+  577:         except Exception as exc:
+  578:             raise SchemaRegistryError(
+  579:                 "feature-flag provider failed"
+  580:             ) from exc
+  581: 
+  582:         return (
+  583:             EnforcementLevel.BLOCK
+  584:             if enabled
+  585:             else EnforcementLevel.WARN
+  586:         )
+  587: 
+  588:     def evaluate(
+  589:         self,
+  590:         policy: DeprecationPolicy,
+  591:         now: datetime,
+  592:     ) -> DeprecationEvaluation:
+  593:         """Return immutable evaluation evidence."""
+  594:         if not isinstance(
+  595:             policy,
+  596:             DeprecationPolicy,
+  597:         ):
+  598:             raise SchemaRegistryError(
+  599:                 "policy must be a DeprecationPolicy"
+  600:             )
+  601: 
+  602:         effective_now = (
+  603:             _require_aware_datetime(
+  604:                 now
+  605:             )
+  606:         )
+  607: 
+  608:         effective_enforcement = (
+  609:             self.effective_enforcement(
+  610:                 policy
+  611:             )
+  612:         )
+  613: 
+  614:         notice_satisfied = (
+  615:             policy.notice_period_satisfied(
+  616:                 effective_now
+  617:             )
+  618:         )
+  619: 
+  620:         sunset_passed = (
+  621:             policy.sunset_passed(
+  622:                 effective_now
+  623:             )
+  624:         )
+  625: 
+  626:         return DeprecationEvaluation(
+  627:             policy_fingerprint=(
+  628:                 policy.fingerprint
+  629:             ),
+  630:             evaluated_at=(
+  631:                 effective_now.strftime(
+  632:                     "%Y-%m-%dT%H:%M:%S.%fZ"
+  633:                 )
+  634:             ),
+  635:             effective_enforcement=(
+  636:                 effective_enforcement
+  637:             ),
+  638:             notice_period_satisfied=(
+  639:                 notice_satisfied
+  640:             ),
+  641:             sunset_passed=(
+  642:                 sunset_passed
+  643:             ),
+  644:             usage_blocked=(
+  645:                 effective_enforcement
+  646:                 is EnforcementLevel.BLOCK
+  647:                 and notice_satisfied
+  648:                 and sunset_passed
+  649:             ),
+  650:         )
+  651: 
+  652:     def usage_blocked(
+  653:         self,
+  654:         policy: DeprecationPolicy,
+  655:         now: datetime,
+  656:     ) -> bool:
+  657:         """Return whether use must be rejected."""
+  658:         return self.evaluate(
+  659:             policy,
+  660:             now,
+  661:         ).usage_blocked
+  662: 
+  663: 
+  664: __all__ = [
+  665:     "DEPRECATION_ENFORCEMENT_FLAG",
+  666:     "LEGAL_LIFECYCLE_TRANSITIONS",
+  667:     "MAX_NOTICE_PERIOD_DAYS",
+  668:     "DeprecationEngine",
+  669:     "DeprecationEvaluation",
+  670:     "DeprecationPolicy",
+  671:     "FeatureFlagProvider",
+  672:     "is_legal_transition",
+  673:     "require_legal_transition",
+  674: ]
+
+==========================================================================================
+FULL SOURCE: backend/server/runtime/runtime_feature_flag_gateway.py
+==========================================================================================
+    1: from __future__ import annotations
+    2: 
+    3: from backend.server.runtime.runtime_feature_flags import (
+    4:     RuntimeFeatureFlagContext,
+    5:     RuntimeFeatureFlagRegistry,
+    6:     get_runtime_feature_flag_registry,
+    7: )
+    8: 
+    9: GATEWAY_KEY = "runtime_feature_flags"
+   10: REGISTRY_KEY = "runtime_feature_flag_registry"
+   11: 
+   12: 
+   13: class RuntimeFeatureFlagGateway:
+   14:     """Runtime context adapter; the canonical registry owns evaluation."""
+   15: 
+   16:     def __init__(self, *, registry, environment, runtime_id):
+   17:         if not isinstance(registry, RuntimeFeatureFlagRegistry):
+   18:             raise TypeError("Expected the canonical feature-flag registry.")
+   19:         if not isinstance(environment, str) or not environment.strip():
+   20:             raise ValueError("environment must be a non-empty string.")
+   21:         if not isinstance(runtime_id, str) or not runtime_id.strip():
+   22:             raise ValueError("runtime_id must be a non-empty string.")
+   23:         self.registry = registry
+   24:         self.environment = environment.strip()
+   25:         self.runtime_id = runtime_id.strip()
+   26: 
+   27:     def evaluate(
+   28:         self, flag_key, *, evaluation_key=None, workspace_id=None,
+   29:         plan_id=None, worker_class=None, runtime_version=None,
+   30:         attributes=None, actor="runtime_feature_flag_gateway",
+   31:     ):
+   32:         context = RuntimeFeatureFlagContext(
+   33:             environment=self.environment,
+   34:             evaluation_key=(
+   35:                 self.runtime_id if evaluation_key is None else evaluation_key
+   36:             ),
+   37:             workspace_id=workspace_id,
+   38:             plan_id=plan_id,
+   39:             worker_class=worker_class,
+   40:             runtime_version=runtime_version,
+   41:             attributes={} if attributes is None else attributes,
+   42:         )
+   43:         return self.registry.evaluate(flag_key, context, actor=actor)
+   44: 
+   45:     def is_enabled(self, flag_name):
+   46:         return self.evaluate(flag_name).enabled is True
+   47: 
+   48:     def snapshot(self):
+   49:         return self.registry.snapshot()
+   50: 
+   51:     def evidence(self):
+   52:         snapshot = self.snapshot()
+   53:         return {
+   54:             "runtime_id": self.runtime_id,
+   55:             "environment": self.environment,
+   56:             "generation": snapshot.generation,
+   57:             "flag_count": len(snapshot.flags),
+   58:             "snapshot_fingerprint": snapshot.fingerprint,
+   59:         }
+   60: 
+   61: 
+   62: def register_runtime_feature_flag_gateway(composition):
+   63:     registry = get_runtime_feature_flag_registry()
+   64:     gateway = RuntimeFeatureFlagGateway(
+   65:         registry=registry,
+   66:         environment=composition.configuration.environment,
+   67:         runtime_id=composition.configuration.runtime_id,
+   68:     )
+   69:     kernel = composition.kernel
+   70:     if kernel.has_component(REGISTRY_KEY) or kernel.has_component(GATEWAY_KEY):
+   71:         raise RuntimeError("Feature-flag kernel binding already exists.")
+   72:     kernel.bind_component(REGISTRY_KEY, registry)
+   73:     kernel.bind_component(GATEWAY_KEY, gateway)
+   74:     return gateway
+
+==========================================================================================
+FULL SOURCE: backend/server/runtime/runtime_application_lifecycle.py
+==========================================================================================
+    1: from __future__ import annotations
+    2: 
+    3: from contextlib import asynccontextmanager
+    4: from dataclasses import asdict, is_dataclass
+    5: from pathlib import Path
+    6: from typing import Any, AsyncIterator, Mapping
+    7: 
+    8: from backend.server.runtime.runtime_boot_process import (
+    9:     boot_runtime,
+   10: )
+   11: from backend.server.runtime.runtime_shutdown_process import (
+   12:     shutdown_runtime,
+   13: )
+   14: 
+   15: 
+   16: RUNTIME_APPLICATION_LIFECYCLE_VERSION = (
+   17:     "runtime_application_lifecycle_v1"
+   18: )
+   19: 
+   20: 
+   21: class RuntimeApplicationLifecycleError(RuntimeError):
+   22:     pass
+   23: 
+   24: 
+   25: def _project_root() -> Path:
+   26:     return Path(__file__).resolve().parents[3]
+   27: 
+   28: 
+   29: def _record_mapping(value: Any) -> dict[str, Any]:
+   30:     """Convert record containers without copying live runtime services.
+   31: 
+   32:     This is an in-process evidence mapping, not a JSON serializer.
+   33:     Opaque service references remain references.
+   34:     """
+   35:     from dataclasses import fields, is_dataclass
+   36:     from collections.abc import Mapping
+   37: 
+   38:     active = set()
+   39: 
+   40:     def convert(item):
+   41:         record = is_dataclass(item) and not isinstance(item, type)
+   42:         container = record or isinstance(item, (Mapping, list, tuple))
+   43:         if not container:
+   44:             return item
+   45:         identity = id(item)
+   46:         if identity in active:
+   47:             raise RuntimeApplicationLifecycleError("Cyclic evidence container.")
+   48:         active.add(identity)
+   49:         try:
+   50:             if record:
+   51:                 return {field.name: convert(getattr(item, field.name))
+   52:                         for field in fields(item)}
+   53:             if isinstance(item, Mapping):
+   54:                 return {key: convert(child) for key, child in item.items()}
+   55:             if isinstance(item, tuple):
+   56:                 return tuple(convert(child) for child in item)
+   57:             return [convert(child) for child in item]
+   58:         finally:
+   59:             active.remove(identity)
+   60: 
+   61:     if ((is_dataclass(value) and not isinstance(value, type))
+   62:             or isinstance(value, Mapping)):
+   63:         return convert(value)
+   64: 
+   65:     to_dict = getattr(value, "to_dict", None)
+   66:     if callable(to_dict):
+   67:         converted = to_dict()
+   68:         if not isinstance(converted, Mapping):
+   69:             raise RuntimeApplicationLifecycleError(
+   70:                 "Lifecycle to_dict() result must be a mapping.")
+   71:         return convert(converted)
+   72: 
+   73:     attributes = getattr(value, "__dict__", None)
+   74:     if isinstance(attributes, dict):
+   75:         return convert({key: child for key, child in attributes.items()
+   76:                         if not key.startswith("_")})
+   77: 
+   78:     raise RuntimeApplicationLifecycleError(
+   79:         "Lifecycle evidence is not serializable.")
+   80: 
+   81: 
+   82: 
+   83: from backend.server.runtime.runtime_feature_flag_gateway import (
+   84:     GATEWAY_KEY,
+   85:     RuntimeFeatureFlagGateway,
+   86:     register_runtime_feature_flag_gateway,
+   87: )
+   88: 
+   89: @asynccontextmanager
+   90: async def linkcraftor_runtime_lifespan(
+   91:     application: Any,
+   92: ) -> AsyncIterator[None]:
+   93:     application.state.runtime_lifecycle_version = (
+   94:         RUNTIME_APPLICATION_LIFECYCLE_VERSION
+   95:     )
+   96:     application.state.runtime_lifecycle_status = "BOOTING"
+   97: 
+   98:     try:
+   99:         boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway,))
+  100: 
+  101:     except Exception as exc:
+  102:         application.state.runtime_lifecycle_status = (
+  103:             "BOOT_FAILED"
+  104:         )
+  105:         application.state.runtime_boot_failure = {
+  106:             "error_type": type(exc).__name__,
+  107:             "error_message": str(exc),
+  108:         }
+  109:         raise
+  110: 
+  111:     feature_flag_gateway = boot_context.kernel.get_component(
+  112:         GATEWAY_KEY, RuntimeFeatureFlagGateway
+  113:     )
+  114:     application.state.runtime_feature_flag_gateway = feature_flag_gateway
+  115:     application.state.runtime_feature_flag_evidence = feature_flag_gateway.evidence()
+  116:     application.state.runtime_feature_flag_snapshot = _record_mapping(
+  117:         feature_flag_gateway.snapshot()
+  118:     )
+  119: 
+  120:     application.state.runtime_boot_process = boot_process
+  121:     application.state.runtime_boot_context = boot_context
+  122:     application.state.runtime_boot_evidence = (
+  123:         _record_mapping(boot_context)
+  124:     )
+  125:     application.state.runtime_lifecycle_status = "RUNNING"
+  126: 
+  127:     try:
+  128:         yield
+  129: 
+  130:     finally:
+  131:         application.state.runtime_lifecycle_status = (
+  132:             "SHUTTING_DOWN"
+  133:         )
+  134: 
+  135:         try:
+  136:             (
+  137:                 shutdown_process,
+  138:                 shutdown_context,
+  139:             ) = await shutdown_runtime(
+  140:                 boot_process=boot_process,
+  141:                 drain_before_stop=True,
+  142:                 timeout_seconds=None,
+  143:                 raise_on_failure=True,
+  144:             )
+  145: 
+  146:         except Exception as exc:
+  147:             application.state.runtime_lifecycle_status = (
+  148:                 "SHUTDOWN_FAILED"
+  149:             )
+  150:             application.state.runtime_shutdown_failure = {
+  151:                 "error_type": type(exc).__name__,
+  152:                 "error_message": str(exc),
+  153:             }
+  154:             raise
+  155: 
+  156:         application.state.runtime_shutdown_process = (
+  157:             shutdown_process
+  158:         )
+  159:         application.state.runtime_shutdown_context = (
+  160:             shutdown_context
+  161:         )
+  162:         application.state.runtime_shutdown_evidence = (
+  163:             _record_mapping(shutdown_context)
+  164:         )
+  165:         application.state.runtime_shutdown_snapshot = (
+  166:             _record_mapping(
+  167:                 shutdown_process.snapshot()
+  168:             )
+  169:         )
+  170:         application.state.runtime_lifecycle_status = "STOPPED"
+
+==========================================================================================
+CALLER AND PROVIDER REFERENCES
+==========================================================================================
+
+==========================================================================================
+REFERENCE CANDIDATE: backend/server/runtime/runtime_schema/certification.py
+==========================================================================================
+   23: from __future__ import annotations
+    ... unrelated source omitted ...
+   25: import importlib
+   26: import inspect
+   27: import threading
+   28: from dataclasses import dataclass
+   29: from enum import Enum
+   30: from typing import Any, Callable, Mapping
+    ... unrelated source omitted ...
+   32: from .audit import (
+   33:     GENESIS_HASH,
+   34:     AuditLog,
+   35: )
+   36: from .change_detection import (
+   37:     ChangeDetector,
+   38: )
+   39: from .compatibility import (
+   40:     CompatibilityChecker,
+   41: )
+   42: from .definitions import (
+   43:     SchemaDefinition,
+   44: )
+   45: from .deprecation import (
+   46:     DeprecationEngine,
+   47:     DeprecationPolicy,
+   48:     require_legal_transition,
+   49: )
+   50: from .diff_engine import (
+   51:     SchemaDiffEngine,
+   52: )
+   53: from .loader import (
+   54:     RuntimeSchemaLoader,
+   55: )
+   56: from .migration import (
+   57:     MigrationPlanner,
+   58: )
+   59: from .ports import (
+   60:     RuntimeSchemaCertificationPort,
+   61: )
+   62: from .registry import (
+   63:     RuntimeSchemaRegistry,
+   64: )
+   65: from .serialization import (
+   66:     canonical_json,
+   67:     parse_canonical_json,
+   68:     structure_fingerprint,
+   69: )
+   70: from .snapshots import (
+   71:     SnapshotCollection,
+   72:     build_empty_snapshot,
+   73:     build_snapshot,
+   74:     compare_snapshots,
+   75: )
+   76: from .transition_validation import (
+   77:     DowngradeValidator,
+   78:     UpgradeValidator,
+   79: )
+   80: from .types import (
+   81:     AuditAction,
+   82:     CompatibilityMode,
+   83:     EnforcementLevel,
+   84:     SchemaLifecycleState,
+   85:     SchemaRegistryError,
+   86:     UnknownFieldPolicy,
+   87:     deep_freeze,
+   88:     deep_thaw,
+   89:     utc_now_iso,
+   90: )
+   91: from .validation import (
+   92:     DocumentValidator,
+   93: )
+   94: from .versioning import (
+   95:     SchemaVersion,
+   96: )
+    ... unrelated source omitted ...
+ 1300:         def enforcement():
+ 1301:             policy = (
+ 1302:                 DeprecationPolicy(
+ 1303:                     notice_period_days=0,
+ 1304:                     deprecated_at=(
+ 1305:                         FIXTURE_TIMESTAMP
+ 1306:                     ),
+ 1307:                     sunset_at=(
+ 1308:                         FIXTURE_TIMESTAMP
+ 1309:                     ),
+ 1310:                     enforcement=(
+ 1311:                         EnforcementLevel.BLOCK
+ 1312:                     ),
+ 1313:                 )
+ 1314:             )
+ 1315: 
+ 1316:             disabled = (
+ 1317:                 DeprecationEngine(
+ 1318:                     _FeatureFlags(
+ 1319:                         False
+ 1320:                     )
+ 1321:                 )
+ 1322:             )
+ 1323: 
+ 1324:             enabled = (
+ 1325:                 DeprecationEngine(
+ 1326:                     _FeatureFlags(
+ 1327:                         True
+ 1328:                     )
+ 1329:                 )
+ 1330:             )
+ 1331: 
+ 1332:             self._expect(
+ 1333:                 disabled
+ 1334:                 .effective_enforcement(
+ 1335:                     policy
+ 1336:                 )
+ 1337:                 is EnforcementLevel.WARN,
+ 1338:                 "disabled flag did not degrade enforcement",
+ 1339:             )
+ 1340: 
+ 1341:             self._expect(
+ 1342:                 enabled
+ 1343:                 .effective_enforcement(
+ 1344:                     policy
+ 1345:                 )
+ 1346:                 is EnforcementLevel.BLOCK,
+ 1347:                 "enabled flag did not enforce blocking",
+ 1348:             )
+ 1349: 
+ 1350:             return "feature-flag staging"
+
+==========================================================================================
+INSPECTION SUMMARY
+==========================================================================================
+External reference candidates: 1
+References are candidates, not proof of active production execution.
+
+==========================================================================================
+FINAL RESULT
+==========================================================================================
+A1.11 DEPRECATION BOUNDARY INSPECTION COMPLETE
+No production files were modified.

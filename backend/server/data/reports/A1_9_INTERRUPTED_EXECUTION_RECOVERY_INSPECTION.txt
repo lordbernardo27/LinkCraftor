@@ -1,0 +1,2610 @@
+﻿LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.9 INTERRUPTED EXECUTION AND RECOVERY INSPECTION
+
+Generated: 2026-10-04T20:32:17.1830850+00:00
+Mode: READ-ONLY — NO PRODUCTION FILES MODIFIED
+Project root: C:\Users\HP\Documents\LinkCraftor
+INSPECTION STATUS: COMPLETE
+
+=========================================================================================================
+INSPECTION OUTPUT
+=========================================================================================================
+
+==============================================================================================================
+A1.9 INTERRUPTED EXECUTION AND RECOVERY INSPECTION
+==============================================================================================================
+MODE: READ-ONLY
+PROJECT_ROOT: C:\Users\HP\Documents\LinkCraftor
+
+==============================================================================================================
+TARGET FILE VALIDATION
+==============================================================================================================
+worker: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+EXISTS: True
+SYNTAX: PASS
+queue: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\queue.py
+EXISTS: True
+SYNTAX: PASS
+job_store: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\job_store.py
+EXISTS: True
+SYNTAX: PASS
+service: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\service.py
+EXISTS: True
+SYNTAX: PASS
+worker_recovery: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\recovery.py
+EXISTS: True
+SYNTAX: PASS
+worker_leasing: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\leasing.py
+EXISTS: True
+SYNTAX: PASS
+lifecycle_gateway: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\lifecycle_gateway.py
+EXISTS: True
+SYNTAX: PASS
+queue_recovery: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\recovery.py
+EXISTS: True
+SYNTAX: PASS
+dead_letter: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\dead_letter.py
+EXISTS: True
+SYNTAX: PASS
+runtime_recovery: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\runtime_recovery.py
+EXISTS: False
+orchestration_recovery: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_orchestration\recovery.py
+EXISTS: True
+SYNTAX: PASS
+
+==============================================================================================================
+PRODUCTION MODULE IMPORTS
+==============================================================================================================
+worker: IMPORT PASS
+queue: IMPORT PASS
+job_store: IMPORT PASS
+service: IMPORT PASS
+worker_recovery: IMPORT PASS
+worker_leasing: IMPORT PASS
+lifecycle_gateway: IMPORT PASS
+
+==============================================================================================================
+WORKER RECOVERY AUTHORITY
+==============================================================================================================
+MODULE_FILE: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\recovery.py
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerLeaseState
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*values)
+SOURCE:
+class UniversalWorkerLeaseState(
+    str,
+    Enum,
+):
+
+    ACTIVE = "ACTIVE"
+    EXPIRED = "EXPIRED"
+
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerRecoveryDisposition
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*values)
+SOURCE:
+class UniversalWorkerRecoveryDisposition(
+    str,
+    Enum,
+):
+
+    RECOVERABLE = "RECOVERABLE"
+
+    NOT_RECOVERABLE = "NOT_RECOVERABLE"
+
+    NO_ACTION = "NO_ACTION"
+
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerRecoveryError
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (message: 'str', *, code: 'str', value: 'Any' = None) -> 'None'
+SOURCE:
+class UniversalWorkerRecoveryError(
+    ValueError
+):
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        value: Any = None,
+    ) -> None:
+
+        super().__init__(
+            message
+        )
+
+        self.code = str(
+            code
+        )
+
+        self.value = value
+
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerRecoveryEvidence
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', job_status: 'UniversalJobStatus', worker_ownership_lost: 'bool', retry_permitted: 'bool', duplicate_execution_safe: 'bool', lease_state: 'UniversalWorkerLeaseState | None' = None, schema_version: 'str' = 'universal_worker_recovery_evidence_schema_v1') -> None
+SOURCE:
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalWorkerRecoveryEvidence:
+
+    job_id: str
+
+    job_status: UniversalJobStatus
+
+    worker_ownership_lost: bool
+
+    retry_permitted: bool
+
+    duplicate_execution_safe: bool
+
+    lease_state: UniversalWorkerLeaseState | None = None
+
+    schema_version: str = (
+        UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "job_id",
+            normalize_universal_worker_recovery_job_id(
+                self.job_id
+            ),
+        )
+
+        if not isinstance(
+            self.job_status,
+            UniversalJobStatus,
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "job_status must be "
+                    "UniversalJobStatus."
+                ),
+                code="invalid_worker_recovery_job_status",
+                value=self.job_status,
+            )
+
+        object.__setattr__(
+            self,
+            "worker_ownership_lost",
+            _validate_strict_bool(
+                self.worker_ownership_lost,
+                field_name="worker_ownership_lost",
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "retry_permitted",
+            _validate_strict_bool(
+                self.retry_permitted,
+                field_name="retry_permitted",
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "duplicate_execution_safe",
+            _validate_strict_bool(
+                self.duplicate_execution_safe,
+                field_name="duplicate_execution_safe",
+            ),
+        )
+
+        if (
+            self.lease_state is not None
+            and
+            not isinstance(
+                self.lease_state,
+                UniversalWorkerLeaseState,
+            )
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "lease_state must be "
+                    "UniversalWorkerLeaseState or None."
+                ),
+                code="invalid_worker_recovery_lease_state",
+                value=self.lease_state,
+            )
+
+        if (
+            self.job_status
+            is UniversalJobStatus.LEASED
+        ):
+
+            if self.lease_state is None:
+
+                raise UniversalWorkerRecoveryError(
+                    (
+                        "LEASED Worker Recovery evidence "
+                        "requires lease_state."
+                    ),
+                    code="leased_recovery_requires_lease_state",
+                    value=None,
+                )
+
+            if (
+                self.lease_state
+                is UniversalWorkerLeaseState.ACTIVE
+                and
+                self.worker_ownership_lost
+                is True
+            ):
+
+                raise UniversalWorkerRecoveryError(
+                    (
+                        "ACTIVE lease contradicts "
+                        "worker_ownership_lost=True."
+                    ),
+                    code="active_lease_ownership_contradiction",
+                    value=True,
+                )
+
+            if (
+                self.lease_state
+                is UniversalWorkerLeaseState.EXPIRED
+                and
+                self.worker_ownership_lost
+                is False
+            ):
+
+                raise UniversalWorkerRecoveryError(
+                    (
+                        "EXPIRED lease requires "
+                        "worker_ownership_lost=True."
+                    ),
+                    code="expired_lease_ownership_contradiction",
+                    value=False,
+                )
+
+        elif self.lease_state is not None:
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "lease_state is only accepted for "
+                    "LEASED Worker Recovery evidence."
+                ),
+                code="lease_state_requires_leased_status",
+                value=self.job_status,
+            )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "Invalid Worker Recovery Evidence "
+                    "schema_version."
+                ),
+                code=(
+                    "invalid_worker_recovery_"
+                    "evidence_schema_version"
+                ),
+                value=self.schema_version,
+            )
+
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerRecoveryReason
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*values)
+SOURCE:
+class UniversalWorkerRecoveryReason(
+    str,
+    Enum,
+):
+
+    STATUS_NOT_WORKER_OWNED = (
+        "STATUS_NOT_WORKER_OWNED"
+    )
+
+    OWNERSHIP_STILL_VALID = (
+        "OWNERSHIP_STILL_VALID"
+    )
+
+    ACTIVE_LEASE = (
+        "ACTIVE_LEASE"
+    )
+
+    OWNERSHIP_LOST_RETRY_PERMITTED = (
+        "OWNERSHIP_LOST_RETRY_PERMITTED"
+    )
+
+    RETRY_NOT_PERMITTED = (
+        "RETRY_NOT_PERMITTED"
+    )
+
+    DUPLICATE_EXECUTION_NOT_SAFE = (
+        "DUPLICATE_EXECUTION_NOT_SAFE"
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerRecoveryResult
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', original_status: 'UniversalJobStatus', disposition: 'UniversalWorkerRecoveryDisposition', reason: 'UniversalWorkerRecoveryReason', worker_ownership_lost: 'bool', retry_permitted: 'bool', duplicate_execution_safe: 'bool', lease_state: 'UniversalWorkerLeaseState | None', schema_version: 'str' = 'universal_worker_recovery_result_schema_v1') -> None
+SOURCE:
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalWorkerRecoveryResult:
+
+    job_id: str
+
+    original_status: UniversalJobStatus
+
+    disposition: UniversalWorkerRecoveryDisposition
+
+    reason: UniversalWorkerRecoveryReason
+
+    worker_ownership_lost: bool
+
+    retry_permitted: bool
+
+    duplicate_execution_safe: bool
+
+    lease_state: UniversalWorkerLeaseState | None
+
+    schema_version: str = (
+        UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "job_id",
+            normalize_universal_worker_recovery_job_id(
+                self.job_id
+            ),
+        )
+
+        if not isinstance(
+            self.original_status,
+            UniversalJobStatus,
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "original_status must be "
+                    "UniversalJobStatus."
+                ),
+                code="invalid_recovery_result_status",
+                value=self.original_status,
+            )
+
+        if not isinstance(
+            self.disposition,
+            UniversalWorkerRecoveryDisposition,
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "disposition must be "
+                    "UniversalWorkerRecoveryDisposition."
+                ),
+                code="invalid_recovery_disposition",
+                value=self.disposition,
+            )
+
+        if not isinstance(
+            self.reason,
+            UniversalWorkerRecoveryReason,
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "reason must be "
+                    "UniversalWorkerRecoveryReason."
+                ),
+                code="invalid_recovery_reason",
+                value=self.reason,
+            )
+
+        object.__setattr__(
+            self,
+            "worker_ownership_lost",
+            _validate_strict_bool(
+                self.worker_ownership_lost,
+                field_name="worker_ownership_lost",
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "retry_permitted",
+            _validate_strict_bool(
+                self.retry_permitted,
+                field_name="retry_permitted",
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "duplicate_execution_safe",
+            _validate_strict_bool(
+                self.duplicate_execution_safe,
+                field_name="duplicate_execution_safe",
+            ),
+        )
+
+        if (
+            self.lease_state is not None
+            and
+            not isinstance(
+                self.lease_state,
+                UniversalWorkerLeaseState,
+            )
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "lease_state must be "
+                    "UniversalWorkerLeaseState or None."
+                ),
+                code="invalid_recovery_result_lease_state",
+                value=self.lease_state,
+            )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "Invalid Worker Recovery Result "
+                    "schema_version."
+                ),
+                code=(
+                    "invalid_worker_recovery_"
+                    "result_schema_version"
+                ),
+                value=self.schema_version,
+            )
+
+        canonical_evidence = (
+            UniversalWorkerRecoveryEvidence(
+                job_id=self.job_id,
+                job_status=self.original_status,
+                worker_ownership_lost=(
+                    self.worker_ownership_lost
+                ),
+                retry_permitted=(
+                    self.retry_permitted
+                ),
+                duplicate_execution_safe=(
+                    self.duplicate_execution_safe
+                ),
+                lease_state=self.lease_state,
+            )
+        )
+
+        (
+            expected_disposition,
+            expected_reason,
+        ) = decide_universal_worker_recovery(
+            canonical_evidence
+        )
+
+        if (
+            self.disposition
+            is not expected_disposition
+            or
+            self.reason
+            is not expected_reason
+        ):
+
+            raise UniversalWorkerRecoveryError(
+                (
+                    "Worker Recovery result is "
+                    "inconsistent with its evidence."
+                ),
+                code="inconsistent_worker_recovery_result",
+                value={
+                    "disposition":
+                        self.disposition.value,
+
+                    "reason":
+                        self.reason.value,
+
+                    "expected_disposition":
+                        expected_disposition.value,
+
+                    "expected_reason":
+                        expected_reason.value,
+                },
+            )
+
+    @property
+    def recoverable(
+        self,
+    ) -> bool:
+
+        return (
+            self.disposition
+            is UniversalWorkerRecoveryDisposition.RECOVERABLE
+        )
+
+    @property
+    def action_required(
+        self,
+    ) -> bool:
+
+        return (
+            self.disposition
+            is not UniversalWorkerRecoveryDisposition.NO_ACTION
+        )
+
+
+--------------------------------------------------------------------------------------------------------------
+create_universal_worker_recovery_evidence
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*, job_id: 'str', job_status: 'UniversalJobStatus', worker_ownership_lost: 'bool', retry_permitted: 'bool', duplicate_execution_safe: 'bool', lease_state: 'UniversalWorkerLeaseState | None' = None) -> 'UniversalWorkerRecoveryEvidence'
+SOURCE:
+def create_universal_worker_recovery_evidence(
+    *,
+    job_id: str,
+    job_status: UniversalJobStatus,
+    worker_ownership_lost: bool,
+    retry_permitted: bool,
+    duplicate_execution_safe: bool,
+    lease_state: UniversalWorkerLeaseState | None = None,
+) -> UniversalWorkerRecoveryEvidence:
+
+    return UniversalWorkerRecoveryEvidence(
+        job_id=job_id,
+        job_status=job_status,
+        worker_ownership_lost=worker_ownership_lost,
+        retry_permitted=retry_permitted,
+        duplicate_execution_safe=duplicate_execution_safe,
+        lease_state=lease_state,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+decide_universal_worker_recovery
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (evidence: 'UniversalWorkerRecoveryEvidence') -> 'tuple[UniversalWorkerRecoveryDisposition, UniversalWorkerRecoveryReason]'
+SOURCE:
+def decide_universal_worker_recovery(
+    evidence: UniversalWorkerRecoveryEvidence,
+) -> tuple[
+    UniversalWorkerRecoveryDisposition,
+    UniversalWorkerRecoveryReason,
+]:
+
+    if not isinstance(
+        evidence,
+        UniversalWorkerRecoveryEvidence,
+    ):
+
+        raise UniversalWorkerRecoveryError(
+            (
+                "evidence must be "
+                "UniversalWorkerRecoveryEvidence."
+            ),
+            code="invalid_worker_recovery_evidence",
+            value=evidence,
+        )
+
+    if evidence.job_status not in {
+        UniversalJobStatus.LEASED,
+        UniversalJobStatus.RUNNING,
+    }:
+
+        return (
+            UniversalWorkerRecoveryDisposition.NO_ACTION,
+            UniversalWorkerRecoveryReason.STATUS_NOT_WORKER_OWNED,
+        )
+
+    if (
+        evidence.job_status
+        is UniversalJobStatus.LEASED
+        and
+        evidence.lease_state
+        is UniversalWorkerLeaseState.ACTIVE
+    ):
+
+        return (
+            UniversalWorkerRecoveryDisposition.NO_ACTION,
+            UniversalWorkerRecoveryReason.ACTIVE_LEASE,
+        )
+
+    if (
+        evidence.worker_ownership_lost
+        is False
+    ):
+
+        return (
+            UniversalWorkerRecoveryDisposition.NO_ACTION,
+            UniversalWorkerRecoveryReason.OWNERSHIP_STILL_VALID,
+        )
+
+    if (
+        evidence.retry_permitted
+        is False
+    ):
+
+        return (
+            UniversalWorkerRecoveryDisposition.NOT_RECOVERABLE,
+            UniversalWorkerRecoveryReason.RETRY_NOT_PERMITTED,
+        )
+
+    if (
+        evidence.duplicate_execution_safe
+        is False
+    ):
+
+        return (
+            UniversalWorkerRecoveryDisposition.NOT_RECOVERABLE,
+            UniversalWorkerRecoveryReason.DUPLICATE_EXECUTION_NOT_SAFE,
+        )
+
+    return (
+        UniversalWorkerRecoveryDisposition.RECOVERABLE,
+        UniversalWorkerRecoveryReason.OWNERSHIP_LOST_RETRY_PERMITTED,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+evaluate_universal_worker_recovery
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (evidence: 'UniversalWorkerRecoveryEvidence') -> 'UniversalWorkerRecoveryResult'
+SOURCE:
+def evaluate_universal_worker_recovery(
+    evidence: UniversalWorkerRecoveryEvidence,
+) -> UniversalWorkerRecoveryResult:
+
+    if not isinstance(
+        evidence,
+        UniversalWorkerRecoveryEvidence,
+    ):
+
+        raise UniversalWorkerRecoveryError(
+            (
+                "evidence must be "
+                "UniversalWorkerRecoveryEvidence."
+            ),
+            code="invalid_worker_recovery_evidence",
+            value=evidence,
+        )
+
+    (
+        disposition,
+        reason,
+    ) = decide_universal_worker_recovery(
+        evidence
+    )
+
+    return UniversalWorkerRecoveryResult(
+        job_id=evidence.job_id,
+        original_status=evidence.job_status,
+        disposition=disposition,
+        reason=reason,
+        worker_ownership_lost=(
+            evidence.worker_ownership_lost
+        ),
+        retry_permitted=(
+            evidence.retry_permitted
+        ),
+        duplicate_execution_safe=(
+            evidence.duplicate_execution_safe
+        ),
+        lease_state=evidence.lease_state,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+explain_universal_worker_recovery_v1
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: () -> 'Mapping[str, Any]'
+SOURCE:
+def explain_universal_worker_recovery_v1(
+) -> Mapping[str, Any]:
+
+    return MappingProxyType(
+        {
+            "phase":
+                "4.1.6",
+
+            "component":
+                "Universal Worker Recovery",
+
+            "version":
+                UNIVERSAL_WORKER_RECOVERY_VERSION,
+
+            "evidence_schema_version":
+                UNIVERSAL_WORKER_RECOVERY_EVIDENCE_SCHEMA_VERSION,
+
+            "result_schema_version":
+                UNIVERSAL_WORKER_RECOVERY_RESULT_SCHEMA_VERSION,
+
+            "dispositions": (
+                "RECOVERABLE",
+                "NOT_RECOVERABLE",
+                "NO_ACTION",
+            ),
+
+            "worker_owned_statuses": (
+                "LEASED",
+                "RUNNING",
+            ),
+
+            "input_rule": (
+                "4.1.6 consumes caller-supplied "
+                "worker-ownership-loss, retry-permission "
+                "and duplicate-execution-safety evidence"
+            ),
+
+            "leased_rule": (
+                "LEASED recovery requires canonical "
+                "4.1.4 lease state; ACTIVE means "
+                "ownership is still valid and EXPIRED "
+                "means worker ownership is lost"
+            ),
+
+            "running_rule": (
+                "RUNNING recovery requires explicit "
+                "caller-supplied worker_ownership_lost "
+                "evidence"
+            ),
+
+            "recovery_gate_rule": (
+                "RECOVERABLE requires worker ownership "
+                "lost, retry permitted and duplicate "
+                "execution safe"
+            ),
+
+            "retry_boundary": (
+                "4.1.6 consumes retry_permitted as "
+                "caller evidence and does not calculate "
+                "attempt ceilings, increment attempts, "
+                "backoff or retry scheduling"
+            ),
+
+            "duplicate_execution_boundary": (
+                "4.1.6 requires caller-supplied "
+                "duplicate_execution_safe evidence and "
+                "does not invent idempotency or fencing "
+                "policy"
+            ),
+
+            "queue_boundary": (
+                "4.1.6 decides Worker Recovery "
+                "permission but does not restore queue "
+                "membership or requeue a job"
+            ),
+
+            "lease_boundary": (
+                "4.1.6 consumes lease state but does "
+                "not acquire, renew, release or persist "
+                "leases"
+            ),
+
+            "health_heartbeat_boundary": (
+                "4.1.6 does not classify worker health, "
+                "read heartbeats or detect stale workers"
+            ),
+
+            "dead_letter_boundary": (
+                "DEAD_LETTER recovery remains outside "
+                "4.1.6"
+            ),
+
+            "execution_boundary": (
+                "RECOVERABLE is authorization evidence "
+                "only and does not dispatch or execute "
+                "the job"
+            ),
+
+            "purity_rule": (
+                "Worker Recovery is deterministic over "
+                "caller-supplied evidence and performs "
+                "no state lookup, persistence or "
+                "mutation"
+            ),
+
+            "prohibitions": (
+                "does not requeue jobs",
+                "does not restore queue membership",
+                "does not increment attempts",
+                "does not calculate maximum attempts",
+                "does not calculate retry backoff",
+                "does not schedule retries",
+                "does not transition jobs to QUEUED",
+                "does not transition jobs to FAILED",
+                "does not transition jobs to DEAD_LETTER",
+                "does not recover dead-letter jobs",
+                "does not acquire leases",
+                "does not renew leases",
+                "does not release leases",
+                "does not persist leases",
+                "does not classify lease expiration",
+                "does not determine worker health",
+                "does not read worker heartbeats",
+                "does not calculate heartbeat freshness",
+                "does not detect stale workers",
+                "does not restart workers",
+                "does not terminate workers",
+                "does not assign replacement workers",
+                "does not dispatch jobs",
+                "does not execute jobs",
+                "does not invent idempotency policy",
+                "does not invent fencing policy",
+                "does not access Runtime State Store",
+                "does not access orchestration",
+                "does not mutate Queue Infrastructure",
+                "does not persist recovery results",
+                "does not perform filesystem I/O",
+                "does not perform network I/O",
+            ),
+        }
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+normalize_universal_worker_recovery_job_id
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (value: 'Any') -> 'str'
+SOURCE:
+def normalize_universal_worker_recovery_job_id(
+    value: Any,
+) -> str:
+
+    if not isinstance(
+        value,
+        str,
+    ):
+
+        raise UniversalWorkerRecoveryError(
+            "job_id must be a string.",
+            code="invalid_recovery_job_id_type",
+            value=value,
+        )
+
+    normalized = value.strip()
+
+    if not normalized:
+
+        raise UniversalWorkerRecoveryError(
+            "job_id must not be empty.",
+            code="empty_recovery_job_id",
+            value=value,
+        )
+
+    if (
+        len(normalized)
+        > MAX_UNIVERSAL_WORKER_RECOVERY_JOB_ID_LENGTH
+    ):
+
+        raise UniversalWorkerRecoveryError(
+            (
+                "job_id exceeds maximum supported "
+                "Worker Recovery length."
+            ),
+            code="recovery_job_id_too_long",
+            value=value,
+        )
+
+    return normalized
+
+
+==============================================================================================================
+WORKER LEASING AUTHORITY
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerLease
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', lease_owner: 'str', lease_id: 'str', lease_started_at: 'str', lease_expires_at: 'str', schema_version: 'str' = 'universal_worker_lease_schema_v1') -> None
+SOURCE:
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalWorkerLease:
+
+    job_id: str
+    lease_owner: str
+    lease_id: str
+    lease_started_at: str
+    lease_expires_at: str
+
+    schema_version: str = (
+        UNIVERSAL_WORKER_LEASE_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        if not isinstance(
+            self.job_id,
+            str,
+        ):
+
+            raise UniversalWorkerLeasingError(
+                "job_id must be a string.",
+                code="invalid_lease_job_id_type",
+                value=self.job_id,
+            )
+
+        canonical_job_id = (
+            self.job_id.strip()
+        )
+
+        if not canonical_job_id:
+
+            raise UniversalWorkerLeasingError(
+                "job_id must not be empty.",
+                code="empty_lease_job_id",
+                value=self.job_id,
+            )
+
+        object.__setattr__(
+            self,
+            "job_id",
+            canonical_job_id,
+        )
+
+        if not isinstance(
+            self.lease_owner,
+            str,
+        ):
+
+            raise UniversalWorkerLeasingError(
+                "lease_owner must be a string.",
+                code="invalid_lease_owner_type",
+                value=self.lease_owner,
+            )
+
+        canonical_owner = (
+            self.lease_owner.strip()
+        )
+
+        if not canonical_owner:
+
+            raise UniversalWorkerLeasingError(
+                "lease_owner must not be empty.",
+                code="empty_lease_owner",
+                value=self.lease_owner,
+            )
+
+        if (
+            canonical_owner.count(
+                UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR
+            )
+            != 1
+        ):
+
+            raise UniversalWorkerLeasingError(
+                (
+                    "lease_owner must encode exactly "
+                    "one worker_id and worker_instance_id."
+                ),
+                code="invalid_lease_owner",
+                value=self.lease_owner,
+            )
+
+        left, right = canonical_owner.split(
+            UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR,
+            1,
+        )
+
+        if (
+            not left
+            or not right
+        ):
+
+            raise UniversalWorkerLeasingError(
+                (
+                    "lease_owner contains an "
+                    "invalid worker identity."
+                ),
+                code="invalid_lease_owner",
+                value=self.lease_owner,
+            )
+
+        object.__setattr__(
+            self,
+            "lease_owner",
+            canonical_owner,
+        )
+
+        object.__setattr__(
+            self,
+            "lease_id",
+            normalize_universal_worker_lease_id(
+                self.lease_id
+            ),
+        )
+
+        canonical_started = (
+            normalize_universal_worker_lease_timestamp(
+                self.lease_started_at,
+                field_name="lease_started_at",
+            )
+        )
+
+        canonical_expires = (
+            normalize_universal_worker_lease_timestamp(
+                self.lease_expires_at,
+                field_name="lease_expires_at",
+            )
+        )
+
+        if (
+            _timestamp_key(
+                canonical_expires
+            )
+            <=
+            _timestamp_key(
+                canonical_started
+            )
+        ):
+
+            raise UniversalWorkerLeasingError(
+                (
+                    "lease_expires_at must be "
+                    "strictly later than lease_started_at."
+                ),
+                code="invalid_lease_interval",
+                value=(
+                    canonical_started,
+                    canonical_expires,
+                ),
+            )
+
+        object.__setattr__(
+            self,
+            "lease_started_at",
+            canonical_started,
+        )
+
+        object.__setattr__(
+            self,
+            "lease_expires_at",
+            canonical_expires,
+        )
+
+        if (
+            self.schema_version
+            != UNIVERSAL_WORKER_LEASE_SCHEMA_VERSION
+        ):
+
+            raise UniversalWorkerLeasingError(
+                (
+                    "Invalid Worker Lease "
+                    "schema_version."
+                ),
+                code=(
+                    "invalid_worker_lease_"
+                    "schema_version"
+                ),
+                value=self.schema_version,
+            )
+
+    @property
+    def worker_identity(
+        self,
+    ) -> tuple[str, str]:
+
+        worker_id, worker_instance_id = (
+            self.lease_owner.split(
+                UNIVERSAL_WORKER_LEASE_OWNER_SEPARATOR,
+                1,
+            )
+        )
+
+        return (
+            worker_id,
+            worker_instance_id,
+        )
+
+    def to_job_lease_fields(
+        self,
+    ) -> Mapping[str, str]:
+
+        return MappingProxyType(
+            {
+                "lease_owner":
+                    self.lease_owner,
+
+                "lease_id":
+                    self.lease_id,
+
+                "lease_started_at":
+                    self.lease_started_at,
+
+                "lease_expires_at":
+                    self.lease_expires_at,
+            }
+        )
+
+
+--------------------------------------------------------------------------------------------------------------
+UniversalWorkerLeaseState
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*values)
+SOURCE:
+class UniversalWorkerLeaseState(
+    str,
+    Enum,
+):
+
+    ACTIVE = "ACTIVE"
+    EXPIRED = "EXPIRED"
+
+
+--------------------------------------------------------------------------------------------------------------
+evaluate_universal_worker_lease_state
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*, lease: 'UniversalWorkerLease', evaluation_at: 'str') -> 'UniversalWorkerLeaseState'
+SOURCE:
+def evaluate_universal_worker_lease_state(
+    *,
+    lease: UniversalWorkerLease,
+    evaluation_at: str,
+) -> UniversalWorkerLeaseState:
+
+    if not isinstance(
+        lease,
+        UniversalWorkerLease,
+    ):
+
+        raise UniversalWorkerLeasingError(
+            "lease must be a UniversalWorkerLease.",
+            code="invalid_worker_lease",
+            value=lease,
+        )
+
+    canonical_evaluation = (
+        normalize_universal_worker_lease_timestamp(
+            evaluation_at,
+            field_name="evaluation_at",
+        )
+    )
+
+    if (
+        _timestamp_key(
+            canonical_evaluation
+        )
+        <
+        _timestamp_key(
+            lease.lease_expires_at
+        )
+    ):
+
+        return (
+            UniversalWorkerLeaseState.ACTIVE
+        )
+
+    return (
+        UniversalWorkerLeaseState.EXPIRED
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+renew_universal_worker_lease
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*, lease: 'UniversalWorkerLease', expected_lease_owner: 'str', expected_lease_id: 'str', renewed_at: 'str', new_lease_expires_at: 'str') -> 'UniversalWorkerLease'
+SOURCE:
+def renew_universal_worker_lease(
+    *,
+    lease: UniversalWorkerLease,
+    expected_lease_owner: str,
+    expected_lease_id: str,
+    renewed_at: str,
+    new_lease_expires_at: str,
+) -> UniversalWorkerLease:
+
+    if not isinstance(
+        lease,
+        UniversalWorkerLease,
+    ):
+
+        raise UniversalWorkerLeasingError(
+            "lease must be a UniversalWorkerLease.",
+            code="invalid_worker_lease",
+            value=lease,
+        )
+
+    if (
+        not isinstance(
+            expected_lease_owner,
+            str,
+        )
+        or
+        expected_lease_owner.strip()
+        != lease.lease_owner
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease renewal owner does not "
+                "match the current lease owner."
+            ),
+            code="lease_owner_mismatch",
+            value=expected_lease_owner,
+        )
+
+    canonical_lease_id = (
+        normalize_universal_worker_lease_id(
+            expected_lease_id
+        )
+    )
+
+    if (
+        canonical_lease_id
+        != lease.lease_id
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease renewal lease_id does not "
+                "match the current lease."
+            ),
+            code="lease_id_mismatch",
+            value=expected_lease_id,
+        )
+
+    canonical_renewed_at = (
+        normalize_universal_worker_lease_timestamp(
+            renewed_at,
+            field_name="renewed_at",
+        )
+    )
+
+    if (
+        evaluate_universal_worker_lease_state(
+            lease=lease,
+            evaluation_at=canonical_renewed_at,
+        )
+        is not UniversalWorkerLeaseState.ACTIVE
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "An expired lease cannot "
+                "be renewed."
+            ),
+            code="expired_lease_cannot_renew",
+            value=lease.lease_id,
+        )
+
+    canonical_new_expiry = (
+        normalize_universal_worker_lease_timestamp(
+            new_lease_expires_at,
+            field_name="new_lease_expires_at",
+        )
+    )
+
+    if (
+        _timestamp_key(
+            canonical_new_expiry
+        )
+        <=
+        _timestamp_key(
+            canonical_renewed_at
+        )
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "new_lease_expires_at must be "
+                "later than renewed_at."
+            ),
+            code="invalid_renewal_interval",
+            value=canonical_new_expiry,
+        )
+
+    if (
+        _timestamp_key(
+            canonical_new_expiry
+        )
+        <=
+        _timestamp_key(
+            lease.lease_expires_at
+        )
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease renewal must extend "
+                "the current expiration."
+            ),
+            code="lease_renewal_not_extended",
+            value=canonical_new_expiry,
+        )
+
+    return UniversalWorkerLease(
+        job_id=lease.job_id,
+        lease_owner=lease.lease_owner,
+        lease_id=lease.lease_id,
+        lease_started_at=lease.lease_started_at,
+        lease_expires_at=canonical_new_expiry,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+release_universal_worker_lease
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*, lease: 'UniversalWorkerLease', expected_lease_owner: 'str', expected_lease_id: 'str', released_at: 'str') -> 'UniversalWorkerLeaseRelease'
+SOURCE:
+def release_universal_worker_lease(
+    *,
+    lease: UniversalWorkerLease,
+    expected_lease_owner: str,
+    expected_lease_id: str,
+    released_at: str,
+) -> UniversalWorkerLeaseRelease:
+
+    if not isinstance(
+        lease,
+        UniversalWorkerLease,
+    ):
+
+        raise UniversalWorkerLeasingError(
+            "lease must be a UniversalWorkerLease.",
+            code="invalid_worker_lease",
+            value=lease,
+        )
+
+    if (
+        not isinstance(
+            expected_lease_owner,
+            str,
+        )
+        or
+        expected_lease_owner.strip()
+        != lease.lease_owner
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease release owner does not "
+                "match the current lease owner."
+            ),
+            code="lease_owner_mismatch",
+            value=expected_lease_owner,
+        )
+
+    canonical_lease_id = (
+        normalize_universal_worker_lease_id(
+            expected_lease_id
+        )
+    )
+
+    if (
+        canonical_lease_id
+        != lease.lease_id
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "Lease release lease_id does not "
+                "match the current lease."
+            ),
+            code="lease_id_mismatch",
+            value=expected_lease_id,
+        )
+
+    canonical_released_at = (
+        normalize_universal_worker_lease_timestamp(
+            released_at,
+            field_name="released_at",
+        )
+    )
+
+    if (
+        _timestamp_key(
+            canonical_released_at
+        )
+        <
+        _timestamp_key(
+            lease.lease_started_at
+        )
+    ):
+
+        raise UniversalWorkerLeasingError(
+            (
+                "released_at must not precede "
+                "lease_started_at."
+            ),
+            code="release_precedes_lease",
+            value=canonical_released_at,
+        )
+
+    return UniversalWorkerLeaseRelease(
+        job_id=lease.job_id,
+        lease_owner=lease.lease_owner,
+        lease_id=lease.lease_id,
+        released_at=canonical_released_at,
+    )
+
+
+==============================================================================================================
+JOB STORE RECOVERY BOUNDARY
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+get_job
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str') -> 'Optional[OrchestrationJob]'
+SOURCE:
+def get_job(job_id: str) -> Optional[OrchestrationJob]:
+    return load_jobs().get(job_id)
+
+
+--------------------------------------------------------------------------------------------------------------
+load_jobs
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: () -> 'Dict[str, OrchestrationJob]'
+SOURCE:
+def load_jobs() -> Dict[str, OrchestrationJob]:
+    raw = _read_json(JOBS_FILE, {})
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        job_id: _job_from_dict(item)
+        for job_id, item in raw.items()
+        if isinstance(item, dict)
+    }
+
+
+--------------------------------------------------------------------------------------------------------------
+save_jobs
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (jobs: 'Dict[str, OrchestrationJob]') -> 'None'
+SOURCE:
+def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
+    _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
+
+
+--------------------------------------------------------------------------------------------------------------
+update_job_status
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', new_status: 'str', metadata: 'Optional[Dict[str, Any]]' = None, error_message: 'Optional[str]' = None) -> 'OrchestrationJob'
+SOURCE:
+def update_job_status(
+    job_id: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> OrchestrationJob:
+    if new_status not in VALID_JOB_STATUSES:
+        raise ValueError(f"Invalid job status: {new_status}")
+
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    old_status = job.status
+    job.status = new_status
+    job.updated_at = utc_now()
+
+    normalized_metadata = (
+        dict(metadata)
+        if isinstance(
+            metadata,
+            dict,
+        )
+        else {}
+    )
+
+    if normalized_metadata:
+
+        existing_metadata = (
+            job.metadata
+            if isinstance(
+                job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        job.metadata = {
+            **existing_metadata,
+            **normalized_metadata,
+        }
+
+    if error_message:
+        job.error_message = error_message
+
+        if new_status == JOB_STATUS_FAILED:
+            job.progress_percent = min(
+                job.progress_percent,
+                99.0,
+            )
+
+    jobs[job_id] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        job_id,
+        old_status,
+        new_status,
+        normalized_metadata,
+    )
+
+    return job
+
+
+--------------------------------------------------------------------------------------------------------------
+append_job_event
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', old_status: 'str', new_status: 'str', metadata: 'Optional[Dict[str, Any]]' = None) -> 'JobStatusEvent'
+SOURCE:
+def append_job_event(
+    job_id: str,
+    old_status: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> JobStatusEvent:
+    events = _read_json(EVENTS_FILE, {})
+    if not isinstance(events, dict):
+        events = {}
+
+    event = JobStatusEvent(
+        event_id=f"evt_{uuid4().hex[:16]}",
+        job_id=job_id,
+        old_status=old_status,
+        new_status=new_status,
+        metadata=metadata or {},
+    )
+
+    events.setdefault(job_id, [])
+    events[job_id].append(asdict(event))
+    _write_json(EVENTS_FILE, events)
+    return event
+
+
+==============================================================================================================
+QUEUE RECOVERY BOUNDARY
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+_queued_jobs
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (jobs: 'Optional[Dict[str, OrchestrationJob]]' = None, *, evaluation_time: 'str | None' = None) -> 'List[OrchestrationJob]'
+SOURCE:
+def _queued_jobs(
+    jobs: Optional[
+        Dict[str, OrchestrationJob]
+    ] = None,
+    *,
+    evaluation_time: str | None = None,
+) -> List[OrchestrationJob]:
+    """
+    Return queued and time-eligible jobs in canonical service order.
+    """
+    if jobs is None:
+        jobs = load_jobs()
+
+    if evaluation_time is None:
+        evaluation_time = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+    queued = [
+        job
+        for job in jobs.values()
+        if (
+            job.status == JOB_STATUS_QUEUED
+            and _is_job_time_eligible(
+                job,
+                evaluation_time=evaluation_time,
+            )
+            and _are_job_dependencies_satisfied(
+                job,
+                jobs=jobs,
+            )
+        )
+    ]
+
+    queued.sort(
+        key=_sort_key
+    )
+
+    return _apply_workspace_fairness(
+        queued=queued,
+        jobs=jobs,
+    )
+
+
+--------------------------------------------------------------------------------------------------------------
+dequeue_job
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (worker_id: 'str | None' = None, *, worker_registration: 'Mapping[str, Any] | None' = None, lease_seconds: 'int' = 1800) -> 'Optional[OrchestrationJob]'
+SOURCE:
+def dequeue_job(
+    worker_id: str | None = None,
+    *,
+    worker_registration: Mapping[str, Any] | None = None,
+    lease_seconds: int = 1800,
+) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {
+                "claimed_by_dequeue": True,
+            }
+
+            if worker_id:
+                metadata["worker_id"] = worker_id
+
+            if worker_registration is not None:
+                lease_fields = (
+                    "lease_owner",
+                    "lease_id",
+                    "lease_started_at",
+                    "lease_expires_at",
+                )
+
+                existing_lease = {
+                    field:
+                        candidate.metadata.get(field)
+                    for field in lease_fields
+                    if (
+                        isinstance(
+                            candidate.metadata,
+                            Mapping,
+                        )
+                        and candidate.metadata.get(field)
+                    )
+                }
+
+                if existing_lease:
+                    raise RuntimeError(
+                        "Queued job already contains lease "
+                        "ownership evidence."
+                    )
+
+                lease_metadata = (
+                    prepare_universal_runtime_job_lease(
+                        job_id=candidate.job_id,
+                        registration=worker_registration,
+                        lease_seconds=lease_seconds,
+                    )
+                )
+
+                if (
+                    worker_id
+                    and lease_metadata.get(
+                        "assigned_worker_id"
+                    )
+                    != worker_id
+                ):
+                    raise RuntimeError(
+                        "Assigned worker does not match "
+                        "the claiming worker."
+                    )
+
+                metadata.update(
+                    dict(lease_metadata)
+                )
+
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write ù
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+
+--------------------------------------------------------------------------------------------------------------
+enqueue_job
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str') -> 'bool'
+SOURCE:
+def enqueue_job(job_id: str) -> bool:
+    """Kept for API compatibility.
+
+    Enqueueing is now implicit: create_job persists the job with status
+    JOB_STATUS_QUEUED, and that persisted status is the queue membership.
+    This function only verifies the job actually exists in a queued state,
+    which catches caller bugs (e.g. enqueueing an ID that was never created).
+    """
+    job = get_job(job_id)
+    return job is not None and job.status == JOB_STATUS_QUEUED
+
+
+--------------------------------------------------------------------------------------------------------------
+queue_snapshot
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: () -> 'Dict[str, object]'
+SOURCE:
+def queue_snapshot() -> Dict[str, object]:
+    queued = _queued_jobs()
+
+    return {
+        "queue_length": len(queued),
+        "queued_job_ids": [job.job_id for job in queued],
+        "queued_jobs": [
+            {
+                "job_id": job.job_id,
+                "workspace_id": job.workspace_id,
+                "job_type": job.job_type,
+                "priority": job.priority,
+                "created_at": (
+                    job.created_at.isoformat()
+                    if hasattr(job.created_at, "isoformat")
+                    else str(job.created_at)
+                ),
+            }
+            for job in queued
+        ],
+    }
+
+
+--------------------------------------------------------------------------------------------------------------
+refresh_queue_from_store
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: () -> 'None'
+SOURCE:
+def refresh_queue_from_store() -> None:
+    """Kept for API compatibility.
+
+    There is no longer any in-memory queue state to refresh ù every read
+    goes straight to the job store ù so this is a no-op.
+    """
+    return None
+
+
+==============================================================================================================
+ORCHESTRATION SERVICE FINALIZATION
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+mark_job_running
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', worker_id: 'str | None' = None) -> 'OrchestrationJob'
+SOURCE:
+def mark_job_running(job_id: str, worker_id: str | None = None) -> OrchestrationJob:
+    """Transition a job to RUNNING.
+
+    FIX: made idempotent. dequeue_job() now claims jobs by flipping them to
+    RUNNING atomically, so by the time the worker calls this the job is
+    usually already running. Re-issuing the transition would be harmless in
+    most stores but is wasteful and can clobber claim metadata; if the job is
+    already RUNNING we just return it (merging in the worker_id if it wasn't
+    recorded yet).
+    """
+    job = get_job(job_id)
+    if job is None:
+        raise KeyError(f"unknown job: {job_id}")
+
+    if job.status == JOB_STATUS_RUNNING:
+        if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
+            # Record the worker identity without re-transitioning status.
+            return update_job_status(
+                job_id, JOB_STATUS_RUNNING, metadata={"worker_id": worker_id}
+            )
+        return job
+
+    metadata: Dict[str, Any] = {}
+    if worker_id:
+        metadata["worker_id"] = worker_id
+    return update_job_status(job_id, JOB_STATUS_RUNNING, metadata=metadata)
+
+
+--------------------------------------------------------------------------------------------------------------
+mark_job_completed
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', metadata: 'Optional[Dict[str, Any]]' = None) -> 'OrchestrationJob'
+SOURCE:
+def mark_job_completed(
+    job_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    # FIX: metadata was previously passed to BOTH the progress update and the
+    # status update, merging the same dict twice. Progress just records 100%;
+    # metadata rides on the terminal status change.
+    update_job_progress(job_id, 100.0)
+    return update_job_status(job_id, JOB_STATUS_COMPLETED, metadata=metadata or {})
+
+
+--------------------------------------------------------------------------------------------------------------
+mark_job_failed
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (job_id: 'str', error_message: 'str', metadata: 'Optional[Dict[str, Any]]' = None) -> 'OrchestrationJob'
+SOURCE:
+def mark_job_failed(
+    job_id: str,
+    error_message: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> OrchestrationJob:
+    return update_job_status(
+        job_id,
+        JOB_STATUS_FAILED,
+        metadata=metadata or {},
+        error_message=error_message,
+    )
+
+
+==============================================================================================================
+PRODUCTION WORKER RECOVERY CONNECTION
+==============================================================================================================
+
+--------------------------------------------------------------------------------------------------------------
+run_one_universal_runtime_job_v1
+--------------------------------------------------------------------------------------------------------------
+EXISTS: YES
+SIGNATURE: (*, worker_id: 'str' = 'universal_runtime_worker_v1', worker_capabilities: 'Iterable[Any]' = ('universal_runtime',), dispatcher: 'Callable[[Mapping[str, Any]], dict[str, Any]]' = <function dispatch_registered_runtime_handler at 0x000002BAB92A3380>) -> 'dict[str, Any]'
+SOURCE:
+def run_one_universal_runtime_job_v1(
+    *,
+    worker_id: str = "universal_runtime_worker_v1",
+    worker_capabilities: Iterable[Any] = (
+        "universal_runtime",
+    ),
+    dispatcher: Callable[
+        [Mapping[str, Any]],
+        dict[str, Any],
+    ] = dispatch_registered_runtime_handler,
+) -> dict[str, Any]:
+    """
+    Claim and execute at most one canonical orchestration job.
+
+    Returns IDLE when no queued work exists.
+
+    The dequeue operation itself owns QUEUED -> RUNNING.
+    """
+
+    canonical_worker_id = str(
+        worker_id
+        or ""
+    ).strip()
+
+    if not canonical_worker_id:
+        raise UniversalRuntimeWorkerContractError(
+            "worker_id must not be empty."
+        )
+
+    if not callable(
+        dispatcher
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "dispatcher must be callable."
+        )
+
+    lifecycle_admission = admit_universal_runtime_worker(
+        worker_id=canonical_worker_id,
+        runtime_version=UNIVERSAL_RUNTIME_WORKER_VERSION,
+        capabilities=worker_capabilities,
+        capacity_limit=1,
+        active_work_count=0,
+        heartbeat_sequence=1,
+    )
+
+    if not lifecycle_admission.get("admitted"):
+        raise UniversalRuntimeWorkerContractError(
+            "Worker lifecycle admission failed."
+        )
+
+    claimed_job = dequeue_job(
+        worker_id=canonical_worker_id,
+        worker_registration=lifecycle_admission[
+            "registration"
+        ],
+        lease_seconds=1800,
+    )
+
+    if claimed_job is None:
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "IDLE",
+
+            "job_claimed":
+                False,
+
+            "job_id":
+                None,
+
+            "dispatch_performed":
+                False,
+
+            "terminal_status":
+                None,
+        }
+
+    job_id = str(
+        claimed_job.job_id
+        or ""
+    ).strip()
+
+    if not job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a claimed job without job_id."
+        )
+
+    if claimed_job.status != JOB_STATUS_RUNNING:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a job that is not RUNNING."
+        )
+
+    runtime_job = (
+        orchestration_job_to_runtime_mapping_v1(
+            claimed_job
+        )
+    )
+
+    if runtime_job[
+        "job_id"
+    ] != job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "Runtime mapping changed canonical job identity."
+        )
+
+    try:
+        registration = get_runtime_registration(
+            claimed_job.job_type
+        )
+
+        if not isinstance(registration, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration did not return a mapping."
+            )
+
+        registration_metadata = registration.get("metadata", {})
+
+        if not isinstance(registration_metadata, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration metadata must be a mapping."
+            )
+
+        required_worker_capabilities = registration_metadata.get(
+            "required_worker_capabilities",
+            (),
+        )
+
+        if required_worker_capabilities is None:
+            required_worker_capabilities = ()
+
+        if isinstance(required_worker_capabilities, str):
+            raise UniversalRuntimeWorkerContractError(
+                "required_worker_capabilities must be a collection, "
+                "not a string."
+            )
+
+        worker_capability_snapshot = UniversalWorkerCapabilitySnapshot(
+            worker_id=canonical_worker_id,
+            worker_instance_id=canonical_worker_id,
+            worker_type="universal_runtime_worker",
+            capabilities=tuple(worker_capabilities),
+        )
+
+        capability_match = match_universal_worker_capabilities(
+            snapshot=worker_capability_snapshot,
+            required_capabilities=required_worker_capabilities,
+        )
+
+        if not capability_match.compatible:
+            raise UniversalRuntimeWorkerContractError(
+                "Worker lacks required runtime capabilities: "
+                + ", ".join(capability_match.missing_capabilities)
+            )
+
+        dispatch_result = dispatcher(
+            runtime_job
+        )
+
+        if dispatch_result is None:
+            dispatch_result = {}
+
+        if not isinstance(
+            dispatch_result,
+            Mapping,
+        ):
+            dispatch_result = {
+                "value":
+                    dispatch_result,
+            }
+
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
+        completed_job = mark_job_completed(
+            job_id,
+            metadata={
+                **dict(lease_release_metadata),
+                "worker_id":
+                    canonical_worker_id,
+
+                "runtime_worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "runtime_dispatch_completed":
+                    True,
+
+                "worker_capability_admitted":
+                    True,
+
+                "worker_capabilities":
+                    list(worker_capability_snapshot.capabilities),
+
+                "required_worker_capabilities":
+                    list(capability_match.required_capabilities),
+
+                "runtime_dispatch_result":
+                    deepcopy(
+                        dict(
+                            dispatch_result
+                        )
+                    ),
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            },
+        )
+
+        if (
+            completed_job.job_id
+            != job_id
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion changed canonical job identity."
+            )
+
+        if (
+            completed_job.status
+            != JOB_STATUS_COMPLETED
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion did not persist COMPLETED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "COMPLETED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "worker_capability_admitted":
+                True,
+
+            "worker_capabilities":
+                list(worker_capability_snapshot.capabilities),
+
+            "required_worker_capabilities":
+                list(capability_match.required_capabilities),
+
+            "dispatch_result":
+                deepcopy(
+                    dict(
+                        dispatch_result
+                    )
+                ),
+
+            "terminal_status":
+                completed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+    except UniversalRuntimeWorkerFinalizationError:
+        raise
+
+    except Exception as exc:
+
+        error_message = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
+        claimed_metadata = (
+            claimed_job.metadata
+            if isinstance(
+                claimed_job.metadata,
+                Mapping,
+            )
+            else {}
+        )
+
+        attempt_number = (
+            _runtime_failure_attempt_number_v1(
+                claimed_metadata
+            )
+        )
+
+        retry_policy = (
+            _runtime_retry_policy_v1(
+                job_type=
+                    claimed_job.job_type
+            )
+        )
+
+        maximum_attempts = int(
+            retry_policy[
+                "maximum_attempts"
+            ]
+        )
+
+        contract_error = (
+            _runtime_failure_is_contract_error_v1(
+                exc
+            )
+        )
+
+        if contract_error:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_contract_error"
+                ]
+            )
+        else:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_handler_error"
+                ]
+            )
+
+        retry_ceiling_allows = (
+            attempt_number
+            < maximum_attempts
+        )
+
+        retry_allowed = (
+            retry_type_allowed
+            and retry_ceiling_allows
+        )
+
+        # ====================================================
+        # RETRY PATH
+        # SAME canonical job_id -> QUEUED
+        # ====================================================
+
+        if retry_allowed:
+
+            try:
+                requeued_job = (
+                    _requeue_same_runtime_job_v1(
+                        job_id=
+                            job_id,
+
+                        worker_id=
+                            canonical_worker_id,
+
+                        error=
+                            exc,
+
+                        attempt_number=
+                            attempt_number,
+
+                        maximum_attempts=
+                            maximum_attempts,
+
+                        finalization_metadata=
+                            lease_release_metadata,
+                    )
+                )
+
+            except Exception as finalization_exc:
+                raise UniversalRuntimeWorkerFinalizationError(
+                    "Runtime dispatch failed and same-job retry "
+                    "could not be persisted."
+                ) from finalization_exc
+
+            return {
+                "schema_version":
+                    UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+                "worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "worker_id":
+                    canonical_worker_id,
+
+                "worker_status":
+                    "RETRY_QUEUED",
+
+                "job_claimed":
+                    True,
+
+                "job_id":
+                    job_id,
+
+                "job_type":
+                    claimed_job.job_type,
+
+                "claimed_status":
+                    JOB_STATUS_RUNNING,
+
+                "dispatch_performed":
+                    True,
+
+                "dispatch_succeeded":
+                    False,
+
+                "dispatch_error_type":
+                    type(
+                        exc
+                    ).__name__,
+
+                "dispatch_error":
+                    str(
+                        exc
+                    ),
+
+                "contract_error":
+                    contract_error,
+
+                "retry_type_allowed":
+                    retry_type_allowed,
+
+                "retry_ceiling_allows":
+                    retry_ceiling_allows,
+
+                "retry_allowed":
+                    True,
+
+                "retry_scheduled":
+                    True,
+
+                "attempt_number":
+                    attempt_number,
+
+                "maximum_attempts":
+                    maximum_attempts,
+
+                "queue_status":
+                    requeued_job.status,
+
+                "terminal_status":
+                    None,
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "retry_created_new_job":
+                    False,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            }
+
+        # ====================================================
+        # TERMINAL FAILURE PATH
+        # SAME canonical job_id -> FAILED
+        # ====================================================
+
+        try:
+            failed_job = mark_job_failed(
+                job_id,
+                error_message,
+                metadata={
+                    **dict(lease_release_metadata),
+                    "worker_id":
+                        canonical_worker_id,
+
+                    "runtime_worker_version":
+                        UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                    "runtime_dispatch_completed":
+                        False,
+
+                    "runtime_dispatch_failed":
+                        True,
+
+                    "runtime_retry_scheduled":
+                        False,
+
+                    "runtime_failure_attempt_count":
+                        attempt_number,
+
+                    "runtime_maximum_attempts":
+                        maximum_attempts,
+
+                    "runtime_retry_type_allowed":
+                        retry_type_allowed,
+
+                    "runtime_retry_exhausted":
+                        (
+                            retry_type_allowed
+                            and not retry_ceiling_allows
+                        ),
+
+                    "runtime_contract_error":
+                        contract_error,
+
+                    "runtime_dispatch_error_type":
+                        type(
+                            exc
+                        ).__name__,
+
+                    "canonical_job_id_preserved":
+                        True,
+
+                    "retry_created_new_job":
+                        False,
+
+                    "old_universal_knowledge_jsonl_used":
+                        False,
+                },
+            )
+
+        except Exception as finalization_exc:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Runtime dispatch failed and FAILED status "
+                "could not be persisted."
+            ) from finalization_exc
+
+        if failed_job.job_id != job_id:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization changed canonical job identity."
+            )
+
+        if failed_job.status != JOB_STATUS_FAILED:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization did not persist FAILED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "FAILED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "dispatch_succeeded":
+                False,
+
+            "dispatch_error_type":
+                type(
+                    exc
+                ).__name__,
+
+            "dispatch_error":
+                str(
+                    exc
+                ),
+
+            "contract_error":
+                contract_error,
+
+            "retry_type_allowed":
+                retry_type_allowed,
+
+            "retry_ceiling_allows":
+                retry_ceiling_allows,
+
+            "retry_allowed":
+                False,
+
+            "retry_scheduled":
+                False,
+
+            "attempt_number":
+                attempt_number,
+
+            "maximum_attempts":
+                maximum_attempts,
+
+            "retry_exhausted":
+                (
+                    retry_type_allowed
+                    and not retry_ceiling_allows
+                ),
+
+            "terminal_status":
+                failed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "retry_created_new_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+
+==============================================================================================================
+CURRENT PRODUCTION RECOVERY ANALYSIS
+==============================================================================================================
+LEASE_FIELDS_PERSISTED=YES
+LEASE_RELEASE_ACTIVE=YES
+RECOVERY_AUTHORITY_EXISTS=YES
+WORKER_IMPORTS_RECOVERY_AUTHORITY=NO
+WORKER_CALLS_RECOVERY_AUTHORITY=NO
+QUEUE_CALLS_RECOVERY_AUTHORITY=NO
+JOB_STORE_CONTAINS_RECOVERY_MUTATION=NO
+RECOVERY_CLASSIFIES_ACTIVE_LEASE=YES
+RECOVERY_CLASSIFIES_EXPIRED_LEASE=YES
+RECOVERY_HANDLES_INTERRUPTED_EXECUTION=NO
+RECOVERY_HANDLES_OWNERSHIP_CONFLICT=YES
+RECOVERY_PERSISTS_DECISION=NO
+RECOVERY_REQUEUES_SAME_JOB=YES
+RECOVERY_CAN_DEAD_LETTER=YES
+ATOMIC_QUEUE_CLAIM_RETAINED=YES
+A1_8_ASSIGNMENT_RETAINED=YES
+
+==============================================================================================================
+OPTIONAL RECOVERY COMPONENT DISCOVERY
+==============================================================================================================
+queue_recovery: FOUND
+  mentions_requeue: True
+  mentions_dead_letter: True
+  mentions_expired_lease: True
+dead_letter: FOUND
+  mentions_requeue: True
+  mentions_dead_letter: True
+  mentions_expired_lease: False
+runtime_recovery: NOT FOUND
+orchestration_recovery: FOUND
+  mentions_requeue: True
+  mentions_dead_letter: True
+  mentions_expired_lease: True
+
+==============================================================================================================
+A1.9 DECISION QUESTIONS
+==============================================================================================================
+1. Which existing authority classifies interrupted jobs?
+2. How is an expired lease distinguished from an active lease?
+3. Which persisted fields prove lease ownership?
+4. Can recovery safely requeue the same canonical job_id?
+5. When must an interrupted job move to dead-letter instead?
+6. How are retry ceilings preserved during recovery?
+7. How are cross-workspace jobs kept isolated?
+8. Where should recovery run before normal queue claiming?
+9. How are conflicting lease owners rejected?
+10. What evidence is persisted for each recovery decision?
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+INSPECTION_COMPLETE=PASS
+PRODUCTION_FILES_MODIFIED=NO
+
+
+=========================================================================================================
+STANDARD ERROR
+=========================================================================================================
+
+
+=========================================================================================================
+FINAL RESULT
+=========================================================================================================
+A1.9 INSPECTION COMPLETE

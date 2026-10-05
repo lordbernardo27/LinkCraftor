@@ -1,0 +1,576 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.11 KERNEL BINDING ORDER INSPECTION
+
+Generated: 2026-10-05T05:49:19.585676+00:00
+Mode: READ-ONLY - NO PRODUCTION FILES MODIFIED
+Project root: C:\Users\HP\Documents\LinkCraftor
+
+=========================================================================================================
+RuntimeBootProcess.boot
+=========================================================================================================
+Signature: (self) -> 'RuntimeBootContext'
+
+    async def boot(
+        self,
+    ) -> RuntimeBootContext:
+        """
+        Compose and start the runtime.
+
+        The asyncio lock creates a single-flight boot boundary. A second
+        caller waits for the first caller and then receives the same
+        successful context.
+        """
+
+        async with self._lock:
+            if (
+                self._status
+                is RuntimeBootStatus.SHUTTING_DOWN
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime boot is unavailable while "
+                    "shutdown is in progress."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.RUNNING
+                and self._context is not None
+            ):
+                self._record_event(
+                    stage="boot",
+                    outcome="already_running",
+                    detail=self._context.boot_id,
+                )
+
+                return self._context
+
+            self._attempt += 1
+            self._boot_id = (
+                f"runtime_boot_{uuid4().hex}"
+            )
+            self._status = RuntimeBootStatus.BOOTING
+            self._failure_reason = None
+            self._context = None
+
+            self._record_event(
+                stage="boot",
+                outcome="started",
+                detail=f"attempt={self._attempt}",
+            )
+
+            kernel: UniversalRuntimeKernel | None = None
+
+            lifecycle_manager: (
+                RuntimeLifecycleManager | None
+            ) = None
+
+            stage = "configuration"
+
+            try:
+                loader = RuntimeConfigurationLoader(
+                    project_root=self._project_root
+                )
+
+                configuration = loader.load(
+                    environ=self._environ,
+                    overrides=self._overrides,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.fingerprint(),
+                )
+
+                stage = "environment"
+
+                environment = RuntimeEnvironmentManager(
+                    configuration
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=environment.name.value,
+                )
+
+                stage = "kernel"
+
+                kernel = UniversalRuntimeKernel(
+                    runtime_id=configuration.runtime_id,
+                    product_name=configuration.product_name,
+                )
+
+                kernel.bind_component(
+                    "configuration",
+                    configuration,
+                )
+
+                kernel.bind_component(
+                    "environment",
+                    environment,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.runtime_id,
+                )
+
+                stage = "service_registry"
+
+                service_registry = (
+                    RuntimeServiceRegistry()
+                )
+
+                kernel.bind_component(
+                    "service_registry",
+                    service_registry,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="created",
+                )
+
+                stage = "service_registration"
+
+                composition = RuntimeBootComposition(
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=service_registry,
+                )
+
+                for registrar in self._registrars:
+                    registrar_name = (
+                        self._registrar_name(
+                            registrar
+                        )
+                    )
+
+                    registrar(composition)
+
+                    self._record_event(
+                        stage=stage,
+                        outcome="registrar_completed",
+                        detail=registrar_name,
+                    )
+
+                stage = "lifecycle_manager"
+
+                lifecycle_manager = (
+                    RuntimeLifecycleManager(
+                        kernel=kernel,
+                        service_registry=(
+                            service_registry
+                        ),
+                        startup_timeout_seconds=(
+                            configuration
+                            .startup_timeout_seconds
+                        ),
+                        shutdown_timeout_seconds=(
+                            configuration
+                            .shutdown_timeout_seconds
+                        ),
+                    )
+                )
+
+                kernel.bind_component(
+                    "lifecycle_manager",
+                    lifecycle_manager,
+                )
+
+                kernel.require_components(
+                    list(
+                        BOOT_REQUIRED_COMPONENT_KEYS
+                    )
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "registry_seal"
+
+                registry_snapshot = (
+                    service_registry.seal()
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=(
+                        "services="
+                        f"{registry_snapshot.service_count}"
+                    ),
+                )
+
+                stage = "lifecycle_initialize"
+
+                await lifecycle_manager.initialize()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "lifecycle_start"
+
+                await lifecycle_manager.start()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "finalize"
+
+                service_keys = (
+                    service_registry
+                    .dependency_order()
+                )
+
+                context = RuntimeBootContext(
+                    boot_id=self._boot_id,
+                    attempt=self._attempt,
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=(
+                        service_registry
+                    ),
+                    lifecycle_manager=(
+                        lifecycle_manager
+                    ),
+                    service_keys=service_keys,
+                    booted_at=_utc_now(),
+                )
+
+                self._context = context
+                self._status = (
+                    RuntimeBootStatus.RUNNING
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=self._boot_id,
+                )
+
+                return context
+
+            except Exception as exc:
+                self._status = (
+                    RuntimeBootStatus.FAILED
+                )
+
+                self._failure_reason = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="failed",
+                    detail=self._failure_reason,
+                )
+
+                cleanup_failures = (
+                    await self._cleanup_failed_boot(
+                        kernel=kernel,
+                        lifecycle_manager=(
+                            lifecycle_manager
+                        ),
+                    )
+                )
+
+                if cleanup_failures:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome=(
+                            "completed_with_failures"
+                        ),
+                        detail="; ".join(
+                            cleanup_failures
+                        ),
+                    )
+                else:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome="completed",
+                    )
+
+                raise RuntimeBootFailureError(
+                    stage=stage,
+                    cause=exc,
+                ) from exc
+
+
+=========================================================================================================
+RuntimeBootProcess.__init__
+=========================================================================================================
+Signature: (self, *, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None, service_registrars: 'Sequence[RuntimeServiceRegistrar]' = (), event_limit: 'int' = 500) -> 'None'
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        environ: Mapping[str, str] | None = None,
+        overrides: Mapping[str, Any] | None = None,
+        service_registrars: Sequence[
+            RuntimeServiceRegistrar
+        ] = (),
+        event_limit: int = 500,
+    ) -> None:
+        resolved_root = (
+            Path(project_root)
+            .expanduser()
+            .resolve()
+        )
+
+        if (
+            not resolved_root.exists()
+            or not resolved_root.is_dir()
+        ):
+            raise RuntimeBootConfigurationError(
+                "project_root must be an existing "
+                f"directory: {resolved_root}"
+            )
+
+        if isinstance(event_limit, bool):
+            raise RuntimeBootConfigurationError(
+                "event_limit must be an integer."
+            )
+
+        resolved_event_limit = int(event_limit)
+
+        if not 10 <= resolved_event_limit <= 100000:
+            raise RuntimeBootConfigurationError(
+                "event_limit must be between 10 and 100000."
+            )
+
+        registrars = tuple(service_registrars)
+
+        invalid_registrar_indexes = tuple(
+            index
+            for index, registrar in enumerate(registrars)
+            if not callable(registrar)
+        )
+
+        if invalid_registrar_indexes:
+            raise RuntimeBootConfigurationError(
+                "All service registrars must be callable. "
+                "Invalid indexes: "
+                + ", ".join(
+                    str(index)
+                    for index in invalid_registrar_indexes
+                )
+            )
+
+        self._project_root = resolved_root
+
+        self._environ = (
+            None
+            if environ is None
+            else MappingProxyType(
+                dict(environ)
+            )
+        )
+
+        self._overrides = MappingProxyType(
+            dict(overrides or {})
+        )
+
+        self._registrars = registrars
+        self._event_limit = resolved_event_limit
+        self._status = RuntimeBootStatus.IDLE
+        self._attempt = 0
+        self._boot_id: str | None = None
+        self._stage = "idle"
+        self._generation = 0
+        self._events: list[RuntimeBootEvent] = []
+        self._context: RuntimeBootContext | None = None
+        self._failure_reason: str | None = None
+        self._lock = asyncio.Lock()
+
+
+=========================================================================================================
+UniversalRuntimeKernel.bind_component
+=========================================================================================================
+Signature: (self, component_key: 'str', component: 'object', *, replace: 'bool' = False) -> 'KernelComponentBinding'
+
+    def bind_component(
+        self,
+        component_key: str,
+        component: object,
+        *,
+        replace: bool = False,
+    ) -> KernelComponentBinding:
+        """
+        Bind one foundation component to the kernel.
+
+        Components are stored by explicit logical key. Duplicate
+        replacement is prohibited unless replace=True is supplied.
+        """
+
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        if component is None:
+            raise RuntimeKernelBindingError(
+                "A kernel component cannot be None."
+            )
+
+        with self._lock:
+            self._assert_mutable()
+
+            if key in self._components and not replace:
+                raise RuntimeKernelBindingError(
+                    f"Kernel component {key!r} is already bound."
+                )
+
+            generation = self._record_mutation()
+
+            binding = KernelComponentBinding(
+                key=key,
+                component_type=_qualified_type_name(
+                    component
+                ),
+                bound_at=self._updated_at,
+                generation=generation,
+            )
+
+            self._components[key] = component
+            self._bindings[key] = binding
+
+            return binding
+
+
+=========================================================================================================
+UniversalRuntimeKernel.transition_state
+=========================================================================================================
+Signature: (self, *, expected_state: 'RuntimeKernelState | str', target_state: 'RuntimeKernelState | str', reason: 'str | None' = None) -> 'RuntimeKernelState'
+
+    def transition_state(
+        self,
+        *,
+        expected_state: RuntimeKernelState | str,
+        target_state: RuntimeKernelState | str,
+        reason: str | None = None,
+    ) -> RuntimeKernelState:
+        """
+        Perform one guarded kernel state transition.
+
+        expected_state provides optimistic concurrency protection and
+        prevents stale lifecycle actors from applying invalid changes.
+        """
+
+        expected = self.coerce_state(
+            expected_state
+        )
+        target = self.coerce_state(
+            target_state
+        )
+
+        with self._lock:
+            if self._state is not expected:
+                raise RuntimeKernelStateError(
+                    "Kernel state transition rejected: expected "
+                    f"{expected.value!r}, found "
+                    f"{self._state.value!r}."
+                )
+
+            allowed = _ALLOWED_TRANSITIONS[
+                self._state
+            ]
+
+            if target not in allowed:
+                raise RuntimeKernelStateError(
+                    "Illegal kernel state transition: "
+                    f"{self._state.value!r} -> "
+                    f"{target.value!r}."
+                )
+
+            self._state = target
+
+            if target is RuntimeKernelState.FAILED:
+                normalized_reason = str(
+                    reason or "unspecified runtime failure"
+                ).strip()
+
+                self._failure_reason = (
+                    normalized_reason
+                    or "unspecified runtime failure"
+                )
+
+            self._record_mutation()
+
+            return self._state
+
+
+=========================================================================================================
+UniversalRuntimeKernel.missing_foundation_components
+=========================================================================================================
+Signature: (self) -> 'tuple[str, ...]'
+
+    def missing_foundation_components(
+        self,
+    ) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(
+                key
+                for key in FOUNDATION_COMPONENT_KEYS
+                if key not in self._components
+            )
+
+
+=========================================================================================================
+UniversalRuntimeKernel.require_components
+=========================================================================================================
+Signature: (self, component_keys: 'tuple[str, ...] | list[str]') -> 'Mapping[str, object]'
+
+    def require_components(
+        self,
+        component_keys: tuple[str, ...] | list[str],
+    ) -> Mapping[str, object]:
+        """
+        Return a read-only mapping of required components.
+
+        The operation fails atomically when any requested component is
+        missing.
+        """
+
+        normalized_keys = tuple(
+            self.normalize_component_key(key)
+            for key in component_keys
+        )
+
+        with self._lock:
+            missing = tuple(
+                key
+                for key in normalized_keys
+                if key not in self._components
+            )
+
+            if missing:
+                raise RuntimeKernelMissingComponentError(
+                    "Missing required kernel components: "
+                    + ", ".join(missing)
+                )
+
+            selected = {
+                key: self._components[key]
+                for key in normalized_keys
+            }
+
+        return MappingProxyType(selected)
+
+
+=========================================================================================================
+FINAL RESULT
+=========================================================================================================
+A1.11 KERNEL BINDING ORDER INSPECTION COMPLETE

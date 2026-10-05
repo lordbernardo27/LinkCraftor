@@ -71,6 +71,7 @@ from backend.server.runtime.universal_worker.capability import (
 )
 from backend.server.runtime.universal_worker.lifecycle_gateway import (
     admit_universal_runtime_worker,
+    release_universal_runtime_job_lease,
 )
 
 
@@ -377,6 +378,7 @@ def _requeue_same_runtime_job_v1(
     error: Exception,
     attempt_number: int,
     maximum_attempts: int,
+    finalization_metadata: Mapping[str, Any],
 ) -> OrchestrationJob:
     """
     Requeue the SAME canonical orchestration record.
@@ -389,6 +391,8 @@ def _requeue_same_runtime_job_v1(
         job_id,
         JOB_STATUS_QUEUED,
         metadata={
+            **dict(finalization_metadata),
+
             "worker_id":
                 worker_id,
 
@@ -504,7 +508,11 @@ def run_one_universal_runtime_job_v1(
         )
 
     claimed_job = dequeue_job(
-        worker_id=canonical_worker_id
+        worker_id=canonical_worker_id,
+        worker_registration=lifecycle_admission[
+            "registration"
+        ],
+        lease_seconds=1800,
     )
 
     if claimed_job is None:
@@ -627,9 +635,17 @@ def run_one_universal_runtime_job_v1(
                     dispatch_result,
             }
 
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
         completed_job = mark_job_completed(
             job_id,
             metadata={
+                **dict(lease_release_metadata),
                 "worker_id":
                     canonical_worker_id,
 
@@ -742,6 +758,13 @@ def run_one_universal_runtime_job_v1(
             f"{type(exc).__name__}: {exc}"
         )
 
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
         claimed_metadata = (
             claimed_job.metadata
             if isinstance(
@@ -823,6 +846,9 @@ def run_one_universal_runtime_job_v1(
 
                         maximum_attempts=
                             maximum_attempts,
+
+                        finalization_metadata=
+                            lease_release_metadata,
                     )
                 )
 
@@ -920,6 +946,7 @@ def run_one_universal_runtime_job_v1(
                 job_id,
                 error_message,
                 metadata={
+                    **dict(lease_release_metadata),
                     "worker_id":
                         canonical_worker_id,
 

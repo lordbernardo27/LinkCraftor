@@ -26,6 +26,15 @@ from backend.server.runtime.runtime_configuration import (
 from backend.server.runtime.runtime_environment import (
     RuntimeEnvironmentManager,
 )
+from backend.server.runtime.runtime_compatibility import (
+    RuntimeCompatibilityLayer,
+    RuntimeCompatibilityReport,
+    create_default_runtime_compatibility_layer,
+)
+from backend.server.runtime.runtime_versioning import (
+    RuntimeVersionManager,
+    create_default_runtime_version_manager,
+)
 from backend.server.runtime.runtime_lifecycle_manager import (
     RuntimeLifecycleManager,
     RuntimeLifecyclePhase,
@@ -58,9 +67,25 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+RUNTIME_VERSION_MANAGER_COMPONENT_KEY = (
+    "runtime_version_manager"
+)
+
+RUNTIME_COMPATIBILITY_COMPONENT_KEY = (
+    "runtime_compatibility"
+)
+
+RUNTIME_COMPATIBILITY_REPORT_COMPONENT_KEY = (
+    "runtime_compatibility_report"
+)
+
+
 BOOT_REQUIRED_COMPONENT_KEYS: tuple[str, ...] = (
     "configuration",
     "environment",
+    RUNTIME_VERSION_MANAGER_COMPONENT_KEY,
+    RUNTIME_COMPATIBILITY_COMPONENT_KEY,
+    RUNTIME_COMPATIBILITY_REPORT_COMPONENT_KEY,
     "service_registry",
     "lifecycle_manager",
 )
@@ -516,6 +541,52 @@ class RuntimeBootProcess:
                     stage=stage,
                     outcome="completed",
                     detail=configuration.runtime_id,
+                )
+
+                stage = "compatibility"
+
+                version_manager = (
+                    create_default_runtime_version_manager()
+                )
+
+                compatibility_layer = (
+                    create_default_runtime_compatibility_layer(
+                        strict=(
+                            configuration
+                            .strict_compatibility
+                        )
+                    )
+                )
+
+                compatibility_report = (
+                    compatibility_layer
+                    .require_compatible(
+                        version_manager.manifest
+                    )
+                )
+
+                kernel.bind_component(
+                    RUNTIME_VERSION_MANAGER_COMPONENT_KEY,
+                    version_manager,
+                )
+
+                kernel.bind_component(
+                    RUNTIME_COMPATIBILITY_COMPONENT_KEY,
+                    compatibility_layer,
+                )
+
+                kernel.bind_component(
+                    RUNTIME_COMPATIBILITY_REPORT_COMPONENT_KEY,
+                    compatibility_report,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=(
+                        compatibility_report
+                        .manifest_fingerprint
+                    ),
                 )
 
                 stage = "service_registry"

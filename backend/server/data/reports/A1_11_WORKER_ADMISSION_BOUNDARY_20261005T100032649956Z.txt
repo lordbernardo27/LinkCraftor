@@ -1,0 +1,2576 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.11 WORKER ADMISSION AND CALLER INSPECTION
+Generated: 2026-10-05T10:00:32.650010+00:00
+Mode: source inspection; no application imports
+Production files modified: NO
+
+====================================================================================================
+FULL SOURCE: backend\server\runtime\universal_runtime_worker_v1.py
+====================================================================================================
+"""
+Canonical Universal Runtime Worker v1.
+
+Canonical position:
+
+    Canonical Orchestration Job Store
+        ->
+    dequeue_job(worker_id=...)
+        ->
+    atomic QUEUED -> RUNNING claim
+        ->
+    Universal Runtime Worker
+        ->
+    Runtime Registration Dispatcher
+        ->
+    registered handler
+        ->
+    COMPLETED or FAILED
+
+This worker is intentionally one-shot.
+
+It does:
+- atomically claim at most one queued orchestration job;
+- preserve the existing canonical job_id;
+- convert OrchestrationJob into the Runtime Registration dispatch mapping;
+- invoke the canonical Runtime Registration dispatcher;
+- mark successful execution COMPLETED;
+- mark exceptions FAILED;
+- return an auditable worker result.
+
+It does NOT:
+- create jobs;
+- mint replacement job identities;
+- write the retired Universal Knowledge JSONL queue;
+- use the older Universal Knowledge status/progress files;
+- run an infinite polling loop;
+- perform Runtime Registration mutation.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from datetime import datetime
+from typing import Any, Callable, Iterable, Mapping
+
+from backend.server.orchestration.models import (
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_QUEUED,
+    JOB_STATUS_RUNNING,
+    OrchestrationJob,
+)
+from backend.server.orchestration.queue import (
+    dequeue_job,
+)
+from backend.server.orchestration.service import (
+    mark_job_completed,
+    mark_job_failed,
+)
+
+from backend.server.orchestration.job_store import (
+    update_job_status,
+)
+from backend.server.runtime.universal_runtime_registration import (
+    dispatch_registered_runtime_handler,
+    get_runtime_registration,
+)
+from backend.server.runtime.universal_worker.capability import (
+    UniversalWorkerCapabilitySnapshot,
+    match_universal_worker_capabilities,
+)
+from backend.server.runtime.universal_worker.lifecycle_gateway import (
+    admit_universal_runtime_worker,
+    release_universal_runtime_job_lease,
+)
+
+
+UNIVERSAL_RUNTIME_WORKER_VERSION = (
+    "universal_runtime_worker_v1"
+)
+
+UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION = (
+    "universal_runtime_worker_result_v1"
+)
+
+
+class UniversalRuntimeWorkerError(
+    RuntimeError
+):
+    """Base error for canonical Universal Runtime Worker."""
+
+
+class UniversalRuntimeWorkerContractError(
+    UniversalRuntimeWorkerError
+):
+    """Raised when a claimed orchestration job violates the worker contract."""
+
+
+class UniversalRuntimeWorkerFinalizationError(
+    UniversalRuntimeWorkerError
+):
+    """Raised when canonical terminal-state persistence fails."""
+
+
+def _datetime_value(
+    value: Any,
+) -> Any:
+    if isinstance(
+        value,
+        datetime,
+    ):
+        return value.isoformat()
+
+    return value
+
+
+def orchestration_job_to_runtime_mapping_v1(
+    job: OrchestrationJob,
+) -> dict[str, Any]:
+    """
+    Convert one claimed OrchestrationJob into the canonical Runtime
+    Registration dispatch mapping.
+
+    This preserves job identity and does not reconstruct a new job.
+    """
+
+    if not isinstance(
+        job,
+        OrchestrationJob,
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "job must be an OrchestrationJob."
+        )
+
+    job_id = str(
+        job.job_id
+        or ""
+    ).strip()
+
+    if not job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "Claimed orchestration job has no job_id."
+        )
+
+    workspace_id = str(
+        job.workspace_id
+        or ""
+    ).strip()
+
+    if not workspace_id:
+        raise UniversalRuntimeWorkerContractError(
+            "Claimed orchestration job has no workspace_id."
+        )
+
+    job_type = str(
+        job.job_type
+        or ""
+    ).strip()
+
+    if not job_type:
+        raise UniversalRuntimeWorkerContractError(
+            "Claimed orchestration job has no job_type."
+        )
+
+    if job.status != JOB_STATUS_RUNNING:
+        raise UniversalRuntimeWorkerContractError(
+            "Worker may execute only a job already atomically "
+            "claimed as RUNNING."
+        )
+
+    payload = job.payload
+
+    if not isinstance(
+        payload,
+        Mapping,
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "Claimed orchestration job payload must be a mapping."
+        )
+
+    metadata = job.metadata
+
+    if not isinstance(
+        metadata,
+        Mapping,
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "Claimed orchestration job metadata must be a mapping."
+        )
+
+    return {
+        "job_id":
+            job_id,
+
+        "workspace_id":
+            workspace_id,
+
+        "job_type":
+            job_type,
+
+        "status":
+            job.status,
+
+        "priority":
+            job.priority,
+
+        "created_at":
+            _datetime_value(
+                job.created_at
+            ),
+
+        "updated_at":
+            _datetime_value(
+                job.updated_at
+            ),
+
+        "started_at":
+            _datetime_value(
+                job.started_at
+            ),
+
+        "payload":
+            deepcopy(
+                dict(
+                    payload
+                )
+            ),
+
+        "metadata":
+            deepcopy(
+                dict(
+                    metadata
+                )
+            ),
+    }
+
+
+def _runtime_retry_policy_v1(
+    *,
+    job_type: str,
+) -> dict[str, Any]:
+    """
+    Resolve executable retry policy from Runtime Registration.
+
+    Supports both:
+      - maximum_attempts
+      - max_attempts
+    """
+
+    registration = get_runtime_registration(
+        job_type
+    )
+
+    if not isinstance(
+        registration,
+        Mapping,
+    ):
+        return {
+            "maximum_attempts": 1,
+            "retry_on_handler_error": False,
+            "retry_on_contract_error": False,
+        }
+
+    raw_policy = registration.get(
+        "retry_policy"
+    )
+
+    policy = (
+        raw_policy
+        if isinstance(
+            raw_policy,
+            Mapping,
+        )
+        else {}
+    )
+
+    raw_maximum_attempts = policy.get(
+        "maximum_attempts",
+        policy.get(
+            "max_attempts",
+            1,
+        ),
+    )
+
+    try:
+        maximum_attempts = int(
+            raw_maximum_attempts
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        maximum_attempts = 1
+
+    maximum_attempts = max(
+        1,
+        maximum_attempts,
+    )
+
+    retry_on_handler_error = bool(
+        policy.get(
+            "retry_on_handler_error",
+            policy.get(
+                "retryable",
+                False,
+            ),
+        )
+    )
+
+    retry_on_contract_error = bool(
+        policy.get(
+            "retry_on_contract_error",
+            False,
+        )
+    )
+
+    return {
+        "maximum_attempts":
+            maximum_attempts,
+
+        "retry_on_handler_error":
+            retry_on_handler_error,
+
+        "retry_on_contract_error":
+            retry_on_contract_error,
+    }
+
+
+def _runtime_failure_is_contract_error_v1(
+    exc: Exception,
+) -> bool:
+    """
+    Classify canonical contract failures without coupling the
+    universal worker to individual stage exception classes.
+    """
+
+    return type(
+        exc
+    ).__name__.endswith(
+        "ContractError"
+    )
+
+
+def _runtime_failure_attempt_number_v1(
+    metadata: Mapping[str, Any],
+) -> int:
+    """
+    Return this failure's 1-based attempt number.
+    """
+
+    raw_previous = metadata.get(
+        "runtime_failure_attempt_count",
+        0,
+    )
+
+    try:
+        previous = int(
+            raw_previous
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        previous = 0
+
+    previous = max(
+        0,
+        previous,
+    )
+
+    return previous + 1
+
+
+def _requeue_same_runtime_job_v1(
+    *,
+    job_id: str,
+    worker_id: str,
+    error: Exception,
+    attempt_number: int,
+    maximum_attempts: int,
+    finalization_metadata: Mapping[str, Any],
+) -> OrchestrationJob:
+    """
+    Requeue the SAME canonical orchestration record.
+
+    This function MUST NOT create a new Universal Job or a new
+    orchestration job_id.
+    """
+
+    requeued = update_job_status(
+        job_id,
+        JOB_STATUS_QUEUED,
+        metadata={
+            **dict(finalization_metadata),
+
+            "worker_id":
+                worker_id,
+
+            "runtime_worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "runtime_dispatch_completed":
+                False,
+
+            "runtime_dispatch_failed":
+                True,
+
+            "runtime_retry_scheduled":
+                True,
+
+            "runtime_failure_attempt_count":
+                attempt_number,
+
+            "runtime_maximum_attempts":
+                maximum_attempts,
+
+            "runtime_retry_remaining":
+                max(
+                    0,
+                    maximum_attempts
+                    - attempt_number,
+                ),
+
+            "runtime_dispatch_error_type":
+                type(
+                    error
+                ).__name__,
+
+            "runtime_dispatch_error_message":
+                str(
+                    error
+                ),
+
+            "canonical_job_id_preserved":
+                True,
+
+            "retry_created_new_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        },
+
+        error_message=None,
+    )
+
+    if requeued.job_id != job_id:
+        raise UniversalRuntimeWorkerFinalizationError(
+            "Same-job retry changed canonical job identity."
+        )
+
+    if requeued.status != JOB_STATUS_QUEUED:
+        raise UniversalRuntimeWorkerFinalizationError(
+            "Same-job retry did not persist QUEUED status."
+        )
+
+    return requeued
+
+
+def run_one_universal_runtime_job_v1(
+    *,
+    worker_id: str = "universal_runtime_worker_v1",
+    worker_capabilities: Iterable[Any] = (
+        "universal_runtime",
+    ),
+    dispatcher: Callable[
+        [Mapping[str, Any]],
+        dict[str, Any],
+    ] = dispatch_registered_runtime_handler,
+) -> dict[str, Any]:
+    """
+    Claim and execute at most one canonical orchestration job.
+
+    Returns IDLE when no queued work exists.
+
+    The dequeue operation itself owns QUEUED -> RUNNING.
+    """
+
+    canonical_worker_id = str(
+        worker_id
+        or ""
+    ).strip()
+
+    if not canonical_worker_id:
+        raise UniversalRuntimeWorkerContractError(
+            "worker_id must not be empty."
+        )
+
+    if not callable(
+        dispatcher
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "dispatcher must be callable."
+        )
+
+    lifecycle_admission = admit_universal_runtime_worker(
+        worker_id=canonical_worker_id,
+        runtime_version=UNIVERSAL_RUNTIME_WORKER_VERSION,
+        capabilities=worker_capabilities,
+        capacity_limit=1,
+        active_work_count=0,
+        heartbeat_sequence=1,
+    )
+
+    if not lifecycle_admission.get("admitted"):
+        raise UniversalRuntimeWorkerContractError(
+            "Worker lifecycle admission failed."
+        )
+
+    claimed_job = dequeue_job(
+        worker_id=canonical_worker_id,
+        worker_registration=lifecycle_admission[
+            "registration"
+        ],
+        lease_seconds=1800,
+    )
+
+    if claimed_job is None:
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "IDLE",
+
+            "job_claimed":
+                False,
+
+            "job_id":
+                None,
+
+            "dispatch_performed":
+                False,
+
+            "terminal_status":
+                None,
+        }
+
+    job_id = str(
+        claimed_job.job_id
+        or ""
+    ).strip()
+
+    if not job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a claimed job without job_id."
+        )
+
+    if claimed_job.status != JOB_STATUS_RUNNING:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a job that is not RUNNING."
+        )
+
+    runtime_job = (
+        orchestration_job_to_runtime_mapping_v1(
+            claimed_job
+        )
+    )
+
+    if runtime_job[
+        "job_id"
+    ] != job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "Runtime mapping changed canonical job identity."
+        )
+
+    try:
+        registration = get_runtime_registration(
+            claimed_job.job_type
+        )
+
+        if not isinstance(registration, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration did not return a mapping."
+            )
+
+        registration_metadata = registration.get("metadata", {})
+
+        if not isinstance(registration_metadata, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration metadata must be a mapping."
+            )
+
+        required_worker_capabilities = registration_metadata.get(
+            "required_worker_capabilities",
+            (),
+        )
+
+        if required_worker_capabilities is None:
+            required_worker_capabilities = ()
+
+        if isinstance(required_worker_capabilities, str):
+            raise UniversalRuntimeWorkerContractError(
+                "required_worker_capabilities must be a collection, "
+                "not a string."
+            )
+
+        worker_capability_snapshot = UniversalWorkerCapabilitySnapshot(
+            worker_id=canonical_worker_id,
+            worker_instance_id=canonical_worker_id,
+            worker_type="universal_runtime_worker",
+            capabilities=tuple(worker_capabilities),
+        )
+
+        capability_match = match_universal_worker_capabilities(
+            snapshot=worker_capability_snapshot,
+            required_capabilities=required_worker_capabilities,
+        )
+
+        if not capability_match.compatible:
+            raise UniversalRuntimeWorkerContractError(
+                "Worker lacks required runtime capabilities: "
+                + ", ".join(capability_match.missing_capabilities)
+            )
+
+        dispatch_result = dispatcher(
+            runtime_job
+        )
+
+        if dispatch_result is None:
+            dispatch_result = {}
+
+        if not isinstance(
+            dispatch_result,
+            Mapping,
+        ):
+            dispatch_result = {
+                "value":
+                    dispatch_result,
+            }
+
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
+        completed_job = mark_job_completed(
+            job_id,
+            metadata={
+                **dict(lease_release_metadata),
+                "worker_id":
+                    canonical_worker_id,
+
+                "runtime_worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "runtime_dispatch_completed":
+                    True,
+
+                "worker_capability_admitted":
+                    True,
+
+                "worker_capabilities":
+                    list(worker_capability_snapshot.capabilities),
+
+                "required_worker_capabilities":
+                    list(capability_match.required_capabilities),
+
+                "runtime_dispatch_result":
+                    deepcopy(
+                        dict(
+                            dispatch_result
+                        )
+                    ),
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            },
+        )
+
+        if (
+            completed_job.job_id
+            != job_id
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion changed canonical job identity."
+            )
+
+        if (
+            completed_job.status
+            != JOB_STATUS_COMPLETED
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion did not persist COMPLETED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "COMPLETED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "worker_capability_admitted":
+                True,
+
+            "worker_capabilities":
+                list(worker_capability_snapshot.capabilities),
+
+            "required_worker_capabilities":
+                list(capability_match.required_capabilities),
+
+            "dispatch_result":
+                deepcopy(
+                    dict(
+                        dispatch_result
+                    )
+                ),
+
+            "terminal_status":
+                completed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+    except UniversalRuntimeWorkerFinalizationError:
+        raise
+
+    except Exception as exc:
+
+        error_message = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
+        claimed_metadata = (
+            claimed_job.metadata
+            if isinstance(
+                claimed_job.metadata,
+                Mapping,
+            )
+            else {}
+        )
+
+        attempt_number = (
+            _runtime_failure_attempt_number_v1(
+                claimed_metadata
+            )
+        )
+
+        retry_policy = (
+            _runtime_retry_policy_v1(
+                job_type=
+                    claimed_job.job_type
+            )
+        )
+
+        maximum_attempts = int(
+            retry_policy[
+                "maximum_attempts"
+            ]
+        )
+
+        contract_error = (
+            _runtime_failure_is_contract_error_v1(
+                exc
+            )
+        )
+
+        if contract_error:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_contract_error"
+                ]
+            )
+        else:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_handler_error"
+                ]
+            )
+
+        retry_ceiling_allows = (
+            attempt_number
+            < maximum_attempts
+        )
+
+        retry_allowed = (
+            retry_type_allowed
+            and retry_ceiling_allows
+        )
+
+        # ====================================================
+        # RETRY PATH
+        # SAME canonical job_id -> QUEUED
+        # ====================================================
+
+        if retry_allowed:
+
+            try:
+                requeued_job = (
+                    _requeue_same_runtime_job_v1(
+                        job_id=
+                            job_id,
+
+                        worker_id=
+                            canonical_worker_id,
+
+                        error=
+                            exc,
+
+                        attempt_number=
+                            attempt_number,
+
+                        maximum_attempts=
+                            maximum_attempts,
+
+                        finalization_metadata=
+                            lease_release_metadata,
+                    )
+                )
+
+            except Exception as finalization_exc:
+                raise UniversalRuntimeWorkerFinalizationError(
+                    "Runtime dispatch failed and same-job retry "
+                    "could not be persisted."
+                ) from finalization_exc
+
+            return {
+                "schema_version":
+                    UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+                "worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "worker_id":
+                    canonical_worker_id,
+
+                "worker_status":
+                    "RETRY_QUEUED",
+
+                "job_claimed":
+                    True,
+
+                "job_id":
+                    job_id,
+
+                "job_type":
+                    claimed_job.job_type,
+
+                "claimed_status":
+                    JOB_STATUS_RUNNING,
+
+                "dispatch_performed":
+                    True,
+
+                "dispatch_succeeded":
+                    False,
+
+                "dispatch_error_type":
+                    type(
+                        exc
+                    ).__name__,
+
+                "dispatch_error":
+                    str(
+                        exc
+                    ),
+
+                "contract_error":
+                    contract_error,
+
+                "retry_type_allowed":
+                    retry_type_allowed,
+
+                "retry_ceiling_allows":
+                    retry_ceiling_allows,
+
+                "retry_allowed":
+                    True,
+
+                "retry_scheduled":
+                    True,
+
+                "attempt_number":
+                    attempt_number,
+
+                "maximum_attempts":
+                    maximum_attempts,
+
+                "queue_status":
+                    requeued_job.status,
+
+                "terminal_status":
+                    None,
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "retry_created_new_job":
+                    False,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            }
+
+        # ====================================================
+        # TERMINAL FAILURE PATH
+        # SAME canonical job_id -> FAILED
+        # ====================================================
+
+        try:
+            failed_job = mark_job_failed(
+                job_id,
+                error_message,
+                metadata={
+                    **dict(lease_release_metadata),
+                    "worker_id":
+                        canonical_worker_id,
+
+                    "runtime_worker_version":
+                        UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                    "runtime_dispatch_completed":
+                        False,
+
+                    "runtime_dispatch_failed":
+                        True,
+
+                    "runtime_retry_scheduled":
+                        False,
+
+                    "runtime_failure_attempt_count":
+                        attempt_number,
+
+                    "runtime_maximum_attempts":
+                        maximum_attempts,
+
+                    "runtime_retry_type_allowed":
+                        retry_type_allowed,
+
+                    "runtime_retry_exhausted":
+                        (
+                            retry_type_allowed
+                            and not retry_ceiling_allows
+                        ),
+
+                    "runtime_contract_error":
+                        contract_error,
+
+                    "runtime_dispatch_error_type":
+                        type(
+                            exc
+                        ).__name__,
+
+                    "canonical_job_id_preserved":
+                        True,
+
+                    "retry_created_new_job":
+                        False,
+
+                    "old_universal_knowledge_jsonl_used":
+                        False,
+                },
+            )
+
+        except Exception as finalization_exc:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Runtime dispatch failed and FAILED status "
+                "could not be persisted."
+            ) from finalization_exc
+
+        if failed_job.job_id != job_id:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization changed canonical job identity."
+            )
+
+        if failed_job.status != JOB_STATUS_FAILED:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization did not persist FAILED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "FAILED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "dispatch_succeeded":
+                False,
+
+            "dispatch_error_type":
+                type(
+                    exc
+                ).__name__,
+
+            "dispatch_error":
+                str(
+                    exc
+                ),
+
+            "contract_error":
+                contract_error,
+
+            "retry_type_allowed":
+                retry_type_allowed,
+
+            "retry_ceiling_allows":
+                retry_ceiling_allows,
+
+            "retry_allowed":
+                False,
+
+            "retry_scheduled":
+                False,
+
+            "attempt_number":
+                attempt_number,
+
+            "maximum_attempts":
+                maximum_attempts,
+
+            "retry_exhausted":
+                (
+                    retry_type_allowed
+                    and not retry_ceiling_allows
+                ),
+
+            "terminal_status":
+                failed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "retry_created_new_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+
+
+def explain_universal_runtime_worker_v1() -> dict[str, Any]:
+    """Return the canonical Stage 10.8 worker contract."""
+
+    return {
+        "component":
+            "Universal Runtime Worker",
+
+        "version":
+            UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+        "execution_model":
+            "one-shot",
+
+        "queue_source":
+            "canonical orchestration persisted job store",
+
+        "claim_operation":
+            "dequeue_job(worker_id=...)",
+
+        "claim_transition":
+            "QUEUED -> RUNNING owned by dequeue_job",
+
+        "dispatcher":
+            "dispatch_registered_runtime_handler",
+
+        "success_transition":
+            "RUNNING -> COMPLETED via mark_job_completed",
+
+        "failure_transition":
+            (
+                "RUNNING -> QUEUED for permitted retry; "
+                "RUNNING -> FAILED when retry is disallowed "
+                "or exhausted"
+            ),
+
+        "retry_policy_source":
+            "Runtime Registration retry_policy",
+
+        "retry_job_identity_rule":
+            "same canonical job_id; no replacement job",
+
+        "canonical_job_id_preserved":
+            True,
+
+        "old_universal_knowledge_jsonl_used":
+            False,
+
+        "older_execute_registered_runtime_job_v1_used":
+            False,
+
+        "infinite_loop":
+            False,
+    }
+
+
+__all__ = [
+    "UNIVERSAL_RUNTIME_WORKER_VERSION",
+    "UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION",
+    "UniversalRuntimeWorkerError",
+    "UniversalRuntimeWorkerContractError",
+    "UniversalRuntimeWorkerFinalizationError",
+    "orchestration_job_to_runtime_mapping_v1",
+    "run_one_universal_runtime_job_v1",
+    "explain_universal_runtime_worker_v1",
+]
+
+
+====================================================================================================
+FULL SOURCE: backend\server\runtime\universal_worker\lifecycle_gateway.py
+====================================================================================================
+from __future__ import annotations
+
+from dataclasses import asdict
+from datetime import datetime, timezone
+from socket import gethostname
+from typing import Any, Iterable, Mapping
+
+from backend.server.runtime.universal_worker.capacity import (
+    calculate_universal_worker_available_capacity,
+    create_universal_worker_capacity_snapshot,
+)
+from backend.server.runtime.universal_worker.health import (
+    UniversalWorkerHealthState,
+    create_universal_worker_health_evidence,
+    evaluate_universal_worker_health,
+)
+from backend.server.runtime.universal_worker.heartbeat import (
+    create_universal_worker_heartbeat,
+)
+from backend.server.runtime.universal_worker.registration import (
+    create_universal_worker_registration,
+)
+from backend.server.runtime.universal_worker.assignment import (
+    UniversalWorkerAssignmentStatus,
+    assign_universal_worker,
+)
+from backend.server.runtime.universal_worker.leasing import (
+    UniversalWorkerLease,
+    acquire_universal_worker_lease,
+    release_universal_worker_lease,
+)
+from backend.server.runtime.universal_worker.pool import (
+    create_universal_worker_pool_from_registrations,
+)
+
+
+WORKER_LIFECYCLE_GATEWAY_VERSION = (
+    "universal_worker_lifecycle_gateway_v1"
+)
+
+
+class UniversalWorkerLifecycleAdmissionError(RuntimeError):
+    pass
+
+
+def _utc_now() -> str:
+    return (
+        datetime.now(timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+
+def admit_universal_runtime_worker(
+    *,
+    worker_id: str,
+    worker_instance_id: str | None = None,
+    worker_type: str = "universal_runtime_worker",
+    runtime_version: str,
+    host_id: str | None = None,
+    capabilities: Iterable[Any] = (),
+    capacity_limit: int = 1,
+    active_work_count: int = 0,
+    heartbeat_sequence: int = 1,
+) -> Mapping[str, Any]:
+    instance_id = str(
+        worker_instance_id or worker_id
+    ).strip()
+
+    canonical_host_id = str(
+        host_id or gethostname()
+    ).strip()
+
+    now = _utc_now()
+
+    registration = create_universal_worker_registration(
+        worker_id=worker_id,
+        worker_type=worker_type,
+        worker_instance_id=instance_id,
+        runtime_version=runtime_version,
+        host_id=canonical_host_id,
+        registered_at=now,
+    )
+
+    health_evidence = (
+        create_universal_worker_health_evidence(
+            health_check_passed=True,
+            critical_failure_present=False,
+            degraded_condition_present=False,
+        )
+    )
+
+    health = evaluate_universal_worker_health(
+        worker=registration,
+        evidence=health_evidence,
+    )
+
+    if health.state is not UniversalWorkerHealthState.HEALTHY:
+        raise UniversalWorkerLifecycleAdmissionError(
+            "Worker is not healthy."
+        )
+
+    capacity = create_universal_worker_capacity_snapshot(
+        registration=registration,
+        capacity_limit=capacity_limit,
+        active_work_count=active_work_count,
+    )
+
+    available_capacity = (
+        calculate_universal_worker_available_capacity(
+            capacity_limit=capacity.capacity_limit,
+            active_work_count=capacity.active_work_count,
+        )
+    )
+
+    if available_capacity < 1:
+        raise UniversalWorkerLifecycleAdmissionError(
+            "Worker has no available execution capacity."
+        )
+
+    heartbeat = create_universal_worker_heartbeat(
+        registration=registration,
+        heartbeat_at=now,
+        sequence=heartbeat_sequence,
+    )
+
+    return {
+        "gateway_version":
+            WORKER_LIFECYCLE_GATEWAY_VERSION,
+
+        "admitted":
+            True,
+
+        "registration":
+            asdict(registration),
+
+        "health":
+            asdict(health),
+
+        "heartbeat":
+            asdict(heartbeat),
+
+        "capacity":
+            asdict(capacity),
+
+        "available_capacity":
+            available_capacity,
+
+        "capabilities":
+            tuple(
+                str(item)
+                for item in capabilities
+            ),
+    }
+
+
+UNIVERSAL_RUNTIME_JOB_LEASE_GATEWAY_VERSION = (
+    "universal_runtime_job_lease_gateway_v1"
+)
+
+
+class UniversalRuntimeJobLeaseGatewayError(RuntimeError):
+    pass
+
+
+def _worker_registration_from_mapping(
+    value: Mapping[str, Any],
+):
+    if not isinstance(value, Mapping):
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Worker registration must be a mapping."
+        )
+
+    fields = (
+        "worker_id",
+        "worker_type",
+        "worker_instance_id",
+        "runtime_version",
+        "host_id",
+        "registered_at",
+    )
+
+    missing = [
+        field
+        for field in fields
+        if not str(value.get(field, "") or "").strip()
+    ]
+
+    if missing:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Worker registration is missing: "
+            + ", ".join(missing)
+        )
+
+    return create_universal_worker_registration(
+        worker_id=str(value["worker_id"]),
+        worker_type=str(value["worker_type"]),
+        worker_instance_id=str(
+            value["worker_instance_id"]
+        ),
+        runtime_version=str(value["runtime_version"]),
+        host_id=str(value["host_id"]),
+        registered_at=str(value["registered_at"]),
+    )
+
+
+def prepare_universal_runtime_job_lease(
+    *,
+    job_id: str,
+    registration: Mapping[str, Any],
+    lease_seconds: int = 1800,
+) -> Mapping[str, Any]:
+    from datetime import timedelta
+    from uuid import uuid4
+
+    canonical_job_id = str(job_id or "").strip()
+
+    if not canonical_job_id:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "job_id must not be empty."
+        )
+
+    if (
+        isinstance(lease_seconds, bool)
+        or not isinstance(lease_seconds, int)
+        or lease_seconds < 1
+    ):
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "lease_seconds must be a positive integer."
+        )
+
+    worker = _worker_registration_from_mapping(
+        registration
+    )
+
+    pool = create_universal_worker_pool_from_registrations(
+        pool_id=(
+            "universal_runtime_pool_"
+            + worker.worker_type
+        ),
+        worker_type=worker.worker_type,
+        registrations=(worker,),
+    )
+
+    if len(pool.members) != 1:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Eligible worker pool is invalid."
+        )
+
+    assignment = assign_universal_worker(
+        job_id=canonical_job_id,
+        eligible_workers=(worker,),
+    )
+
+    if (
+        assignment.status
+        is not UniversalWorkerAssignmentStatus.ASSIGNED
+        or assignment.worker is None
+    ):
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "No eligible worker was assigned."
+        )
+
+    now = datetime.now(timezone.utc)
+
+    started = (
+        now.isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    expires = (
+        (
+            now
+            + timedelta(seconds=lease_seconds)
+        )
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    lease = acquire_universal_worker_lease(
+        assignment=assignment,
+        lease_id="lease_" + uuid4().hex,
+        lease_started_at=started,
+        lease_expires_at=expires,
+        existing_lease=None,
+    )
+
+    if lease.job_id != canonical_job_id:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Lease changed canonical job identity."
+        )
+
+    return {
+        "job_id":
+            canonical_job_id,
+
+        "worker_assignment_status":
+            str(
+                getattr(
+                    assignment.status,
+                    "value",
+                    assignment.status,
+                )
+            ),
+
+        "worker_assignment_candidate_count":
+            assignment.candidate_count,
+
+        "assigned_worker_id":
+            assignment.worker.worker_id,
+
+        "assigned_worker_instance_id":
+            assignment.worker.worker_instance_id,
+
+        "worker_pool_id":
+            pool.pool_id,
+
+        "lease_owner":
+            lease.lease_owner,
+
+        "lease_id":
+            lease.lease_id,
+
+        "lease_started_at":
+            lease.lease_started_at,
+
+        "lease_expires_at":
+            lease.lease_expires_at,
+
+        "lease_active":
+            True,
+
+        "lease_released":
+            False,
+
+        "lease_gateway_version":
+            UNIVERSAL_RUNTIME_JOB_LEASE_GATEWAY_VERSION,
+    }
+
+
+def release_universal_runtime_job_lease(
+    *,
+    job_id: str,
+    metadata: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    canonical_job_id = str(job_id or "").strip()
+
+    if not canonical_job_id:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "job_id must not be empty."
+        )
+
+    if not isinstance(metadata, Mapping):
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Lease metadata must be a mapping."
+        )
+
+    fields = (
+        "lease_owner",
+        "lease_id",
+        "lease_started_at",
+        "lease_expires_at",
+    )
+
+    missing = [
+        field
+        for field in fields
+        if not str(metadata.get(field, "") or "").strip()
+    ]
+
+    if missing:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Claimed job is missing lease fields: "
+            + ", ".join(missing)
+        )
+
+    lease = UniversalWorkerLease(
+        job_id=canonical_job_id,
+        lease_owner=str(metadata["lease_owner"]),
+        lease_id=str(metadata["lease_id"]),
+        lease_started_at=str(
+            metadata["lease_started_at"]
+        ),
+        lease_expires_at=str(
+            metadata["lease_expires_at"]
+        ),
+    )
+
+    release = release_universal_worker_lease(
+        lease=lease,
+        expected_lease_owner=lease.lease_owner,
+        expected_lease_id=lease.lease_id,
+        released_at=_utc_now(),
+    )
+
+    if release.job_id != canonical_job_id:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Lease release changed job identity."
+        )
+
+    return {
+        "lease_owner":
+            lease.lease_owner,
+
+        "lease_id":
+            lease.lease_id,
+
+        "lease_started_at":
+            lease.lease_started_at,
+
+        "lease_expires_at":
+            lease.lease_expires_at,
+
+        "lease_released_at":
+            release.released_at,
+
+        "lease_active":
+            False,
+
+        "lease_released":
+            True,
+
+        "lease_release_gateway_version":
+            UNIVERSAL_RUNTIME_JOB_LEASE_GATEWAY_VERSION,
+    }
+
+
+
+====================================================================================================
+FULL SOURCE: backend\server\runtime\runtime_feature_flag_gateway.py
+====================================================================================================
+from __future__ import annotations
+
+from backend.server.runtime.runtime_feature_flags import (
+    RuntimeFeatureFlagContext,
+    RuntimeFeatureFlagRegistry,
+    get_runtime_feature_flag_registry,
+)
+
+GATEWAY_KEY = "runtime_feature_flags"
+REGISTRY_KEY = "runtime_feature_flag_registry"
+
+
+class RuntimeFeatureFlagGateway:
+    """Runtime context adapter; the canonical registry owns evaluation."""
+
+    def __init__(self, *, registry, environment, runtime_id):
+        if not isinstance(registry, RuntimeFeatureFlagRegistry):
+            raise TypeError("Expected the canonical feature-flag registry.")
+        if not isinstance(environment, str) or not environment.strip():
+            raise ValueError("environment must be a non-empty string.")
+        if not isinstance(runtime_id, str) or not runtime_id.strip():
+            raise ValueError("runtime_id must be a non-empty string.")
+        self.registry = registry
+        self.environment = environment.strip()
+        self.runtime_id = runtime_id.strip()
+
+    def evaluate(
+        self, flag_key, *, evaluation_key=None, workspace_id=None,
+        plan_id=None, worker_class=None, runtime_version=None,
+        attributes=None, actor="runtime_feature_flag_gateway",
+    ):
+        context = RuntimeFeatureFlagContext(
+            environment=self.environment,
+            evaluation_key=(
+                self.runtime_id if evaluation_key is None else evaluation_key
+            ),
+            workspace_id=workspace_id,
+            plan_id=plan_id,
+            worker_class=worker_class,
+            runtime_version=runtime_version,
+            attributes={} if attributes is None else attributes,
+        )
+        return self.registry.evaluate(flag_key, context, actor=actor)
+
+    def is_enabled(self, flag_name):
+        return self.evaluate(flag_name).enabled is True
+
+    def snapshot(self):
+        return self.registry.snapshot()
+
+    def evidence(self):
+        snapshot = self.snapshot()
+        return {
+            "runtime_id": self.runtime_id,
+            "environment": self.environment,
+            "generation": snapshot.generation,
+            "flag_count": len(snapshot.flags),
+            "snapshot_fingerprint": snapshot.fingerprint,
+        }
+
+
+def register_runtime_feature_flag_gateway(composition):
+    registry = get_runtime_feature_flag_registry()
+    gateway = RuntimeFeatureFlagGateway(
+        registry=registry,
+        environment=composition.configuration.environment,
+        runtime_id=composition.configuration.runtime_id,
+    )
+    kernel = composition.kernel
+    if kernel.has_component(REGISTRY_KEY) or kernel.has_component(GATEWAY_KEY):
+        raise RuntimeError("Feature-flag kernel binding already exists.")
+    kernel.bind_component(REGISTRY_KEY, registry)
+    kernel.bind_component(GATEWAY_KEY, gateway)
+    return gateway
+
+
+====================================================================================================
+FULL SOURCE: backend\server\runtime\runtime_configuration.py
+====================================================================================================
+from __future__ import annotations
+
+"""
+Universal Runtime Configuration.
+
+This module owns the centralized, immutable, validated configuration
+contract for the Universal Runtime Infrastructure.
+
+It does not start the runtime, select application environments, execute
+jobs, initialize workers, or contain product-pipeline business logic.
+"""
+
+import hashlib
+import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Mapping
+
+
+__all__ = [
+    "ALLOWED_ENVIRONMENT_NAMES",
+    "CONFIGURATION_ENV_PREFIX",
+    "CONFIGURATION_SCHEMA_VERSION",
+    "RuntimeConfiguration",
+    "RuntimeConfigurationError",
+    "RuntimeConfigurationLoader",
+    "RuntimeConfigurationSourceError",
+    "RuntimeConfigurationValidationError",
+    "load_runtime_configuration",
+]
+
+
+CONFIGURATION_SCHEMA_VERSION = "1.0.0"
+
+CONFIGURATION_ENV_PREFIX = "LINKCRAFTOR_RUNTIME_"
+
+ALLOWED_ENVIRONMENT_NAMES = frozenset(
+    {
+        "development",
+        "testing",
+        "staging",
+        "production",
+    }
+)
+
+_ALLOWED_LOG_LEVELS = frozenset(
+    {
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    }
+)
+
+_ALLOWED_STATE_BACKENDS = frozenset(
+    {
+        "filesystem",
+        "memory",
+        "database",
+    }
+)
+
+_RUNTIME_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$"
+)
+
+_CONFIGURATION_VERSION_PATTERN = re.compile(
+    r"^[0-9]+\.[0-9]+\.[0-9]+$"
+)
+
+_TRUE_VALUES = frozenset(
+    {
+        "1",
+        "true",
+        "yes",
+        "on",
+        "enabled",
+    }
+)
+
+_FALSE_VALUES = frozenset(
+    {
+        "0",
+        "false",
+        "no",
+        "off",
+        "disabled",
+    }
+)
+
+_SECRET_FIELD_PATTERN = re.compile(
+    r"(secret|password|token|credential|api[_-]?key)",
+    re.IGNORECASE,
+)
+
+_CONFIGURATION_FIELDS = frozenset(
+    {
+        "configuration_schema_version",
+        "runtime_id",
+        "product_name",
+        "environment",
+        "debug",
+        "log_level",
+        "data_root",
+        "state_backend",
+        "worker_enabled",
+        "startup_timeout_seconds",
+        "shutdown_timeout_seconds",
+        "queue_poll_interval_seconds",
+        "max_concurrency",
+        "strict_compatibility",
+        "schema_auto_migrate",
+    }
+)
+
+_ENVIRONMENT_FIELD_MAP = MappingProxyType(
+    {
+        "RUNTIME_ID": "runtime_id",
+        "PRODUCT_NAME": "product_name",
+        "ENVIRONMENT": "environment",
+        "DEBUG": "debug",
+        "LOG_LEVEL": "log_level",
+        "DATA_ROOT": "data_root",
+        "STATE_BACKEND": "state_backend",
+        "WORKER_ENABLED": "worker_enabled",
+        "STARTUP_TIMEOUT_SECONDS": (
+            "startup_timeout_seconds"
+        ),
+        "SHUTDOWN_TIMEOUT_SECONDS": (
+            "shutdown_timeout_seconds"
+        ),
+        "QUEUE_POLL_INTERVAL_SECONDS": (
+            "queue_poll_interval_seconds"
+        ),
+        "MAX_CONCURRENCY": "max_concurrency",
+        "STRICT_COMPATIBILITY": (
+            "strict_compatibility"
+        ),
+        "SCHEMA_AUTO_MIGRATE": (
+            "schema_auto_migrate"
+        ),
+    }
+)
+
+_DEFAULT_VALUES = MappingProxyType(
+    {
+        "configuration_schema_version": (
+            CONFIGURATION_SCHEMA_VERSION
+        ),
+        "runtime_id": "linkcraftor.primary",
+        "product_name": "LinkCraftor",
+        "environment": "development",
+        "debug": False,
+        "log_level": "INFO",
+        "data_root": "backend/server/data/runtime",
+        "state_backend": "filesystem",
+        "worker_enabled": True,
+        "startup_timeout_seconds": 30.0,
+        "shutdown_timeout_seconds": 30.0,
+        "queue_poll_interval_seconds": 1.0,
+        "max_concurrency": 4,
+        "strict_compatibility": True,
+        "schema_auto_migrate": False,
+    }
+)
+
+
+class RuntimeConfigurationError(RuntimeError):
+    """Base error for runtime-configuration failures."""
+
+
+class RuntimeConfigurationSourceError(
+    RuntimeConfigurationError
+):
+    """Raised for unknown or invalid configuration sources."""
+
+
+class RuntimeConfigurationValidationError(
+    RuntimeConfigurationError
+):
+    """Raised when configuration values violate the contract."""
+
+
+def _serialize_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeConfiguration:
+    """
+    Immutable resolved runtime configuration.
+
+    field_sources records where each final value came from:
+
+    - default
+    - environment:<VARIABLE>
+    - override
+    """
+
+    configuration_schema_version: str
+    runtime_id: str
+    product_name: str
+    environment: str
+    debug: bool
+    log_level: str
+    data_root: Path
+    state_backend: str
+    worker_enabled: bool
+    startup_timeout_seconds: float
+    shutdown_timeout_seconds: float
+    queue_poll_interval_seconds: float
+    max_concurrency: int
+    strict_compatibility: bool
+    schema_auto_migrate: bool
+    field_sources: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        self._validate()
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment == "production"
+
+    def source_for(self, field_name: str) -> str:
+        normalized = str(field_name or "").strip()
+
+        if normalized not in _CONFIGURATION_FIELDS:
+            raise RuntimeConfigurationSourceError(
+                f"Unknown runtime configuration field: "
+                f"{field_name!r}"
+            )
+
+        try:
+            return self.field_sources[normalized]
+        except KeyError as exc:
+            raise RuntimeConfigurationSourceError(
+                "No source record exists for runtime "
+                f"configuration field {normalized!r}."
+            ) from exc
+
+    def to_dict(
+        self,
+        *,
+        include_sources: bool = False,
+        redact_sensitive: bool = True,
+    ) -> dict[str, Any]:
+        values: dict[str, Any] = {
+            "configuration_schema_version": (
+                self.configuration_schema_version
+            ),
+            "runtime_id": self.runtime_id,
+            "product_name": self.product_name,
+            "environment": self.environment,
+            "debug": self.debug,
+            "log_level": self.log_level,
+            "data_root": str(self.data_root),
+            "state_backend": self.state_backend,
+            "worker_enabled": self.worker_enabled,
+            "startup_timeout_seconds": (
+                self.startup_timeout_seconds
+            ),
+            "shutdown_timeout_seconds": (
+                self.shutdown_timeout_seconds
+            ),
+            "queue_poll_interval_seconds": (
+                self.queue_poll_interval_seconds
+            ),
+            "max_concurrency": self.max_concurrency,
+            "strict_compatibility": (
+                self.strict_compatibility
+            ),
+            "schema_auto_migrate": (
+                self.schema_auto_migrate
+            ),
+        }
+
+        if redact_sensitive:
+            for key in tuple(values):
+                if _SECRET_FIELD_PATTERN.search(key):
+                    values[key] = "[REDACTED]"
+
+        if include_sources:
+            values["field_sources"] = dict(
+                self.field_sources
+            )
+
+        return values
+
+    def fingerprint(self) -> str:
+        """
+        Return a deterministic value fingerprint.
+
+        Source labels are intentionally excluded. Equal effective
+        configuration values produce equal fingerprints regardless of
+        whether they came from defaults, environment variables, or
+        explicit overrides.
+        """
+
+        payload = json.dumps(
+            self.to_dict(
+                include_sources=False,
+                redact_sensitive=False,
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        return hashlib.sha256(payload).hexdigest()
+
+    def _validate(self) -> None:
+        if not _CONFIGURATION_VERSION_PATTERN.fullmatch(
+            self.configuration_schema_version
+        ):
+            raise RuntimeConfigurationValidationError(
+                "configuration_schema_version must use "
+                "MAJOR.MINOR.PATCH format."
+            )
+
+        if (
+            self.configuration_schema_version
+            != CONFIGURATION_SCHEMA_VERSION
+        ):
+            raise RuntimeConfigurationValidationError(
+                "Unsupported configuration schema version: "
+                f"{self.configuration_schema_version!r}."
+            )
+
+        if not _RUNTIME_ID_PATTERN.fullmatch(
+            self.runtime_id
+        ):
+            raise RuntimeConfigurationValidationError(
+                "runtime_id must be 3-128 characters and "
+                "contain only letters, numbers, dots, "
+                "underscores, colons, or hyphens."
+            )
+
+        if not self.product_name.strip():
+            raise RuntimeConfigurationValidationError(
+                "product_name must not be empty."
+            )
+
+        if len(self.product_name) > 128:
+            raise RuntimeConfigurationValidationError(
+                "product_name must not exceed 128 characters."
+            )
+
+        if (
+            self.environment
+            not in ALLOWED_ENVIRONMENT_NAMES
+        ):
+            raise RuntimeConfigurationValidationError(
+                "environment must be one of: "
+                + ", ".join(
+                    sorted(ALLOWED_ENVIRONMENT_NAMES)
+                )
+            )
+
+        if self.log_level not in _ALLOWED_LOG_LEVELS:
+            raise RuntimeConfigurationValidationError(
+                "log_level must be one of: "
+                + ", ".join(sorted(_ALLOWED_LOG_LEVELS))
+            )
+
+        if not self.data_root.is_absolute():
+            raise RuntimeConfigurationValidationError(
+                "data_root must be resolved to an absolute path."
+            )
+
+        if self.state_backend not in _ALLOWED_STATE_BACKENDS:
+            raise RuntimeConfigurationValidationError(
+                "state_backend must be one of: "
+                + ", ".join(
+                    sorted(_ALLOWED_STATE_BACKENDS)
+                )
+            )
+
+        if not (
+            0.1
+            <= self.startup_timeout_seconds
+            <= 3600.0
+        ):
+            raise RuntimeConfigurationValidationError(
+                "startup_timeout_seconds must be between "
+                "0.1 and 3600 seconds."
+            )
+
+        if not (
+            0.1
+            <= self.shutdown_timeout_seconds
+            <= 3600.0
+        ):
+            raise RuntimeConfigurationValidationError(
+                "shutdown_timeout_seconds must be between "
+                "0.1 and 3600 seconds."
+            )
+
+        if not (
+            0.05
+            <= self.queue_poll_interval_seconds
+            <= 300.0
+        ):
+            raise RuntimeConfigurationValidationError(
+                "queue_poll_interval_seconds must be between "
+                "0.05 and 300 seconds."
+            )
+
+        if not 1 <= self.max_concurrency <= 1024:
+            raise RuntimeConfigurationValidationError(
+                "max_concurrency must be between 1 and 1024."
+            )
+
+        if self.is_production and self.debug:
+            raise RuntimeConfigurationValidationError(
+                "debug must be disabled in production."
+            )
+
+        if (
+            self.is_production
+            and self.state_backend == "memory"
+        ):
+            raise RuntimeConfigurationValidationError(
+                "The memory state backend is not permitted "
+                "in production."
+            )
+
+        if (
+            self.is_production
+            and self.schema_auto_migrate
+        ):
+            raise RuntimeConfigurationValidationError(
+                "Automatic runtime schema migration is not "
+                "permitted in production."
+            )
+
+        missing_sources = sorted(
+            field
+            for field in _CONFIGURATION_FIELDS
+            if field not in self.field_sources
+        )
+
+        if missing_sources:
+            raise RuntimeConfigurationValidationError(
+                "Missing configuration-source records: "
+                + ", ".join(missing_sources)
+            )
+
+
+class RuntimeConfigurationLoader:
+    """
+    Resolve runtime configuration from controlled sources.
+
+    Precedence, from lowest to highest:
+
+    1. Built-in defaults
+    2. Runtime-prefixed environment variables
+    3. Explicit overrides
+
+    The loader does not mutate os.environ and does not create any
+    configured directories.
+    """
+
+    __slots__ = (
+        "_project_root",
+        "_environment_prefix",
+    )
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        environment_prefix: str = (
+            CONFIGURATION_ENV_PREFIX
+        ),
+    ) -> None:
+        resolved_root = Path(project_root).expanduser()
+
+        if not resolved_root.is_absolute():
+            resolved_root = resolved_root.resolve()
+
+        normalized_prefix = str(
+            environment_prefix or ""
+        ).strip().upper()
+
+        if not normalized_prefix:
+            raise RuntimeConfigurationSourceError(
+                "environment_prefix must not be empty."
+            )
+
+        if not normalized_prefix.endswith("_"):
+            raise RuntimeConfigurationSourceError(
+                "environment_prefix must end with an underscore."
+            )
+
+        self._project_root = resolved_root.resolve()
+        self._environment_prefix = normalized_prefix
+
+    @property
+    def project_root(self) -> Path:
+        return self._project_root
+
+    @property
+    def environment_prefix(self) -> str:
+        return self._environment_prefix
+
+    def defaults(self) -> Mapping[str, Any]:
+        return MappingProxyType(dict(_DEFAULT_VALUES))
+
+    def load(
+        self,
+        *,
+        environ: Mapping[str, str] | None = None,
+        overrides: Mapping[str, Any] | None = None,
+    ) -> RuntimeConfiguration:
+        environment_values = (
+            os.environ
+            if environ is None
+            else environ
+        )
+
+        explicit_overrides = (
+            {}
+            if overrides is None
+            else dict(overrides)
+        )
+
+        unknown_override_fields = sorted(
+            set(explicit_overrides)
+            - _CONFIGURATION_FIELDS
+        )
+
+        if unknown_override_fields:
+            raise RuntimeConfigurationSourceError(
+                "Unknown runtime configuration overrides: "
+                + ", ".join(unknown_override_fields)
+            )
+
+        if "field_sources" in explicit_overrides:
+            raise RuntimeConfigurationSourceError(
+                "field_sources cannot be supplied as an override."
+            )
+
+        values = dict(_DEFAULT_VALUES)
+
+        sources = {
+            field: "default"
+            for field in _CONFIGURATION_FIELDS
+        }
+
+        environment_updates = (
+            self._collect_environment_updates(
+                environment_values
+            )
+        )
+
+        for field, update in environment_updates.items():
+            raw_value, source_name = update
+            values[field] = self._coerce_value(
+                field,
+                raw_value,
+            )
+            sources[field] = source_name
+
+        for field, raw_value in explicit_overrides.items():
+            values[field] = self._coerce_value(
+                field,
+                raw_value,
+            )
+            sources[field] = "override"
+
+        values["data_root"] = self._resolve_data_root(
+            values["data_root"]
+        )
+
+        frozen_sources = MappingProxyType(
+            dict(sources)
+        )
+
+        return RuntimeConfiguration(
+            configuration_schema_version=str(
+                values[
+                    "configuration_schema_version"
+                ]
+            ),
+            runtime_id=str(values["runtime_id"]).strip(),
+            product_name=str(
+                values["product_name"]
+            ).strip(),
+            environment=str(
+                values["environment"]
+            ).strip().lower(),
+            debug=bool(values["debug"]),
+            log_level=str(
+                values["log_level"]
+            ).strip().upper(),
+            data_root=values["data_root"],
+            state_backend=str(
+                values["state_backend"]
+            ).strip().lower(),
+            worker_enabled=bool(
+                values["worker_enabled"]
+            ),
+            startup_timeout_seconds=float(
+                values["startup_timeout_seconds"]
+            ),
+            shutdown_timeout_seconds=float(
+                values["shutdown_timeout_seconds"]
+            ),
+            queue_poll_interval_seconds=float(
+                values[
+                    "queue_poll_interval_seconds"
+                ]
+            ),
+            max_concurrency=int(
+                values["max_concurrency"]
+            ),
+            strict_compatibility=bool(
+                values["strict_compatibility"]
+            ),
+            schema_auto_migrate=bool(
+                values["schema_auto_migrate"]
+            ),
+            field_sources=frozen_sources,
+        )
+
+    def _collect_environment_updates(
+        self,
+        environ: Mapping[str, str],
+    ) -> dict[str, tuple[str, str]]:
+        updates: dict[str, tuple[str, str]] = {}
+        unknown_keys: list[str] = []
+
+        for raw_name, raw_value in environ.items():
+            name = str(raw_name).strip()
+            upper_name = name.upper()
+
+            if not upper_name.startswith(
+                self._environment_prefix
+            ):
+                continue
+
+            suffix = upper_name[
+                len(self._environment_prefix):
+            ]
+
+            field = _ENVIRONMENT_FIELD_MAP.get(
+                suffix
+            )
+
+            if field is None:
+                unknown_keys.append(name)
+                continue
+
+            updates[field] = (
+                str(raw_value),
+                f"environment:{name}",
+            )
+
+        if unknown_keys:
+            raise RuntimeConfigurationSourceError(
+                "Unknown runtime environment variables: "
+                + ", ".join(sorted(unknown_keys))
+            )
+
+        return updates
+
+    def _coerce_value(
+        self,
+        field: str,
+        raw_value: Any,
+    ) -> Any:
+        if field not in _CONFIGURATION_FIELDS:
+            raise RuntimeConfigurationSourceError(
+                f"Unknown runtime configuration field: "
+                f"{field!r}"
+            )
+
+        if field in {
+            "debug",
+            "worker_enabled",
+            "strict_compatibility",
+            "schema_auto_migrate",
+        }:
+            return self._parse_boolean(
+                field,
+                raw_value,
+            )
+
+        if field == "max_concurrency":
+            return self._parse_integer(
+                field,
+                raw_value,
+            )
+
+        if field in {
+            "startup_timeout_seconds",
+            "shutdown_timeout_seconds",
+            "queue_poll_interval_seconds",
+        }:
+            return self._parse_float(
+                field,
+                raw_value,
+            )
+
+        if field == "data_root":
+            if isinstance(raw_value, Path):
+                return raw_value
+
+            return Path(
+                str(raw_value or "").strip()
+            )
+
+        return str(raw_value or "").strip()
+
+    def _parse_boolean(
+        self,
+        field: str,
+        raw_value: Any,
+    ) -> bool:
+        if isinstance(raw_value, bool):
+            return raw_value
+
+        normalized = str(raw_value or "").strip().lower()
+
+        if normalized in _TRUE_VALUES:
+            return True
+
+        if normalized in _FALSE_VALUES:
+            return False
+
+        raise RuntimeConfigurationValidationError(
+            f"{field} must be a recognized boolean value."
+        )
+
+    def _parse_integer(
+        self,
+        field: str,
+        raw_value: Any,
+    ) -> int:
+        if isinstance(raw_value, bool):
+            raise RuntimeConfigurationValidationError(
+                f"{field} must be an integer, not a boolean."
+            )
+
+        try:
+            return int(str(raw_value).strip())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeConfigurationValidationError(
+                f"{field} must be a valid integer."
+            ) from exc
+
+    def _parse_float(
+        self,
+        field: str,
+        raw_value: Any,
+    ) -> float:
+        if isinstance(raw_value, bool):
+            raise RuntimeConfigurationValidationError(
+                f"{field} must be numeric, not a boolean."
+            )
+
+        try:
+            return float(str(raw_value).strip())
+        except (TypeError, ValueError) as exc:
+            raise RuntimeConfigurationValidationError(
+                f"{field} must be a valid number."
+            ) from exc
+
+    def _resolve_data_root(
+        self,
+        raw_value: Any,
+    ) -> Path:
+        path = (
+            raw_value
+            if isinstance(raw_value, Path)
+            else Path(str(raw_value))
+        ).expanduser()
+
+        if not path.is_absolute():
+            path = self._project_root / path
+
+        return path.resolve()
+
+
+def load_runtime_configuration(
+    *,
+    project_root: Path,
+    environ: Mapping[str, str] | None = None,
+    overrides: Mapping[str, Any] | None = None,
+) -> RuntimeConfiguration:
+    """Convenience entry point for configuration resolution."""
+
+    return RuntimeConfigurationLoader(
+        project_root=project_root
+    ).load(
+        environ=environ,
+        overrides=overrides,
+    )
+
+
+CALLER SEARCH TERMS: explain_universal_runtime_worker_v1, orchestration_job_to_runtime_mapping_v1, run_one_universal_runtime_job_v1, universal_runtime_worker_v1
+
+====================================================================================================
+CALLER CANDIDATE: backend\server\runtime\execution_engine\job_queue_worker_integration.py
+====================================================================================================
+    9: 
+   10: Universal Job / orchestration service:
+   11:     backend.server.orchestration.service
+   12: 
+   13: Queue:
+   14:     backend.server.orchestration.queue
+   15: 
+   16: Universal runtime worker:
+   17:     backend.server.runtime.universal_runtime_worker_v1
+   18: 
+   19: Worker leasing:
+   20:     backend.server.runtime.universal_worker.leasing
+   21: 
+   22: Runtime registration / handler registry:
+   23:     backend.server.runtime.universal_runtime_registration
+   24: 
+   25: Core law:
+   26:     Phase 6 integrates with existing infrastructure.
+   27:     Phase 6 does NOT create another job system, queue, worker,
+   28:     lease manager, runtime registry, handler registry or persistence layer.
+   29: 
+   45: from __future__ import annotations
+   47: from dataclasses import dataclass, field
+   48: from importlib import import_module
+   49: from types import MappingProxyType, ModuleType
+   50: from typing import Any, Callable, Mapping, Optional
+   63:     "backend.server.orchestration.service"
+   64: )
+   65: 
+   66: ORCHESTRATION_QUEUE_MODULE = (
+   67:     "backend.server.orchestration.queue"
+   68: )
+   69: 
+   70: UNIVERSAL_RUNTIME_WORKER_MODULE = (
+   71:     "backend.server.runtime.universal_runtime_worker_v1"
+   72: )
+   73: 
+   74: UNIVERSAL_WORKER_LEASING_MODULE = (
+   75:     "backend.server.runtime.universal_worker.leasing"
+   76: )
+   77: 
+   78: UNIVERSAL_RUNTIME_REGISTRATION_MODULE = (
+   79:     "backend.server.runtime.universal_runtime_registration"
+   80: )
+   81: 
+   82: 
+   83: class JobQueueWorkerIntegrationError(RuntimeError):
+  328: def _build_worker_operations(
+  329:     worker_module: ModuleType,
+  330: ) -> Mapping[str, Callable[..., Any]]:
+  331: 
+  332:     operations: dict[
+  333:         str,
+  334:         Callable[..., Any],
+  335:     ] = {}
+  336: 
+  337:     for required in (
+  338:         "_runtime_retry_policy_v1",
+  339:         "_runtime_failure_attempt_number_v1",
+  340:         "_requeue_same_runtime_job_v1",
+  341:         "dequeue_job",
+  342:         "explain_universal_runtime_worker_v1",
+  343:     ):
+  344:         operations[
+  345:             required
+  346:         ] = _require_callable(
+  347:             worker_module,
+  348:             required,
+  349:         )
+  350: 
+  351:     return MappingProxyType(
+  352:         operations
+  353:     )
+
+INSPECTION STATUS: COMPLETE
+References require review; they do not prove production execution.
+ERRORS:
+NONE

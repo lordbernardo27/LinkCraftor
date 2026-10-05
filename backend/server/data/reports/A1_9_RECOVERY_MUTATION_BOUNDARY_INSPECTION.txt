@@ -1,0 +1,165 @@
+﻿LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.9 RECOVERY MUTATION BOUNDARY INSPECTION
+
+Generated: 2026-10-04T20:40:53.9111175+00:00
+Mode: READ-ONLY — NO PRODUCTION FILES MODIFIED
+Project root: C:\Users\HP\Documents\LinkCraftor
+INSPECTION STATUS: FAILED
+
+=========================================================================================================
+INSPECTION OUTPUT
+=========================================================================================================
+
+==============================================================================================================
+A1.9 RECOVERY MUTATION BOUNDARY INSPECTION
+==============================================================================================================
+MODE: READ-ONLY
+PROJECT_ROOT: C:\Users\HP\Documents\LinkCraftor
+
+==============================================================================================================
+FILE VALIDATION
+==============================================================================================================
+models_path: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\models.py
+models_exists: True
+models_syntax: PASS
+job_store_path: C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\job_store.py
+job_store_exists: True
+job_store_syntax: PASS
+worker_path: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+worker_exists: True
+worker_syntax: PASS
+worker_recovery_path: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\recovery.py
+worker_recovery_exists: True
+worker_recovery_syntax: PASS
+worker_leasing_path: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\leasing.py
+worker_leasing_exists: True
+worker_leasing_syntax: PASS
+queue_recovery_path: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\recovery.py
+queue_recovery_exists: True
+queue_recovery_syntax: PASS
+dead_letter_path: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_queue\dead_letter.py
+dead_letter_exists: True
+dead_letter_syntax: PASS
+gateway_path: C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\lifecycle_gateway.py
+gateway_exists: True
+gateway_syntax: PASS
+
+==============================================================================================================
+ORCHESTRATION STATUS AUTHORITY
+==============================================================================================================
+JOB_STATUS_QUEUED: queued
+JOB_STATUS_RUNNING: running
+JOB_STATUS_COMPLETED: completed
+JOB_STATUS_FAILED: failed
+JOB_STATUS_CANCELLED: cancelled
+JOB_STATUS_DEAD_LETTER: NOT_DEFINED
+VALID_JOB_STATUSES: {'pending', 'cancelled', 'queued', 'running', 'failed', 'completed'}
+DEAD_LETTER_STORE_SUPPORTED: False
+UNIVERSAL_JOB_STATUS_VALUES: ['created', 'queued', 'scheduled', 'leased', 'running', 'suspended', 'succeeded', 'failed', 'cancelled', 'dead_letter', 'expired']
+
+==============================================================================================================
+JOB STORE MUTATION API
+==============================================================================================================
+update_job_status_signature: (job_id: 'str', new_status: 'str', metadata: 'Optional[Dict[str, Any]]' = None, error_message: 'Optional[str]' = None) -> 'OrchestrationJob'
+update_job_status_source:
+def update_job_status(
+    job_id: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> OrchestrationJob:
+    if new_status not in VALID_JOB_STATUSES:
+        raise ValueError(f"Invalid job status: {new_status}")
+
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    old_status = job.status
+    job.status = new_status
+    job.updated_at = utc_now()
+
+    normalized_metadata = (
+        dict(metadata)
+        if isinstance(
+            metadata,
+            dict,
+        )
+        else {}
+    )
+
+    if normalized_metadata:
+
+        existing_metadata = (
+            job.metadata
+            if isinstance(
+                job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        job.metadata = {
+            **existing_metadata,
+            **normalized_metadata,
+        }
+
+    if error_message:
+        job.error_message = error_message
+
+        if new_status == JOB_STATUS_FAILED:
+            job.progress_percent = min(
+                job.progress_percent,
+                99.0,
+            )
+
+    jobs[job_id] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        job_id,
+        old_status,
+        new_status,
+        normalized_metadata,
+    )
+
+    return job
+
+
+==============================================================================================================
+WORKER RECOVERY DECISION MATRIX
+==============================================================================================================
+
+
+=========================================================================================================
+STANDARD ERROR
+=========================================================================================================
+Traceback (most recent call last):
+  File "C:\Users\HP\Documents\LinkCraftor\_a1_9_mutation_boundary.py", line 228, in <module>
+    evidence = create_universal_worker_recovery_evidence(
+        job_id=f"job_{label}",
+    ...<4 lines>...
+        lease_state=lease_state,
+    )
+  File "C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\recovery.py", line 643, in create_universal_worker_recovery_evidence
+    return UniversalWorkerRecoveryEvidence(
+        job_id=job_id,
+    ...<4 lines>...
+        lease_state=lease_state,
+    )
+  File "<string>", line 10, in __init__
+  File "C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_worker\recovery.py", line 310, in __post_init__
+    raise UniversalWorkerRecoveryError(
+    ...<6 lines>...
+    )
+backend.server.runtime.universal_worker.recovery.UniversalWorkerRecoveryError: lease_state is only accepted for LEASED Worker Recovery evidence.
+
+
+=========================================================================================================
+FINAL RESULT
+=========================================================================================================
+A1.9 MUTATION BOUNDARY INSPECTION FAILED

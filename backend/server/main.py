@@ -147,7 +147,16 @@ log = logging.getLogger("linkcraftor.server")
 logging.basicConfig(level=logging.INFO)
 
 
-app = FastAPI(title="LinkCraftor API", version="0.1.0")
+from backend.server.runtime.runtime_application_lifecycle import (
+    linkcraftor_runtime_lifespan,
+)
+
+
+app = FastAPI(
+    title="LinkCraftor API",
+    version="0.1.0",
+    lifespan=linkcraftor_runtime_lifespan,
+)
 
 
 app.include_router(owner_audit_router)

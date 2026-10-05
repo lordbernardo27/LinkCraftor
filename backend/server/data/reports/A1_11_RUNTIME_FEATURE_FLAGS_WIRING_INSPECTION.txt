@@ -1,0 +1,1799 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.11 RUNTIME FEATURE FLAGS WIRING INSPECTION
+
+Generated: 2026-10-05T05:40:12.668719+00:00
+Mode: READ-ONLY - NO PRODUCTION FILES MODIFIED
+Project root: C:\Users\HP\Documents\LinkCraftor
+
+=========================================================================================================
+INSPECTION PURPOSE
+=========================================================================================================
+1. Locate the canonical Runtime Feature Flags authority.
+2. Identify its public functions and contracts.
+3. Determine whether boot, configuration or kernel code consumes it.
+4. Identify the exact production wiring boundary for A1.11.
+
+=========================================================================================================
+SUMMARY
+=========================================================================================================
+Active Python files scanned: 927
+Files containing feature-flag references: 6
+Priority runtime files identified: 5
+
+=========================================================================================================
+FEATURE-FLAG FILE INVENTORY
+=========================================================================================================
+
+backend/server/orchestration/context_snapshot.py
+Syntax: PASS
+Matching lines: 1
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+9: function build_context_snapshot
+
+MATCH CONTEXT
+--------------------------------------------------
+   24:         "domain": context.domain,
+   25:         "plan": context.plan,
+   26:         "enabled_modules": list(context.enabled_modules),
+   27:         "feature_flags": dict(context.feature_flags),
+   28:         "billing_limits": dict(context.billing_limits),
+   29:         "document_limits": dict(context.document_limits),
+   30:         "au_limits": dict(context.au_limits),
+   31:         "workspace_profile": dict(profile),
+   32:     }
+
+backend/server/orchestration/workspace_context.py
+Syntax: PASS
+Matching lines: 3
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+58: class WorkspaceContext
+72: function _domain_from_workspace_id
+79: function load_workspace_context
+
+MATCH CONTEXT
+--------------------------------------------------
+   19: ]
+   20: 
+   21: 
+   22: DEFAULT_FEATURE_FLAGS = {
+   23:     "async_orchestration": True,
+   24:     "batch_processing": True,
+   25:     "workspace_context": True,
+   26:     "context_snapshot": True,
+   27:     "live_domain_sync": True,
+    ----------------------------------------
+   60:     domain: str
+   61:     plan: str
+   62:     enabled_modules: List[str]
+   63:     feature_flags: Dict[str, bool]
+   64:     billing_limits: Dict[str, Any]
+   65:     document_limits: Dict[str, Any]
+   66:     au_limits: Dict[str, Any]
+   67: 
+   68:     def to_dict(self) -> Dict[str, Any]:
+    ----------------------------------------
+   93:         domain=_domain_from_workspace_id(workspace_id),
+   94:         plan=plan,
+   95:         enabled_modules=list(DEFAULT_ENABLED_MODULES),
+   96:         feature_flags=dict(DEFAULT_FEATURE_FLAGS),
+   97:         billing_limits=dict(limits["billing_limits"]),
+   98:         document_limits=dict(limits["document_limits"]),
+   99:         au_limits=dict(limits["au_limits"]),
+  100:     )
+
+backend/server/runtime/runtime_feature_flags.py
+Syntax: PASS
+Matching lines: 121
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+40: class RuntimeFeatureFlagError
+44: class RuntimeFeatureFlagValidationError
+48: class RuntimeFeatureFlagConflictError
+52: class RuntimeFeatureFlagNotFoundError
+56: class RuntimeFeatureFlagState
+61: class RuntimeFeatureFlagDecisionReason
+76: class RuntimeFeatureFlagAuditAction
+83: function _utc_now
+87: function _normalise_text
+107: function _normalise_optional_text
+121: function _normalise_scope
+142: function _normalise_datetime
+163: function _freeze_mapping
+174: function _canonical_json
+186: function _fingerprint
+195: class RuntimeFeatureFlagContext
+271: class RuntimeFeatureFlag
+542: class RuntimeFeatureFlagDecision
+599: class RuntimeFeatureFlagAuditEvent
+660: class RuntimeFeatureFlagSnapshot
+695: function deterministic_rollout_bucket
+731: class RuntimeFeatureFlagRegistry
+1193: function get_runtime_feature_flag_registry
+1198: function register_runtime_feature_flag
+1211: function evaluate_runtime_feature_flag
+
+MATCH CONTEXT
+--------------------------------------------------
+    2: 
+    3: """
+    4: Universal Runtime Infrastructure
+    5: Phase 1.1.10 — Runtime Feature Flags
+    6: 
+    7: This module provides the product-wide, business-logic-agnostic runtime
+    8: feature-flag infrastructure.
+    9: 
+   10: It supports:
+    ----------------------------------------
+   37: from typing import Any, Iterable, Mapping
+   38: 
+   39: 
+   40: class RuntimeFeatureFlagError(RuntimeError):
+   41:     """Base exception for runtime feature-flag failures."""
+   42: 
+   43: 
+   44: class RuntimeFeatureFlagValidationError(RuntimeFeatureFlagError):
+   45:     """Raised when a feature-flag contract is invalid."""
+   46: 
+   47: 
+   48: class RuntimeFeatureFlagConflictError(RuntimeFeatureFlagError):
+   49:     """Raised when registration conflicts with an existing flag."""
+   50: 
+   51: 
+   52: class RuntimeFeatureFlagNotFoundError(RuntimeFeatureFlagError):
+   53:     """Raised when a requested feature flag does not exist."""
+   54: 
+   55: 
+   56: class RuntimeFeatureFlagState(str, Enum):
+   57:     ENABLED = "enabled"
+   58:     DISABLED = "disabled"
+   59: 
+   60: 
+   61: class RuntimeFeatureFlagDecisionReason(str, Enum):
+   62:     ENABLED = "enabled"
+   63:     DISABLED = "disabled"
+   64:     SAFE_DEFAULT = "safe_default"
+   65:     FLAG_NOT_FOUND = "flag_not_found"
+   66:     EXPIRED = "expired"
+    ----------------------------------------
+   73:     EMERGENCY_KILL_SWITCH = "emergency_kill_switch"
+   74: 
+   75: 
+   76: class RuntimeFeatureFlagAuditAction(str, Enum):
+   77:     REGISTERED = "registered"
+   78:     REPLACED = "replaced"
+   79:     REMOVED = "removed"
+   80:     EVALUATED = "evaluated"
+   81: 
+    ----------------------------------------
+   90:     field_name: str,
+   91: ) -> str:
+   92:     if not isinstance(value, str):
+   93:         raise RuntimeFeatureFlagValidationError(
+   94:             f"{field_name} must be a string."
+   95:         )
+   96: 
+   97:     normalised = value.strip()
+   98: 
+   99:     if not normalised:
+  100:         raise RuntimeFeatureFlagValidationError(
+  101:             f"{field_name} must not be empty."
+  102:         )
+  103: 
+  104:     return normalised
+  105: 
+    ----------------------------------------
+  148:         return None
+  149: 
+  150:     if not isinstance(value, datetime):
+  151:         raise RuntimeFeatureFlagValidationError(
+  152:             f"{field_name} must be a datetime."
+  153:         )
+  154: 
+  155:     if value.tzinfo is None:
+  156:         raise RuntimeFeatureFlagValidationError(
+  157:             f"{field_name} must be timezone-aware."
+  158:         )
+  159: 
+  160:     return value.astimezone(timezone.utc)
+  161: 
+    ----------------------------------------
+  192: 
+  193: 
+  194: @dataclass(frozen=True, slots=True)
+  195: class RuntimeFeatureFlagContext:
+  196:     environment: str
+  197:     evaluation_key: str
+  198:     workspace_id: str | None = None
+  199:     plan_id: str | None = None
+  200:     worker_class: str | None = None
+    ----------------------------------------
+  268: 
+  269: 
+  270: @dataclass(frozen=True, slots=True)
+  271: class RuntimeFeatureFlag:
+  272:     key: str
+  273:     state: RuntimeFeatureFlagState
+  274:     owner: str
+  275:     description: str = ""
+  276:     safe_default_enabled: bool = False
+  277:     emergency_kill_switch: bool = False
+  278:     rollout_percentage: float = 100.0
+    ----------------------------------------
+  314: 
+  315:         if not isinstance(
+  316:             self.state,
+  317:             RuntimeFeatureFlagState,
+  318:         ):
+  319:             try:
+  320:                 object.__setattr__(
+  321:                     self,
+  322:                     "state",
+  323:                     RuntimeFeatureFlagState(
+  324:                         self.state
+  325:                     ),
+  326:                 )
+  327:             except Exception as exc:
+  328:                 raise RuntimeFeatureFlagValidationError(
+  329:                     "state is invalid."
+  330:                 ) from exc
+  331: 
+  332:         object.__setattr__(
+  333:             self,
+    ----------------------------------------
+  342:             self.description,
+  343:             str,
+  344:         ):
+  345:             raise RuntimeFeatureFlagValidationError(
+  346:                 "description must be a string."
+  347:             )
+  348: 
+  349:         percentage = float(
+  350:             self.rollout_percentage
+  351:         )
+  352: 
+  353:         if percentage < 0.0 or percentage > 100.0:
+  354:             raise RuntimeFeatureFlagValidationError(
+  355:                 "rollout_percentage must be between 0 and 100."
+  356:             )
+  357: 
+  358:         object.__setattr__(
+  359:             self,
+    ----------------------------------------
+  422:         )
+  423: 
+  424:         if created_at is None or updated_at is None:
+  425:             raise RuntimeFeatureFlagValidationError(
+  426:                 "created_at and updated_at are required."
+  427:             )
+  428: 
+  429:         if updated_at < created_at:
+  430:             raise RuntimeFeatureFlagValidationError(
+  431:                 "updated_at must not be earlier than created_at."
+  432:             )
+  433: 
+  434:         if (
+  435:             expires_at is not None
+  436:             and expires_at <= created_at
+  437:         ):
+  438:             raise RuntimeFeatureFlagValidationError(
+  439:                 "expires_at must be later than created_at."
+  440:             )
+  441: 
+  442:         object.__setattr__(
+  443:             self,
+    ----------------------------------------
+  482:         reference = now or _utc_now()
+  483: 
+  484:         if reference.tzinfo is None:
+  485:             raise RuntimeFeatureFlagValidationError(
+  486:                 "now must be timezone-aware."
+  487:             )
+  488: 
+  489:         return (
+  490:             reference.astimezone(timezone.utc)
+    ----------------------------------------
+  539: 
+  540: 
+  541: @dataclass(frozen=True, slots=True)
+  542: class RuntimeFeatureFlagDecision:
+  543:     flag_key: str
+  544:     enabled: bool
+  545:     reason: RuntimeFeatureFlagDecisionReason
+  546:     evaluation_key: str
+  547:     evaluated_at: datetime
+  548:     flag_fingerprint: str | None
+  549:     rollout_bucket: float | None = None
+  550:     details: Mapping[str, Any] = field(
+    ----------------------------------------
+  576:         )
+  577: 
+  578:         if evaluated_at is None:
+  579:             raise RuntimeFeatureFlagValidationError(
+  580:                 "evaluated_at is required."
+  581:             )
+  582: 
+  583:         object.__setattr__(
+  584:             self,
+    ----------------------------------------
+  596: 
+  597: 
+  598: @dataclass(frozen=True, slots=True)
+  599: class RuntimeFeatureFlagAuditEvent:
+  600:     sequence: int
+  601:     action: RuntimeFeatureFlagAuditAction
+  602:     flag_key: str
+  603:     actor: str
+  604:     occurred_at: datetime
+  605:     flag_fingerprint: str | None = None
+  606:     details: Mapping[str, Any] = field(
+    ----------------------------------------
+  609: 
+  610:     def __post_init__(self) -> None:
+  611:         if self.sequence < 1:
+  612:             raise RuntimeFeatureFlagValidationError(
+  613:                 "sequence must be at least 1."
+  614:             )
+  615: 
+  616:         object.__setattr__(
+  617:             self,
+    ----------------------------------------
+  637:         )
+  638: 
+  639:         if occurred_at is None:
+  640:             raise RuntimeFeatureFlagValidationError(
+  641:                 "occurred_at is required."
+  642:             )
+  643: 
+  644:         object.__setattr__(
+  645:             self,
+    ----------------------------------------
+  657: 
+  658: 
+  659: @dataclass(frozen=True, slots=True)
+  660: class RuntimeFeatureFlagSnapshot:
+  661:     generation: int
+  662:     captured_at: datetime
+  663:     flags: tuple[RuntimeFeatureFlag, ...]
+  664:     fingerprint: str
+  665: 
+  666:     def __post_init__(self) -> None:
+  667:         if self.generation < 0:
+  668:             raise RuntimeFeatureFlagValidationError(
+  669:                 "generation must not be negative."
+  670:             )
+  671: 
+  672:         captured_at = _normalise_datetime(
+  673:             self.captured_at,
+    ----------------------------------------
+  675:         )
+  676: 
+  677:         if captured_at is None:
+  678:             raise RuntimeFeatureFlagValidationError(
+  679:                 "captured_at is required."
+  680:             )
+  681: 
+  682:         object.__setattr__(
+  683:             self,
+    ----------------------------------------
+  728:     )
+  729: 
+  730: 
+  731: class RuntimeFeatureFlagRegistry:
+  732:     """
+  733:     Thread-safe feature-flag registry and evaluator.
+  734: 
+  735:     Registration is separate from persistence. A durable adapter may persist
+  736:     RuntimeFeatureFlag, RuntimeFeatureFlagSnapshot, and
+  737:     RuntimeFeatureFlagAuditEvent contracts without changing evaluation logic.
+  738:     """
+  739: 
+  740:     def __init__(
+  741:         self,
+  742:         *,
+    ----------------------------------------
+  751:         )
+  752:         self._flags: dict[
+  753:             str,
+  754:             RuntimeFeatureFlag,
+  755:         ] = {}
+  756:         self._audit_events: list[
+  757:             RuntimeFeatureFlagAuditEvent
+  758:         ] = []
+  759:         self._generation = 0
+  760:         self._audit_sequence = 0
+  761:         self._lock = threading.RLock()
+  762: 
+    ----------------------------------------
+  767: 
+  768:     def register(
+  769:         self,
+  770:         flag: RuntimeFeatureFlag,
+  771:         *,
+  772:         actor: str,
+  773:         replace: bool = False,
+  774:     ) -> RuntimeFeatureFlag:
+  775:         if not isinstance(
+  776:             flag,
+  777:             RuntimeFeatureFlag,
+  778:         ):
+  779:             raise RuntimeFeatureFlagValidationError(
+  780:                 "flag must be a RuntimeFeatureFlag."
+  781:             )
+  782: 
+  783:         normalised_actor = _normalise_text(
+  784:             actor,
+  785:             field_name="actor",
+    ----------------------------------------
+  791:             )
+  792: 
+  793:             if existing is not None and not replace:
+  794:                 raise RuntimeFeatureFlagConflictError(
+  795:                     f"Feature flag already exists: {flag.key}"
+  796:                 )
+  797: 
+  798:             self._flags[flag.key] = flag
+  799:             self._generation += 1
+  800: 
+  801:             action = (
+  802:                 RuntimeFeatureFlagAuditAction.REPLACED
+  803:                 if existing is not None
+  804:                 else RuntimeFeatureFlagAuditAction.REGISTERED
+  805:             )
+  806: 
+  807:             self._append_audit_event(
+  808:                 action=action,
+  809:                 flag_key=flag.key,
+    ----------------------------------------
+  821:         flag_key: str,
+  822:         *,
+  823:         actor: str,
+  824:     ) -> RuntimeFeatureFlag:
+  825:         normalised_key = _normalise_text(
+  826:             flag_key,
+  827:             field_name="flag_key",
+  828:         )
+  829: 
+    ----------------------------------------
+  838:                     normalised_key
+  839:                 )
+  840:             except KeyError as exc:
+  841:                 raise RuntimeFeatureFlagNotFoundError(
+  842:                     f"Feature flag does not exist: {normalised_key}"
+  843:                 ) from exc
+  844: 
+  845:             self._generation += 1
+  846: 
+  847:             self._append_audit_event(
+  848:                 action=RuntimeFeatureFlagAuditAction.REMOVED,
+  849:                 flag_key=normalised_key,
+  850:                 actor=normalised_actor,
+  851:                 flag_fingerprint=flag.fingerprint,
+  852:                 details={
+  853:                     "generation": self._generation,
+    ----------------------------------------
+  859:     def get(
+  860:         self,
+  861:         flag_key: str,
+  862:     ) -> RuntimeFeatureFlag:
+  863:         normalised_key = _normalise_text(
+  864:             flag_key,
+  865:             field_name="flag_key",
+  866:         )
+  867: 
+    ----------------------------------------
+  871:             )
+  872: 
+  873:             if flag is None:
+  874:                 raise RuntimeFeatureFlagNotFoundError(
+  875:                     f"Feature flag does not exist: {normalised_key}"
+  876:                 )
+  877: 
+  878:             return flag
+  879: 
+  880:     def evaluate(
+  881:         self,
+  882:         flag_key: str,
+  883:         context: RuntimeFeatureFlagContext,
+  884:         *,
+  885:         now: datetime | None = None,
+  886:         actor: str = "runtime",
+  887:     ) -> RuntimeFeatureFlagDecision:
+  888:         if not isinstance(
+  889:             context,
+  890:             RuntimeFeatureFlagContext,
+  891:         ):
+  892:             raise RuntimeFeatureFlagValidationError(
+  893:                 "context must be a RuntimeFeatureFlagContext."
+  894:             )
+  895: 
+  896:         normalised_key = _normalise_text(
+  897:             flag_key,
+  898:             field_name="flag_key",
+    ----------------------------------------
+  906:         reference = now or _utc_now()
+  907: 
+  908:         if reference.tzinfo is None:
+  909:             raise RuntimeFeatureFlagValidationError(
+  910:                 "now must be timezone-aware."
+  911:             )
+  912: 
+  913:         reference = reference.astimezone(
+  914:             timezone.utc
+    ----------------------------------------
+  920:             )
+  921: 
+  922:             if flag is None:
+  923:                 decision = RuntimeFeatureFlagDecision(
+  924:                     flag_key=normalised_key,
+  925:                     enabled=self._safe_default_enabled,
+  926:                     reason=(
+  927:                         RuntimeFeatureFlagDecisionReason.FLAG_NOT_FOUND
+  928:                     ),
+  929:                     evaluation_key=context.evaluation_key,
+  930:                     evaluated_at=reference,
+  931:                     flag_fingerprint=None,
+  932:                     details={
+    ----------------------------------------
+  958: 
+  959:     def snapshot(
+  960:         self,
+  961:     ) -> RuntimeFeatureFlagSnapshot:
+  962:         with self._lock:
+  963:             flags = tuple(
+  964:                 sorted(
+  965:                     self._flags.values(),
+  966:                     key=lambda item: item.key,
+    ----------------------------------------
+  975:                 ],
+  976:             }
+  977: 
+  978:             return RuntimeFeatureFlagSnapshot(
+  979:                 generation=self._generation,
+  980:                 captured_at=_utc_now(),
+  981:                 flags=flags,
+  982:                 fingerprint=_fingerprint(
+  983:                     payload
+    ----------------------------------------
+  986: 
+  987:     def audit_history(
+  988:         self,
+  989:     ) -> tuple[RuntimeFeatureFlagAuditEvent, ...]:
+  990:         with self._lock:
+  991:             return tuple(
+  992:                 self._audit_events
+  993:             )
+  994: 
+  995:     def _evaluate_flag(
+  996:         self,
+  997:         flag: RuntimeFeatureFlag,
+  998:         context: RuntimeFeatureFlagContext,
+  999:         *,
+ 1000:         now: datetime,
+ 1001:     ) -> RuntimeFeatureFlagDecision:
+ 1002:         base = {
+ 1003:             "flag_key": flag.key,
+ 1004:             "evaluation_key": context.evaluation_key,
+ 1005:             "evaluated_at": now,
+ 1006:             "flag_fingerprint": flag.fingerprint,
+ 1007:         }
+ 1008: 
+ 1009:         if flag.emergency_kill_switch:
+ 1010:             return RuntimeFeatureFlagDecision(
+ 1011:                 **base,
+ 1012:                 enabled=False,
+ 1013:                 reason=(
+ 1014:                     RuntimeFeatureFlagDecisionReason.EMERGENCY_KILL_SWITCH
+ 1015:                 ),
+ 1016:             )
+ 1017: 
+ 1018:         if flag.is_expired(now=now):
+ 1019:             return RuntimeFeatureFlagDecision(
+ 1020:                 **base,
+ 1021:                 enabled=flag.safe_default_enabled,
+ 1022:                 reason=RuntimeFeatureFlagDecisionReason.EXPIRED,
+ 1023:                 details={
+ 1024:                     "safe_default_enabled": (
+ 1025:                         flag.safe_default_enabled
+ 1026:                     ),
+ 1027:                 },
+    ----------------------------------------
+ 1029: 
+ 1030:         if (
+ 1031:             flag.state
+ 1032:             is RuntimeFeatureFlagState.DISABLED
+ 1033:         ):
+ 1034:             return RuntimeFeatureFlagDecision(
+ 1035:                 **base,
+ 1036:                 enabled=False,
+ 1037:                 reason=RuntimeFeatureFlagDecisionReason.DISABLED,
+ 1038:             )
+ 1039: 
+ 1040:         if (
+ 1041:             flag.environments
+ 1042:             and context.environment
+ 1043:             not in flag.environments
+ 1044:         ):
+ 1045:             return RuntimeFeatureFlagDecision(
+ 1046:                 **base,
+ 1047:                 enabled=flag.safe_default_enabled,
+ 1048:                 reason=(
+ 1049:                     RuntimeFeatureFlagDecisionReason.ENVIRONMENT_MISMATCH
+ 1050:                 ),
+ 1051:             )
+ 1052: 
+ 1053:         if (
+ 1054:             flag.workspace_ids
+ 1055:             and context.workspace_id
+ 1056:             not in flag.workspace_ids
+ 1057:         ):
+ 1058:             return RuntimeFeatureFlagDecision(
+ 1059:                 **base,
+ 1060:                 enabled=flag.safe_default_enabled,
+ 1061:                 reason=(
+ 1062:                     RuntimeFeatureFlagDecisionReason.WORKSPACE_MISMATCH
+ 1063:                 ),
+ 1064:             )
+ 1065: 
+ 1066:         if (
+ 1067:             flag.plan_ids
+ 1068:             and context.plan_id
+ 1069:             not in flag.plan_ids
+ 1070:         ):
+ 1071:             return RuntimeFeatureFlagDecision(
+ 1072:                 **base,
+ 1073:                 enabled=flag.safe_default_enabled,
+ 1074:                 reason=(
+ 1075:                     RuntimeFeatureFlagDecisionReason.PLAN_MISMATCH
+ 1076:                 ),
+ 1077:             )
+ 1078: 
+ 1079:         if (
+ 1080:             flag.worker_classes
+ 1081:             and context.worker_class
+ 1082:             not in flag.worker_classes
+ 1083:         ):
+ 1084:             return RuntimeFeatureFlagDecision(
+ 1085:                 **base,
+ 1086:                 enabled=flag.safe_default_enabled,
+ 1087:                 reason=(
+ 1088:                     RuntimeFeatureFlagDecisionReason.WORKER_CLASS_MISMATCH
+ 1089:                 ),
+ 1090:             )
+ 1091: 
+ 1092:         if (
+ 1093:             flag.runtime_versions
+ 1094:             and context.runtime_version
+ 1095:             not in flag.runtime_versions
+ 1096:         ):
+ 1097:             return RuntimeFeatureFlagDecision(
+ 1098:                 **base,
+ 1099:                 enabled=flag.safe_default_enabled,
+ 1100:                 reason=(
+ 1101:                     RuntimeFeatureFlagDecisionReason.RUNTIME_VERSION_MISMATCH
+ 1102:                 ),
+ 1103:             )
+ 1104: 
+ 1105:         rollout_bucket = deterministic_rollout_bucket(
+ 1106:             flag_key=flag.key,
+    ----------------------------------------
+ 1111:             rollout_bucket
+ 1112:             >= flag.rollout_percentage
+ 1113:         ):
+ 1114:             return RuntimeFeatureFlagDecision(
+ 1115:                 **base,
+ 1116:                 enabled=flag.safe_default_enabled,
+ 1117:                 reason=(
+ 1118:                     RuntimeFeatureFlagDecisionReason.ROLLOUT_EXCLUDED
+ 1119:                 ),
+ 1120:                 rollout_bucket=rollout_bucket,
+ 1121:                 details={
+ 1122:                     "rollout_percentage": (
+ 1123:                         flag.rollout_percentage
+    ----------------------------------------
+ 1125:                 },
+ 1126:             )
+ 1127: 
+ 1128:         return RuntimeFeatureFlagDecision(
+ 1129:             **base,
+ 1130:             enabled=True,
+ 1131:             reason=RuntimeFeatureFlagDecisionReason.ENABLED,
+ 1132:             rollout_bucket=rollout_bucket,
+ 1133:             details={
+ 1134:                 "rollout_percentage": (
+ 1135:                     flag.rollout_percentage
+ 1136:                 ),
+    ----------------------------------------
+ 1139: 
+ 1140:     def _record_decision(
+ 1141:         self,
+ 1142:         decision: RuntimeFeatureFlagDecision,
+ 1143:         *,
+ 1144:         actor: str,
+ 1145:     ) -> None:
+ 1146:         if not self._record_evaluations:
+ 1147:             return
+ 1148: 
+ 1149:         self._append_audit_event(
+ 1150:             action=RuntimeFeatureFlagAuditAction.EVALUATED,
+ 1151:             flag_key=decision.flag_key,
+ 1152:             actor=actor,
+ 1153:             flag_fingerprint=decision.flag_fingerprint,
+ 1154:             details={
+ 1155:                 "enabled": decision.enabled,
+    ----------------------------------------
+ 1166:     def _append_audit_event(
+ 1167:         self,
+ 1168:         *,
+ 1169:         action: RuntimeFeatureFlagAuditAction,
+ 1170:         flag_key: str,
+ 1171:         actor: str,
+ 1172:         flag_fingerprint: str | None,
+ 1173:         details: Mapping[str, Any],
+ 1174:     ) -> None:
+ 1175:         self._audit_sequence += 1
+ 1176: 
+ 1177:         self._audit_events.append(
+ 1178:             RuntimeFeatureFlagAuditEvent(
+ 1179:                 sequence=self._audit_sequence,
+ 1180:                 action=action,
+ 1181:                 flag_key=flag_key,
+ 1182:                 actor=actor,
+ 1183:                 occurred_at=_utc_now(),
+    ----------------------------------------
+ 1187:         )
+ 1188: 
+ 1189: 
+ 1190: _default_registry = RuntimeFeatureFlagRegistry()
+ 1191: 
+ 1192: 
+ 1193: def get_runtime_feature_flag_registry(
+ 1194: ) -> RuntimeFeatureFlagRegistry:
+ 1195:     return _default_registry
+ 1196: 
+ 1197: 
+ 1198: def register_runtime_feature_flag(
+ 1199:     flag: RuntimeFeatureFlag,
+ 1200:     *,
+ 1201:     actor: str,
+ 1202:     replace: bool = False,
+ 1203: ) -> RuntimeFeatureFlag:
+ 1204:     return _default_registry.register(
+ 1205:         flag,
+ 1206:         actor=actor,
+ 1207:         replace=replace,
+ 1208:     )
+ 1209: 
+ 1210: 
+ 1211: def evaluate_runtime_feature_flag(
+ 1212:     flag_key: str,
+ 1213:     context: RuntimeFeatureFlagContext,
+ 1214:     *,
+ 1215:     now: datetime | None = None,
+ 1216:     actor: str = "runtime",
+ 1217: ) -> RuntimeFeatureFlagDecision:
+ 1218:     return _default_registry.evaluate(
+ 1219:         flag_key,
+ 1220:         context,
+ 1221:         now=now,
+ 1222:         actor=actor,
+    ----------------------------------------
+ 1224: 
+ 1225: 
+ 1226: __all__ = [
+ 1227:     "RuntimeFeatureFlag",
+ 1228:     "RuntimeFeatureFlagAuditAction",
+ 1229:     "RuntimeFeatureFlagAuditEvent",
+ 1230:     "RuntimeFeatureFlagConflictError",
+ 1231:     "RuntimeFeatureFlagContext",
+ 1232:     "RuntimeFeatureFlagDecision",
+ 1233:     "RuntimeFeatureFlagDecisionReason",
+ 1234:     "RuntimeFeatureFlagError",
+ 1235:     "RuntimeFeatureFlagNotFoundError",
+ 1236:     "RuntimeFeatureFlagRegistry",
+ 1237:     "RuntimeFeatureFlagSnapshot",
+ 1238:     "RuntimeFeatureFlagState",
+ 1239:     "RuntimeFeatureFlagValidationError",
+ 1240:     "deterministic_rollout_bucket",
+ 1241:     "evaluate_runtime_feature_flag",
+ 1242:     "get_runtime_feature_flag_registry",
+ 1243:     "register_runtime_feature_flag",
+ 1244: ]
+
+backend/server/runtime/runtime_foundation_certification.py
+Syntax: PASS
+Matching lines: 5
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+76: class _ComponentSpec
+221: function _canonical_json
+228: function _fingerprint
+233: function _utc_now
+238: function _public_api
+305: class CertificationStatus
+313: class CertificationCheck
+349: class CertificationSection
+391: class RuntimeFoundationCertificationReport
+443: function _expect
+454: class RuntimeFoundationCertification
+
+MATCH CONTEXT
+--------------------------------------------------
+   65: ROLE_SHUTDOWN: str = "runtime_shutdown_process"
+   66: ROLE_VERSIONING: str = "runtime_versioning"
+   67: ROLE_COMPATIBILITY: str = "runtime_compatibility_layer"
+   68: ROLE_FEATURE_FLAGS: str = "runtime_feature_flags"
+   69: ROLE_CAPABILITY: str = "runtime_capability_negotiation"
+   70: ROLE_PERSISTENCE: str = "runtime_persistence_interface"
+   71: ROLE_STATE_STORE: str = "runtime_state_store_abstraction"
+   72: ROLE_SCHEMA: str = "runtime_schema_management"
+   73: 
+    ----------------------------------------
+  142:     ),
+  143:     _ComponentSpec(
+  144:         "1.1.10",
+  145:         ROLE_FEATURE_FLAGS,
+  146:         "Runtime Feature Flags",
+  147:         ("runtime_feature_flags",),
+  148:     ),
+  149:     _ComponentSpec(
+  150:         "1.1.11",
+  151:         ROLE_CAPABILITY,
+  152:         "Runtime Capability Negotiation",
+    ----------------------------------------
+ 1128:         out: list[CertificationCheck] = []
+ 1129: 
+ 1130:         def negotiation_stack() -> str:
+ 1131:             for role in (ROLE_FEATURE_FLAGS, ROLE_CAPABILITY,
+ 1132:                          ROLE_COMPATIBILITY):
+ 1133:                 module = self._module_of(resolutions, role)
+ 1134:                 api = resolutions[role]["public_api"]
+ 1135:                 _expect(
+ 1136:                     self._exports_class_or_callable(module, api),
+
+backend/server/runtime/runtime_schema/deprecation.py
+Syntax: PASS
+Matching lines: 9
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+46: class FeatureFlagProvider
+117: function _coerce_state
+141: function is_legal_transition
+163: function require_legal_transition
+198: class DeprecationPolicy
+411: class DeprecationEvaluation
+501: function _require_aware_datetime
+525: class DeprecationEngine
+
+MATCH CONTEXT
+--------------------------------------------------
+   52:         self,
+   53:         flag_name: str,
+   54:     ) -> bool:
+   55:         """Return whether one runtime feature flag is enabled."""
+   56: 
+   57: 
+   58: LEGAL_LIFECYCLE_TRANSITIONS: Final[
+   59:     Mapping[
+   60:         SchemaLifecycleState,
+    ----------------------------------------
+  527: 
+  528:     def __init__(
+  529:         self,
+  530:         feature_flags: FeatureFlagProvider | None = None,
+  531:     ) -> None:
+  532:         if (
+  533:             feature_flags is not None
+  534:             and not isinstance(
+  535:                 feature_flags,
+  536:                 FeatureFlagProvider,
+  537:             )
+  538:         ):
+  539:             raise SchemaRegistryError(
+  540:                 "feature_flags does not satisfy "
+  541:                 "FeatureFlagProvider"
+  542:             )
+  543: 
+  544:         self._feature_flags = feature_flags
+  545: 
+  546:     def effective_enforcement(
+  547:         self,
+  548:         policy: DeprecationPolicy,
+  549:     ) -> EnforcementLevel:
+  550:         """Return staged enforcement level.
+  551: 
+  552:         BLOCK degrades to WARN until the runtime feature flag is enabled.
+  553:         """
+  554:         if not isinstance(
+  555:             policy,
+  556:             DeprecationPolicy,
+  557:         ):
+    ----------------------------------------
+  565:         ):
+  566:             return EnforcementLevel.WARN
+  567: 
+  568:         if self._feature_flags is None:
+  569:             return EnforcementLevel.WARN
+  570: 
+  571:         try:
+  572:             enabled = bool(
+  573:                 self._feature_flags.is_enabled(
+  574:                     DEPRECATION_ENFORCEMENT_FLAG
+  575:                 )
+  576:             )
+  577:         except Exception as exc:
+  578:             raise SchemaRegistryError(
+
+backend/server/runtime/runtime_state_store.py
+Syntax: PASS
+Matching lines: 1
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+42: class RuntimeStateStoreError
+46: class RuntimeStateStoreValidationError
+50: class RuntimeStateStoreNotFoundError
+54: class RuntimeStateStoreConflictError
+58: class RuntimeStateStoreRegistrationError
+62: class RuntimeStateDomain
+83: class RuntimeStateLifecycle
+90: class RuntimeStateMutationMode
+97: function _utc_now
+101: function _normalise_text
+121: function _normalise_optional_text
+135: function _normalise_datetime
+156: function _freeze_mapping
+164: function _canonical_json
+176: function _fingerprint
+184: function _state_namespace
+205: class RuntimeStateIdentity
+272: class RuntimeStateEnvelope
+559: class RuntimeStoredState
+611: class RuntimeStateMutation
+681: class RuntimeStateDelete
+721: class RuntimeStatePage
+771: class RuntimeStateStoreSnapshot
+812: class RuntimeStateTransactionResult
+844: function _persistence_condition
+872: function _stored_state_from_record
+898: class RuntimeStateStore
+1508: class RuntimeStateStoreRegistrySnapshot
+1516: class RuntimeStateStoreRegistry
+1765: function create_default_runtime_state_stores
+1796: function get_runtime_state_store_registry
+1801: function register_runtime_state_store
+
+MATCH CONTEXT
+--------------------------------------------------
+   73:     RESOURCE_RESERVATIONS = "resource_reservations"
+   74:     AU_RECORDS = "au_records"
+   75:     COST_RECORDS = "cost_records"
+   76:     FEATURE_FLAGS = "feature_flags"
+   77:     CAPABILITY_MANIFESTS = "capability_manifests"
+   78:     RUNTIME_VERSIONS = "runtime_versions"
+   79:     RUNTIME_MIGRATIONS = "runtime_migrations"
+   80:     RUNTIME_CERTIFICATES = "runtime_certificates"
+   81: 
+
+=========================================================================================================
+PRIORITY RUNTIME FILES
+=========================================================================================================
+
+backend/server/runtime/runtime_application_lifecycle.py
+Syntax: PASS
+Feature-flag references: 0
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+21: class RuntimeApplicationLifecycleError
+25: function _project_root
+29: function _record_mapping
+66: async function linkcraftor_runtime_lifespan
+
+backend/server/runtime/runtime_boot_process.py
+Syntax: PASS
+Feature-flag references: 0
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+57: function _utc_now
+69: class RuntimeBootError
+73: class RuntimeBootConfigurationError
+79: class RuntimeBootFailureError
+99: class RuntimeBootStatus
+108: class RuntimeServiceRegistrar
+124: class RuntimeBootComposition
+135: class RuntimeBootContext
+151: class RuntimeBootEvent
+163: class RuntimeBootSnapshot
+182: class RuntimeBootProcess
+907: async function boot_runtime
+
+backend/server/runtime/runtime_configuration.py
+Syntax: PASS
+Feature-flag references: 0
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+172: class RuntimeConfigurationError
+176: class RuntimeConfigurationSourceError
+182: class RuntimeConfigurationValidationError
+188: function _serialize_value
+196: class RuntimeConfiguration
+456: class RuntimeConfigurationLoader
+792: function load_runtime_configuration
+
+backend/server/runtime/runtime_feature_flags.py
+Syntax: PASS
+Feature-flag references: 121
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+40: class RuntimeFeatureFlagError
+44: class RuntimeFeatureFlagValidationError
+48: class RuntimeFeatureFlagConflictError
+52: class RuntimeFeatureFlagNotFoundError
+56: class RuntimeFeatureFlagState
+61: class RuntimeFeatureFlagDecisionReason
+76: class RuntimeFeatureFlagAuditAction
+83: function _utc_now
+87: function _normalise_text
+107: function _normalise_optional_text
+121: function _normalise_scope
+142: function _normalise_datetime
+163: function _freeze_mapping
+174: function _canonical_json
+186: function _fingerprint
+195: class RuntimeFeatureFlagContext
+271: class RuntimeFeatureFlag
+542: class RuntimeFeatureFlagDecision
+599: class RuntimeFeatureFlagAuditEvent
+660: class RuntimeFeatureFlagSnapshot
+695: function deterministic_rollout_bucket
+731: class RuntimeFeatureFlagRegistry
+1193: function get_runtime_feature_flag_registry
+1198: function register_runtime_feature_flag
+1211: function evaluate_runtime_feature_flag
+
+FEATURE-FLAG CONTEXT
+--------------------------------------------------
+    2: 
+    3: """
+    4: Universal Runtime Infrastructure
+    5: Phase 1.1.10 — Runtime Feature Flags
+    6: 
+    7: This module provides the product-wide, business-logic-agnostic runtime
+    8: feature-flag infrastructure.
+    9: 
+   10: It supports:
+    ----------------------------------------
+   37: from typing import Any, Iterable, Mapping
+   38: 
+   39: 
+   40: class RuntimeFeatureFlagError(RuntimeError):
+   41:     """Base exception for runtime feature-flag failures."""
+   42: 
+   43: 
+   44: class RuntimeFeatureFlagValidationError(RuntimeFeatureFlagError):
+   45:     """Raised when a feature-flag contract is invalid."""
+   46: 
+   47: 
+   48: class RuntimeFeatureFlagConflictError(RuntimeFeatureFlagError):
+   49:     """Raised when registration conflicts with an existing flag."""
+   50: 
+   51: 
+   52: class RuntimeFeatureFlagNotFoundError(RuntimeFeatureFlagError):
+   53:     """Raised when a requested feature flag does not exist."""
+   54: 
+   55: 
+   56: class RuntimeFeatureFlagState(str, Enum):
+   57:     ENABLED = "enabled"
+   58:     DISABLED = "disabled"
+   59: 
+   60: 
+   61: class RuntimeFeatureFlagDecisionReason(str, Enum):
+   62:     ENABLED = "enabled"
+   63:     DISABLED = "disabled"
+   64:     SAFE_DEFAULT = "safe_default"
+   65:     FLAG_NOT_FOUND = "flag_not_found"
+   66:     EXPIRED = "expired"
+    ----------------------------------------
+   73:     EMERGENCY_KILL_SWITCH = "emergency_kill_switch"
+   74: 
+   75: 
+   76: class RuntimeFeatureFlagAuditAction(str, Enum):
+   77:     REGISTERED = "registered"
+   78:     REPLACED = "replaced"
+   79:     REMOVED = "removed"
+   80:     EVALUATED = "evaluated"
+   81: 
+    ----------------------------------------
+   90:     field_name: str,
+   91: ) -> str:
+   92:     if not isinstance(value, str):
+   93:         raise RuntimeFeatureFlagValidationError(
+   94:             f"{field_name} must be a string."
+   95:         )
+   96: 
+   97:     normalised = value.strip()
+   98: 
+   99:     if not normalised:
+  100:         raise RuntimeFeatureFlagValidationError(
+  101:             f"{field_name} must not be empty."
+  102:         )
+  103: 
+  104:     return normalised
+  105: 
+    ----------------------------------------
+  148:         return None
+  149: 
+  150:     if not isinstance(value, datetime):
+  151:         raise RuntimeFeatureFlagValidationError(
+  152:             f"{field_name} must be a datetime."
+  153:         )
+  154: 
+  155:     if value.tzinfo is None:
+  156:         raise RuntimeFeatureFlagValidationError(
+  157:             f"{field_name} must be timezone-aware."
+  158:         )
+  159: 
+  160:     return value.astimezone(timezone.utc)
+  161: 
+    ----------------------------------------
+  192: 
+  193: 
+  194: @dataclass(frozen=True, slots=True)
+  195: class RuntimeFeatureFlagContext:
+  196:     environment: str
+  197:     evaluation_key: str
+  198:     workspace_id: str | None = None
+  199:     plan_id: str | None = None
+  200:     worker_class: str | None = None
+    ----------------------------------------
+  268: 
+  269: 
+  270: @dataclass(frozen=True, slots=True)
+  271: class RuntimeFeatureFlag:
+  272:     key: str
+  273:     state: RuntimeFeatureFlagState
+  274:     owner: str
+  275:     description: str = ""
+  276:     safe_default_enabled: bool = False
+  277:     emergency_kill_switch: bool = False
+  278:     rollout_percentage: float = 100.0
+    ----------------------------------------
+  314: 
+  315:         if not isinstance(
+  316:             self.state,
+  317:             RuntimeFeatureFlagState,
+  318:         ):
+  319:             try:
+  320:                 object.__setattr__(
+  321:                     self,
+  322:                     "state",
+  323:                     RuntimeFeatureFlagState(
+  324:                         self.state
+  325:                     ),
+  326:                 )
+  327:             except Exception as exc:
+  328:                 raise RuntimeFeatureFlagValidationError(
+  329:                     "state is invalid."
+  330:                 ) from exc
+  331: 
+  332:         object.__setattr__(
+  333:             self,
+    ----------------------------------------
+  342:             self.description,
+  343:             str,
+  344:         ):
+  345:             raise RuntimeFeatureFlagValidationError(
+  346:                 "description must be a string."
+  347:             )
+  348: 
+  349:         percentage = float(
+  350:             self.rollout_percentage
+  351:         )
+  352: 
+  353:         if percentage < 0.0 or percentage > 100.0:
+  354:             raise RuntimeFeatureFlagValidationError(
+  355:                 "rollout_percentage must be between 0 and 100."
+  356:             )
+  357: 
+  358:         object.__setattr__(
+  359:             self,
+    ----------------------------------------
+  422:         )
+  423: 
+  424:         if created_at is None or updated_at is None:
+  425:             raise RuntimeFeatureFlagValidationError(
+  426:                 "created_at and updated_at are required."
+  427:             )
+  428: 
+  429:         if updated_at < created_at:
+  430:             raise RuntimeFeatureFlagValidationError(
+  431:                 "updated_at must not be earlier than created_at."
+  432:             )
+  433: 
+  434:         if (
+  435:             expires_at is not None
+  436:             and expires_at <= created_at
+  437:         ):
+  438:             raise RuntimeFeatureFlagValidationError(
+  439:                 "expires_at must be later than created_at."
+  440:             )
+  441: 
+  442:         object.__setattr__(
+  443:             self,
+    ----------------------------------------
+  482:         reference = now or _utc_now()
+  483: 
+  484:         if reference.tzinfo is None:
+  485:             raise RuntimeFeatureFlagValidationError(
+  486:                 "now must be timezone-aware."
+  487:             )
+  488: 
+  489:         return (
+  490:             reference.astimezone(timezone.utc)
+    ----------------------------------------
+  539: 
+  540: 
+  541: @dataclass(frozen=True, slots=True)
+  542: class RuntimeFeatureFlagDecision:
+  543:     flag_key: str
+  544:     enabled: bool
+  545:     reason: RuntimeFeatureFlagDecisionReason
+  546:     evaluation_key: str
+  547:     evaluated_at: datetime
+  548:     flag_fingerprint: str | None
+  549:     rollout_bucket: float | None = None
+  550:     details: Mapping[str, Any] = field(
+    ----------------------------------------
+  576:         )
+  577: 
+  578:         if evaluated_at is None:
+  579:             raise RuntimeFeatureFlagValidationError(
+  580:                 "evaluated_at is required."
+  581:             )
+  582: 
+  583:         object.__setattr__(
+  584:             self,
+    ----------------------------------------
+  596: 
+  597: 
+  598: @dataclass(frozen=True, slots=True)
+  599: class RuntimeFeatureFlagAuditEvent:
+  600:     sequence: int
+  601:     action: RuntimeFeatureFlagAuditAction
+  602:     flag_key: str
+  603:     actor: str
+  604:     occurred_at: datetime
+  605:     flag_fingerprint: str | None = None
+  606:     details: Mapping[str, Any] = field(
+    ----------------------------------------
+  609: 
+  610:     def __post_init__(self) -> None:
+  611:         if self.sequence < 1:
+  612:             raise RuntimeFeatureFlagValidationError(
+  613:                 "sequence must be at least 1."
+  614:             )
+  615: 
+  616:         object.__setattr__(
+  617:             self,
+    ----------------------------------------
+  637:         )
+  638: 
+  639:         if occurred_at is None:
+  640:             raise RuntimeFeatureFlagValidationError(
+  641:                 "occurred_at is required."
+  642:             )
+  643: 
+  644:         object.__setattr__(
+  645:             self,
+    ----------------------------------------
+  657: 
+  658: 
+  659: @dataclass(frozen=True, slots=True)
+  660: class RuntimeFeatureFlagSnapshot:
+  661:     generation: int
+  662:     captured_at: datetime
+  663:     flags: tuple[RuntimeFeatureFlag, ...]
+  664:     fingerprint: str
+  665: 
+  666:     def __post_init__(self) -> None:
+  667:         if self.generation < 0:
+  668:             raise RuntimeFeatureFlagValidationError(
+  669:                 "generation must not be negative."
+  670:             )
+  671: 
+  672:         captured_at = _normalise_datetime(
+  673:             self.captured_at,
+    ----------------------------------------
+  675:         )
+  676: 
+  677:         if captured_at is None:
+  678:             raise RuntimeFeatureFlagValidationError(
+  679:                 "captured_at is required."
+  680:             )
+  681: 
+  682:         object.__setattr__(
+  683:             self,
+    ----------------------------------------
+  728:     )
+  729: 
+  730: 
+  731: class RuntimeFeatureFlagRegistry:
+  732:     """
+  733:     Thread-safe feature-flag registry and evaluator.
+  734: 
+  735:     Registration is separate from persistence. A durable adapter may persist
+  736:     RuntimeFeatureFlag, RuntimeFeatureFlagSnapshot, and
+  737:     RuntimeFeatureFlagAuditEvent contracts without changing evaluation logic.
+  738:     """
+  739: 
+  740:     def __init__(
+  741:         self,
+  742:         *,
+    ----------------------------------------
+  751:         )
+  752:         self._flags: dict[
+  753:             str,
+  754:             RuntimeFeatureFlag,
+  755:         ] = {}
+  756:         self._audit_events: list[
+  757:             RuntimeFeatureFlagAuditEvent
+  758:         ] = []
+  759:         self._generation = 0
+  760:         self._audit_sequence = 0
+  761:         self._lock = threading.RLock()
+  762: 
+    ----------------------------------------
+  767: 
+  768:     def register(
+  769:         self,
+  770:         flag: RuntimeFeatureFlag,
+  771:         *,
+  772:         actor: str,
+  773:         replace: bool = False,
+  774:     ) -> RuntimeFeatureFlag:
+  775:         if not isinstance(
+  776:             flag,
+  777:             RuntimeFeatureFlag,
+  778:         ):
+  779:             raise RuntimeFeatureFlagValidationError(
+  780:                 "flag must be a RuntimeFeatureFlag."
+  781:             )
+  782: 
+  783:         normalised_actor = _normalise_text(
+  784:             actor,
+  785:             field_name="actor",
+    ----------------------------------------
+  791:             )
+  792: 
+  793:             if existing is not None and not replace:
+  794:                 raise RuntimeFeatureFlagConflictError(
+  795:                     f"Feature flag already exists: {flag.key}"
+  796:                 )
+  797: 
+  798:             self._flags[flag.key] = flag
+  799:             self._generation += 1
+  800: 
+  801:             action = (
+  802:                 RuntimeFeatureFlagAuditAction.REPLACED
+  803:                 if existing is not None
+  804:                 else RuntimeFeatureFlagAuditAction.REGISTERED
+  805:             )
+  806: 
+  807:             self._append_audit_event(
+  808:                 action=action,
+  809:                 flag_key=flag.key,
+    ----------------------------------------
+  821:         flag_key: str,
+  822:         *,
+  823:         actor: str,
+  824:     ) -> RuntimeFeatureFlag:
+  825:         normalised_key = _normalise_text(
+  826:             flag_key,
+  827:             field_name="flag_key",
+  828:         )
+  829: 
+    ----------------------------------------
+  838:                     normalised_key
+  839:                 )
+  840:             except KeyError as exc:
+  841:                 raise RuntimeFeatureFlagNotFoundError(
+  842:                     f"Feature flag does not exist: {normalised_key}"
+  843:                 ) from exc
+  844: 
+  845:             self._generation += 1
+  846: 
+  847:             self._append_audit_event(
+  848:                 action=RuntimeFeatureFlagAuditAction.REMOVED,
+  849:                 flag_key=normalised_key,
+  850:                 actor=normalised_actor,
+  851:                 flag_fingerprint=flag.fingerprint,
+  852:                 details={
+  853:                     "generation": self._generation,
+    ----------------------------------------
+  859:     def get(
+  860:         self,
+  861:         flag_key: str,
+  862:     ) -> RuntimeFeatureFlag:
+  863:         normalised_key = _normalise_text(
+  864:             flag_key,
+  865:             field_name="flag_key",
+  866:         )
+  867: 
+    ----------------------------------------
+  871:             )
+  872: 
+  873:             if flag is None:
+  874:                 raise RuntimeFeatureFlagNotFoundError(
+  875:                     f"Feature flag does not exist: {normalised_key}"
+  876:                 )
+  877: 
+  878:             return flag
+  879: 
+  880:     def evaluate(
+  881:         self,
+  882:         flag_key: str,
+  883:         context: RuntimeFeatureFlagContext,
+  884:         *,
+  885:         now: datetime | None = None,
+  886:         actor: str = "runtime",
+  887:     ) -> RuntimeFeatureFlagDecision:
+  888:         if not isinstance(
+  889:             context,
+  890:             RuntimeFeatureFlagContext,
+  891:         ):
+  892:             raise RuntimeFeatureFlagValidationError(
+  893:                 "context must be a RuntimeFeatureFlagContext."
+  894:             )
+  895: 
+  896:         normalised_key = _normalise_text(
+  897:             flag_key,
+  898:             field_name="flag_key",
+    ----------------------------------------
+  906:         reference = now or _utc_now()
+  907: 
+  908:         if reference.tzinfo is None:
+  909:             raise RuntimeFeatureFlagValidationError(
+  910:                 "now must be timezone-aware."
+  911:             )
+  912: 
+  913:         reference = reference.astimezone(
+  914:             timezone.utc
+    ----------------------------------------
+  920:             )
+  921: 
+  922:             if flag is None:
+  923:                 decision = RuntimeFeatureFlagDecision(
+  924:                     flag_key=normalised_key,
+  925:                     enabled=self._safe_default_enabled,
+  926:                     reason=(
+  927:                         RuntimeFeatureFlagDecisionReason.FLAG_NOT_FOUND
+  928:                     ),
+  929:                     evaluation_key=context.evaluation_key,
+  930:                     evaluated_at=reference,
+  931:                     flag_fingerprint=None,
+  932:                     details={
+    ----------------------------------------
+  958: 
+  959:     def snapshot(
+  960:         self,
+  961:     ) -> RuntimeFeatureFlagSnapshot:
+  962:         with self._lock:
+  963:             flags = tuple(
+  964:                 sorted(
+  965:                     self._flags.values(),
+  966:                     key=lambda item: item.key,
+    ----------------------------------------
+  975:                 ],
+  976:             }
+  977: 
+  978:             return RuntimeFeatureFlagSnapshot(
+  979:                 generation=self._generation,
+  980:                 captured_at=_utc_now(),
+  981:                 flags=flags,
+  982:                 fingerprint=_fingerprint(
+  983:                     payload
+    ----------------------------------------
+  986: 
+  987:     def audit_history(
+  988:         self,
+  989:     ) -> tuple[RuntimeFeatureFlagAuditEvent, ...]:
+  990:         with self._lock:
+  991:             return tuple(
+  992:                 self._audit_events
+  993:             )
+  994: 
+  995:     def _evaluate_flag(
+  996:         self,
+  997:         flag: RuntimeFeatureFlag,
+  998:         context: RuntimeFeatureFlagContext,
+  999:         *,
+ 1000:         now: datetime,
+ 1001:     ) -> RuntimeFeatureFlagDecision:
+ 1002:         base = {
+ 1003:             "flag_key": flag.key,
+ 1004:             "evaluation_key": context.evaluation_key,
+ 1005:             "evaluated_at": now,
+ 1006:             "flag_fingerprint": flag.fingerprint,
+ 1007:         }
+ 1008: 
+ 1009:         if flag.emergency_kill_switch:
+ 1010:             return RuntimeFeatureFlagDecision(
+ 1011:                 **base,
+ 1012:                 enabled=False,
+ 1013:                 reason=(
+ 1014:                     RuntimeFeatureFlagDecisionReason.EMERGENCY_KILL_SWITCH
+ 1015:                 ),
+ 1016:             )
+ 1017: 
+ 1018:         if flag.is_expired(now=now):
+ 1019:             return RuntimeFeatureFlagDecision(
+ 1020:                 **base,
+ 1021:                 enabled=flag.safe_default_enabled,
+ 1022:                 reason=RuntimeFeatureFlagDecisionReason.EXPIRED,
+ 1023:                 details={
+ 1024:                     "safe_default_enabled": (
+ 1025:                         flag.safe_default_enabled
+ 1026:                     ),
+ 1027:                 },
+    ----------------------------------------
+ 1029: 
+ 1030:         if (
+ 1031:             flag.state
+ 1032:             is RuntimeFeatureFlagState.DISABLED
+ 1033:         ):
+ 1034:             return RuntimeFeatureFlagDecision(
+ 1035:                 **base,
+ 1036:                 enabled=False,
+ 1037:                 reason=RuntimeFeatureFlagDecisionReason.DISABLED,
+ 1038:             )
+ 1039: 
+ 1040:         if (
+ 1041:             flag.environments
+ 1042:             and context.environment
+ 1043:             not in flag.environments
+ 1044:         ):
+ 1045:             return RuntimeFeatureFlagDecision(
+ 1046:                 **base,
+ 1047:                 enabled=flag.safe_default_enabled,
+ 1048:                 reason=(
+ 1049:                     RuntimeFeatureFlagDecisionReason.ENVIRONMENT_MISMATCH
+ 1050:                 ),
+ 1051:             )
+ 1052: 
+ 1053:         if (
+ 1054:             flag.workspace_ids
+ 1055:             and context.workspace_id
+ 1056:             not in flag.workspace_ids
+ 1057:         ):
+ 1058:             return RuntimeFeatureFlagDecision(
+ 1059:                 **base,
+ 1060:                 enabled=flag.safe_default_enabled,
+ 1061:                 reason=(
+ 1062:                     RuntimeFeatureFlagDecisionReason.WORKSPACE_MISMATCH
+ 1063:                 ),
+ 1064:             )
+ 1065: 
+ 1066:         if (
+ 1067:             flag.plan_ids
+ 1068:             and context.plan_id
+ 1069:             not in flag.plan_ids
+ 1070:         ):
+ 1071:             return RuntimeFeatureFlagDecision(
+ 1072:                 **base,
+ 1073:                 enabled=flag.safe_default_enabled,
+ 1074:                 reason=(
+ 1075:                     RuntimeFeatureFlagDecisionReason.PLAN_MISMATCH
+ 1076:                 ),
+ 1077:             )
+ 1078: 
+ 1079:         if (
+ 1080:             flag.worker_classes
+ 1081:             and context.worker_class
+ 1082:             not in flag.worker_classes
+ 1083:         ):
+ 1084:             return RuntimeFeatureFlagDecision(
+ 1085:                 **base,
+ 1086:                 enabled=flag.safe_default_enabled,
+ 1087:                 reason=(
+ 1088:                     RuntimeFeatureFlagDecisionReason.WORKER_CLASS_MISMATCH
+ 1089:                 ),
+ 1090:             )
+ 1091: 
+ 1092:         if (
+ 1093:             flag.runtime_versions
+ 1094:             and context.runtime_version
+ 1095:             not in flag.runtime_versions
+ 1096:         ):
+ 1097:             return RuntimeFeatureFlagDecision(
+ 1098:                 **base,
+ 1099:                 enabled=flag.safe_default_enabled,
+ 1100:                 reason=(
+ 1101:                     RuntimeFeatureFlagDecisionReason.RUNTIME_VERSION_MISMATCH
+ 1102:                 ),
+ 1103:             )
+ 1104: 
+ 1105:         rollout_bucket = deterministic_rollout_bucket(
+ 1106:             flag_key=flag.key,
+    ----------------------------------------
+ 1111:             rollout_bucket
+ 1112:             >= flag.rollout_percentage
+ 1113:         ):
+ 1114:             return RuntimeFeatureFlagDecision(
+ 1115:                 **base,
+ 1116:                 enabled=flag.safe_default_enabled,
+ 1117:                 reason=(
+ 1118:                     RuntimeFeatureFlagDecisionReason.ROLLOUT_EXCLUDED
+ 1119:                 ),
+ 1120:                 rollout_bucket=rollout_bucket,
+ 1121:                 details={
+ 1122:                     "rollout_percentage": (
+ 1123:                         flag.rollout_percentage
+    ----------------------------------------
+ 1125:                 },
+ 1126:             )
+ 1127: 
+ 1128:         return RuntimeFeatureFlagDecision(
+ 1129:             **base,
+ 1130:             enabled=True,
+ 1131:             reason=RuntimeFeatureFlagDecisionReason.ENABLED,
+ 1132:             rollout_bucket=rollout_bucket,
+ 1133:             details={
+ 1134:                 "rollout_percentage": (
+ 1135:                     flag.rollout_percentage
+ 1136:                 ),
+    ----------------------------------------
+ 1139: 
+ 1140:     def _record_decision(
+ 1141:         self,
+ 1142:         decision: RuntimeFeatureFlagDecision,
+ 1143:         *,
+ 1144:         actor: str,
+ 1145:     ) -> None:
+ 1146:         if not self._record_evaluations:
+ 1147:             return
+ 1148: 
+ 1149:         self._append_audit_event(
+ 1150:             action=RuntimeFeatureFlagAuditAction.EVALUATED,
+ 1151:             flag_key=decision.flag_key,
+ 1152:             actor=actor,
+ 1153:             flag_fingerprint=decision.flag_fingerprint,
+ 1154:             details={
+ 1155:                 "enabled": decision.enabled,
+    ----------------------------------------
+ 1166:     def _append_audit_event(
+ 1167:         self,
+ 1168:         *,
+ 1169:         action: RuntimeFeatureFlagAuditAction,
+ 1170:         flag_key: str,
+ 1171:         actor: str,
+ 1172:         flag_fingerprint: str | None,
+ 1173:         details: Mapping[str, Any],
+ 1174:     ) -> None:
+ 1175:         self._audit_sequence += 1
+ 1176: 
+ 1177:         self._audit_events.append(
+ 1178:             RuntimeFeatureFlagAuditEvent(
+ 1179:                 sequence=self._audit_sequence,
+ 1180:                 action=action,
+ 1181:                 flag_key=flag_key,
+ 1182:                 actor=actor,
+ 1183:                 occurred_at=_utc_now(),
+    ----------------------------------------
+ 1187:         )
+ 1188: 
+ 1189: 
+ 1190: _default_registry = RuntimeFeatureFlagRegistry()
+ 1191: 
+ 1192: 
+ 1193: def get_runtime_feature_flag_registry(
+ 1194: ) -> RuntimeFeatureFlagRegistry:
+ 1195:     return _default_registry
+ 1196: 
+ 1197: 
+ 1198: def register_runtime_feature_flag(
+ 1199:     flag: RuntimeFeatureFlag,
+ 1200:     *,
+ 1201:     actor: str,
+ 1202:     replace: bool = False,
+ 1203: ) -> RuntimeFeatureFlag:
+ 1204:     return _default_registry.register(
+ 1205:         flag,
+ 1206:         actor=actor,
+ 1207:         replace=replace,
+ 1208:     )
+ 1209: 
+ 1210: 
+ 1211: def evaluate_runtime_feature_flag(
+ 1212:     flag_key: str,
+ 1213:     context: RuntimeFeatureFlagContext,
+ 1214:     *,
+ 1215:     now: datetime | None = None,
+ 1216:     actor: str = "runtime",
+ 1217: ) -> RuntimeFeatureFlagDecision:
+ 1218:     return _default_registry.evaluate(
+ 1219:         flag_key,
+ 1220:         context,
+ 1221:         now=now,
+ 1222:         actor=actor,
+    ----------------------------------------
+ 1224: 
+ 1225: 
+ 1226: __all__ = [
+ 1227:     "RuntimeFeatureFlag",
+ 1228:     "RuntimeFeatureFlagAuditAction",
+ 1229:     "RuntimeFeatureFlagAuditEvent",
+ 1230:     "RuntimeFeatureFlagConflictError",
+ 1231:     "RuntimeFeatureFlagContext",
+ 1232:     "RuntimeFeatureFlagDecision",
+ 1233:     "RuntimeFeatureFlagDecisionReason",
+ 1234:     "RuntimeFeatureFlagError",
+ 1235:     "RuntimeFeatureFlagNotFoundError",
+ 1236:     "RuntimeFeatureFlagRegistry",
+ 1237:     "RuntimeFeatureFlagSnapshot",
+ 1238:     "RuntimeFeatureFlagState",
+ 1239:     "RuntimeFeatureFlagValidationError",
+ 1240:     "deterministic_rollout_bucket",
+ 1241:     "evaluate_runtime_feature_flag",
+ 1242:     "get_runtime_feature_flag_registry",
+ 1243:     "register_runtime_feature_flag",
+ 1244: ]
+
+backend/server/runtime/universal_runtime_kernel.py
+Syntax: PASS
+Feature-flag references: 0
+
+DECLARATIONS
+--------------------------------------------------
+AST_PARSE: PASS
+39: function _utc_now
+43: function _qualified_type_name
+51: class RuntimeKernelError
+55: class RuntimeKernelBindingError
+59: class RuntimeKernelMissingComponentError
+63: class RuntimeKernelStateError
+67: class RuntimeKernelState
+163: class KernelComponentBinding
+178: class RuntimeKernelSnapshot
+193: class UniversalRuntimeKernel
+
+=========================================================================================================
+PRELIMINARY WIRING DECISION
+=========================================================================================================
+Canonical definition candidates: 1
+External production consumer candidates: 5
+
+Definition candidates:
+  - backend/server/runtime/runtime_feature_flags.py
+External consumer candidates:
+  - backend/server/orchestration/context_snapshot.py
+  - backend/server/orchestration/workspace_context.py
+  - backend/server/runtime/runtime_foundation_certification.py
+  - backend/server/runtime/runtime_schema/deprecation.py
+  - backend/server/runtime/runtime_state_store.py
+
+No files were modified by this inspection.
+
+=========================================================================================================
+FINAL RESULT
+=========================================================================================================
+A1.11 FEATURE-FLAG WIRING INSPECTION COMPLETE

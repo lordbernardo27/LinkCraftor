@@ -1,0 +1,888 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.10 ACTUAL FASTAPI APPLICATION LIFESPAN VERIFICATION
+Generated: 2026-10-05T10:16:19.400748+00:00
+Production source changes: NONE
+Actual app.router.lifespan_context(app) exercised.
+Real boot/shutdown delegated with isolated runtime configuration.
+Failure cases use deliberate boundary fault injection.
+No queue claims or production handler executions requested.
+
+
+==========================================================================================
+NORMAL
+==========================================================================================
+A1.10 APPLICATION_PASSES_PROJECT_ROOT: PASS
+A1.10 APPLICATION_RUNNING: PASS
+A1.10 ACTUAL_BOOT_PROCESS_PUBLISHED: PASS
+A1.10 ACTUAL_BOOT_CONTEXT_PUBLISHED: PASS
+A1.10 RUNTIME_DATA_ISOLATED: PASS
+A1.10 BOOT_EVIDENCE_PUBLISHED: PASS
+A1.11 FEATURE_FLAG_EVIDENCE_PUBLISHED: PASS
+A1.11 CLAIMS_ENABLED_DURING_RUNNING: PASS
+A1.10 APPLICATION_BODY_ENTERED: PASS
+A1.10 APPLICATION_STOPPED: PASS
+A1.10 SHUTDOWN_EVIDENCE_PUBLISHED: PASS
+A1.10 SHUTDOWN_SNAPSHOT_PUBLISHED: PASS
+A1.11 STOPPED_APPLICATION_DENIES_CLAIMS: FAIL
+A1.10 SHUTDOWN_CALLED_ONCE: PASS
+A1.10 SAME_BOOT_PROCESS_SHUT_DOWN: PASS
+A1.10 DRAIN_REQUESTED: PASS
+A1.10 SHUTDOWN_ERRORS_NOT_SUPPRESSED: PASS
+A1.10 REAL_BOOT_CONTROLLER_STOPPED: PASS
+
+==========================================================================================
+BOOT_FAILURE
+==========================================================================================
+A1.10 APPLICATION_PASSES_PROJECT_ROOT: PASS
+A1.10 BOOT_FAILURE_PROPAGATED: PASS
+A1.10 BOOT_FAILURE_PREVENTS_APPLICATION: PASS
+A1.10 BOOT_FAILURE_STATUS_PUBLISHED: PASS
+A1.10 BOOT_FAILURE_EVIDENCE_PUBLISHED: PASS
+A1.11 FAILED_STARTUP_DENIES_CLAIMS: PASS
+
+==========================================================================================
+SHUTDOWN_FAILURE
+==========================================================================================
+A1.10 APPLICATION_PASSES_PROJECT_ROOT: PASS
+A1.10 APPLICATION_RUNNING: PASS
+A1.10 ACTUAL_BOOT_PROCESS_PUBLISHED: PASS
+A1.10 ACTUAL_BOOT_CONTEXT_PUBLISHED: PASS
+A1.10 RUNTIME_DATA_ISOLATED: PASS
+A1.10 BOOT_EVIDENCE_PUBLISHED: PASS
+A1.11 FEATURE_FLAG_EVIDENCE_PUBLISHED: PASS
+A1.11 CLAIMS_ENABLED_DURING_RUNNING: PASS
+A1.10 SHUTDOWN_FAILURE_PROPAGATED: PASS
+A1.10 SHUTDOWN_FAILURE_STATUS_PUBLISHED: PASS
+A1.10 SHUTDOWN_FAILURE_EVIDENCE_PUBLISHED: PASS
+A1.11 FAILED_SHUTDOWN_DENIES_CLAIMS: FAIL
+A1.10 SHUTDOWN_CALLED_ONCE: PASS
+A1.10 SAME_BOOT_PROCESS_SHUT_DOWN: PASS
+A1.10 DRAIN_REQUESTED: PASS
+A1.10 SHUTDOWN_ERRORS_NOT_SUPPRESSED: PASS
+A1.10 REAL_BOOT_CONTROLLER_STOPPED: PASS
+
+RESULTS
+A1.10 lifespan checks: PASSED
+A1.11 lifecycle admission checks: FAILED
+Checks passed: 39
+Checks failed: 2
+
+UNEXPECTED ERRORS
+NONE
+
+SCOPE
+Normal case uses the actual FastAPI app and actual lifespan.
+Boot filesystem/configuration are isolated.
+Injected startup failure occurs before real boot.
+Injected shutdown failure occurs after real shutdown returns.
+These cases do not certify every internal service failure or worker drain.
+
+INTEGRATION GATE
+1. Needs integration now: YES.
+2. Components: FastAPI lifespan, boot, shutdown, evidence, queue admission.
+3. Method: run actual application lifecycle in fresh test processes.
+4. Decision: report lifecycle and admission results separately.
+
+==========================================================================================
+CURRENT SOURCE: backend/server/runtime/runtime_application_lifecycle.py
+==========================================================================================
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from dataclasses import asdict, is_dataclass
+from pathlib import Path
+from typing import Any, AsyncIterator, Mapping
+
+from backend.server.runtime.runtime_boot_process import (
+    boot_runtime,
+)
+from backend.server.runtime.runtime_shutdown_process import (
+    shutdown_runtime,
+)
+
+
+RUNTIME_APPLICATION_LIFECYCLE_VERSION = (
+    "runtime_application_lifecycle_v1"
+)
+
+
+class RuntimeApplicationLifecycleError(RuntimeError):
+    pass
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _record_mapping(value: Any) -> dict[str, Any]:
+    """Convert record containers without copying live runtime services.
+
+    This is an in-process evidence mapping, not a JSON serializer.
+    Opaque service references remain references.
+    """
+    from dataclasses import fields, is_dataclass
+    from collections.abc import Mapping
+
+    active = set()
+
+    def convert(item):
+        record = is_dataclass(item) and not isinstance(item, type)
+        container = record or isinstance(item, (Mapping, list, tuple))
+        if not container:
+            return item
+        identity = id(item)
+        if identity in active:
+            raise RuntimeApplicationLifecycleError("Cyclic evidence container.")
+        active.add(identity)
+        try:
+            if record:
+                return {field.name: convert(getattr(item, field.name))
+                        for field in fields(item)}
+            if isinstance(item, Mapping):
+                return {key: convert(child) for key, child in item.items()}
+            if isinstance(item, tuple):
+                return tuple(convert(child) for child in item)
+            return [convert(child) for child in item]
+        finally:
+            active.remove(identity)
+
+    if ((is_dataclass(value) and not isinstance(value, type))
+            or isinstance(value, Mapping)):
+        return convert(value)
+
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        converted = to_dict()
+        if not isinstance(converted, Mapping):
+            raise RuntimeApplicationLifecycleError(
+                "Lifecycle to_dict() result must be a mapping.")
+        return convert(converted)
+
+    attributes = getattr(value, "__dict__", None)
+    if isinstance(attributes, dict):
+        return convert({key: child for key, child in attributes.items()
+                        if not key.startswith("_")})
+
+    raise RuntimeApplicationLifecycleError(
+        "Lifecycle evidence is not serializable.")
+
+
+
+from backend.server.runtime.runtime_feature_flag_gateway import (
+    GATEWAY_KEY,
+    RuntimeFeatureFlagGateway,
+    register_runtime_feature_flag_gateway,
+)
+
+@asynccontextmanager
+async def linkcraftor_runtime_lifespan(
+    application: Any,
+) -> AsyncIterator[None]:
+    application.state.runtime_lifecycle_version = (
+        RUNTIME_APPLICATION_LIFECYCLE_VERSION
+    )
+    application.state.runtime_lifecycle_status = "BOOTING"
+
+    try:
+        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway,))
+
+    except Exception as exc:
+        application.state.runtime_lifecycle_status = (
+            "BOOT_FAILED"
+        )
+        application.state.runtime_boot_failure = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+        }
+        raise
+
+    feature_flag_gateway = boot_context.kernel.get_component(
+        GATEWAY_KEY, RuntimeFeatureFlagGateway
+    )
+    application.state.runtime_feature_flag_gateway = feature_flag_gateway
+    application.state.runtime_feature_flag_evidence = feature_flag_gateway.evidence()
+    application.state.runtime_feature_flag_snapshot = _record_mapping(
+        feature_flag_gateway.snapshot()
+    )
+
+    application.state.runtime_boot_process = boot_process
+    application.state.runtime_boot_context = boot_context
+    application.state.runtime_boot_evidence = (
+        _record_mapping(boot_context)
+    )
+    application.state.runtime_lifecycle_status = "RUNNING"
+
+    try:
+        yield
+
+    finally:
+        application.state.runtime_lifecycle_status = (
+            "SHUTTING_DOWN"
+        )
+
+        try:
+            (
+                shutdown_process,
+                shutdown_context,
+            ) = await shutdown_runtime(
+                boot_process=boot_process,
+                drain_before_stop=True,
+                timeout_seconds=None,
+                raise_on_failure=True,
+            )
+
+        except Exception as exc:
+            application.state.runtime_lifecycle_status = (
+                "SHUTDOWN_FAILED"
+            )
+            application.state.runtime_shutdown_failure = {
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            }
+            raise
+
+        application.state.runtime_shutdown_process = (
+            shutdown_process
+        )
+        application.state.runtime_shutdown_context = (
+            shutdown_context
+        )
+        application.state.runtime_shutdown_evidence = (
+            _record_mapping(shutdown_context)
+        )
+        application.state.runtime_shutdown_snapshot = (
+            _record_mapping(
+                shutdown_process.snapshot()
+            )
+        )
+        application.state.runtime_lifecycle_status = "STOPPED"
+
+
+==========================================================================================
+CURRENT SOURCE: backend/server/runtime/universal_runtime_kernel.py
+==========================================================================================
+from __future__ import annotations
+
+"""
+Universal Runtime Kernel.
+
+This module is the business-logic-agnostic composition root for the
+Universal Runtime Infrastructure.
+
+The kernel does not execute product pipelines, queue jobs, or worker
+business logic. It coordinates runtime foundation components through
+explicit bindings and guarded state transitions.
+"""
+
+import re
+import threading
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, Mapping, TypeVar, cast
+
+
+__all__ = [
+    "FOUNDATION_COMPONENT_KEYS",
+    "KernelComponentBinding",
+    "RuntimeKernelBindingError",
+    "RuntimeKernelError",
+    "RuntimeKernelMissingComponentError",
+    "RuntimeKernelSnapshot",
+    "RuntimeKernelState",
+    "RuntimeKernelStateError",
+    "UniversalRuntimeKernel",
+]
+
+
+T = TypeVar("T")
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _qualified_type_name(value: object) -> str:
+    value_type = type(value)
+    return (
+        f"{value_type.__module__}."
+        f"{value_type.__qualname__}"
+    )
+
+
+class RuntimeKernelError(RuntimeError):
+    """Base exception for Universal Runtime Kernel failures."""
+
+
+class RuntimeKernelBindingError(RuntimeKernelError):
+    """Raised when a kernel component binding is invalid."""
+
+
+class RuntimeKernelMissingComponentError(RuntimeKernelError):
+    """Raised when a required kernel component is unavailable."""
+
+
+class RuntimeKernelStateError(RuntimeKernelError):
+    """Raised when a kernel state transition is invalid."""
+
+
+class RuntimeKernelState(str, Enum):
+    """
+    High-level kernel lifecycle states.
+
+    Detailed boot, readiness, draining, and shutdown orchestration will
+    be owned by the Runtime Lifecycle Manager. The kernel enforces the
+    legal state boundary.
+    """
+
+    CREATED = "created"
+    INITIALIZING = "initializing"
+    READY = "ready"
+    RUNNING = "running"
+    DRAINING = "draining"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    FAILED = "failed"
+
+
+FOUNDATION_COMPONENT_KEYS: tuple[str, ...] = (
+    "configuration",
+    "environment",
+    "service_registry",
+    "lifecycle_manager",
+    "persistence",
+    "state_store",
+    "schema_manager",
+)
+
+
+_ALLOWED_TRANSITIONS: Mapping[
+    RuntimeKernelState,
+    frozenset[RuntimeKernelState],
+] = MappingProxyType(
+    {
+        RuntimeKernelState.CREATED: frozenset(
+            {
+                RuntimeKernelState.INITIALIZING,
+                RuntimeKernelState.FAILED,
+            }
+        ),
+        RuntimeKernelState.INITIALIZING: frozenset(
+            {
+                RuntimeKernelState.READY,
+                RuntimeKernelState.FAILED,
+                RuntimeKernelState.STOPPING,
+            }
+        ),
+        RuntimeKernelState.READY: frozenset(
+            {
+                RuntimeKernelState.RUNNING,
+                RuntimeKernelState.STOPPING,
+                RuntimeKernelState.FAILED,
+            }
+        ),
+        RuntimeKernelState.RUNNING: frozenset(
+            {
+                RuntimeKernelState.DRAINING,
+                RuntimeKernelState.STOPPING,
+                RuntimeKernelState.FAILED,
+            }
+        ),
+        RuntimeKernelState.DRAINING: frozenset(
+            {
+                RuntimeKernelState.RUNNING,
+                RuntimeKernelState.STOPPING,
+                RuntimeKernelState.FAILED,
+            }
+        ),
+        RuntimeKernelState.STOPPING: frozenset(
+            {
+                RuntimeKernelState.STOPPED,
+                RuntimeKernelState.FAILED,
+            }
+        ),
+        RuntimeKernelState.STOPPED: frozenset(),
+        RuntimeKernelState.FAILED: frozenset(
+            {
+                RuntimeKernelState.STOPPING,
+                RuntimeKernelState.STOPPED,
+            }
+        ),
+    }
+)
+
+
+_RUNTIME_ID_PATTERN = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9_.:-]{2,127}$"
+)
+
+_COMPONENT_KEY_PATTERN = re.compile(
+    r"^[a-z][a-z0-9_.-]{1,127}$"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class KernelComponentBinding:
+    """
+    Immutable description of one component bound to the kernel.
+
+    The component object itself is intentionally excluded from snapshots
+    so runtime inspection cannot accidentally expose internal objects.
+    """
+
+    key: str
+    component_type: str
+    bound_at: datetime
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeKernelSnapshot:
+    """Immutable point-in-time kernel inspection record."""
+
+    runtime_id: str
+    product_name: str
+    state: RuntimeKernelState
+    generation: int
+    created_at: datetime
+    updated_at: datetime
+    component_count: int
+    components: tuple[KernelComponentBinding, ...]
+    missing_foundation_components: tuple[str, ...]
+    failure_reason: str | None
+
+
+class UniversalRuntimeKernel:
+    """
+    Central composition root for the Universal Runtime Infrastructure.
+
+    Responsibilities:
+
+    - Own the runtime identity.
+    - Hold references to runtime foundation components.
+    - Prevent accidental duplicate component bindings.
+    - Enforce legal high-level lifecycle transitions.
+    - Provide immutable runtime inspection snapshots.
+    - Remain independent from pipeline and product business logic.
+
+    Non-responsibilities:
+
+    - Executing queue jobs.
+    - Running workers.
+    - Implementing pipeline stages.
+    - Persisting runtime records directly.
+    - Loading environment configuration directly.
+    """
+
+    __slots__ = (
+        "_runtime_id",
+        "_product_name",
+        "_state",
+        "_generation",
+        "_created_at",
+        "_updated_at",
+        "_components",
+        "_bindings",
+        "_failure_reason",
+        "_lock",
+    )
+
+    def __init__(
+        self,
+        *,
+        runtime_id: str,
+        product_name: str,
+    ) -> None:
+        normalized_runtime_id = str(runtime_id or "").strip()
+        normalized_product_name = str(product_name or "").strip()
+
+        if not _RUNTIME_ID_PATTERN.fullmatch(
+            normalized_runtime_id
+        ):
+            raise ValueError(
+                "runtime_id must be 3-128 characters and contain "
+                "only letters, numbers, dots, underscores, colons, "
+                "or hyphens."
+            )
+
+        if not normalized_product_name:
+            raise ValueError(
+                "product_name must not be empty."
+            )
+
+        now = _utc_now()
+
+        self._runtime_id = normalized_runtime_id
+        self._product_name = normalized_product_name
+        self._state = RuntimeKernelState.CREATED
+        self._generation = 0
+        self._created_at = now
+        self._updated_at = now
+        self._components: dict[str, object] = {}
+        self._bindings: dict[
+            str,
+            KernelComponentBinding,
+        ] = {}
+        self._failure_reason: str | None = None
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def normalize_component_key(
+        component_key: str,
+    ) -> str:
+        key = str(component_key or "").strip().lower()
+
+        if not _COMPONENT_KEY_PATTERN.fullmatch(key):
+            raise RuntimeKernelBindingError(
+                "component_key must be 2-128 characters, begin "
+                "with a lowercase letter, and contain only "
+                "lowercase letters, numbers, dots, underscores, "
+                "or hyphens."
+            )
+
+        return key
+
+    @staticmethod
+    def coerce_state(
+        state: RuntimeKernelState | str,
+    ) -> RuntimeKernelState:
+        if isinstance(state, RuntimeKernelState):
+            return state
+
+        try:
+            return RuntimeKernelState(
+                str(state or "").strip().lower()
+            )
+        except ValueError as exc:
+            raise RuntimeKernelStateError(
+                f"Unknown runtime kernel state: {state!r}"
+            ) from exc
+
+    @property
+    def runtime_id(self) -> str:
+        return self._runtime_id
+
+    @property
+    def product_name(self) -> str:
+        return self._product_name
+
+    @property
+    def state(self) -> RuntimeKernelState:
+        with self._lock:
+            return self._state
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    @property
+    def component_count(self) -> int:
+        with self._lock:
+            return len(self._components)
+
+    def _assert_mutable(self) -> None:
+        if self._state in {
+            RuntimeKernelState.STOPPING,
+            RuntimeKernelState.STOPPED,
+        }:
+            raise RuntimeKernelStateError(
+                "Kernel component bindings cannot be changed while "
+                f"the runtime is {self._state.value!r}."
+            )
+
+    def _record_mutation(self) -> int:
+        self._generation += 1
+        self._updated_at = _utc_now()
+        return self._generation
+
+    def bind_component(
+        self,
+        component_key: str,
+        component: object,
+        *,
+        replace: bool = False,
+    ) -> KernelComponentBinding:
+        """
+        Bind one foundation component to the kernel.
+
+        Components are stored by explicit logical key. Duplicate
+        replacement is prohibited unless replace=True is supplied.
+        """
+
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        if component is None:
+            raise RuntimeKernelBindingError(
+                "A kernel component cannot be None."
+            )
+
+        with self._lock:
+            self._assert_mutable()
+
+            if key in self._components and not replace:
+                raise RuntimeKernelBindingError(
+                    f"Kernel component {key!r} is already bound."
+                )
+
+            generation = self._record_mutation()
+
+            binding = KernelComponentBinding(
+                key=key,
+                component_type=_qualified_type_name(
+                    component
+                ),
+                bound_at=self._updated_at,
+                generation=generation,
+            )
+
+            self._components[key] = component
+            self._bindings[key] = binding
+
+            return binding
+
+    def unbind_component(
+        self,
+        component_key: str,
+    ) -> object:
+        """Remove and return one bound component."""
+
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        with self._lock:
+            self._assert_mutable()
+
+            if key not in self._components:
+                raise RuntimeKernelMissingComponentError(
+                    f"Kernel component {key!r} is not bound."
+                )
+
+            component = self._components.pop(key)
+            self._bindings.pop(key, None)
+            self._record_mutation()
+
+            return component
+
+    def has_component(
+        self,
+        component_key: str,
+    ) -> bool:
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        with self._lock:
+            return key in self._components
+
+    def get_component(
+        self,
+        component_key: str,
+        expected_type: type[T] | None = None,
+    ) -> T | object:
+        """
+        Retrieve a bound component.
+
+        expected_type may be supplied to protect consumers against an
+        incompatible binding.
+        """
+
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        with self._lock:
+            if key not in self._components:
+                raise RuntimeKernelMissingComponentError(
+                    f"Kernel component {key!r} is not bound."
+                )
+
+            component = self._components[key]
+
+        if (
+            expected_type is not None
+            and not isinstance(component, expected_type)
+        ):
+            raise RuntimeKernelBindingError(
+                f"Kernel component {key!r} has type "
+                f"{_qualified_type_name(component)!r}, not "
+                f"{expected_type.__module__}."
+                f"{expected_type.__qualname__!s}."
+            )
+
+        if expected_type is not None:
+            return cast(T, component)
+
+        return component
+
+    def require_components(
+        self,
+        component_keys: tuple[str, ...] | list[str],
+    ) -> Mapping[str, object]:
+        """
+        Return a read-only mapping of required components.
+
+        The operation fails atomically when any requested component is
+        missing.
+        """
+
+        normalized_keys = tuple(
+            self.normalize_component_key(key)
+            for key in component_keys
+        )
+
+        with self._lock:
+            missing = tuple(
+                key
+                for key in normalized_keys
+                if key not in self._components
+            )
+
+            if missing:
+                raise RuntimeKernelMissingComponentError(
+                    "Missing required kernel components: "
+                    + ", ".join(missing)
+                )
+
+            selected = {
+                key: self._components[key]
+                for key in normalized_keys
+            }
+
+        return MappingProxyType(selected)
+
+    def missing_foundation_components(
+        self,
+    ) -> tuple[str, ...]:
+        with self._lock:
+            return tuple(
+                key
+                for key in FOUNDATION_COMPONENT_KEYS
+                if key not in self._components
+            )
+
+    def transition_state(
+        self,
+        *,
+        expected_state: RuntimeKernelState | str,
+        target_state: RuntimeKernelState | str,
+        reason: str | None = None,
+    ) -> RuntimeKernelState:
+        """
+        Perform one guarded kernel state transition.
+
+        expected_state provides optimistic concurrency protection and
+        prevents stale lifecycle actors from applying invalid changes.
+        """
+
+        expected = self.coerce_state(
+            expected_state
+        )
+        target = self.coerce_state(
+            target_state
+        )
+
+        with self._lock:
+            if self._state is not expected:
+                raise RuntimeKernelStateError(
+                    "Kernel state transition rejected: expected "
+                    f"{expected.value!r}, found "
+                    f"{self._state.value!r}."
+                )
+
+            allowed = _ALLOWED_TRANSITIONS[
+                self._state
+            ]
+
+            if target not in allowed:
+                raise RuntimeKernelStateError(
+                    "Illegal kernel state transition: "
+                    f"{self._state.value!r} -> "
+                    f"{target.value!r}."
+                )
+
+            self._state = target
+
+            if target is RuntimeKernelState.FAILED:
+                normalized_reason = str(
+                    reason or "unspecified runtime failure"
+                ).strip()
+
+                self._failure_reason = (
+                    normalized_reason
+                    or "unspecified runtime failure"
+                )
+
+            self._record_mutation()
+
+            return self._state
+
+    def mark_failed(
+        self,
+        reason: str,
+    ) -> RuntimeKernelState:
+        normalized_reason = str(reason or "").strip()
+
+        if not normalized_reason:
+            raise ValueError(
+                "A failure reason is required."
+            )
+
+        with self._lock:
+            if self._state in {
+                RuntimeKernelState.STOPPED,
+                RuntimeKernelState.FAILED,
+            }:
+                raise RuntimeKernelStateError(
+                    "A stopped or failed kernel cannot be marked "
+                    "failed again."
+                )
+
+            if (
+                RuntimeKernelState.FAILED
+                not in _ALLOWED_TRANSITIONS[self._state]
+            ):
+                raise RuntimeKernelStateError(
+                    "The current kernel state cannot transition "
+                    "to failed."
+                )
+
+            current_state = self._state
+
+        return self.transition_state(
+            expected_state=current_state,
+            target_state=RuntimeKernelState.FAILED,
+            reason=normalized_reason,
+        )
+
+    def snapshot(self) -> RuntimeKernelSnapshot:
+        """Return an immutable kernel inspection snapshot."""
+
+        with self._lock:
+            components = tuple(
+                self._bindings[key]
+                for key in sorted(self._bindings)
+            )
+
+            missing = tuple(
+                key
+                for key in FOUNDATION_COMPONENT_KEYS
+                if key not in self._components
+            )
+
+            return RuntimeKernelSnapshot(
+                runtime_id=self._runtime_id,
+                product_name=self._product_name,
+                state=self._state,
+                generation=self._generation,
+                created_at=self._created_at,
+                updated_at=self._updated_at,
+                component_count=len(self._components),
+                components=components,
+                missing_foundation_components=missing,
+                failure_reason=self._failure_reason,
+            )

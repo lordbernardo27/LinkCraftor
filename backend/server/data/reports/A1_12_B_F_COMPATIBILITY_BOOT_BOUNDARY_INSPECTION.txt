@@ -1,0 +1,1504 @@
+LINKCRAFTER UNIVERSAL RUNTIME INFRASTRUCTURE
+A1.12-B THROUGH A1.12-F COMPATIBILITY BOOT BOUNDARY INSPECTION
+
+Mode: READ-ONLY — NO PRODUCTION FILES MODIFIED
+Project root: C:\Users\HP\Documents\LinkCraftor
+
+=========================================================================================================
+A1.12-B — TARGET FILE VALIDATION
+=========================================================================================================
+versioning_exists: True
+versioning_path: backend/server/runtime/runtime_versioning.py
+versioning_syntax: PASS
+compatibility_exists: True
+compatibility_path: backend/server/runtime/runtime_compatibility.py
+compatibility_syntax: PASS
+boot_exists: True
+boot_path: backend/server/runtime/runtime_boot_process.py
+boot_syntax: PASS
+configuration_exists: True
+configuration_path: backend/server/runtime/runtime_configuration.py
+configuration_syntax: PASS
+environment_exists: True
+environment_path: backend/server/runtime/runtime_environment.py
+environment_syntax: PASS
+
+=========================================================================================================
+A1.12-B — RUNTIME VERSIONING PUBLIC CONTRACT
+=========================================================================================================
+RuntimeSemanticVersion_available: True
+RuntimeSemanticVersion_signature: (major: 'int', minor: 'int', patch: 'int', prerelease: 'tuple[str, ...]' = (), build: 'tuple[str, ...]' = ()) -> None
+RuntimeVersionManifest_available: True
+RuntimeVersionManifest_signature: (manifest_schema_version: 'RuntimeSemanticVersion', runtime_name: 'str', runtime_version: 'RuntimeSemanticVersion', kernel_api_version: 'RuntimeSemanticVersion', service_contract_version: 'RuntimeSemanticVersion', job_contract_version: 'RuntimeSemanticVersion', state_schema_version: 'RuntimeSemanticVersion', configuration_schema_version: 'RuntimeSemanticVersion', release_channel: 'RuntimeReleaseChannel', created_at: 'datetime', build_id: 'str | None', metadata: 'Mapping[str, str]') -> None
+RuntimeVersionManager_available: True
+RuntimeVersionManager_signature: (manifest: 'RuntimeVersionManifest') -> 'None'
+
+=========================================================================================================
+RUNTIME VERSION MANIFEST AND MANAGER SOURCE
+=========================================================================================================
+
+--- RuntimeSemanticVersion ---
+
+class RuntimeSemanticVersion:
+    """
+    Strict Semantic Versioning 2.0.0 identifier.
+
+    Build metadata is retained as identity information but does not
+    influence precedence comparison.
+    """
+
+    major: int
+    minor: int
+    patch: int
+    prerelease: tuple[str, ...] = ()
+    build: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "major",
+            "minor",
+            "patch",
+        ):
+            value = getattr(self, field_name)
+
+            if isinstance(value, bool) or value < 0:
+                raise RuntimeVersionValidationError(
+                    f"{field_name} must be a non-negative integer."
+                )
+
+        for identifier in self.prerelease:
+            if not identifier:
+                raise RuntimeVersionValidationError(
+                    "Prerelease identifiers must not be empty."
+                )
+
+            if (
+                identifier.isdigit()
+                and len(identifier) > 1
+                and identifier.startswith("0")
+            ):
+                raise RuntimeVersionValidationError(
+                    "Numeric prerelease identifiers must not "
+                    "contain leading zeroes."
+                )
+
+        for identifier in self.build:
+            if not identifier:
+                raise RuntimeVersionValidationError(
+                    "Build identifiers must not be empty."
+                )
+
+    @classmethod
+    def parse(
+        cls,
+        value: "RuntimeSemanticVersion | str",
+    ) -> "RuntimeSemanticVersion":
+        if isinstance(value, cls):
+            return value
+
+        normalized = str(value or "").strip()
+        match = _SEMVER_PATTERN.fullmatch(normalized)
+
+        if match is None:
+            raise RuntimeVersionValidationError(
+                f"Invalid Semantic Version: {value!r}"
+            )
+
+        prerelease_text = match.group("prerelease")
+        build_text = match.group("build")
+
+        return cls(
+            major=int(match.group("major")),
+            minor=int(match.group("minor")),
+            patch=int(match.group("patch")),
+            prerelease=(
+                ()
+                if prerelease_text is None
+                else tuple(prerelease_text.split("."))
+            ),
+            build=(
+                ()
+                if build_text is None
+                else tuple(build_text.split("."))
+            ),
+        )
+
+    def __str__(self) -> str:
+        value = (
+            f"{self.major}."
+            f"{self.minor}."
+            f"{self.patch}"
+        )
+
+        if self.prerelease:
+            value += "-" + ".".join(self.prerelease)
+
+        if self.build:
+            value += "+" + ".".join(self.build)
+
+        return value
+
+    def compare_precedence(
+        self,
+        other: "RuntimeSemanticVersion | str",
+    ) -> int:
+        """
+        Compare Semantic Version precedence.
+
+        Returns:
+        -1 when self has lower precedence
+         0 when precedence is equal
+         1 when self has higher precedence
+        """
+
+        resolved = self.parse(other)
+
+        self_core = (
+            self.major,
+            self.minor,
+            self.patch,
+        )
+
+        other_core = (
+            resolved.major,
+            resolved.minor,
+            resolved.patch,
+        )
+
+        if self_core < other_core:
+            return -1
+
+        if self_core > other_core:
+            return 1
+
+        if not self.prerelease and not resolved.prerelease:
+            return 0
+
+        if not self.prerelease:
+            return 1
+
+        if not resolved.prerelease:
+            return -1
+
+        for left, right in zip(
+            self.prerelease,
+            resolved.prerelease,
+        ):
+            if left == right:
+                continue
+
+            left_numeric = left.isdigit()
+            right_numeric = right.isdigit()
+
+            if left_numeric and right_numeric:
+                left_number = int(left)
+                right_number = int(right)
+
+                return (
+                    -1
+                    if left_number < right_number
+                    else 1
+                )
+
+            if left_numeric and not right_numeric:
+                return -1
+
+            if not left_numeric and right_numeric:
+                return 1
+
+            return -1 if left < right else 1
+
+        if len(self.prerelease) < len(
+            resolved.prerelease
+        ):
+            return -1
+
+        if len(self.prerelease) > len(
+            resolved.prerelease
+        ):
+            return 1
+
+        return 0
+
+    def same_precedence(
+        self,
+        other: "RuntimeSemanticVersion | str",
+    ) -> bool:
+        return self.compare_precedence(other) == 0
+
+--- RuntimeVersionManifest ---
+
+class RuntimeVersionManifest:
+    """Immutable runtime foundation version manifest."""
+
+    manifest_schema_version: RuntimeSemanticVersion
+    runtime_name: str
+    runtime_version: RuntimeSemanticVersion
+    kernel_api_version: RuntimeSemanticVersion
+    service_contract_version: RuntimeSemanticVersion
+    job_contract_version: RuntimeSemanticVersion
+    state_schema_version: RuntimeSemanticVersion
+    configuration_schema_version: RuntimeSemanticVersion
+    release_channel: RuntimeReleaseChannel
+    created_at: datetime
+    build_id: str | None
+    metadata: Mapping[str, str]
+
+    def __post_init__(self) -> None:
+        runtime_name = str(
+            self.runtime_name or ""
+        ).strip()
+
+        if not runtime_name:
+            raise RuntimeVersionValidationError(
+                "runtime_name must not be empty."
+            )
+
+        if len(runtime_name) > 128:
+            raise RuntimeVersionValidationError(
+                "runtime_name must not exceed 128 characters."
+            )
+
+        if (
+            self.build_id is not None
+            and not _BUILD_ID_PATTERN.fullmatch(
+                self.build_id
+            )
+        ):
+            raise RuntimeVersionValidationError(
+                "build_id contains invalid characters."
+            )
+
+        if self.created_at.tzinfo is None:
+            raise RuntimeVersionValidationError(
+                "created_at must be timezone-aware."
+            )
+
+        normalized_metadata: dict[str, str] = {}
+
+        for raw_key, raw_value in self.metadata.items():
+            key = str(raw_key or "").strip()
+            value = str(raw_value or "").strip()
+
+            if not _METADATA_KEY_PATTERN.fullmatch(key):
+                raise RuntimeVersionValidationError(
+                    f"Invalid metadata key: {raw_key!r}"
+                )
+
+            if len(value) > 1024:
+                raise RuntimeVersionValidationError(
+                    f"Metadata value for {key!r} exceeds "
+                    "1024 characters."
+                )
+
+            normalized_metadata[key] = value
+
+        object.__setattr__(
+            self,
+            "runtime_name",
+            runtime_name,
+        )
+
+        object.__setattr__(
+            self,
+            "metadata",
+            MappingProxyType(normalized_metadata),
+        )
+
+    def to_dict(
+        self,
+        *,
+        include_created_at: bool = True,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "manifest_schema_version": str(
+                self.manifest_schema_version
+            ),
+            "runtime_name": self.runtime_name,
+            "runtime_version": str(
+                self.runtime_version
+            ),
+            "kernel_api_version": str(
+                self.kernel_api_version
+            ),
+            "service_contract_version": str(
+                self.service_contract_version
+            ),
+            "job_contract_version": str(
+                self.job_contract_version
+            ),
+            "state_schema_version": str(
+                self.state_schema_version
+            ),
+            "configuration_schema_version": str(
+                self.configuration_schema_version
+            ),
+            "release_channel": (
+                self.release_channel.value
+            ),
+            "build_id": self.build_id,
+            "metadata": dict(self.metadata),
+        }
+
+        if include_created_at:
+            result["created_at"] = (
+                self.created_at.isoformat()
+            )
+
+        return result
+
+    def fingerprint(self) -> str:
+        """
+        Return a deterministic effective-version fingerprint.
+
+        created_at is excluded because it does not change the effective
+        version contract.
+        """
+
+        payload = json.dumps(
+            self.to_dict(
+                include_created_at=False
+            ),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        return hashlib.sha256(payload).hexdigest()
+
+--- RuntimeVersionManager ---
+
+class RuntimeVersionManager:
+    """
+    Thread-safe version manifest and component-version registry.
+
+    This class records exact versions. It deliberately does not make
+    compatibility decisions.
+    """
+
+    __slots__ = (
+        "_manifest",
+        "_components",
+        "_generation",
+        "_sealed",
+        "_lock",
+    )
+
+    def __init__(
+        self,
+        manifest: RuntimeVersionManifest,
+    ) -> None:
+        if not isinstance(
+            manifest,
+            RuntimeVersionManifest,
+        ):
+            raise RuntimeVersionValidationError(
+                "A RuntimeVersionManifest is required."
+            )
+
+        self._manifest = manifest
+        self._components: dict[
+            str,
+            RuntimeComponentVersion,
+        ] = {}
+        self._generation = 0
+        self._sealed = False
+        self._lock = threading.RLock()
+
+    @staticmethod
+    def normalize_component_key(
+        component_key: str,
+    ) -> str:
+        key = str(component_key or "").strip().lower()
+
+        if not _COMPONENT_KEY_PATTERN.fullmatch(key):
+            raise RuntimeVersionRegistrationError(
+                "component_key must be 2-128 characters, "
+                "begin with a lowercase letter, and contain "
+                "only lowercase letters, numbers, dots, "
+                "underscores, or hyphens."
+            )
+
+        return key
+
+    @staticmethod
+    def normalize_contract(
+        contract: str,
+    ) -> str:
+        normalized = str(contract or "").strip().lower()
+
+        if not _CONTRACT_KEY_PATTERN.fullmatch(
+            normalized
+        ):
+            raise RuntimeVersionRegistrationError(
+                "contract must be 2-128 characters, begin "
+                "with a lowercase letter, and contain only "
+                "lowercase letters, numbers, dots, "
+                "underscores, colons, or hyphens."
+            )
+
+        return normalized
+
+    @property
+    def manifest(
+        self,
+    ) -> RuntimeVersionManifest:
+        return self._manifest
+
+    @property
+    def sealed(self) -> bool:
+        with self._lock:
+            return self._sealed
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            return self._generation
+
+    @property
+    def component_count(self) -> int:
+        with self._lock:
+            return len(self._components)
+
+    def _assert_mutable(self) -> None:
+        if self._sealed:
+            raise RuntimeVersionStateError(
+                "The runtime version manager is sealed."
+            )
+
+    def _record_mutation(self) -> int:
+        self._generation += 1
+        return self._generation
+
+    def register_component(
+        self,
+        component_key: str,
+        version: RuntimeSemanticVersion | str,
+        *,
+        contract: str = "implementation",
+        replace: bool = False,
+    ) -> RuntimeComponentVersion:
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        resolved_version = (
+            RuntimeSemanticVersion.parse(version)
+        )
+
+        resolved_contract = self.normalize_contract(
+            contract
+        )
+
+        with self._lock:
+            self._assert_mutable()
+
+            if key in self._components and not replace:
+                raise RuntimeVersionRegistrationError(
+                    f"Runtime component {key!r} already "
+                    "has a registered version."
+                )
+
+            generation = self._record_mutation()
+
+            registration = RuntimeComponentVersion(
+                component_key=key,
+                version=resolved_version,
+                contract=resolved_contract,
+                registered_at=_utc_now(),
+                generation=generation,
+            )
+
+            self._components[key] = registration
+
+            return registration
+
+    def has_component(
+        self,
+        component_key: str,
+    ) -> bool:
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        with self._lock:
+            return key in self._components
+
+    def get_component_version(
+        self,
+        component_key: str,
+    ) -> RuntimeComponentVersion:
+        key = self.normalize_component_key(
+            component_key
+        )
+
+        with self._lock:
+            try:
+                return self._components[key]
+            except KeyError as exc:
+                raise RuntimeVersionMissingError(
+                    f"No version is registered for "
+                    f"runtime component {key!r}."
+                ) from exc
+
+    def components_for_contract(
+        self,
+        contract: str,
+    ) -> tuple[RuntimeComponentVersion, ...]:
+        resolved_contract = self.normalize_contract(
+            contract
+        )
+
+        with self._lock:
+            return tuple(
+                self._components[key]
+                for key in sorted(self._components)
+                if (
+                    self._components[key].contract
+                    == resolved_contract
+                )
+            )
+
+    def version_graph_fingerprint(
+        self,
+    ) -> str:
+        with self._lock:
+            components = [
+                {
+                    "component_key": registration.component_key,
+                    "version": str(registration.version),
+                    "contract": registration.contract,
+                }
+                for registration in (
+                    self._components[key]
+                    for key in sorted(self._components)
+                )
+            ]
+
+        payload = json.dumps(
+            {
+                "manifest_fingerprint": (
+                    self._manifest.fingerprint()
+                ),
+                "components": components,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+
+        return hashlib.sha256(payload).hexdigest()
+
+    def seal(
+        self,
+    ) -> RuntimeVersionSnapshot:
+        with self._lock:
+            self._sealed = True
+            self._record_mutation()
+
+        return self.snapshot()
+
+    def snapshot(
+        self,
+    ) -> RuntimeVersionSnapshot:
+        with self._lock:
+            components = tuple(
+                self._components[key]
+                for key in sorted(self._components)
+            )
+
+            return RuntimeVersionSnapshot(
+                sealed=self._sealed,
+                generation=self._generation,
+                component_count=len(self._components),
+                manifest_fingerprint=(
+                    self._manifest.fingerprint()
+                ),
+                version_graph_fingerprint=(
+                    self.version_graph_fingerprint()
+                ),
+                manifest=self._manifest,
+                components=components,
+            )
+
+=========================================================================================================
+VERSIONING CONSTANTS AND FACTORIES
+=========================================================================================================
+RUNTIME_VERSION_MANIFEST_SCHEMA_VERSION = "1.0.0"
+DEFAULT_RUNTIME_VERSION = "0.1.0"
+DEFAULT_KERNEL_API_VERSION = "0.1.0"
+DEFAULT_SERVICE_CONTRACT_VERSION = "0.1.0"
+DEFAULT_JOB_CONTRACT_VERSION = "0.1.0"
+DEFAULT_STATE_SCHEMA_VERSION = "0.1.0"
+DEFAULT_CONFIGURATION_SCHEMA_VERSION = "1.0.0"
+_CONTRACT_KEY_PATTERN = re.compile(
+    r"^[a-z][a-z0-9_.:-]{1,127}$"
+)
+Version-related module functions: create_default_runtime_version_manager
+
+=========================================================================================================
+A1.12-C — ACTIVE COMPATIBILITY CONSUMERS
+=========================================================================================================
+backend/server/runtime/runtime_versioning.py
+  CALL RuntimeVersionManifest line=781
+
+=========================================================================================================
+A1.12-D — STRICT COMPATIBILITY CONFIGURATION
+=========================================================================================================
+RuntimeConfiguration signature: (configuration_schema_version: 'str', runtime_id: 'str', product_name: 'str', environment: 'str', debug: 'bool', log_level: 'str', data_root: 'Path', state_backend: 'str', worker_enabled: 'bool', startup_timeout_seconds: 'float', shutdown_timeout_seconds: 'float', queue_poll_interval_seconds: 'float', max_concurrency: 'int', strict_compatibility: 'bool', schema_auto_migrate: 'bool', field_sources: 'Mapping[str, str]') -> None
+load_runtime_configuration signature: (*, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None) -> 'RuntimeConfiguration'
+Configuration defaults: None
+strict_compatibility references: Name line=220, Field line=115, Field line=141, Field line=166, Field line=276, Field line=688, Field line=625
+
+=========================================================================================================
+A1.12-E — DEFAULT COMPATIBILITY POLICY
+=========================================================================================================
+strict=True
+  policy_name=uri.phase1.default
+  policy_version=0.1.0
+  policy_strict=True
+  requirement=manifest.schema;mode=exact;expected=1.0.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=runtime.version;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=kernel.api;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=service.contract;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=job.contract;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=state.schema;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=configuration.schema;mode=same_major;expected=1.0.0;maximum_exclusive=None;required=True;allow_prerelease=False
+strict=False
+  policy_name=uri.phase1.default
+  policy_version=0.1.0
+  policy_strict=False
+  requirement=manifest.schema;mode=exact;expected=1.0.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=runtime.version;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=kernel.api;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=service.contract;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=job.contract;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=state.schema;mode=same_minor;expected=0.1.0;maximum_exclusive=None;required=True;allow_prerelease=False
+  requirement=configuration.schema;mode=same_major;expected=1.0.0;maximum_exclusive=None;required=True;allow_prerelease=False
+
+=========================================================================================================
+A1.12-F — BOOT ENFORCEMENT BOUNDARY
+=========================================================================================================
+boot_runtime signature: (*, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None, service_registrars: 'Sequence[RuntimeServiceRegistrar]' = ()) -> 'tuple[RuntimeBootProcess, RuntimeBootContext]'
+RuntimeBootProcess constructor: (*, project_root: 'Path', environ: 'Mapping[str, str] | None' = None, overrides: 'Mapping[str, Any] | None' = None, service_registrars: 'Sequence[RuntimeServiceRegistrar]' = (), event_limit: 'int' = 500) -> 'None'
+
+--- RuntimeBootComposition ---
+
+class RuntimeBootComposition:
+    """Foundation objects available during service registration."""
+
+    project_root: Path
+    configuration: RuntimeConfiguration
+    environment: RuntimeEnvironmentManager
+    kernel: UniversalRuntimeKernel
+    service_registry: RuntimeServiceRegistry
+
+--- RuntimeBootContext ---
+
+class RuntimeBootContext:
+    """Immutable result of a successful runtime boot."""
+
+    boot_id: str
+    attempt: int
+    project_root: Path
+    configuration: RuntimeConfiguration
+    environment: RuntimeEnvironmentManager
+    kernel: UniversalRuntimeKernel
+    service_registry: RuntimeServiceRegistry
+    lifecycle_manager: RuntimeLifecycleManager
+    service_keys: tuple[str, ...]
+    booted_at: datetime
+
+--- RuntimeBootProcess ---
+
+class RuntimeBootProcess:
+    """
+    Compose and start the Universal Runtime foundation.
+
+    Composition order:
+
+    1. Load Runtime Configuration.
+    2. Validate Runtime Environment.
+    3. Create Universal Runtime Kernel.
+    4. Create and bind Runtime Service Registry.
+    5. Execute controlled service registrars.
+    6. Create and bind Runtime Lifecycle Manager.
+    7. Validate required kernel components.
+    8. Seal the service registry.
+    9. Initialize services.
+    10. Start services.
+    11. Publish immutable boot context.
+
+    Concurrent boot requests are serialized through one asyncio lock.
+    Once running, repeated boot requests return the existing context.
+    """
+
+    __slots__ = (
+        "_project_root",
+        "_environ",
+        "_overrides",
+        "_registrars",
+        "_event_limit",
+        "_status",
+        "_attempt",
+        "_boot_id",
+        "_stage",
+        "_generation",
+        "_events",
+        "_context",
+        "_failure_reason",
+        "_lock",
+    )
+
+    def __init__(
+        self,
+        *,
+        project_root: Path,
+        environ: Mapping[str, str] | None = None,
+        overrides: Mapping[str, Any] | None = None,
+        service_registrars: Sequence[
+            RuntimeServiceRegistrar
+        ] = (),
+        event_limit: int = 500,
+    ) -> None:
+        resolved_root = (
+            Path(project_root)
+            .expanduser()
+            .resolve()
+        )
+
+        if (
+            not resolved_root.exists()
+            or not resolved_root.is_dir()
+        ):
+            raise RuntimeBootConfigurationError(
+                "project_root must be an existing "
+                f"directory: {resolved_root}"
+            )
+
+        if isinstance(event_limit, bool):
+            raise RuntimeBootConfigurationError(
+                "event_limit must be an integer."
+            )
+
+        resolved_event_limit = int(event_limit)
+
+        if not 10 <= resolved_event_limit <= 100000:
+            raise RuntimeBootConfigurationError(
+                "event_limit must be between 10 and 100000."
+            )
+
+        registrars = tuple(service_registrars)
+
+        invalid_registrar_indexes = tuple(
+            index
+            for index, registrar in enumerate(registrars)
+            if not callable(registrar)
+        )
+
+        if invalid_registrar_indexes:
+            raise RuntimeBootConfigurationError(
+                "All service registrars must be callable. "
+                "Invalid indexes: "
+                + ", ".join(
+                    str(index)
+                    for index in invalid_registrar_indexes
+                )
+            )
+
+        self._project_root = resolved_root
+
+        self._environ = (
+            None
+            if environ is None
+            else MappingProxyType(
+                dict(environ)
+            )
+        )
+
+        self._overrides = MappingProxyType(
+            dict(overrides or {})
+        )
+
+        self._registrars = registrars
+        self._event_limit = resolved_event_limit
+        self._status = RuntimeBootStatus.IDLE
+        self._attempt = 0
+        self._boot_id: str | None = None
+        self._stage = "idle"
+        self._generation = 0
+        self._events: list[RuntimeBootEvent] = []
+        self._context: RuntimeBootContext | None = None
+        self._failure_reason: str | None = None
+        self._lock = asyncio.Lock()
+
+    @property
+    def status(self) -> RuntimeBootStatus:
+        return self._status
+
+    @property
+    def current_context(
+        self,
+    ) -> RuntimeBootContext | None:
+        return self._context
+
+    def _record_event(
+        self,
+        *,
+        stage: str,
+        outcome: str,
+        detail: str | None = None,
+    ) -> RuntimeBootEvent:
+        self._generation += 1
+        self._stage = str(stage)
+
+        event = RuntimeBootEvent(
+            sequence=self._generation,
+            timestamp=_utc_now(),
+            status=self._status,
+            stage=self._stage,
+            outcome=str(outcome),
+            detail=detail,
+        )
+
+        self._events.append(event)
+
+        if len(self._events) > self._event_limit:
+            overflow = (
+                len(self._events)
+                - self._event_limit
+            )
+
+            del self._events[:overflow]
+
+        return event
+
+    @staticmethod
+    def _registrar_name(
+        registrar: RuntimeServiceRegistrar,
+    ) -> str:
+        return str(
+            getattr(
+                registrar,
+                "__qualname__",
+                None,
+            )
+            or getattr(
+                registrar,
+                "__name__",
+                None,
+            )
+            or type(registrar).__qualname__
+        )
+
+    async def _cleanup_failed_boot(
+        self,
+        *,
+        kernel: UniversalRuntimeKernel | None,
+        lifecycle_manager: (
+            RuntimeLifecycleManager | None
+        ),
+    ) -> tuple[str, ...]:
+        """
+        Perform best-effort cleanup after failed composition or startup.
+        """
+
+        failures: list[str] = []
+
+        if (
+            lifecycle_manager is not None
+            and lifecycle_manager.phase
+            not in {
+                RuntimeLifecyclePhase.CREATED,
+                RuntimeLifecyclePhase.STOPPED,
+            }
+        ):
+            try:
+                await lifecycle_manager.stop()
+            except Exception as exc:
+                failures.append(
+                    "lifecycle_cleanup="
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        elif (
+            kernel is not None
+            and kernel.state.value
+            not in {
+                "failed",
+                "stopped",
+                "stopping",
+            }
+        ):
+            try:
+                kernel.mark_failed(
+                    self._failure_reason
+                    or "runtime boot failure"
+                )
+            except Exception as exc:
+                failures.append(
+                    "kernel_failure_mark="
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+        return tuple(failures)
+
+    async def boot(
+        self,
+    ) -> RuntimeBootContext:
+        """
+        Compose and start the runtime.
+
+        The asyncio lock creates a single-flight boot boundary. A second
+        caller waits for the first caller and then receives the same
+        successful context.
+        """
+
+        async with self._lock:
+            if (
+                self._status
+                is RuntimeBootStatus.SHUTTING_DOWN
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime boot is unavailable while "
+                    "shutdown is in progress."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.RUNNING
+                and self._context is not None
+            ):
+                self._record_event(
+                    stage="boot",
+                    outcome="already_running",
+                    detail=self._context.boot_id,
+                )
+
+                return self._context
+
+            self._attempt += 1
+            self._boot_id = (
+                f"runtime_boot_{uuid4().hex}"
+            )
+            self._status = RuntimeBootStatus.BOOTING
+            self._failure_reason = None
+            self._context = None
+
+            self._record_event(
+                stage="boot",
+                outcome="started",
+                detail=f"attempt={self._attempt}",
+            )
+
+            kernel: UniversalRuntimeKernel | None = None
+
+            lifecycle_manager: (
+                RuntimeLifecycleManager | None
+            ) = None
+
+            stage = "configuration"
+
+            try:
+                loader = RuntimeConfigurationLoader(
+                    project_root=self._project_root
+                )
+
+                configuration = loader.load(
+                    environ=self._environ,
+                    overrides=self._overrides,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.fingerprint(),
+                )
+
+                stage = "environment"
+
+                environment = RuntimeEnvironmentManager(
+                    configuration
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=environment.name.value,
+                )
+
+                stage = "kernel"
+
+                kernel = UniversalRuntimeKernel(
+                    runtime_id=configuration.runtime_id,
+                    product_name=configuration.product_name,
+                )
+
+                kernel.bind_component(
+                    "configuration",
+                    configuration,
+                )
+
+                kernel.bind_component(
+                    "environment",
+                    environment,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=configuration.runtime_id,
+                )
+
+                stage = "service_registry"
+
+                service_registry = (
+                    RuntimeServiceRegistry()
+                )
+
+                kernel.bind_component(
+                    "service_registry",
+                    service_registry,
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="created",
+                )
+
+                stage = "service_registration"
+
+                composition = RuntimeBootComposition(
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=service_registry,
+                )
+
+                for registrar in self._registrars:
+                    registrar_name = (
+                        self._registrar_name(
+                            registrar
+                        )
+                    )
+
+                    registrar(composition)
+
+                    self._record_event(
+                        stage=stage,
+                        outcome="registrar_completed",
+                        detail=registrar_name,
+                    )
+
+                stage = "lifecycle_manager"
+
+                lifecycle_manager = (
+                    RuntimeLifecycleManager(
+                        kernel=kernel,
+                        service_registry=(
+                            service_registry
+                        ),
+                        startup_timeout_seconds=(
+                            configuration
+                            .startup_timeout_seconds
+                        ),
+                        shutdown_timeout_seconds=(
+                            configuration
+                            .shutdown_timeout_seconds
+                        ),
+                    )
+                )
+
+                kernel.bind_component(
+                    "lifecycle_manager",
+                    lifecycle_manager,
+                )
+
+                kernel.require_components(
+                    list(
+                        BOOT_REQUIRED_COMPONENT_KEYS
+                    )
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "registry_seal"
+
+                registry_snapshot = (
+                    service_registry.seal()
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=(
+                        "services="
+                        f"{registry_snapshot.service_count}"
+                    ),
+                )
+
+                stage = "lifecycle_initialize"
+
+                await lifecycle_manager.initialize()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "lifecycle_start"
+
+                await lifecycle_manager.start()
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                )
+
+                stage = "finalize"
+
+                service_keys = (
+                    service_registry
+                    .dependency_order()
+                )
+
+                context = RuntimeBootContext(
+                    boot_id=self._boot_id,
+                    attempt=self._attempt,
+                    project_root=self._project_root,
+                    configuration=configuration,
+                    environment=environment,
+                    kernel=kernel,
+                    service_registry=(
+                        service_registry
+                    ),
+                    lifecycle_manager=(
+                        lifecycle_manager
+                    ),
+                    service_keys=service_keys,
+                    booted_at=_utc_now(),
+                )
+
+                self._context = context
+                self._status = (
+                    RuntimeBootStatus.RUNNING
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="completed",
+                    detail=self._boot_id,
+                )
+
+                return context
+
+            except Exception as exc:
+                self._status = (
+                    RuntimeBootStatus.FAILED
+                )
+
+                self._failure_reason = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+
+                self._record_event(
+                    stage=stage,
+                    outcome="failed",
+                    detail=self._failure_reason,
+                )
+
+                cleanup_failures = (
+                    await self._cleanup_failed_boot(
+                        kernel=kernel,
+                        lifecycle_manager=(
+                            lifecycle_manager
+                        ),
+                    )
+                )
+
+                if cleanup_failures:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome=(
+                            "completed_with_failures"
+                        ),
+                        detail="; ".join(
+                            cleanup_failures
+                        ),
+                    )
+                else:
+                    self._record_event(
+                        stage="failure_cleanup",
+                        outcome="completed",
+                    )
+
+                raise RuntimeBootFailureError(
+                    stage=stage,
+                    cause=exc,
+                ) from exc
+
+    async def begin_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+    ) -> None:
+        """Lock the boot controller into SHUTTING_DOWN."""
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            if (
+                self._status
+                is RuntimeBootStatus.STOPPED
+            ):
+                return
+
+            if (
+                self._status
+                is not RuntimeBootStatus.RUNNING
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown can begin only while "
+                    f"boot status is 'running', not "
+                    f"{self._status.value!r}."
+                )
+
+            self._status = (
+                RuntimeBootStatus.SHUTTING_DOWN
+            )
+
+            self._record_event(
+                stage="shutdown",
+                outcome="started",
+                detail=context.boot_id,
+            )
+
+    async def complete_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+        failure_reason: str | None = None,
+    ) -> None:
+        """Publish a completed runtime shutdown."""
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            if (
+                context.lifecycle_manager.phase.value
+                != "stopped"
+            ):
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown cannot be completed "
+                    "before the lifecycle reaches STOPPED."
+                )
+
+            if self._status not in {
+                RuntimeBootStatus.SHUTTING_DOWN,
+                RuntimeBootStatus.STOPPED,
+            }:
+                raise RuntimeBootConfigurationError(
+                    "Runtime shutdown completion is invalid "
+                    f"while boot status is "
+                    f"{self._status.value!r}."
+                )
+
+            self._status = RuntimeBootStatus.STOPPED
+            self._failure_reason = failure_reason
+
+            self._record_event(
+                stage="shutdown",
+                outcome=(
+                    "completed_with_failures"
+                    if failure_reason
+                    else "completed"
+                ),
+                detail=(
+                    failure_reason
+                    or context.boot_id
+                ),
+            )
+
+    async def fail_shutdown(
+        self,
+        *,
+        context: RuntimeBootContext,
+        reason: str,
+    ) -> None:
+        """Publish an incomplete or failed shutdown."""
+
+        normalized_reason = str(reason or "").strip()
+
+        if not normalized_reason:
+            raise RuntimeBootConfigurationError(
+                "A shutdown-failure reason is required."
+            )
+
+        async with self._lock:
+            if self._context is not context:
+                raise RuntimeBootConfigurationError(
+                    "Shutdown context does not match the "
+                    "active runtime boot context."
+                )
+
+            self._status = RuntimeBootStatus.FAILED
+            self._failure_reason = normalized_reason
+
+            self._record_event(
+                stage="shutdown",
+                outcome="failed",
+                detail=normalized_reason,
+            )
+
+    def snapshot(
+        self,
+    ) -> RuntimeBootSnapshot:
+        context = self._context
+
+        kernel = (
+            None
+            if context is None
+            else context.kernel
+        )
+
+        lifecycle = (
+            None
+            if context is None
+            else context.lifecycle_manager
+        )
+
+        configuration = (
+            None
+            if context is None
+            else context.configuration
+        )
+
+        registry = (
+            None
+            if context is None
+            else context.service_registry
+        )
+
+        return RuntimeBootSnapshot(
+            status=self._status,
+            attempt=self._attempt,
+            boot_id=self._boot_id,
+            stage=self._stage,
+            generation=self._generation,
+            event_count=len(self._events),
+            events=tuple(self._events),
+            runtime_id=(
+                None
+                if configuration is None
+                else configuration.runtime_id
+            ),
+            environment=(
+                None
+                if configuration is None
+                else configuration.environment
+            ),
+            service_count=(
+                0
+                if registry is None
+                else registry.service_count
+            ),
+            kernel_state=(
+                None
+                if kernel is None
+                else kernel.state.value
+            ),
+            lifecycle_phase=(
+                None
+                if lifecycle is None
+                else lifecycle.phase.value
+            ),
+            missing_foundation_components=(
+                ()
+                if kernel is None
+                else (
+                    kernel
+                    .missing_foundation_components()
+                )
+            ),
+            failure_reason=self._failure_reason,
+        )
+
+--- boot_runtime ---
+
+async def boot_runtime(
+    *,
+    project_root: Path,
+    environ: Mapping[str, str] | None = None,
+    overrides: Mapping[str, Any] | None = None,
+    service_registrars: Sequence[
+        RuntimeServiceRegistrar
+    ] = (),
+) -> tuple[
+    RuntimeBootProcess,
+    RuntimeBootContext,
+]:
+    """
+    Convenience entry point returning both controller and context.
+    """
+
+    process = RuntimeBootProcess(
+        project_root=project_root,
+        environ=environ,
+        overrides=overrides,
+        service_registrars=service_registrars,
+    )
+
+    context = await process.boot()
+
+    return process, context
+
+BOOT_COMPATIBILITY_IMPORT: ABSENT
+BOOT_REQUIRE_COMPATIBLE_CALL: ABSENT
+BOOT_MANIFEST_CONSTRUCTION: ABSENT
+
+=========================================================================================================
+INSPECTION DECISION
+=========================================================================================================
+Production boot compatibility enforcement is not structurally complete.
+The next step is a bounded production patch using the exact contracts captured above.
+
+=========================================================================================================
+INTEGRATION GATE
+=========================================================================================================
+1. Needs integration now:
+   YES
+
+2. Integrates with:
+   - Runtime Version Manifest
+   - Runtime Compatibility Layer
+   - Runtime Configuration
+   - Runtime Environment admission
+   - Universal Runtime Boot Process
+   - Universal Runtime Kernel
+   - Application lifespan evidence
+
+3. Practical integration:
+   Boot must construct or obtain the canonical RuntimeVersionManifest.
+   The existing compatibility layer must evaluate that manifest before runtime services start.
+   Incompatible required contracts must prevent the kernel and application from entering RUNNING.
+
+4. Decision:
+   Use this report to determine whether enforcement already exists or requires the A1.12 production patch.
+
+=========================================================================================================
+FINAL RESULT
+=========================================================================================================
+A1.12-B THROUGH A1.12-F INSPECTION COMPLETE
+PRODUCTION FILES MODIFIED: NO
