@@ -111,6 +111,66 @@ def _dequeue_lock() -> Iterator[None]:
                 _funlock(fh)
 
 
+
+def _owner_runtime_compatible_queue_priority(
+    priority,
+):
+    """
+    Project legacy orchestration priority values onto the canonical
+    Universal Job priority scale for queue ordering only.
+
+    Canonical values:
+        10 critical
+        20 high
+        30 normal
+        40 low
+        50 background
+
+    Legacy orchestration values:
+        1-10, with lower numbers representing greater urgency.
+
+    This adapter:
+    - performs no persistence mutation;
+    - does not rewrite stored jobs;
+    - preserves already-canonical values;
+    - exists only at the queue ordering compatibility boundary.
+    """
+
+    if isinstance(priority, bool):
+        return priority
+
+    try:
+        value = int(priority)
+    except (TypeError, ValueError):
+        return priority
+
+    if value in {
+        10,
+        20,
+        30,
+        40,
+        50,
+    }:
+        return value
+
+    if 1 <= value <= 2:
+        return 10
+
+    if 3 <= value <= 4:
+        return 20
+
+    if 5 <= value <= 6:
+        return 30
+
+    if 7 <= value <= 8:
+        return 40
+
+    if 9 <= value <= 10:
+        return 50
+
+    return priority
+
+
 def _sort_key(job: OrchestrationJob):
     """Return the canonical Universal Queue priority ordering key."""
     created_at = (
@@ -120,7 +180,9 @@ def _sort_key(job: OrchestrationJob):
     )
 
     return universal_queue_priority_sort_key(
-        priority=job.priority,
+        priority=_owner_runtime_compatible_queue_priority(
+            job.priority
+        ),
         created_at=created_at,
         job_id=job.job_id,
     )
@@ -475,7 +537,9 @@ def _apply_workspace_fairness(
 
     for job in queued:
         priority_groups.setdefault(
-            job.priority,
+            _owner_runtime_compatible_queue_priority(
+                job.priority
+            ),
             [],
         ).append(
             job
@@ -520,7 +584,9 @@ def _apply_workspace_fairness(
                 create_universal_queue_fairness_candidate(
                     workspace_id=workspace_id,
                     job_id=head.job_id,
-                    priority=head.priority,
+                    priority=_owner_runtime_compatible_queue_priority(
+                        head.priority
+                    ),
                     created_at=head.created_at,
                     service_count=service_counts.get(
                         workspace_id,

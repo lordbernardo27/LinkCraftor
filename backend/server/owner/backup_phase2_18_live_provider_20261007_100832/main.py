@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 # backend/server/main.py
 
 
@@ -61,7 +61,6 @@ import mammoth
 
 from backend.server.owner.audit_routes import router as owner_audit_router
 from backend.server.owner.runtime_summary_api import router as runtime_owner_summary_router
-from backend.server.owner.runtime_summary_live_provider import install_live_runtime_owner_summary_provider
 
 
 from fastapi import Body, FastAPI, File, HTTPException, UploadFile
@@ -163,7 +162,6 @@ app = FastAPI(
 
 app.include_router(owner_audit_router)
 app.include_router(runtime_owner_summary_router)
-install_live_runtime_owner_summary_provider(app)
 
 
 app.include_router(workspace_autosave_router)

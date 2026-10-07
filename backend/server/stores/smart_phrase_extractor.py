@@ -118,7 +118,7 @@ _ABBREV = (
     r"(?<!\bInc)(?<!\bLtd)(?<!\bCo)(?<!\bU\.S)(?<!\bU\.K)"
 )
 SENTENCE_SPLIT_RE = re.compile(
-    r"(?:" + _ABBREV + r"(?<!\d\.\d)[.!?])\s+|\n+"
+    r"(?:" + _ABBREV + r"(?<!\d\.\d)(?<=[.!?])\s+)|\n+"
 )
 
 DETERMINERS: Set[str] = {
@@ -1324,3 +1324,4 @@ if __name__ == "__main__":
         print(f"{r['extractor_intelligence']['score']:.2f}  "
               f"[{r['source_type']:<13}] {r['phrase']}")
     print(f"\nTotal: {len(results)} phrases")
+

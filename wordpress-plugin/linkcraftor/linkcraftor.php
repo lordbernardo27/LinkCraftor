@@ -20,3 +20,6 @@ if ( ! defined( 'LINKCRAFTOR_PLUGIN_FILE' ) ) {
 
 require_once __DIR__ . '/constants.php';
 require_once __DIR__ . '/autoload.php';
+
+\LinkCraftor\Runtime\Lifecycle::register();
+\LinkCraftor\Runtime\PluginRuntime::boot();
