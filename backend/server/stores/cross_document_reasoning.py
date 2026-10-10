@@ -890,7 +890,6 @@ def explain_cross_document_intelligence_governance_v2(
         "mutates_existing_intelligence": False,
         "protected_systems": [
             "rb2_runtime",
-            "active_phrase_pool",
             "highlight_selection_engine",
             "highlight_density_engine",
             "internal_linking_logic",
@@ -928,7 +927,6 @@ def explain_semantic_memory_governance_v2(
         "blue_internal_linking": "not_modified",
         "yellow_semantic_linking": "not_modified",
         "rb2_runtime": "not_modified",
-        "active_phrase_pool": "not_modified",
         "highlight_selection_engine": "not_modified",
         "highlight_density_engine": "not_modified",
         "canonical_governance": "not_modified",
@@ -980,7 +978,6 @@ def explain_long_article_compression_governance_v2(
         },
         "protected_boundaries": {
             "rb2_runtime": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_selection_engine": "not_modified",
             "highlight_density_engine": "not_modified",
             "internal_linking_logic": "not_modified",
@@ -1018,7 +1015,6 @@ def explain_semantic_context_compression_governance_v2(
             "internal_linking_logic": "not_modified",
             "semantic_linking_logic": "not_modified",
             "rb2_runtime": "not_modified",
-            "active_phrase_pool": "not_modified",
             "target_pool_resolution": "not_modified",
             "highlight_selection_engine": "not_modified",
             "highlight_density_engine": "not_modified",
@@ -1054,7 +1050,6 @@ def explain_runtime_context_optimization_governance_v2(
         "protected_boundaries": {
             "rb2_runtime": "not_modified",
             "engine_run_endpoint": "not_modified",
-            "active_phrase_pool": "not_modified",
             "target_pool_resolution": "not_modified",
             "internal_linking_logic": "not_modified",
             "semantic_linking_logic": "not_modified",
@@ -1093,7 +1088,6 @@ def explain_large_document_reasoning_governance_v2(
         "protected_boundaries": {
             "rb2_runtime": "not_modified",
             "engine_runtime_flow": "not_modified",
-            "active_phrase_pool": "not_modified",
             "target_pool_resolution": "not_modified",
             "internal_linking_logic": "not_modified",
             "semantic_linking_logic": "not_modified",
@@ -1131,7 +1125,6 @@ def explain_semantic_memory_reduction_governance_v2(
         "protected_boundaries": {
             "decision_intelligence": "not_modified",
             "rb2_runtime": "not_modified",
-            "active_phrase_pool": "not_modified",
             "target_pool_resolution": "not_modified",
             "internal_linking_logic": "not_modified",
             "semantic_linking_logic": "not_modified",
@@ -1362,7 +1355,6 @@ def explain_intent_classification_orchestration_v1(
             "target_ranking": "not_modified",
             "semantic_route_score": "not_modified",
             "semantic_intent_score": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_selection": "not_modified",
             "highlight_density": "not_modified",
         },
@@ -1416,7 +1408,6 @@ def explain_intent_classification_explainability_v1(
             "engine_run": "not_modified",
             "target_ranking": "not_modified",
             "semantic_scoring": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -1602,7 +1593,6 @@ def explain_informational_intent_orchestration_v1(
             "semantic_intent_score": "not_modified",
             "target_ranking": "not_modified",
             "target_pools": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -1864,7 +1854,6 @@ def explain_transactional_intent_orchestration_v1(
             "target_ranking": "not_modified",
             "target_pools": "not_modified",
             "conversion_logic": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -2136,7 +2125,6 @@ def explain_preventive_intent_orchestration_v1(
             "target_ranking": "not_modified",
             "target_pools": "not_modified",
             "safety_logic": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -2435,7 +2423,6 @@ def explain_diagnostic_intent_orchestration_v1(
             "target_pools": "not_modified",
             "diagnostic_logic": "not_modified",
             "dis_learning": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -2739,7 +2726,6 @@ def explain_comparison_intent_orchestration_v1(
             "target_pools": "not_modified",
             "comparison_logic": "not_modified",
             "runtime_ui": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -2877,7 +2863,6 @@ INTENT_AWARE_LINKING_SCHEMA_V1 = {
         "target_intelligence": "not_modified",
         "runtime_balancing": "not_modified",
         "highlight_runtime": "not_modified",
-        "active_phrase_pool": "not_modified",
     },
     "design_rules": {
         "cross_niche": True,
@@ -3016,7 +3001,6 @@ def explain_intent_aware_linking_orchestration_v1(
             "target_intelligence": "not_modified",
             "target_selection": "not_modified",
             "runtime_balancing": "not_modified",
-            "active_phrase_pool": "not_modified",
             "highlight_runtime": "not_modified",
         },
         "universal_design_rules": {
@@ -3072,7 +3056,6 @@ def explain_intent_aware_linking_explainability_v1(
                 "target_intelligence_not_modified",
                 "target_selection_not_modified",
                 "runtime_balancing_not_modified",
-                "active_phrase_pool_not_modified",
                 "highlight_runtime_not_modified",
             ],
         },

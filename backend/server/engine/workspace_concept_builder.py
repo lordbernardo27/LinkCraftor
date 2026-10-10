@@ -142,11 +142,9 @@ def build_workspace_concepts(workspace_id: str, max_concepts: int = 500) -> Dict
     data_dir = _data_dir()
 
     site_pages_fp = data_dir / f"site_pages_{ws}.json"
-    active_phrase_fp = data_dir / "phrase_pools" / "active" / f"active_phrase_pool_{ws}.json"
     live_pool_fp = data_dir / "target_pools" / "live_domain" / f"live_domain_target_pool_{ws}.json"
 
     site_pages = _read_json(site_pages_fp, {}).get("pages", {})
-    active_phrase_obj = _read_json(active_phrase_fp, {})
     live_pool = _read_json(live_pool_fp, {}).get("items", [])
 
     concepts: Dict[str, set] = defaultdict(set)
@@ -170,34 +168,7 @@ def build_workspace_concepts(workspace_id: str, max_concepts: int = 500) -> Dict
             _add_alias(concepts, base, h1)
             _add_alias(concepts, base, slug)
 
-    # 2. Add active article phrases as possible aliases to title concepts using overlap.
-    raw_phrases = active_phrase_obj.get("phrases", {}) if isinstance(active_phrase_obj, dict) else {}
-    if isinstance(raw_phrases, dict):
-        active_phrases = [_phrase_from_item(v) for v in raw_phrases.values()]
-    elif isinstance(raw_phrases, list):
-        active_phrases = [_phrase_from_item(v) for v in raw_phrases]
-    else:
-        active_phrases = []
-
-    concept_keys = list(concepts.keys())
-
-    for phrase in active_phrases:
-        pt = set(_tokens(phrase))
-        if not pt:
-            continue
-
-        for concept in concept_keys:
-            ct = set(_tokens(concept))
-            if not ct:
-                continue
-
-            overlap = pt & ct
-            ratio = len(overlap) / max(1, min(len(pt), len(ct)))
-
-            if ratio >= 0.60:
-                _add_alias(concepts, concept, phrase)
-
-    # 3. Add live target-pool matched phrases/aliases.
+    # 2. Add live target-pool matched phrases/aliases.
     if isinstance(live_pool, list):
         for item in live_pool:
             if not isinstance(item, dict):
@@ -229,7 +200,7 @@ def build_workspace_concepts(workspace_id: str, max_concepts: int = 500) -> Dict
         "concept_count": len(concept_payload),
         "concepts": concept_payload,
         "metadata": {
-            "source": "site_pages + active_phrase_pool + live_domain_target_pool",
+            "source": "site_pages + live_domain_target_pool",
             "version": "workspace_concepts_v1",
         },
     }

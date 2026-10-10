@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -142,15 +142,6 @@ def _data_dir() -> str:
     return os.path.join(os.path.dirname(os.path.dirname(__file__)), "data")
 
 
-def _active_phrase_pool_path(ws: str) -> str:
-    return os.path.join(
-        _data_dir(),
-        "phrase_pools",
-        "active",
-        f"active_phrase_pool_{_ws_safe(ws)}.json",
-    )
-
-
 def _upload_phrase_pool_path(ws: str) -> str:
     return os.path.join(
         _data_dir(),
@@ -189,10 +180,6 @@ def _resolve_pool_path(ws: str, doc_id: str) -> Tuple[str, str]:
     if matches:
         matches.sort(key=lambda p: os.path.getmtime(p), reverse=True)
         return matches[0], "document_specific_glob_match"
-
-    active_pool_path = _active_phrase_pool_path(ws)
-    if os.path.exists(active_pool_path):
-        return active_pool_path, "active_phrase_pool"
 
     fallback_pool_path = _upload_phrase_pool_path(ws)
     return fallback_pool_path, "workspace_upload_fallback"

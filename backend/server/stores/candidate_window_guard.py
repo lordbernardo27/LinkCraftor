@@ -1,4 +1,4 @@
-﻿"""
+"""
 Candidate window guard (corrected, niche-agnostic).
 
 Role
@@ -545,7 +545,7 @@ def _too_many_connectors(tokens: List[str]) -> bool:
 # --------------------------------------------------------------------------- #
 
 def candidate_window_guard(
-    candidate: str,
+    candidate: str | Dict[str, Any],
     *,
     source_type: str = "",
     workspace_id: str = "default",
@@ -553,19 +553,88 @@ def candidate_window_guard(
     vertical: str = "general",
     max_tokens: int = 8,
 ) -> Dict[str, Any]:
-    phrase = " ".join(tokenize(candidate))
+    canonical_envelope = isinstance(candidate, dict)
+
+    if canonical_envelope:
+        envelope = dict(candidate)
+        literal_phrase = str(envelope.get("phrase", "") or "")
+        effective_source_type = str(
+            envelope.get("source_type", "") or source_type or ""
+        )
+        effective_document_id = str(
+            envelope.get("doc_id", "") or document_id or ""
+        )
+        phrase = " ".join(tokenize(literal_phrase))
+    else:
+        envelope = {}
+        literal_phrase = str(candidate or "")
+        effective_source_type = str(source_type or "")
+        effective_document_id = str(document_id or "")
+        phrase = " ".join(tokenize(literal_phrase))
+
+    def finish(result: Dict[str, Any]) -> Dict[str, Any]:
+        if not canonical_envelope:
+            return result
+
+        output = dict(envelope)
+        output["phrase"] = literal_phrase
+        output["keep"] = result.get("keep") is True
+        output["reason"] = str(result.get("reason", "") or "")
+
+        quality_gate = result.get("quality_gate")
+        if isinstance(quality_gate, dict):
+            output["quality_gate"] = dict(quality_gate)
+
+        output["guard_intelligence"] = {
+            "stage": "candidate_window_guard",
+            "input_contract": "canonical_phrase_merger_candidate",
+            "literal_phrase_preserved": True,
+            "source_type": effective_source_type,
+            "document_id": effective_document_id,
+            "decision": (
+                quality_gate.get("decision")
+                if isinstance(quality_gate, dict)
+                else None
+            ),
+            "keep": result.get("keep") is True,
+            "reason": str(result.get("reason", "") or ""),
+        }
+        return output
 
     def rej(p: str, reason: str, signals: Dict[str, float]) -> Dict[str, Any]:
-        return _reject(p, reason, signals, workspace_id=workspace_id,
-                       document_id=document_id, vertical=vertical)
+        return finish(
+            _reject(
+                p,
+                reason,
+                signals,
+                workspace_id=workspace_id,
+                document_id=effective_document_id,
+                vertical=vertical,
+            )
+        )
 
     if not phrase:
         return rej("", "empty_candidate",
                    {"logical_structure": 0.0, "pragmatic_anchor_value": 0.0})
 
-    # Predictable boundary trim (no semantic rewriting).
-    tokens = _trim_boundaries(phrase.split())
-    phrase = " ".join(tokens)
+    raw_tokens = phrase.split()
+
+    if canonical_envelope:
+        # Canonical Phrase Merger candidates carry literal-position metadata.
+        # Never trim/rewrite their phrase because that would invalidate the
+        # upstream literal-span contract.
+        tokens = raw_tokens
+
+        if _starts_or_ends_badly(tokens):
+            return rej(
+                literal_phrase,
+                "bad_boundary",
+                {"logical_structure": 0.25, "pragmatic_anchor_value": 0.20},
+            )
+    else:
+        # Preserve legacy string-caller behavior.
+        tokens = _trim_boundaries(raw_tokens)
+        phrase = " ".join(tokens)
 
     if len(tokens) < 2:
         return rej(phrase, "too_short",
@@ -602,8 +671,14 @@ def candidate_window_guard(
                     "topic_coherence": 0.30})
 
     if _is_vacuous_head(tokens, tags):
-        return _review(phrase, tokens, "vacuous_head_review",
-                       {"pragmatic_anchor_value": 0.45, "topic_coherence": 0.55})
+        return finish(
+            _review(
+                phrase,
+                tokens,
+                "vacuous_head_review",
+                {"pragmatic_anchor_value": 0.45, "topic_coherence": 0.55},
+            )
+        )
 
     if _has_duplicate_noise(tokens):
         return rej(phrase, "duplicate_noise",
@@ -614,7 +689,7 @@ def candidate_window_guard(
                    {"logical_structure": 0.25, "context_fit": 0.30,
                     "pragmatic_anchor_value": 0.20})
 
-    return _accept(phrase, tokens)
+    return finish(_accept(phrase, tokens))
 
 
 __all__ = ["candidate_window_guard", "make_quality_gate_result", "tokenize"]

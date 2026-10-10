@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Set, Tuple
@@ -1358,12 +1358,51 @@ def _reject_score_phrase(
     }
 
 def score_phrase_strength(
-    phrase: str,
+    phrase: str | Dict[str, Any],
     *,
     source_type: str = "",
     allow_trim: bool = True,
     **kwargs: Any,
 ) -> Dict[str, Any]:
+    if isinstance(phrase, dict):
+        envelope = dict(phrase)
+        literal_phrase = str(envelope.get("phrase", "") or "")
+        effective_source_type = str(
+            envelope.get("source_type", "") or source_type or ""
+        )
+        effective_document_id = str(
+            envelope.get("doc_id", "") or kwargs.get("document_id", "") or ""
+        )
+
+        scored = score_phrase_strength(
+            literal_phrase,
+            source_type=effective_source_type,
+            allow_trim=False,
+            workspace_id=kwargs.get("workspace_id", "default"),
+            document_id=effective_document_id,
+            vertical=kwargs.get("vertical", "general"),
+        )
+
+        output = dict(envelope)
+        output["phrase"] = literal_phrase
+        output["keep"] = scored.get("keep") is True
+        output["reason"] = str(scored.get("reason", "") or "")
+        output["strength"] = dict(scored)
+        output["strength_score"] = scored.get("score")
+        output["scorer_intelligence"] = {
+            "stage": "phrase_strength_scorer",
+            "input_contract": "canonical_candidate_envelope",
+            "literal_phrase_preserved": True,
+            "normalized_working_phrase": scored.get("phrase"),
+            "source_type": effective_source_type,
+            "document_id": effective_document_id,
+            "keep": scored.get("keep") is True,
+            "score": scored.get("score"),
+            "reason": str(scored.get("reason", "") or ""),
+            "allow_trim": False,
+        }
+        return output
+
     workspace_id = str(kwargs.get("workspace_id", "default") or "default")
     document_id = str(kwargs.get("document_id", "") or "")
     vertical = str(kwargs.get("vertical", "general") or "general")

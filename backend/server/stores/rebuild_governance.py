@@ -8,7 +8,6 @@ from typing import Any, Dict, List
 import json
 
 from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
-from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
 from backend.server.stores.active_phrase_set_store import load_active_phrase_set, save_active_phrase_set
 from backend.server.stores.reload_governance import queue_reload_event
 
@@ -31,51 +30,39 @@ REBUILD_RULES_V2 = {
             "document_structure",
             "upload_phrase_pool",
             "active_phrase_set",
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
         ],
         "extractor_changed": [
             "upload_phrase_pool",
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
         ],
         "semantic_repair_changed": [
             "upload_phrase_pool",
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
         ],
         "guard_changed": [
             "guarded_candidate_set",
             "upload_phrase_pool",
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
         ],
         "scorer_changed": [
             "upload_phrase_pool_scores",
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
         ],
         "source_membership_changed": [
             "active_phrase_set",
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
         ],
         "upload_pool_changed": [
-            "active_phrase_pool",
             "rb2_runtime",
             "editor_repaint",
-        ],
-        "supporting_intelligence_changed": [
-            "supporting_intelligence_maps",
-            "supporting_scores",
-        ],
-        "target_pool_changed": [
+        ],        "target_pool_changed": [
             "active_target_pool",
             "target_resolution_map",
             "rb2_runtime",
@@ -229,8 +216,7 @@ def detect_stale_layers(workspace_id: str) -> Dict[str, Any]:
 
     dependency_pairs = [
         ("document_structure", "upload_phrase_pool"),
-        ("upload_phrase_pool", "active_phrase_pool"),
-        ("active_phrase_pool", "rb2_runtime"),
+        ("upload_phrase_pool", "rb2_runtime"),
         ("active_target_pool", "rb2_runtime"),
         ("rb2_runtime", "editor_repaint"),
     ]
@@ -345,9 +331,6 @@ def process_rebuild_queue(workspace_id: str, limit: int = 20) -> Dict[str, Any]:
 
                 if layer == "upload_phrase_pool":
                     builder_result = build_upload_phrase_pool(workspace_id)
-
-                elif layer == "active_phrase_pool":
-                    builder_result = build_active_phrase_pool(workspace_id)
 
                 elif layer == "active_phrase_set":
                     active_obj = load_active_phrase_set(workspace_id)

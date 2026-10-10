@@ -1049,7 +1049,6 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
         BASE_DIR / "data" / f"upload_struct_{ws_norm}.json",
         BASE_DIR / "data" / f"upload_phrase_index_{ws_norm}.json",
         BASE_DIR / "data" / "phrase_pools" / "upload" / f"upload_phrase_pool_{ws_norm}.json",
-        BASE_DIR / "data" / "phrase_pools" / "active" / f"active_phrase_pool_{ws_norm}.json",
     ]
 
     for fp in paths_to_remove:
@@ -1164,7 +1163,6 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
             "upload_struct": True,
             "upload_phrase_index": True,
             "upload_phrase_pool": True,
-            "active_phrase_pool": True,
             "document_index": True,
             "active_document_ids": True,
             "canonical_active_target_set_rebuilt": True,

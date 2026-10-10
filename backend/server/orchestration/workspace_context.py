@@ -11,7 +11,6 @@ DEFAULT_ENABLED_MODULES = [
     "semantic_linking",
     "batch_processing",
     "upload_phrase_pool",
-    "active_phrase_pool",
     "live_domain_sync",
     "draft_pool",
     "imported_pool",

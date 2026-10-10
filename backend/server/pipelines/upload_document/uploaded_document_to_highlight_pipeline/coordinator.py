@@ -1,4 +1,4 @@
-﻿"""
+"""
 Uploaded Document-to-Highlight Pipeline
 
 Entry-point scope only:
@@ -20,6 +20,8 @@ from typing import Any, Dict
 from backend.server.stores.smart_phrase_extractor import (
     extract_smart_phrases,
 )
+from backend.server.stores.phrase_discovery_engine import discover_phrases
+from backend.server.stores.phrase_merger import merge_phrase_candidates
 from backend.server.stores.candidate_window_guard import candidate_window_guard
 from backend.server.stores.phrase_strength_scorer import score_phrase_strength
 from backend.server.stores.highlight_selection_engine import select_highlight_candidates
@@ -123,16 +125,49 @@ def run_uploaded_document_to_highlight_pipeline(
             "Smart Phrase Extractor returned a non-list result."
         )
 
-    # TEMP THREE-STAGE PHRASE DIAGNOSTIC
+    discovery_diagnostics: Dict[str, Any] = {}
+    discovery_candidates = discover_phrases(
+        text=text,
+        html=html,
+        title=title,
+        extractor_candidates=phrase_candidates,
+        document_id=clean_document_id,
+        workspace_id=clean_workspace_id,
+        vertical=safe_vertical,
+        max_candidates=safe_max_candidates,
+        diagnostics=discovery_diagnostics,
+    )
+
+    if not isinstance(discovery_candidates, list):
+        raise RuntimeError(
+            "Phrase Discovery Engine returned a non-list result."
+        )
+
+    merger_diagnostics: Dict[str, Any] = {}
+    merged_phrase_candidates = merge_phrase_candidates(
+        text=text,
+        html=html,
+        title=title,
+        extractor_candidates=phrase_candidates,
+        discovery_candidates=discovery_candidates,
+        document_id=clean_document_id,
+        diagnostics=merger_diagnostics,
+    )
+
+    if not isinstance(merged_phrase_candidates, list):
+        raise RuntimeError(
+            "Phrase Merger returned a non-list result."
+        )
+
     guard_passed = []
     guard_rejected = []
 
-    for candidate in phrase_candidates:
+    for candidate in merged_phrase_candidates:
         phrase = str(candidate.get("phrase", "") or "")
         source_type = str(candidate.get("source_type", "") or "")
 
         guard_result = candidate_window_guard(
-            phrase,
+            candidate,
             source_type=source_type,
             workspace_id=clean_workspace_id,
             document_id=clean_document_id,
@@ -160,20 +195,14 @@ def run_uploaded_document_to_highlight_pipeline(
         )
 
         scorer_result = score_phrase_strength(
-            phrase=guarded_phrase,
+            item["guard"],
             source_type=item["source_type"],
             workspace_id=clean_workspace_id,
             document_id=clean_document_id,
             vertical=safe_vertical,
         )
 
-        record = dict(item["candidate"])
-        record["phrase"] = str(scorer_result.get("phrase", "") or guarded_phrase)
-        record["source_type"] = item["source_type"]
-        if isinstance(item["guard"].get("quality_gate"), dict):
-            record["quality_gate"] = item["guard"]["quality_gate"]
-        record["strength"] = scorer_result
-        record["strength_score"] = scorer_result.get("score")
+        record = dict(scorer_result)
 
         if scorer_result.get("keep") is True:
             scorer_passed.append(record)
@@ -235,7 +264,7 @@ def run_uploaded_document_to_highlight_pipeline(
 
     print("")
     print("[HANDOFF CHECKS]")
-    print(f"  Guard input == Extractor output: {len(phrase_candidates)} == {len(phrase_candidates)}")
+    print(f"  Guard input == Merger output: {len(merged_phrase_candidates)} == {len(merged_phrase_candidates)}")
     print(f"  Scorer input == Guard passed: {len(guard_passed)} == {len(guard_passed)}")
     print(f"  Selector input == Scorer passed: {len(scorer_passed)} == {len(scorer_passed)}")
 
@@ -247,6 +276,10 @@ def run_uploaded_document_to_highlight_pipeline(
         "document_id": clean_document_id,
         "title": title,
         "extractor": len(phrase_candidates),
+        "discovery": len(discovery_candidates),
+        "merger": len(merged_phrase_candidates),
+        "discovery_diagnostics": discovery_diagnostics,
+        "merger_diagnostics": merger_diagnostics,
         "guard_passed": len(guard_passed),
         "guard_rejected": len(guard_rejected),
         "scorer_passed": len(scorer_passed),
@@ -255,6 +288,8 @@ def run_uploaded_document_to_highlight_pipeline(
         "selector_selected": len(selection_result.get("selected", [])),
         "selector_rejected": len(selection_result.get("rejected", [])),
         "extractor_samples": [item.get("phrase") for item in phrase_candidates[:5]],
+        "discovery_samples": [item.get("phrase") for item in discovery_candidates[:5]],
+        "merger_samples": [item.get("phrase") for item in merged_phrase_candidates[:5]],
         "guard_samples": [item["guard"].get("phrase") for item in guard_passed[:5]],
         "scorer_samples": [item.get("phrase") for item in scorer_passed[:5]],
         "selector_samples": [item.get("phrase") for item in selection_result.get("selected", [])[:5]],

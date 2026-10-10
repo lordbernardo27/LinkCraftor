@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -76,7 +76,6 @@ def build_pipeline_rejection_learning_event(
         "rc2_pipeline_rules": {
             "learns_from_pipeline_rejections": True,
             "learns_from_pipeline_passed_candidates": False,
-            "learns_from_active_phrase_pool_candidates": False,
             "learns_from_editor_highlighted_candidates": False,
             "learns_from_user_approved_editor_phrases": False,
             "learns_from_accepted_link_decisions": False

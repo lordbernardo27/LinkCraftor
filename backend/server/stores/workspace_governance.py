@@ -1,10 +1,9 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 from backend.server.stores.upload_phrase_pool_builder import build_upload_phrase_pool
-from backend.server.stores.active_phrase_pool_builder import build_active_phrase_pool
 from backend.server.stores.reload_governance import queue_reload_event, process_reload_queue
 
 
@@ -269,9 +268,6 @@ def build_workspace_state_snapshot(workspace_id: str) -> Dict[str, Any]:
         f"backend/server/data/phrase_pools/active/active_phrase_set_{workspace_id}.json"
     )
 
-    active_phrase_pool_path = Path(
-        f"backend/server/data/phrase_pools/active/active_phrase_pool_{workspace_id}.json"
-    )
 
     target_pool_dir = Path("backend/server/data/target_pools")
 
@@ -289,7 +285,6 @@ def build_workspace_state_snapshot(workspace_id: str) -> Dict[str, Any]:
         "upload_structure": file_info(upload_struct_path),
         "upload_phrase_pool": file_info(upload_phrase_pool_path),
         "active_phrase_set": file_info(active_phrase_set_path),
-        "active_phrase_pool": file_info(active_phrase_pool_path),
         "target_pools": {
             "directory_exists": target_pool_dir.exists(),
             "file_count": len(target_pool_files),
@@ -365,14 +360,6 @@ def build_health_issues(snapshot: Dict[str, Any]) -> List[GovernanceIssue]:
             )
         )
 
-    if not snapshot.get("active_phrase_pool", {}).get("exists"):
-        issues.append(
-            GovernanceIssue(
-                code="active_phrase_pool_missing",
-                status=DRIFTED,
-                message="Active phrase pool file is missing.",
-            )
-        )
 
     target_pools = snapshot.get("target_pools", {}) or {}
     if not target_pools.get("directory_exists"):
@@ -410,8 +397,6 @@ def health_score_from_snapshot(snapshot: Dict[str, Any]) -> int:
     if not snapshot.get("active_phrase_set", {}).get("exists"):
         score -= 30
 
-    if not snapshot.get("active_phrase_pool", {}).get("exists"):
-        score -= 30
 
     target_pools = snapshot.get("target_pools", {}) or {}
     if not target_pools.get("directory_exists"):
@@ -735,74 +720,6 @@ def detect_active_phrase_set_drift(
     return issues
 
 
-def detect_active_phrase_pool_drift(
-    workspace_id: str,
-) -> List[GovernanceIssue]:
-    state = load_workspace_state(workspace_id)
-
-    previous_snapshot = state.get("last_snapshot") or {}
-    current_snapshot = build_workspace_state_snapshot(workspace_id)
-
-    previous_pool = previous_snapshot.get("active_phrase_pool") or {}
-    current_pool = current_snapshot.get("active_phrase_pool") or {}
-
-    issues: List[GovernanceIssue] = []
-
-    previous_exists = bool(previous_pool.get("exists"))
-    current_exists = bool(current_pool.get("exists"))
-
-    if previous_exists and not current_exists:
-        issues.append(
-            GovernanceIssue(
-                code="active_phrase_pool_missing_drift",
-                status=DRIFTED,
-                message="Active phrase pool existed previously but is now missing.",
-            )
-        )
-
-    elif not previous_exists and current_exists:
-        issues.append(
-            GovernanceIssue(
-                code="active_phrase_pool_created_drift",
-                status=INFO,
-                message="Active phrase pool was previously missing but now exists.",
-            )
-        )
-
-    previous_modified = previous_pool.get("modified_at")
-    current_modified = current_pool.get("modified_at")
-
-    if (
-        previous_modified
-        and current_modified
-        and previous_modified != current_modified
-    ):
-        issues.append(
-            GovernanceIssue(
-                code="active_phrase_pool_modified_drift",
-                status=INFO,
-                message="Active phrase pool modification timestamp changed.",
-            )
-        )
-
-    previous_size = int(previous_pool.get("size_bytes") or 0)
-    current_size = int(current_pool.get("size_bytes") or 0)
-
-    if (
-        previous_size > 0
-        and current_size > 0
-        and previous_size != current_size
-    ):
-        issues.append(
-            GovernanceIssue(
-                code="active_phrase_pool_size_drift",
-                status=INFO,
-                message="Active phrase pool file size changed.",
-            )
-        )
-
-    return issues
-
 
 def detect_target_pool_drift(
     workspace_id: str,
@@ -960,7 +877,6 @@ def generate_workspace_drift_report(workspace_id: str) -> Dict[str, Any]:
     issues.extend(detect_upload_structure_drift(workspace_id))
     issues.extend(detect_upload_phrase_pool_drift(workspace_id))
     issues.extend(detect_active_phrase_set_drift(workspace_id))
-    issues.extend(detect_active_phrase_pool_drift(workspace_id))
     issues.extend(detect_target_pool_drift(workspace_id))
     issues.extend(detect_decision_cache_drift(workspace_id))
 
@@ -1122,67 +1038,6 @@ def detect_stale_active_phrase_set(
     return issues
 
 
-def detect_stale_active_phrase_pool(
-    workspace_id: str,
-) -> List[GovernanceIssue]:
-    snapshot = build_workspace_state_snapshot(workspace_id)
-
-    active_phrase_set = snapshot.get("active_phrase_set") or {}
-    active_phrase_pool = snapshot.get("active_phrase_pool") or {}
-
-    active_phrase_set_modified_at = active_phrase_set.get("modified_at")
-    active_phrase_pool_modified_at = active_phrase_pool.get("modified_at")
-
-    issues: List[GovernanceIssue] = []
-
-    if is_datetime_newer(
-        active_phrase_set_modified_at,
-        active_phrase_pool_modified_at,
-    ):
-        issues.append(
-            GovernanceIssue(
-                code="stale_active_phrase_pool_from_active_phrase_set",
-                status=STALE,
-                message="Active phrase pool is older than the active phrase set.",
-            )
-        )
-
-    return issues
-
-
-def detect_stale_target_pools(
-    workspace_id: str,
-) -> List[GovernanceIssue]:
-    snapshot = build_workspace_state_snapshot(workspace_id)
-
-    active_phrase_pool = snapshot.get("active_phrase_pool") or {}
-    active_phrase_pool_modified_at = active_phrase_pool.get("modified_at")
-
-    target_pools = snapshot.get("target_pools") or {}
-    target_files = target_pools.get("files") or []
-
-    issues: List[GovernanceIssue] = []
-
-    if not target_files:
-        return issues
-
-    for target_file in target_files:
-        target_info = file_info(Path(target_file))
-        target_modified_at = target_info.get("modified_at")
-
-        if is_datetime_newer(
-            active_phrase_pool_modified_at,
-            target_modified_at,
-        ):
-            issues.append(
-                GovernanceIssue(
-                    code="stale_target_pool_from_active_phrase_pool",
-                    status=STALE,
-                    message=f"Target pool is older than the active phrase pool: {target_file}",
-                )
-            )
-
-    return issues
 
 
 def build_runtime_state_snapshot(workspace_id: str) -> Dict[str, Any]:
@@ -1200,51 +1055,6 @@ def build_runtime_state_snapshot(workspace_id: str) -> Dict[str, Any]:
     }
 
 
-def detect_stale_runtime_state(
-    workspace_id: str,
-) -> List[GovernanceIssue]:
-    snapshot = build_workspace_state_snapshot(workspace_id)
-    runtime_snapshot = build_runtime_state_snapshot(workspace_id)
-
-    active_phrase_pool = snapshot.get("active_phrase_pool") or {}
-    active_phrase_pool_modified_at = active_phrase_pool.get("modified_at")
-
-    issues: List[GovernanceIssue] = []
-
-    runtime_state = runtime_snapshot.get("runtime_state") or {}
-    runtime_cache = runtime_snapshot.get("runtime_cache") or {}
-
-    runtime_state_modified_at = runtime_state.get("modified_at")
-    runtime_cache_modified_at = runtime_cache.get("modified_at")
-
-    if runtime_state.get("exists") and is_datetime_newer(
-        active_phrase_pool_modified_at,
-        runtime_state_modified_at,
-    ):
-        issues.append(
-            GovernanceIssue(
-                code="stale_runtime_state_from_active_phrase_pool",
-                status=STALE,
-                message="Runtime state is older than the active phrase pool.",
-            )
-        )
-
-    if runtime_cache.get("exists") and is_datetime_newer(
-        active_phrase_pool_modified_at,
-        runtime_cache_modified_at,
-    ):
-        issues.append(
-            GovernanceIssue(
-                code="stale_runtime_cache_from_active_phrase_pool",
-                status=STALE,
-                message="Runtime cache is older than the active phrase pool.",
-            )
-        )
-
-    return issues
-
-
-
 
 def classify_stale_issue_severity(issue: GovernanceIssue) -> str:
     code = str(issue.code or "")
@@ -1256,14 +1066,10 @@ def classify_stale_issue_severity(issue: GovernanceIssue) -> str:
 
     warning_codes = {
         "stale_active_phrase_set_from_upload_phrase_pool",
-        "stale_target_pool_from_active_phrase_pool",
-        "stale_runtime_state_from_active_phrase_pool",
-        "stale_runtime_cache_from_active_phrase_pool",
     }
 
     blocking_codes = {
         "stale_upload_phrase_pool_from_upload_structure",
-        "stale_active_phrase_pool_from_active_phrase_set",
     }
 
     if code in blocking_codes:
@@ -1293,9 +1099,6 @@ def generate_workspace_stale_report(
     issues.extend(detect_stale_upload_structure(workspace_id))
     issues.extend(detect_stale_upload_phrase_pool(workspace_id))
     issues.extend(detect_stale_active_phrase_set(workspace_id))
-    issues.extend(detect_stale_active_phrase_pool(workspace_id))
-    issues.extend(detect_stale_target_pools(workspace_id))
-    issues.extend(detect_stale_runtime_state(workspace_id))
 
     decorated_issues = decorate_stale_issues(issues)
 
@@ -1554,148 +1357,18 @@ def validate_upload_to_active_membership(
     return report
 
 
-def extract_active_pool_document_ids(active_pool_data: Dict[str, Any] | List[Any] | None) -> set[str]:
-    if not active_pool_data:
-        return set()
 
-    ids = set()
-
-    if isinstance(active_pool_data, dict):
-        for key in ["doc_ids", "document_ids", "active_document_ids"]:
-            value = active_pool_data.get(key)
-            if isinstance(value, list):
-                ids.update(str(x) for x in value)
-
-        phrases = active_pool_data.get("phrases") or active_pool_data.get("items") or []
-        if isinstance(phrases, list):
-            for item in phrases:
-                if isinstance(item, dict):
-                    doc_id = item.get("doc_id") or item.get("document_id") or item.get("source_doc_id")
-                    if doc_id:
-                        ids.add(str(doc_id))
-
-    elif isinstance(active_pool_data, list):
-        for item in active_pool_data:
-            if isinstance(item, dict):
-                doc_id = item.get("doc_id") or item.get("document_id") or item.get("source_doc_id")
-                if doc_id:
-                    ids.add(str(doc_id))
-
-    return ids
-
-
-def validate_active_membership_to_active_pool(workspace_id: str) -> Dict[str, Any]:
-    workspace_id = str(workspace_id or "").strip()
-
-    active_phrase_set_path = Path(
-        f"backend/server/data/phrase_pools/active/active_phrase_set_{workspace_id}.json"
-    )
-    active_phrase_pool_path = Path(
-        f"backend/server/data/phrase_pools/active/active_phrase_pool_{workspace_id}.json"
-    )
-
-    issues: List[GovernanceIssue] = []
-
-    active_set_data = read_json_file_safely(active_phrase_set_path)
-    active_pool_data = read_json_file_safely(active_phrase_pool_path)
-
-    if not active_phrase_set_path.exists():
-        issues.append(GovernanceIssue("active_phrase_set_missing_for_pool_validation", REPAIR_REQUIRED, "Active phrase set is missing."))
-
-    if not active_phrase_pool_path.exists():
-        issues.append(GovernanceIssue("active_phrase_pool_missing_for_pool_validation", REPAIR_REQUIRED, "Active phrase pool is missing."))
-
-    if active_phrase_set_path.exists() and active_set_data is None:
-        issues.append(GovernanceIssue("active_phrase_set_invalid_json_for_pool_validation", REPAIR_REQUIRED, "Active phrase set JSON is invalid."))
-
-    if active_phrase_pool_path.exists() and active_pool_data is None:
-        issues.append(GovernanceIssue("active_phrase_pool_invalid_json_for_pool_validation", REPAIR_REQUIRED, "Active phrase pool JSON is invalid."))
-
-    membership_doc_ids = extract_active_membership_document_ids(active_set_data)
-    active_pool_doc_ids = extract_active_pool_document_ids(active_pool_data)
-
-    missing_from_pool = sorted(membership_doc_ids - active_pool_doc_ids)
-    nonexistent_pool_refs = sorted(active_pool_doc_ids - membership_doc_ids)
-
-    if missing_from_pool:
-        issues.append(GovernanceIssue("membership_docs_missing_from_active_pool", DRIFTED, f"Membership docs missing from active pool: {missing_from_pool}"))
-
-    if nonexistent_pool_refs:
-        issues.append(GovernanceIssue("active_pool_references_missing_membership_docs", DRIFTED, f"Active pool references docs not in membership: {nonexistent_pool_refs}"))
-
-    passed = len(issues) == 0
-    status = HEALTHY if passed else classify_workspace_status(issues)
-
-    return {
-        "workspace_id": workspace_id,
-        "validation": "active_membership_to_active_pool",
-        "passed": passed,
-        "status": status,
-        "membership_doc_count": len(membership_doc_ids),
-        "active_pool_doc_count": len(active_pool_doc_ids),
-        "missing_from_pool": missing_from_pool,
-        "nonexistent_pool_refs": nonexistent_pool_refs,
-        "issue_count": len(issues),
-        "issues": [asdict(issue) for issue in issues],
-        "checked_at": utc_now_iso(),
-    }
-
-
-def validate_active_pool_to_runtime(workspace_id: str) -> Dict[str, Any]:
-    workspace_id = str(workspace_id or "").strip()
-
-    active_phrase_pool_path = Path(
-        f"backend/server/data/phrase_pools/active/active_phrase_pool_{workspace_id}.json"
-    )
-    runtime_snapshot = build_runtime_state_snapshot(workspace_id)
-
-    issues: List[GovernanceIssue] = []
-
-    active_pool_data = read_json_file_safely(active_phrase_pool_path)
-
-    if not active_phrase_pool_path.exists():
-        issues.append(GovernanceIssue("active_phrase_pool_missing_for_runtime_validation", REPAIR_REQUIRED, "Active phrase pool is missing."))
-
-    if active_phrase_pool_path.exists() and active_pool_data is None:
-        issues.append(GovernanceIssue("active_phrase_pool_invalid_json_for_runtime_validation", REPAIR_REQUIRED, "Active phrase pool JSON is invalid."))
-
-    runtime_state = runtime_snapshot.get("runtime_state") or {}
-    runtime_cache = runtime_snapshot.get("runtime_cache") or {}
-
-    if not runtime_state.get("exists") and not runtime_cache.get("exists"):
-        issues.append(GovernanceIssue("runtime_state_missing_for_active_pool_validation", WARNING, "No runtime state or runtime cache file found."))
-
-    passed = len(issues) == 0
-    status = HEALTHY if passed else classify_workspace_status(issues)
-
-    return {
-        "workspace_id": workspace_id,
-        "validation": "active_pool_to_runtime",
-        "passed": passed,
-        "status": status,
-        "runtime_state": runtime_state,
-        "runtime_cache": runtime_cache,
-        "issue_count": len(issues),
-        "issues": [asdict(issue) for issue in issues],
-        "checked_at": utc_now_iso(),
-    }
 
 
 def validate_target_pool_references(workspace_id: str) -> Dict[str, Any]:
     workspace_id = str(workspace_id or "").strip()
 
     snapshot = build_workspace_state_snapshot(workspace_id)
-    active_phrase_pool_path = Path(
-        f"backend/server/data/phrase_pools/active/active_phrase_pool_{workspace_id}.json"
-    )
 
     issues: List[GovernanceIssue] = []
 
-    active_pool_data = read_json_file_safely(active_phrase_pool_path)
     target_files = (snapshot.get("target_pools") or {}).get("files") or []
 
-    if active_phrase_pool_path.exists() and active_pool_data is None:
-        issues.append(GovernanceIssue("active_phrase_pool_invalid_json_for_target_reference_validation", REPAIR_REQUIRED, "Active phrase pool JSON is invalid."))
 
     for target_file in target_files:
         target_path = Path(target_file)
@@ -2178,11 +1851,8 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
             # -------------------------
 
             if repair_type == "rebuild_repair":
-                # REAL FULL REBUILD:
-                # 1) rebuild upload phrase pool from canonical upload phrase index
-                # 2) rebuild active phrase pool from upload pool and active membership
+                # Rebuild upload phrase pool from canonical upload phrase index.
                 upload_result = build_upload_phrase_pool(workspace_id)
-                active_result = build_active_phrase_pool(workspace_id)
 
                 item["execution_result"] = {
                     "upload_phrase_pool": {
@@ -2190,23 +1860,17 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
                         "quality_filtered_source_count": upload_result.get("quality_filtered_source_count"),
                         "phrase_count": upload_result.get("phrase_count"),
                     },
-                    "active_phrase_pool": {
-                        "phrase_count": active_result.get("phrase_count"),
-                        "accepted_by_source": active_result.get("accepted_by_source"),
-                        "rejected_by_source": active_result.get("rejected_by_source"),
-                    },
                 }
 
                 state["last_auto_rebuild_executed"] = utc_now_iso()
                 state["last_auto_rebuild_upload_phrase_count"] = upload_result.get("phrase_count")
-                state["last_auto_rebuild_active_phrase_count"] = active_result.get("phrase_count")
 
             elif repair_type == "reload_repair":
                 # REAL RELOAD GOVERNANCE:
                 # Queue and process backend reload state so frontend/runtime can repaint from healthy pools.
                 reload_event = queue_reload_event(
                     workspace_id=workspace_id,
-                    trigger="active_phrase_pool_changed",
+                    trigger="rebuild_processed",
                 )
 
                 reload_result = process_reload_queue(workspace_id)
@@ -2225,16 +1889,13 @@ def process_workspace_repair_queue(workspace_id: str) -> Dict[str, Any]:
 
             elif repair_type == "pool_repair":
                 upload_result = build_upload_phrase_pool(workspace_id)
-                active_result = build_active_phrase_pool(workspace_id)
 
                 item["execution_result"] = {
                     "upload_phrase_pool_count": upload_result.get("phrase_count"),
-                    "active_phrase_pool_count": active_result.get("phrase_count"),
                 }
 
                 state["last_pool_repair_executed"] = utc_now_iso()
                 state["last_pool_repair_upload_phrase_count"] = upload_result.get("phrase_count")
-                state["last_pool_repair_active_phrase_count"] = active_result.get("phrase_count")
 
             elif repair_type == "runtime_refresh":
                 state["last_runtime_refresh_executed"] = utc_now_iso()

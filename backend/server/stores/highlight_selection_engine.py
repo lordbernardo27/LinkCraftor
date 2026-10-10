@@ -1,40 +1,54 @@
-﻿"""
-Highlight Selection Engine v2  (corrected)
+"""
+Highlight Selection Engine v3
 
-ROLE (frozen):
-    The Smart Phrase Extractor is the single authority for phrase QUALITY.
-    This engine RANKS extractor-approved phrases and tags link opportunity.
-    It does NOT re-decide whether a phrase is "good".
+ROLE:
+    Receives canonical Phrase Strength Scorer survivors from the certified
+    Extractor + Discovery -> Merger -> Guard -> Scorer pipeline.
 
-What v2 does:
-    - extract candidates from the active phrase pool
-    - confirm the phrase physically occurs in the article (a fact, not a quality call)
-    - attach resolver/target signals as METADATA + ranking input (never a delete gate)
-    - tag each phrase  link_status = "linked" | "unlinked_opportunity"
-    - compute ONE normalized ranking score (extractor score is the base)
-    - sort, and emit EVERY article-present candidate
+    This engine does NOT re-decide phrase quality. Its responsibilities are:
+    - preserve the complete canonical upstream candidate envelope
+    - normalize phrase text only for comparison/matching keys
+    - remove exact normalized duplicates
+    - confirm that a candidate physically occurs in the article
+    - attach resolver signals as ranking metadata only
+    - compute selection/ranking scores
+    - classify link_status
+    - emit every article-present surviving candidate for downstream Density
 
-What v2 deliberately REMOVED (these were hidden phrase validators):
-    - weak_phrase_reason / WEAK_PHRASE_PATTERNS            (re-validation by regex)
-    - link_worthiness_score + suppress_low_link_worthiness (quality opinion)
-    - contextual_naturalness_score + suppression           (quality opinion)
-    - phrase_quality_score < 66 hard reject                (re-gating the authority)
-    - resolver "no target" / "weak evidence" deletions     (now demoted, not dropped)
-    - overwriting item["phrase"] with the normalized form  (mutation)
-    Spacing / zone / family-cap now live in the DENSITY engine as display
-    selection (deferral), not as deletion of valid opportunities.
+RANKING AUTHORITY:
+    - strength_score from Phrase Strength Scorer is the primary ranking base
+      for canonical candidates
+    - extractor_intelligence.score remains a backward-compatible fallback
+    - resolver and occurrence signals may influence ranking but do not
+      independently invalidate phrase quality
 
-Output contract:
-    candidates[]  -> every article-present, extractor-approved phrase, ranked,
-                     each carrying link_status and a family_root for the density
-                     engine. Nothing here is dropped for "quality".
-    rejected[]    -> only: empty phrase, exact duplicate, or not-present-in-article.
+POSITION CONTRACT:
+    Canonical literal/source positions from upstream remain inside:
+        position_intelligence
 
-COORDINATE SPACE (IMPORTANT — read before consuming positions):
-    first_position / all_positions are offsets into the NORMALIZED article
-    (lowercased, whitespace-collapsed via _normalized_article), NOT the raw
-    article text. Any consumer that divides or indexes by article length MUST
-    normalize the length the same way. The density engine relies on this.
+    Selection Engine article-matching positions use NORMALIZED article space
+    and are stored explicitly inside:
+        selection_position_intelligence
+
+    For backward compatibility with Highlight Density and existing consumers,
+    these normalized selection positions are also exposed as:
+        first_position
+        all_positions
+        occurrence_count
+
+    These top-level aliases MUST NOT be confused with canonical upstream
+    position_intelligence.
+
+OUTPUT CONTRACT:
+    selected/candidates:
+        complete canonical upstream records plus Selection Engine metadata.
+
+    rejected:
+        only factual selection-stage exclusions such as empty phrase,
+        exact normalized duplicate, or phrase not physically present in article.
+
+    No valid candidate is rejected here merely because resolver evidence is
+    absent or because this engine has a separate opinion about phrase quality.
 """
 
 from __future__ import annotations
@@ -130,10 +144,10 @@ def _finditer_positions(phrase_key: str, norm_article: str) -> List[int]:
 def _extractor_score_0_100(item: Dict[str, Any]) -> float:
     """Carry the extractor's own score forward as the ranking base."""
     ei = item.get("extractor_intelligence") if isinstance(item.get("extractor_intelligence"), dict) else {}
-    raw = (ei.get("score")
-           if ei.get("score") is not None
-           else item.get("strength_score")
+    raw = (item.get("strength_score")
            if item.get("strength_score") is not None
+           else ei.get("score")
+           if ei.get("score") is not None
            else item.get("quality_score")
            if item.get("quality_score") is not None
            else item.get("score")
@@ -334,8 +348,18 @@ def select_highlight_candidates(
         rec["phrase"] = original          # display text, UNMUTATED
         rec["phrase_key"] = key           # matching/dedupe key
         rec["occurrence_count"] = len(positions)
-        rec["all_positions"] = positions  # NOTE: offsets in NORMALIZED article space
-        rec["first_position"] = positions[0]
+        rec["all_positions"] = positions  # backward-compatible alias: NORMALIZED article space
+        rec["first_position"] = positions[0]  # backward-compatible alias: NORMALIZED article space
+        rec["selection_position_intelligence"] = {
+            "coordinate_space": "normalized_article",
+            "normalization": "lowercase_whitespace_collapsed",
+            "first_position": positions[0],
+            "all_positions": list(positions),
+            "occurrence_count": len(positions),
+            "canonical_position_intelligence_preserved": isinstance(
+                rec.get("position_intelligence"), dict
+            ),
+        }
         rec["family_root"] = _family_root(key)
 
         # advisory only

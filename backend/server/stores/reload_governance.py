@@ -1,4 +1,4 @@
-﻿
+
 from __future__ import annotations
 
 import json
@@ -35,14 +35,7 @@ RELOAD_RULES_V1 = {
             "runtime_refresh",
             "highlight_repaint",
             "panel_refresh",
-        ],
-        "active_phrase_pool_changed": [
-            "backend_state_reload",
-            "runtime_refresh",
-            "highlight_repaint",
-            "panel_refresh",
-        ],
-        "document_uploaded": [
+        ],        "document_uploaded": [
             "backend_state_reload",
             "runtime_refresh",
             "highlight_repaint",

@@ -79,41 +79,6 @@ def _ws_safe(ws: str) -> str:
     return f"ws_{s or 'workspace'}"[:80]
 
 
-def _load_supporting_intelligence_inputs(workspace_id: str) -> Dict[str, Any]:
-    ws = _ws_safe(workspace_id)
-    here = Path(__file__).resolve()
-    server_dir = here.parents[1]
-
-    path = (
-        server_dir
-        / "data"
-        / "phrase_pools"
-        / "active"
-        / f"active_phrase_pool_{ws}.json"
-    )
-
-    try:
-        obj = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {
-            "enabled": False,
-            "reason": "active_phrase_pool_not_found",
-            "runtime_highlight_injection_allowed": False,
-            "sources": {},
-        }
-
-    supporting = obj.get("supporting_intelligence_inputs")
-    if not isinstance(supporting, dict):
-        return {
-            "enabled": False,
-            "reason": "supporting_intelligence_inputs_missing",
-            "runtime_highlight_injection_allowed": False,
-            "sources": {},
-        }
-
-    supporting["runtime_highlight_injection_allowed"] = False
-    return supporting
-
 def _load_imported_di_signal(workspace_id: str, phrase_text: str) -> Dict[str, Any]:
     ws = _ws_safe(workspace_id)
     phrase_norm = re.sub(r"\s+", " ", str(phrase_text or "").lower().strip())
@@ -260,8 +225,6 @@ def score_endpoint(payload: ScoreRequest, debug: bool = False):
     if debug and payload.profile:
         profile = normalize_profile_id(payload.profile)
 
-    supporting_intelligence_inputs = _load_supporting_intelligence_inputs(workspace_id)
-
     imported_di_signal = _load_imported_di_signal(
         workspace_id,
         phrase_ctx.get("phraseText"),
@@ -274,7 +237,6 @@ def score_endpoint(payload: ScoreRequest, debug: bool = False):
             "phrase_ctx": phrase_ctx,
             "candidate_count": len(candidates),
             "candidates_sample": candidates[:3],
-            "supporting_intelligence_inputs": supporting_intelligence_inputs,
             "imported_di_signal": imported_di_signal,
         }
 
@@ -296,7 +258,6 @@ def score_endpoint(payload: ScoreRequest, debug: bool = False):
             built_decision = build_link_decision(
             phrase_ctx,
             out,
-            supporting_intelligence_inputs=supporting_intelligence_inputs,
             imported_di_signal=imported_di_signal,
         )
 
