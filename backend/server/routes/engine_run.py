@@ -723,6 +723,23 @@ def engine_run(payload: EngineRunRequest = Body(...)):
     if not isinstance(selection_result, dict):
         raise RuntimeError("Canonical uploaded-document highlight pipeline returned an invalid selection result.")
 
+    # PHASE 1: Isolated canonical Selector handoff.
+    # Legacy Density must only receive the legacy selected list.
+    canonical_selected_phrase_candidates = canonical_highlight_result.get("all_selected_phrase_candidates")
+    nested_canonical_candidates = selection_result.get("all_selected_phrase_candidates")
+    legacy_selected_candidates = selection_result.get("selected")
+    if not isinstance(canonical_selected_phrase_candidates, list) or not isinstance(legacy_selected_candidates, list):
+        raise RuntimeError("Phrase Selector canonical handoff contract is missing or invalid.")
+    if len(canonical_selected_phrase_candidates) != len(legacy_selected_candidates):
+        raise RuntimeError("Phrase Selector canonical handoff candidate count mismatch.")
+    if any(not isinstance(candidate, dict) for candidate in canonical_selected_phrase_candidates):
+        raise RuntimeError("Phrase Selector canonical handoff contains invalid candidates.")
+    if not isinstance(nested_canonical_candidates, list) or nested_canonical_candidates != canonical_selected_phrase_candidates:
+        raise RuntimeError("Pipeline 2 coordinator and Selector canonical outputs disagree.")
+    if canonical_highlight_result.get("all_selected_phrase_candidate_count") != len(canonical_selected_phrase_candidates):
+        raise RuntimeError("Pipeline 2 canonical candidate count does not match coordinator metadata.")
+    canonical_selected_phrase_candidates = copy.deepcopy(canonical_selected_phrase_candidates)
+
 
     # FIX: snapshot the selection output BEFORE density runs. The density engine
     # mutates candidate dicts in place (and the selection engine aliases
@@ -736,6 +753,13 @@ def engine_run(payload: EngineRunRequest = Body(...)):
     )
 
     final_highlights = density_result.get("final_highlights", []) or []
+
+    # Verify legacy Density did not alter the canonical Selector output.
+    if (
+        canonical_selected_phrase_candidates != canonical_highlight_result.get("all_selected_phrase_candidates")
+        or canonical_selected_phrase_candidates != selection_result.get("all_selected_phrase_candidates")
+    ):
+        raise RuntimeError("Legacy Density modified the canonical Pipeline 2 handoff.")
 
     try:
         from pathlib import Path as _Path
@@ -840,6 +864,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "canonical_highlight_pipeline_status": canonical_highlight_result.get("status"),
             "canonical_highlight_pipeline_stage": canonical_highlight_result.get("latest_stage"),
             "canonical_phrase_candidate_count": canonical_highlight_result.get("phrase_candidate_count", 0),
+            "canonical_all_selected_phrase_candidate_count": len(canonical_selected_phrase_candidates),
             "selection_stats": selection_result.get("stats", {}),
             "density_stats": density_result.get("stats", {}),
             "selection_rejected_sample": selection_result.get("rejected", [])[:10],

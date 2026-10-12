@@ -119,3 +119,102 @@ def test_guard_intelligence_describes_canonical_contract():
     assert guard["decision"] == result["quality_gate"]["decision"]
     assert guard["keep"] == result["keep"]
     assert guard["reason"] == result["reason"]
+
+def test_universal_leading_action_verbs_are_rejected_under_pos_fallback():
+    cases = [
+        "review investment returns",
+        "review contractual obligations",
+        "monitor server performance",
+        "review blood pressure trends",
+        "analyze customer behavior",
+    ]
+
+    for phrase in cases:
+        result = candidate_window_guard(
+            phrase,
+            source_type="phrase_discovery",
+            document_id="doc-universal-action-leak",
+            vertical="general",
+        )
+
+        assert result["keep"] is False, phrase
+        assert result["reason"] == "action_leak_start", phrase
+
+
+def test_ambiguous_action_words_remain_valid_when_used_as_nouns():
+    cases = [
+        "annual performance review",
+        "computer monitor stand",
+        "product review system",
+        "monitor stand",
+    ]
+
+    for phrase in cases:
+        result = candidate_window_guard(
+            phrase,
+            source_type="phrase_discovery",
+            document_id="doc-universal-noun-use",
+            vertical="general",
+        )
+
+        assert result["keep"] is True, phrase
+
+def test_universal_trailing_finite_verb_is_rejected_from_source_context():
+    cases = [
+        (
+            "investment strategy aims",
+            "The investment strategy aims to increase long-term returns."
+        ),
+        (
+            "marketing strategy aims",
+            "The marketing strategy aims to improve brand awareness."
+        ),
+        (
+            "security policy aims",
+            "The security policy aims to reduce unauthorized access."
+        ),
+        (
+            "effective hypertension management aims",
+            "Effective hypertension management aims to reduce long-term risk."
+        ),
+    ]
+
+    for phrase, snippet in cases:
+        candidate = _canonical_candidate(phrase)
+        candidate["snippet"] = snippet
+
+        result = candidate_window_guard(
+            candidate,
+            workspace_id="ws-universal-trailing-verb",
+            document_id="doc-universal-trailing-verb",
+            vertical="general",
+        )
+
+        assert result["keep"] is False, phrase
+        assert result["reason"] == "action_leak_end", phrase
+
+
+def test_ambiguous_trailing_word_remains_valid_when_used_as_noun():
+    cases = [
+        (
+            "project aims",
+            "The project aims and objectives were approved by the board."
+        ),
+        (
+            "research aims",
+            "The research aims and methodology are described below."
+        ),
+    ]
+
+    for phrase, snippet in cases:
+        candidate = _canonical_candidate(phrase)
+        candidate["snippet"] = snippet
+
+        result = candidate_window_guard(
+            candidate,
+            workspace_id="ws-universal-trailing-noun",
+            document_id="doc-universal-trailing-noun",
+            vertical="general",
+        )
+
+        assert result["keep"] is True, phrase

@@ -179,6 +179,17 @@ _CLAUSE_VERB_FORMS: Set[str] = (_expand_forms(CLAUSE_VERBS | {
 }) | AUX_VERBS)
 _ACTION_LEAD_FORMS: Set[str] = _expand_forms(ACTION_LEAD_VERBS)
 
+# Ambiguous words that may legitimately be nouns, so they must NOT be treated
+# as verbs from the token alone.  They become trailing clause signals only when
+# source context proves a predicate construction such as "aims to reduce".
+_CONTEXT_TRAILING_VERB_FORMS: Set[str] = _expand_forms({
+    "aim",
+    "intend",
+    "seek",
+    "attempt",
+    "try",
+})
+
 # Verbs that are *almost never* nouns. Only these may override a confident
 # NOUN tag from the tagger (which has a compound-noun bias on short fragments).
 # Deliberately excludes build / drive / offer / support / review / design /
@@ -481,15 +492,75 @@ def _starts_or_ends_badly(tokens: List[str]) -> bool:
 
 
 def _is_action_led_leak(tokens: List[str], tags: List[str]) -> bool:
-    """Verb+object clause fragment ('reduce churn'): the phrase LEADS with a
-    verb (by tagger or lexicon) followed by a noun-ish object."""
+    """Detect a leading action verb followed by a noun-like object.
+
+    With a real POS tagger, normal verb recognition remains authoritative.
+
+    In heuristic fallback mode, ambiguous action/noun homographs such as
+    ``review`` and ``monitor`` are treated as verbal only when they occupy the
+    leading position of a developed 3+ token window. This catches clause-like
+    fragments such as ``review investment returns`` while preserving short noun
+    compounds such as ``monitor stand`` and non-leading noun uses such as
+    ``annual performance review``.
+    """
     if len(tokens) < 2:
         return False
-    if not _is_verb(tokens[0], tags[0]):
+
+    first_is_verb = _is_verb(tokens[0], tags[0])
+
+    if (
+        not first_is_verb
+        and not _have_nltk()
+        and len(tokens) >= 3
+        and tokens[0] in _ACTION_LEAD_FORMS
+    ):
+        first_is_verb = True
+
+    if not first_is_verb:
         return False
-    # leading word is a verb; the rest must look like an object NP, not e.g.
-    # an adverb tail. Any noun-like token after it -> clause leak.
-    return any(_is_noun_like_head(t, g) for t, g in zip(tokens[1:], tags[1:]))
+
+    return any(
+        _is_noun_like_head(t, g)
+        for t, g in zip(tokens[1:], tags[1:])
+    )
+
+
+def _has_contextual_trailing_action_leak(
+    tokens: List[str],
+    snippet: str,
+) -> bool:
+    """Detect an ambiguous trailing predicate only when context proves it.
+
+    Example:
+        "investment strategy aims" + "... aims to increase returns" -> reject
+
+    But:
+        "project aims" + "... aims and objectives ..." -> preserve
+
+    This is domain-independent and never rewrites the literal candidate.
+    """
+    if not tokens or not snippet or _is_intent(tokens):
+        return False
+
+    if tokens[-1] not in _CONTEXT_TRAILING_VERB_FORMS:
+        return False
+
+    context_tokens = tokenize(snippet)
+    width = len(tokens)
+
+    if len(context_tokens) <= width:
+        return False
+
+    for start in range(0, len(context_tokens) - width + 1):
+        end = start + width
+
+        if context_tokens[start:end] != tokens:
+            continue
+
+        if end < len(context_tokens) and context_tokens[end] == "to":
+            return True
+
+    return False
 
 
 def _head_not_noun(tokens: List[str], tags: List[str]) -> bool:
@@ -564,12 +635,14 @@ def candidate_window_guard(
         effective_document_id = str(
             envelope.get("doc_id", "") or document_id or ""
         )
+        effective_snippet = str(envelope.get("snippet", "") or "")
         phrase = " ".join(tokenize(literal_phrase))
     else:
         envelope = {}
         literal_phrase = str(candidate or "")
         effective_source_type = str(source_type or "")
         effective_document_id = str(document_id or "")
+        effective_snippet = ""
         phrase = " ".join(tokenize(literal_phrase))
 
     def finish(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -655,6 +728,17 @@ def candidate_window_guard(
         return rej(phrase, "action_leak_start",
                    {"logical_structure": 0.35, "pragmatic_anchor_value": 0.20,
                     "topic_coherence": 0.40})
+
+    if _has_contextual_trailing_action_leak(tokens, effective_snippet):
+        return rej(
+            phrase,
+            "action_leak_end",
+            {
+                "logical_structure": 0.30,
+                "context_fit": 0.30,
+                "pragmatic_anchor_value": 0.20,
+            },
+        )
 
     if _head_not_noun(tokens, tags):
         return rej(phrase, "non_noun_head",

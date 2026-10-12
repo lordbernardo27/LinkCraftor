@@ -189,6 +189,15 @@ def run_uploaded_document_to_highlight_pipeline(
     scorer_passed = []
     scorer_rejected = []
 
+    # Full canonical Guard-passed sibling pool for Phrase Strength Scorer
+    # parent-span comparison. This remains evidence for the existing Scorer;
+    # it does not introduce a new pipeline stage.
+    scorer_candidate_pool = [
+        item["guard"]
+        for item in guard_passed
+        if isinstance(item.get("guard"), dict)
+    ]
+
     for item in guard_passed:
         guarded_phrase = str(
             item["guard"].get("phrase", "") or item["original_phrase"]
@@ -200,6 +209,7 @@ def run_uploaded_document_to_highlight_pipeline(
             workspace_id=clean_workspace_id,
             document_id=clean_document_id,
             vertical=safe_vertical,
+            candidate_pool=scorer_candidate_pool,
         )
 
         record = dict(scorer_result)
@@ -303,6 +313,17 @@ def run_uploaded_document_to_highlight_pipeline(
     with diagnostic_path.open("a", encoding="utf-8") as diagnostic_file:
         diagnostic_file.write(json.dumps(diagnostic_record, ensure_ascii=False) + "\n")
 
+    # PHASE 1: Explicit Pipeline 2 canonical output contract.
+    from copy import deepcopy
+    canonical_candidates = selection_result.get("all_selected_phrase_candidates")
+    legacy_candidates = selection_result.get("selected")
+    if not isinstance(canonical_candidates, list) or not isinstance(legacy_candidates, list):
+        raise RuntimeError("Pipeline 2 canonical Selector output is missing or invalid.")
+    if len(canonical_candidates) != len(legacy_candidates):
+        raise RuntimeError("Pipeline 2 canonical candidate count mismatch.")
+    if any(not isinstance(item, dict) for item in canonical_candidates):
+        raise RuntimeError("Pipeline 2 canonical output contains invalid candidates.")
+    canonical_candidates = deepcopy(canonical_candidates)
     return {
         "ok": True,
         "pipeline": "uploaded_document_to_highlight_pipeline",
@@ -314,6 +335,8 @@ def run_uploaded_document_to_highlight_pipeline(
         "latest_stage": "highlight_selection_engine",
         "phrase_candidates": selection_result.get("candidates", []),
         "phrase_candidate_count": len(selection_result.get("candidates", [])),
+        "all_selected_phrase_candidates": canonical_candidates,
+        "all_selected_phrase_candidate_count": len(canonical_candidates),
         "highlight_selection": selection_result,
     }
 

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -9,6 +9,7 @@ from backend.server.stores.dis_rejection_pattern_store import append_rejection_p
 
 VALID_PIPELINE_STAGES = {
     "smart_extractor",
+    "phrase_discovery_engine",
     "candidate_window_guard",
     "phrase_strength_scorer",
 }
@@ -98,11 +99,12 @@ def build_pipeline_rejection_learning_event(
             "can_inform_future_selection": True
         },
 
-        "evidence": evidence or {
+        "evidence": {
             "observed_rejection_count": 1,
             "affected_documents_count": 1,
             "affected_verticals": [str(vertical or "general").strip().lower() or "general"],
-            "confidence": 0.50
+            "confidence": 0.50,
+            **(evidence if isinstance(evidence, dict) else {}),
         }
     }
 
@@ -128,3 +130,5 @@ def learn_from_pipeline_rejection(
     )
 
     return append_rejection_pattern_event(workspace_id, event)
+
+

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
@@ -159,6 +159,276 @@ def _recover_discovery_occurrence(candidate: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+
+def _certify_original_article_position(
+    position: Dict[str, Any],
+    *,
+    model_surface: str,
+    article_text: str,
+    phrase: str,
+) -> Dict[str, Any]:
+    """Keep model-surface evidence separate from original-article coordinates."""
+    from copy import deepcopy
+
+    result = deepcopy(position)
+    occurrence = position.get("matched_occurrence")
+
+    if not isinstance(occurrence, dict):
+        occurrence = {}
+
+    start = occurrence.get("start")
+    end = occurrence.get("end")
+
+    identical_surface = model_surface == article_text
+
+    verified = (
+        identical_surface
+        and position.get("literal_span_verified") is True
+        and type(start) is int
+        and type(end) is int
+        and 0 <= start < end <= len(article_text)
+        and article_text[start:end].casefold() == phrase.casefold()
+    )
+
+    # Retain the upstream evidence without treating its coordinates
+    # as original-article offsets.
+    result["surface_position_intelligence"] = deepcopy(position)
+    result["source_coordinate_space"] = "phrase_discovery_surface_v1"
+    result["original_article_span_verified"] = verified
+
+    if verified:
+        result["original_article_alignment_status"] = (
+            "verified_identical_surface"
+        )
+        result["coordinate_space"] = "original_article"
+    else:
+        result["original_article_alignment_status"] = (
+            "unverified_span"
+            if identical_surface
+            else "surface_mismatch"
+        )
+        result["coordinate_space"] = "unverified_original_article"
+        result["literal_span_verified"] = False
+        result["matched_occurrence"] = None
+        result["first_position"] = -1
+        result["all_positions"] = []
+        result["occurrence_count"] = 0
+
+    return result
+
+
+
+
+def _matched_occurrence_for_merging(
+    position: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Return usable occurrence evidence in its actual coordinate space."""
+    if not isinstance(position, dict):
+        return None
+
+    matched = position.get("matched_occurrence")
+    if isinstance(matched, dict):
+        return {
+            "matched_occurrence": matched,
+            "coordinate_space": str(
+                position.get("coordinate_space", "original_article")
+                or "original_article"
+            ),
+        }
+
+    upstream = position.get("surface_position_intelligence")
+    if not isinstance(upstream, dict):
+        return None
+
+    matched = upstream.get("matched_occurrence")
+    if not isinstance(matched, dict):
+        return None
+
+    return {
+        "matched_occurrence": matched,
+        "coordinate_space": str(
+            position.get(
+                "source_coordinate_space",
+                "phrase_discovery_surface_v1",
+            )
+            or "phrase_discovery_surface_v1"
+        ),
+    }
+
+
+def _build_merger_section_intelligence(
+    model: _DocumentModel,
+    position: Dict[str, Any],
+    phrase: str,
+) -> Dict[str, Any]:
+    """Preserve section hierarchy and distinguish coordinate spaces."""
+    evidence = {
+        "status": "unresolved",
+        "original_article_verified": False,
+        "section_index": None,
+        "source_section_id": None,
+        "section_heading": "",
+        "heading_level": None,
+        "parent_section_index": None,
+        "section_path": [],
+        "section_span": None,
+        "direct_section_span": None,
+        "heading_span": None,
+    }
+
+    upstream = position.get("surface_position_intelligence")
+    if not isinstance(upstream, dict):
+        upstream = position
+
+    occurrence = upstream.get("matched_occurrence")
+    if not isinstance(occurrence, dict):
+        return evidence
+
+    start = occurrence.get("start")
+    end = occurrence.get("end")
+    sentence_index = occurrence.get("sentence_index")
+    section_index = occurrence.get("section_index")
+
+    if not all(
+        type(value) is int
+        for value in (start, end, sentence_index, section_index)
+    ):
+        return evidence
+
+    if not (0 <= start < end <= len(model.surface)):
+        return evidence
+    if not (0 <= sentence_index < len(model.sentences)):
+        return evidence
+    if not (0 <= section_index < len(model.sections)):
+        return evidence
+
+    sentence = model.sentences[sentence_index]
+    section = model.sections[section_index]
+
+    if sentence.section != section_index:
+        return evidence
+    if not (sentence.start <= start < end <= sentence.end):
+        return evidence
+    if model.surface[start:end].casefold() != phrase.casefold():
+        return evidence
+
+    claimed_id = str(upstream.get("section_id") or "").strip()
+    if claimed_id and claimed_id != sentence.section_id:
+        return evidence
+
+    verified = position.get("original_article_span_verified") is True
+    space = (
+        "original_article"
+        if verified
+        else "phrase_discovery_surface_v1"
+    )
+
+    def heading_details(sec):
+        if sec.heading is None:
+            return "", None
+        if not (0 <= sec.heading < len(model.sentences)):
+            return "", None
+
+        sent = model.sentences[sec.heading]
+        return sent.text, {
+            "start": sent.start,
+            "end": sent.end,
+            "coordinate_space": space,
+        }
+
+    hierarchy = []
+    visited = set()
+    cursor = section_index
+
+    while cursor is not None:
+        if cursor in visited:
+            return evidence
+        if not (0 <= cursor < len(model.sections)):
+            return evidence
+
+        visited.add(cursor)
+        ancestor = model.sections[cursor]
+        heading_text, heading_span = heading_details(ancestor)
+
+        hierarchy.append({
+            "section_index": ancestor.index,
+            "parent_section_index": ancestor.parent,
+            "heading_level": ancestor.level,
+            "heading_text": heading_text,
+            "heading_span": heading_span,
+        })
+
+        cursor = ancestor.parent
+
+    hierarchy.reverse()
+    heading_text, heading_span = heading_details(section)
+
+    if section_index == 0:
+        section_start = 0
+    else:
+        if heading_span is None:
+            return evidence
+        section_start = heading_span["start"]
+
+    # Hierarchical scope includes nested child sections.
+    scope_end = len(model.surface)
+
+    # Direct scope stops at the next heading, including a child heading.
+    direct_end = len(model.surface)
+
+    for next_section in model.sections[section_index + 1:]:
+        _, next_heading = heading_details(next_section)
+        if next_heading is None:
+            return evidence
+
+        next_start = next_heading["start"]
+        direct_end = min(direct_end, next_start)
+
+        if next_section.level <= section.level:
+            scope_end = next_start
+            break
+
+    if not (
+        0 <= section_start <= start < end <= scope_end
+        <= len(model.surface)
+    ):
+        return evidence
+
+    if not (section_start <= direct_end <= scope_end):
+        return evidence
+
+    evidence.update({
+        "status": (
+            "verified_original_article"
+            if verified
+            else "unverified_original_article"
+        ),
+        "original_article_verified": verified,
+        "section_index": section.index,
+        "source_section_id": sentence.section_id,
+        "source_sentence_index": sentence.index,
+        "section_heading": heading_text,
+        "heading_level": section.level,
+        "parent_section_index": section.parent,
+        "section_path": hierarchy,
+        "section_span": {
+            "start": section_start,
+            "end": scope_end,
+            "coordinate_space": space,
+            "includes_nested_sections": True,
+        },
+        "direct_section_span": {
+            "start": section_start,
+            "end": direct_end,
+            "coordinate_space": space,
+            "includes_nested_sections": False,
+        },
+        "heading_span": heading_span,
+    })
+
+    return evidence
+
+
 def _build_canonical_candidate(
     candidate: Dict[str, Any],
     *,
@@ -186,7 +456,8 @@ def _build_canonical_candidate(
     if clean_origin and clean_origin not in provenance:
         provenance.append(clean_origin)
 
-    record: Dict[str, Any] = {
+    record: Dict[str, Any] = dict(candidate)
+    record.update({
         "phrase": str(candidate.get("phrase", "") or ""),
         "source_type": str(candidate.get("source_type", "") or ""),
         "section_id": str(candidate.get("section_id", "") or "").strip(),
@@ -201,7 +472,7 @@ def _build_canonical_candidate(
             "origins": list(provenance),
             "merged_cross_source": False,
         },
-    }
+    })
 
     extractor_intelligence = candidate.get("extractor_intelligence")
     if isinstance(extractor_intelligence, dict):
@@ -263,6 +534,7 @@ def merge_phrase_candidates(
         "extractor_only": 0,
         "discovery_only": 0,
         "position_recovery_failures": 0,
+        "original_article_position_unverified": 0,
         "errors": [],
     }
 
@@ -270,12 +542,30 @@ def merge_phrase_candidates(
     for candidate in clean_extractor:
         position = _recover_extractor_occurrence(model, candidate)
 
-        if not position.get("literal_span_verified"):
+        position = _certify_original_article_position(
+            position,
+            model_surface=model.surface,
+            article_text=clean_text,
+            phrase=str(candidate.get("phrase", "") or ""),
+        )
+
+        if _matched_occurrence_for_merging(position) is None:
             diag["position_recovery_failures"] += 1
+        if position.get("original_article_span_verified") is not True:
+            diag["original_article_position_unverified"] += 1
+
+        section_candidate = dict(candidate)
+        section_candidate["merger_section_intelligence"] = (
+            _build_merger_section_intelligence(
+                model,
+                position,
+                str(candidate.get("phrase", "") or ""),
+            )
+        )
 
         extractor_records.append(
             _build_canonical_candidate(
-                candidate,
+                section_candidate,
                 origin="smart_phrase_extractor",
                 position_intelligence=position,
                 document_id=clean_doc,
@@ -286,12 +576,30 @@ def merge_phrase_candidates(
     for candidate in clean_discovery:
         position = _recover_discovery_occurrence(candidate)
 
-        if not position.get("literal_span_verified"):
+        position = _certify_original_article_position(
+            position,
+            model_surface=model.surface,
+            article_text=clean_text,
+            phrase=str(candidate.get("phrase", "") or ""),
+        )
+
+        if _matched_occurrence_for_merging(position) is None:
             diag["position_recovery_failures"] += 1
+        if position.get("original_article_span_verified") is not True:
+            diag["original_article_position_unverified"] += 1
+
+        section_candidate = dict(candidate)
+        section_candidate["merger_section_intelligence"] = (
+            _build_merger_section_intelligence(
+                model,
+                position,
+                str(candidate.get("phrase", "") or ""),
+            )
+        )
 
         discovery_records.append(
             _build_canonical_candidate(
-                candidate,
+                section_candidate,
                 origin="phrase_discovery",
                 position_intelligence=position,
                 document_id=clean_doc,
@@ -310,11 +618,14 @@ def merge_phrase_candidates(
         extractor_position = extractor_record.get(
             "position_intelligence", {}
         )
-        extractor_match = extractor_position.get("matched_occurrence")
-
-        if not isinstance(extractor_match, dict):
+        extractor_match_info = _matched_occurrence_for_merging(
+            extractor_position
+        )
+        if not isinstance(extractor_match_info, dict):
             continue
 
+        extractor_match = extractor_match_info["matched_occurrence"]
+        extractor_space = extractor_match_info["coordinate_space"]
         extractor_start = extractor_match.get("start")
         extractor_end = extractor_match.get("end")
 
@@ -332,9 +643,16 @@ def merge_phrase_candidates(
             discovery_position = discovery_record.get(
                 "position_intelligence", {}
             )
-            discovery_match = discovery_position.get("matched_occurrence")
+            discovery_match_info = _matched_occurrence_for_merging(
+                discovery_position
+            )
+            if not isinstance(discovery_match_info, dict):
+                continue
 
-            if not isinstance(discovery_match, dict):
+            discovery_match = discovery_match_info["matched_occurrence"]
+            discovery_space = discovery_match_info["coordinate_space"]
+
+            if extractor_space != discovery_space:
                 continue
 
             discovery_start = discovery_match.get("start")
@@ -347,6 +665,35 @@ def merge_phrase_candidates(
                 continue
 
             combined = dict(extractor_record)
+
+            from copy import deepcopy
+
+            # Preserve each upstream source independently.
+            excluded_fields = {
+                "position_intelligence",
+                "merger_intelligence",
+                "provenance",
+                "extractor_intelligence",
+                "discovery_intelligence",
+            }
+
+            source_metadata = {
+                source_name: {
+                    field: deepcopy(value)
+                    for field, value in record.items()
+                    if field not in excluded_fields
+                }
+                for source_name, record in (
+                    ("smart_phrase_extractor", extractor_record),
+                    ("phrase_discovery", discovery_record),
+                )
+            }
+
+            # Retain discovery-only metadata without overwriting
+            # the established canonical top-level values.
+            for field, value in discovery_record.items():
+                if field not in excluded_fields:
+                    combined.setdefault(field, deepcopy(value))
 
             provenance: List[str] = []
             for source_record in (extractor_record, discovery_record):
@@ -365,13 +712,25 @@ def merge_phrase_candidates(
                     discovery_intelligence
                 )
 
+            # Position and primary section evidence must describe
+            # the same discovery occurrence. Independent source
+            # evidence remains in merger_intelligence.source_metadata.
             combined["position_intelligence"] = dict(discovery_position)
+            combined["merger_section_intelligence"] = deepcopy(
+                discovery_record.get("merger_section_intelligence", {})
+            )
 
             combined["merger_intelligence"] = {
                 "merger_version": MERGER_VERSION,
                 "origins": list(provenance),
                 "merged_cross_source": True,
                 "overlap_type": "exact_phrase_exact_occurrence",
+
+                "source_metadata": source_metadata,
+                "source_position_intelligence": {
+                    "smart_phrase_extractor": deepcopy(extractor_position),
+                    "phrase_discovery": deepcopy(discovery_position),
+                },
             }
 
             merged.append(combined)
@@ -399,9 +758,12 @@ def merge_phrase_candidates(
         if not isinstance(position, dict):
             position = {}
 
-        matched = position.get("matched_occurrence")
-        if not isinstance(matched, dict):
-            matched = {}
+        match_info = _matched_occurrence_for_merging(position)
+        matched = (
+            match_info.get("matched_occurrence", {})
+            if isinstance(match_info, dict)
+            else {}
+        )
 
         try:
             start = int(matched.get("start", -1))

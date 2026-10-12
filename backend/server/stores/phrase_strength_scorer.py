@@ -543,6 +543,428 @@ def _fails_semantic_anchor_validation(tokens: List[str]) -> bool:
 
     return False
 
+LOW_INFORMATION_CONTEXT_TAIL_HEADS: Set[str] = {
+    "people",
+    "person",
+    "persons",
+    "individual",
+    "individuals",
+    "someone",
+    "somebody",
+    "everyone",
+    "anyone",
+    "thing",
+    "things",
+    "case",
+    "cases",
+    "situation",
+    "situations",
+}
+
+LOW_INFORMATION_CONTEXT_CONNECTORS: Set[str] = {
+    "in",
+    "for",
+    "among",
+    "within",
+    "across",
+}
+
+
+def _is_low_information_contextual_wrapper(tokens: List[str]) -> bool:
+    """Reject generic contextual inflation around an otherwise usable core.
+
+    This is intentionally narrow. It does not reject prepositional phrases
+    generally. The contextual tail must terminate in a highly generic referent
+    such as ``people`` or ``cases``.
+
+    Examples rejected:
+        blood pressure in people
+        blood pressure in susceptible people
+        investment returns for people
+
+    Examples preserved:
+        rate of return
+        rights of employees
+        security in cloud environments
+        travel insurance for students
+    """
+    if len(tokens) < 4:
+        return False
+
+    connector_index = -1
+    for i, token in enumerate(tokens[1:-1], start=1):
+        if token in LOW_INFORMATION_CONTEXT_CONNECTORS:
+            connector_index = i
+            break
+
+    if connector_index < 2:
+        return False
+
+    core = tokens[:connector_index]
+    tail = tokens[connector_index + 1:]
+
+    if len(core) < 2 or not tail:
+        return False
+
+    tail_head = tail[-1]
+
+    if tail_head not in LOW_INFORMATION_CONTEXT_TAIL_HEADS:
+        return False
+
+    # Keep the gate narrow: it is intended for short contextual inflation,
+    # not arbitrary long phrases whose semantics need deeper analysis.
+    if len(tail) > 2:
+        return False
+
+    return True
+
+
+def _boundary_splits_known_semantic_unit(
+    child_tokens: List[str],
+    parent_tokens: List[str],
+) -> bool:
+    """Return True only when the child boundary cuts through a known unit.
+
+    Example:
+        parent: blood pressure management
+        child:       pressure management
+
+    The child starts inside the established semantic unit ``blood pressure``,
+    so an essential modifier was lost.
+
+    By contrast:
+        possible adverse effects -> adverse effects
+
+    does not cut through a known multi-token semantic unit.
+    """
+    if not child_tokens or len(parent_tokens) <= len(child_tokens):
+        return False
+
+    child_start = len(parent_tokens) - len(child_tokens)
+
+    if child_start <= 0:
+        return False
+
+    semantic_units: List[List[str]] = []
+
+    for pair in VALID_ORDERED_PAIRS:
+        unit = list(pair)
+        if len(unit) >= 2:
+            semantic_units.append(unit)
+
+    for anchor in CANONICAL_ANCHOR_PHRASES:
+        unit = tokenize(canonical_phrase(anchor))
+        if len(unit) >= 2:
+            semantic_units.append(unit)
+
+    for unit in semantic_units:
+        width = len(unit)
+
+        for start in range(0, len(parent_tokens) - width + 1):
+            end = start + width
+
+            if parent_tokens[start:end] != unit:
+                continue
+
+            # The child begins INSIDE this semantic unit.
+            if start < child_start < end:
+                return True
+
+    return False
+
+
+def _is_truncated_contained_candidate(
+    phrase: str,
+    snippet: str,
+    candidate_pool: Any,
+) -> bool:
+    """Detect suffix truncation only when an essential semantic unit is split.
+
+    Required evidence:
+    - a longer sibling candidate exists,
+    - the candidate is its exact token suffix,
+    - the complete parent occurs in this candidate's current source snippet,
+    - and the suffix boundary cuts through an established multi-token semantic
+      unit already known to the Scorer.
+
+    This prevents broad suppression of valid shorter concepts such as
+    ``adverse effects`` from ``possible adverse effects`` while rejecting
+    degraded spans such as ``pressure management`` from
+    ``blood pressure management``.
+
+    The literal candidate is never rewritten.
+    """
+    phrase_tokens = tokenize(canonical_phrase(phrase))
+    snippet_tokens = tokenize(canonical_phrase(snippet))
+
+    if len(phrase_tokens) < 2:
+        return False
+
+    if not isinstance(candidate_pool, (list, tuple)):
+        return False
+
+    for sibling in candidate_pool:
+        if isinstance(sibling, dict):
+            sibling_phrase = str(sibling.get("phrase", "") or "")
+            sibling_source_type = str(
+                sibling.get("source_type", "") or ""
+            )
+        else:
+            sibling_phrase = str(sibling or "")
+            sibling_source_type = ""
+
+        sibling_tokens = tokenize(canonical_phrase(sibling_phrase))
+
+        if len(sibling_tokens) <= len(phrase_tokens):
+            continue
+
+        if sibling_tokens[-len(phrase_tokens):] != phrase_tokens:
+            continue
+
+        if not _boundary_splits_known_semantic_unit(
+            phrase_tokens,
+            sibling_tokens,
+        ):
+            continue
+
+        parent_width = len(sibling_tokens)
+
+        for start in range(0, len(snippet_tokens) - parent_width + 1):
+            if snippet_tokens[start:start + parent_width] == sibling_tokens:
+                return True
+
+    return False
+
+
+def _passes_parent_quality_gates(
+    phrase: str,
+    snippet: str,
+    candidate_pool: Any,
+) -> bool:
+    """Side-effect-free mirror of canonical Scorer hard eligibility gates.
+
+    Used only by B4 to prevent an already-invalid longer sibling from becoming
+    containment-quality evidence. This helper never records a rejection,
+    never teaches DIS/history, never trims, and never rewrites the phrase.
+    """
+    p = canonical_phrase(phrase)
+    tokens = tokenize(p)
+
+    if not p or len(tokens) < 2:
+        return False
+
+    if len(tokens) > 10:
+        return False
+
+    if _is_truncated_contained_candidate(
+        p,
+        snippet,
+        candidate_pool,
+    ):
+        return False
+
+    if _is_low_information_contextual_wrapper(tokens):
+        return False
+
+    if _is_universal_weak_semantic_phrase(tokens):
+        return False
+
+    if _is_sentence_fragment_phrase(tokens):
+        return False
+
+    if _fails_semantic_anchor_validation(tokens):
+        return False
+
+    if _fails_malformed_wrapper_validation(tokens):
+        return False
+
+    if _has_reversed_ordered_pair(tokens):
+        return False
+
+    hard_rejects = [
+        _is_cross_niche_stitched_stack(tokens),
+        _is_long_list_chain(tokens),
+        _is_multi_cluster_phrase(tokens),
+        _is_short_orphan_collision(tokens),
+        _is_prefix_suffix_spillover(tokens),
+        _has_orphan_tail_start(tokens),
+        _has_boundary_spillover(tokens),
+        _has_long_clause_leakage(tokens),
+    ]
+
+    if any(hard_rejects):
+        return False
+
+    if (
+        tokens[0] in WEAK_STARTS
+        and not _is_exact_canonical_anchor(tokens)
+        and not _is_natural_compound_phrase(tokens)
+    ):
+        return False
+
+    if (
+        tokens[-1] in WEAK_ENDINGS
+        and not _is_exact_canonical_anchor(tokens)
+        and not _is_natural_compound_phrase(tokens)
+    ):
+        return False
+
+    return True
+
+
+def _quality_identity_evidence(
+    phrase: str,
+    source_type: str = "",
+) -> Dict[str, Any]:
+    """Return factual, non-decisional phrase-quality identity evidence."""
+    tokens = tokenize(canonical_phrase(phrase))
+    has_structural_signal, structural_signals = _has_structural_signal(
+        tokens,
+        source_type,
+    )
+
+    return {
+        "exact_canonical_anchor": _is_exact_canonical_anchor(tokens),
+        "valid_ordered_pair": _has_valid_ordered_pair(tokens),
+        "natural_compound": _is_natural_compound_phrase(tokens),
+        "has_structural_signal": has_structural_signal,
+        "structural_signals": list(structural_signals),
+    }
+
+
+def _containment_quality_advisory(
+    phrase: str,
+    snippet: str,
+    candidate_pool: Any,
+    source_type: str = "",
+) -> Dict[str, Any]:
+    """Return read-only sibling-containment evidence for B4.
+
+    This comparator does not reject, rewrite, trim, or rescore a phrase.
+    It reports only longer sibling candidates that:
+
+    - contain the current phrase as an exact contiguous token span, and
+    - physically occur in the current candidate's source snippet.
+
+    Relative quality/dominance decisions belong to later quality-dominance
+    logic. This helper supplies factual evidence only.
+    """
+    phrase_tokens = tokenize(canonical_phrase(phrase))
+    snippet_tokens = tokenize(canonical_phrase(snippet))
+
+    advisory: Dict[str, Any] = {
+        "comparison_version": "containment_quality/1.0",
+        "advisory_only": True,
+        "can_reject": False,
+        "has_containing_sibling": False,
+        "child_independence": _quality_identity_evidence(
+            phrase,
+            source_type,
+        ),
+        "comparisons": [],
+    }
+
+    if len(phrase_tokens) < 2:
+        return advisory
+
+    if not isinstance(candidate_pool, (list, tuple)):
+        return advisory
+
+    seen = set()
+
+    for sibling in candidate_pool:
+        if isinstance(sibling, dict):
+            sibling_phrase = str(sibling.get("phrase", "") or "")
+            sibling_source_type = str(
+                sibling.get("source_type", "") or ""
+            )
+        else:
+            sibling_phrase = str(sibling or "")
+            sibling_source_type = ""
+
+        sibling_tokens = tokenize(canonical_phrase(sibling_phrase))
+
+        if len(sibling_tokens) <= len(phrase_tokens):
+            continue
+
+        match_start = None
+
+        for start in range(0, len(sibling_tokens) - len(phrase_tokens) + 1):
+            if (
+                sibling_tokens[start:start + len(phrase_tokens)]
+                == phrase_tokens
+            ):
+                match_start = start
+                break
+
+        if match_start is None:
+            continue
+
+        parent_width = len(sibling_tokens)
+        parent_in_current_snippet = any(
+            snippet_tokens[start:start + parent_width] == sibling_tokens
+            for start in range(
+                0,
+                max(0, len(snippet_tokens) - parent_width + 1),
+            )
+        )
+
+        if not parent_in_current_snippet:
+            continue
+
+        if not _passes_parent_quality_gates(
+            sibling_phrase,
+            snippet,
+            candidate_pool,
+        ):
+            continue
+
+        left_added = match_start
+        right_added = (
+            len(sibling_tokens)
+            - (match_start + len(phrase_tokens))
+        )
+
+        if left_added > 0 and right_added > 0:
+            relation = "both_sides"
+        elif left_added > 0:
+            relation = "left_extension"
+        elif right_added > 0:
+            relation = "right_extension"
+        else:
+            continue
+
+        identity = (
+            canonical_phrase(sibling_phrase),
+            relation,
+            left_added,
+            right_added,
+        )
+
+        if identity in seen:
+            continue
+
+        seen.add(identity)
+
+        advisory["comparisons"].append({
+            "parent_phrase": sibling_phrase,
+            "relation": relation,
+            "left_added": left_added,
+            "right_added": right_added,
+            "parent_in_current_snippet": True,
+            "parent_quality": _quality_identity_evidence(
+                sibling_phrase,
+                sibling_source_type,
+            ),
+        })
+
+    advisory["has_containing_sibling"] = bool(
+        advisory["comparisons"]
+    )
+
+    return advisory
+
+
 def _fails_malformed_wrapper_validation(tokens: List[str]) -> bool:
     """
     Universal malformed-wrapper validation.
@@ -1374,6 +1796,9 @@ def score_phrase_strength(
             envelope.get("doc_id", "") or kwargs.get("document_id", "") or ""
         )
 
+        current_snippet = str(envelope.get("snippet", "") or "")
+        candidate_pool = kwargs.get("candidate_pool")
+
         scored = score_phrase_strength(
             literal_phrase,
             source_type=effective_source_type,
@@ -1381,6 +1806,15 @@ def score_phrase_strength(
             workspace_id=kwargs.get("workspace_id", "default"),
             document_id=effective_document_id,
             vertical=kwargs.get("vertical", "general"),
+            snippet=current_snippet,
+            candidate_pool=candidate_pool,
+        )
+
+        containment_quality = _containment_quality_advisory(
+            literal_phrase,
+            current_snippet,
+            candidate_pool,
+            effective_source_type,
         )
 
         output = dict(envelope)
@@ -1400,6 +1834,7 @@ def score_phrase_strength(
             "score": scored.get("score"),
             "reason": str(scored.get("reason", "") or ""),
             "allow_trim": False,
+            "containment_quality": containment_quality,
         }
         return output
 
@@ -1424,6 +1859,30 @@ def score_phrase_strength(
         return _reject_score_phrase(
             p,
             "too_long",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
+
+    if _is_truncated_contained_candidate(
+        p,
+        str(kwargs.get("snippet", "") or ""),
+        kwargs.get("candidate_pool"),
+    ):
+        return _reject_score_phrase(
+            p,
+            "truncated_contained_candidate",
+            score=0.0,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            vertical=vertical,
+        )
+
+    if _is_low_information_contextual_wrapper(tokens):
+        return _reject_score_phrase(
+            p,
+            "low_information_contextual_wrapper",
             score=0.0,
             workspace_id=workspace_id,
             document_id=document_id,

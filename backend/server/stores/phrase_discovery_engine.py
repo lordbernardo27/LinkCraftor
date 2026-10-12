@@ -76,6 +76,13 @@ except Exception:  # pragma: no cover - relative / standalone fallbacks
     except Exception:
         import smart_phrase_extractor as _spe  # type: ignore
 
+try:
+    from backend.server.stores.dis_pipeline_learning import learn_from_pipeline_rejection  # type: ignore
+except Exception:  # pragma: no cover - keep discovery importable standalone
+    def learn_from_pipeline_rejection(**_kwargs: Any) -> None:
+        return None
+
+
 logger = logging.getLogger(__name__)
 
 __all__ = ["discover_phrases", "DISCOVERY_COMPONENTS", "ENGINE_VERSION"]
@@ -1747,15 +1754,59 @@ class _ComponentRun:
     component can bypass the hard rules."""
 
     def __init__(self, model: _DocumentModel, name: str, diag: Dict[str, Any],
-                 limit: int, document_id: str) -> None:
+                 limit: int, document_id: str, workspace_id: str,
+                 vertical: str) -> None:
         self.model, self.name, self.diag = model, name, diag
         self.limit, self.document_id = limit, document_id
+        self.workspace_id = str(workspace_id or "default").strip() or "default"
+        self.vertical = str(vertical or "general").strip() or "general"
         self.by_key: Dict[str, Dict[str, Any]] = {}
         self.out: List[Dict[str, Any]] = []
 
     def _cap(self, capability: str) -> Dict[str, int]:
         return self.diag["capability_counts"].setdefault(capability, {"proposed": 0, "emitted": 0})
 
+    def _learn_rejection(
+        self,
+        *,
+        phrase: str,
+        reason: str,
+        capability: str,
+        evidence: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Persist only genuine Discovery rejection intelligence.
+
+        DIS is a sidecar learning system: persistence failures must never alter
+        Phrase Discovery behaviour or candidate output.
+        """
+        payload_evidence: Dict[str, Any] = {
+            "discovery_component": self.name,
+            "discovery_capability": capability,
+        }
+        if isinstance(evidence, dict):
+            payload_evidence.update(evidence)
+
+        try:
+            learn_from_pipeline_rejection(
+                workspace_id=self.workspace_id,
+                document_id=self.document_id,
+                vertical=self.vertical,
+                pipeline_stage="phrase_discovery_engine",
+                candidate={
+                    "phrase": str(phrase or "").strip(),
+                    "source_type": "phrase_discovery",
+                    "discovery_component": self.name,
+                    "discovery_capability": capability,
+                },
+                rejection_reason=reason,
+                evidence=payload_evidence,
+            )
+        except Exception as exc:
+            self.diag["dis_learning_errors"] = self.diag.get("dis_learning_errors", 0) + 1
+            logger.warning(
+                "Phrase Discovery DIS learning failed component=%s capability=%s reason=%s error=%s",
+                self.name, capability, reason, exc,
+            )
     def propose(self, sp: Optional[_Span], capability: str, signal: float,
                 intel: Optional[Dict[str, Any]] = None, *, mode: str = "discovery",
                 allow_single: bool = False) -> Optional[Dict[str, Any]]:
@@ -1764,10 +1815,19 @@ class _ComponentRun:
         d = self.diag
         d["proposed"] += 1
         self._cap(capability)["proposed"] += 1
-        if sp.e <= sp.s or (sp.length == 1 and not allow_single):
+        if sp.e <= sp.s:
             d["rejected_structural"] += 1
             return None
         phrase = self.model.span_text(sp)
+        if sp.length == 1 and not allow_single:
+            d["rejected_structural"] += 1
+            self._learn_rejection(
+                phrase=phrase,
+                reason="discovery_structural_single_token",
+                capability=capability,
+                evidence={"span_length": sp.length},
+            )
+            return None
         a, b = self.model.abs_bounds(sp)
         stext = sp.sent.text
         ls_, le_ = sp.sent.tokens[sp.s].ls, sp.sent.tokens[sp.e - 1].le
@@ -1777,10 +1837,22 @@ class _ComponentRun:
             not (after.isspace() or after in _CLOSE_PUNCT)
         if glued:  # e.g. "401" cut out of "401(k)", "cloud" out of "cloud/edge"
             d["rejected_structural"] += 1
+            self._learn_rejection(
+                phrase=phrase,
+                reason="discovery_boundary_glued",
+                capability=capability,
+                evidence={"boundary_before": before, "boundary_after": after},
+            )
             return None
         if self.model.cuts_entity(sp):  # never truncate a proper name
             d["rejected_structural"] += 1
             d["rejected_entity_truncation"] = d.get("rejected_entity_truncation", 0) + 1
+            self._learn_rejection(
+                phrase=phrase,
+                reason="discovery_entity_truncation",
+                capability=capability,
+                evidence={"entity_truncation": True},
+            )
             return None
         ok = (bool(phrase) and phrase == phrase.strip()
               and phrase[0].isalnum() and phrase[-1].isalnum()
@@ -1792,6 +1864,12 @@ class _ComponentRun:
             d["exact_span_failures"] += 1
             if len(d["exact_span_failure_examples"]) < 10:
                 d["exact_span_failure_examples"].append(phrase)
+            self._learn_rejection(
+                phrase=phrase,
+                reason="discovery_nonliteral",
+                capability=capability,
+                evidence={"exact_span_failure": True, "literal_verification_failed": True},
+            )
             return None
         d["literal_verified"] += 1
         known = self.model.extractor.is_known(sp.lows)
@@ -3083,7 +3161,7 @@ def discover_phrases(
     per_component: Dict[str, List[Dict[str, Any]]] = {}
     for name in selected:
         d = diag_out["components"][name]
-        run = _ComponentRun(model, name, d, safe_max, clean_doc)
+        run = _ComponentRun(model, name, d, safe_max, clean_doc, diag_out["workspace_id"], diag_out["vertical"])
         try:
             _COMPONENT_FUNCS[name](model, run)
         except Exception as exc:  # isolate component failures
@@ -3144,6 +3222,9 @@ if __name__ == "__main__":  # pragma: no cover
                               document_id="demo", diagnostics=diag):
         print(f'{c["provenance"]["component"]:<30} {c["provenance"]["capability"]:<32} {c["phrase"]}')
     print(json.dumps({k: v["summary"] for k, v in diag["components"].items()}, indent=1))
+
+
+
 
 
 

@@ -252,6 +252,7 @@ def get_rejection_pattern_knowledge(
             by_pattern[pattern_id] = {
                 "pattern_id": pattern_id,
                 "verticals": set(),
+                "document_ids": set(),
                 "pipeline_stages": set(),
                 "failure_categories": set(),
                 "failure_reasons": set(),
@@ -262,17 +263,60 @@ def get_rejection_pattern_knowledge(
         row = by_pattern[pattern_id]
         row["observed_count"] += 1
         row["verticals"].add(str(event.get("vertical", "")).strip())
+        row["document_ids"].add(str(event.get("document_id", "")).strip())
         row["pipeline_stages"].add(str(event.get("pipeline_stage", "")).strip())
         row["failure_categories"].add(str(signature.get("failure_category", "")).strip())
         row["failure_reasons"].add(str(signature.get("failure_reason", "")).strip())
         row["latest_event"] = event
 
+    _FAILURE_CATEGORY_SEVERITY = {
+        "boundary_validity_failure": 1.00,
+        "fragment_validity_failure": 0.95,
+        "term_order_validity_failure": 0.90,
+        "semantic_cohesion_failure": 0.85,
+        "candidate_window_failure": 0.80,
+        "candidate_signal_failure": 0.70,
+        "general_rejection_pattern": 0.60,
+    }
     normalized = []
 
     for row in by_pattern.values():
+        observed_count = int(row["observed_count"])
+        affected_documents_count = len([x for x in row["document_ids"] if x])
+        affected_verticals_count = len([x for x in row["verticals"] if x])
+
+        observation_strength = min(max(observed_count, 0) / 20.0, 1.0)
+        document_diversity_strength = min(max(affected_documents_count, 0) / 12.0, 1.0)
+        vertical_diversity_strength = min(max(affected_verticals_count, 0) / 4.0, 1.0)
+
+        historical_confidence = min(
+            1.0,
+            (0.45 * observation_strength)
+            + (0.40 * document_diversity_strength)
+            + (0.15 * vertical_diversity_strength),
+        )
+
+        category = next(
+            (x for x in row["failure_categories"] if x),
+            "general_rejection_pattern",
+        )
+        failure_severity = _FAILURE_CATEGORY_SEVERITY.get(
+            category,
+            _FAILURE_CATEGORY_SEVERITY["general_rejection_pattern"],
+        )
+        historical_risk = min(1.0, historical_confidence * failure_severity)
+
         normalized.append({
             "pattern_id": row["pattern_id"],
             "verticals": sorted([x for x in row["verticals"] if x]),
+            "affected_verticals_count": affected_verticals_count,
+            "affected_documents_count": affected_documents_count,
+            "observation_strength": round(observation_strength, 4),
+            "document_diversity_strength": round(document_diversity_strength, 4),
+            "vertical_diversity_strength": round(vertical_diversity_strength, 4),
+            "historical_confidence": round(historical_confidence, 4),
+            "failure_severity": round(failure_severity, 4),
+            "historical_risk": round(historical_risk, 4),
             "pipeline_stages": sorted([x for x in row["pipeline_stages"] if x]),
             "failure_categories": sorted([x for x in row["failure_categories"] if x]),
             "failure_reasons": sorted([x for x in row["failure_reasons"] if x]),
@@ -288,3 +332,4 @@ def get_rejection_pattern_knowledge(
         "pattern_count": len(normalized),
         "patterns": normalized,
     }
+
