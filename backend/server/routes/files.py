@@ -1111,28 +1111,9 @@ def clear_file_session(workspace_id: str = Query("ws_betterhealthcheck_com")):
             / f"live_domain_target_pool_{ws_norm}.json"
         )
 
-        imported_payload = load_optional_source_payload(
-            BASE_DIR
-            / "data"
-            / "target_pools"
-            / "imported"
-            / f"imported_target_pool_{ws_norm}.json"
-        )
-
-        draft_payload = load_optional_source_payload(
-            BASE_DIR
-            / "data"
-            / "target_pools"
-            / "draft"
-            / f"draft_target_pool_{ws_norm}.json"
-        )
-
         active_result = build_canonical_active_target_set(
             workspace_id=ws_norm,
             live_domain_payload=live_payload,
-            document_payload={},
-            imported_payload=imported_payload,
-            draft_payload=draft_payload,
         )
 
         save_canonical_active_target_set(

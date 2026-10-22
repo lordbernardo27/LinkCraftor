@@ -716,9 +716,89 @@ def dequeue_job(
             return None
 
         for candidate in _queued_jobs():
+            from backend.server.orchestration.job_store import (
+                load_jobs,
+            )
+            from backend.server.runtime.runtime_registration_execution_policy import (
+                RuntimeRegistrationQueueAction,
+                evaluate_runtime_registration_queue_candidate,
+            )
+            from backend.server.runtime.universal_runtime_registration import (
+                get_runtime_registration,
+            )
+
+            try:
+                runtime_registration = get_runtime_registration(
+                    candidate.job_type
+                )
+            except (KeyError, ValueError):
+                runtime_registration = None
+
+            registration_policy_decision = (
+                evaluate_runtime_registration_queue_candidate(
+                    candidate=candidate,
+                    existing_jobs=tuple(
+                        load_jobs().values()
+                    ),
+                    registration=runtime_registration,
+                )
+            )
+
+            if (
+                registration_policy_decision.action
+                is RuntimeRegistrationQueueAction.DEFER
+            ):
+                continue
+
+            if (
+                registration_policy_decision.action
+                is RuntimeRegistrationQueueAction.REUSE_EXISTING
+            ):
+                try:
+                    update_job_status(
+                        candidate.job_id,
+                        "completed",
+                        metadata=(
+                            registration_policy_decision
+                            .to_metadata()
+                        ),
+                    )
+                except Exception:
+                    continue
+
+                continue
+
+            from backend.server.runtime.runtime_registration_dependency_policy import (
+                RuntimeRegistrationDependencyAction,
+                evaluate_runtime_registration_stage_dependencies,
+            )
+
+            registration_dependency_decision = (
+                evaluate_runtime_registration_stage_dependencies(
+                    candidate=candidate,
+                    existing_jobs=tuple(
+                        load_jobs().values()
+                    ),
+                    registration=runtime_registration,
+                    registration_resolver=(
+                        get_runtime_registration
+                    ),
+                )
+            )
+
+            if (
+                registration_dependency_decision.action
+                is RuntimeRegistrationDependencyAction.DEFER
+            ):
+                continue
+
             metadata: Dict[str, object] = {
                 "claimed_by_dequeue": True,
             }
+
+            metadata.update(
+                registration_dependency_decision.to_metadata()
+            )
 
             if worker_id:
                 metadata["worker_id"] = worker_id

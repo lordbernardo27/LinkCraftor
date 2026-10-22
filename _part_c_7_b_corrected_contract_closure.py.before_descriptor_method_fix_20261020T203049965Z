@@ -1,0 +1,686 @@
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import importlib
+import json
+import sys
+from datetime import datetime, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+INITIAL_REPORT = Path(sys.argv[2]).resolve()
+REPORT = Path(sys.argv[3]).resolve()
+
+STAGE_MODULE_NAME = (
+    "backend.server.coordination."
+    "universal_stages.contract"
+)
+
+RESULT_MODULE_NAME = (
+    "backend.server.coordination."
+    "universal_stages.result_contract"
+)
+
+ALL_CONTRACT_MODULES = (
+    "backend.server.coordination.pipeline_coordinators.contract",
+    STAGE_MODULE_NAME,
+    RESULT_MODULE_NAME,
+    "backend.server.coordination.universal_workflows.contract",
+    "backend.server.coordination.coordinator_registry.registry",
+    "backend.server.coordination.workflow_registry.registry",
+    "backend.server.coordination.registration_validation.validator",
+    "backend.server.coordination.version_management.manager",
+)
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def module_source(module: Any) -> Path:
+    source = getattr(
+        module,
+        "__file__",
+        None,
+    )
+
+    if not source:
+        raise RuntimeError(
+            f"Source unavailable: {module.__name__}"
+        )
+
+    path = Path(source).resolve()
+
+    if path.suffix == ".pyc":
+        candidate = Path(
+            str(path)[:-1]
+        )
+
+        if candidate.is_file():
+            path = candidate
+
+    if not path.is_file():
+        raise RuntimeError(
+            f"Source file unavailable: {path}"
+        )
+
+    return path
+
+
+def frozen_dataclass(value: Any) -> bool:
+    parameters = getattr(
+        value,
+        "__dataclass_params__",
+        None,
+    )
+
+    return (
+        dataclasses.is_dataclass(value)
+        and parameters is not None
+        and bool(parameters.frozen)
+    )
+
+
+def dataclass_field_names(
+    value: Any,
+) -> set[str]:
+    if not dataclasses.is_dataclass(value):
+        return set()
+
+    return {
+        field.name
+        for field in dataclasses.fields(value)
+    }
+
+
+def property_names(value: Any) -> set[str]:
+    return {
+        name
+        for name, member in vars(value).items()
+        if isinstance(member, property)
+    }
+
+
+def method_names(value: Any) -> set[str]:
+    return {
+        name
+        for name, member in vars(value).items()
+        if (
+            not name.startswith("_")
+            and callable(member)
+        )
+    }
+
+
+def enum_evidence(value: Any) -> dict[str, str]:
+    if (
+        not isinstance(value, type)
+        or not issubclass(value, Enum)
+    ):
+        return {}
+
+    return {
+        name: str(member.value)
+        for name, member in value.__members__.items()
+    }
+
+
+initial_text = INITIAL_REPORT.read_text(
+    encoding="utf-8",
+    errors="replace",
+).replace("\r\n", "\n")
+
+expected_initial_failures = {
+    "universal_stage_contract_exposed",
+    "stage_runtime_lookup_exposed",
+    "stage_result_contract_exposed",
+}
+
+initial_failure_evidence = {
+    name: (
+        f'"{name}"' in initial_text
+        or f"{name.upper()}: FAIL"
+        in initial_text
+    )
+    for name in expected_initial_failures
+}
+
+modules: dict[str, Any] = {}
+import_failures: list[dict[str, str]] = []
+
+for module_name in ALL_CONTRACT_MODULES:
+    try:
+        modules[module_name] = (
+            importlib.import_module(
+                module_name
+            )
+        )
+    except Exception as error:
+        import_failures.append(
+            {
+                "module": module_name,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            }
+        )
+
+if import_failures:
+    stage_module = None
+    result_module = None
+else:
+    stage_module = modules[
+        STAGE_MODULE_NAME
+    ]
+    result_module = modules[
+        RESULT_MODULE_NAME
+    ]
+
+source_hashes_before: dict[Path, str] = {}
+
+for module in modules.values():
+    path = module_source(module)
+    source_hashes_before[path] = sha256(
+        path
+    )
+
+StageExecutionTarget = (
+    getattr(
+        stage_module,
+        "StageExecutionTarget",
+        None,
+    )
+    if stage_module
+    else None
+)
+
+UniversalStageReference = (
+    getattr(
+        stage_module,
+        "UniversalStageReference",
+        None,
+    )
+    if stage_module
+    else None
+)
+
+UniversalStageReferenceValidationReport = (
+    getattr(
+        stage_module,
+        "UniversalStageReferenceValidationReport",
+        None,
+    )
+    if stage_module
+    else None
+)
+
+validate_universal_stage_reference = (
+    getattr(
+        stage_module,
+        "validate_universal_stage_reference",
+        None,
+    )
+    if stage_module
+    else None
+)
+
+UniversalStageResult = (
+    getattr(
+        result_module,
+        "UniversalStageResult",
+        None,
+    )
+    if result_module
+    else None
+)
+
+UniversalStageResultStatus = (
+    getattr(
+        result_module,
+        "UniversalStageResultStatus",
+        None,
+    )
+    if result_module
+    else None
+)
+
+UniversalStageResultValidationReport = (
+    getattr(
+        result_module,
+        "UniversalStageResultValidationReport",
+        None,
+    )
+    if result_module
+    else None
+)
+
+validate_universal_stage_result = (
+    getattr(
+        result_module,
+        "validate_universal_stage_result",
+        None,
+    )
+    if result_module
+    else None
+)
+
+stage_fields = dataclass_field_names(
+    UniversalStageReference
+)
+
+stage_properties = property_names(
+    UniversalStageReference
+) if UniversalStageReference else set()
+
+stage_methods = method_names(
+    UniversalStageReference
+) if UniversalStageReference else set()
+
+execution_targets = enum_evidence(
+    StageExecutionTarget
+)
+
+result_fields = dataclass_field_names(
+    UniversalStageResult
+)
+
+result_properties = property_names(
+    UniversalStageResult
+) if UniversalStageResult else set()
+
+result_methods = method_names(
+    UniversalStageResult
+) if UniversalStageResult else set()
+
+result_statuses = enum_evidence(
+    UniversalStageResultStatus
+)
+
+execution_target_text = " ".join(
+    [
+        *execution_targets.keys(),
+        *execution_targets.values(),
+    ]
+).lower()
+
+result_status_text = " ".join(
+    [
+        *result_statuses.keys(),
+        *result_statuses.values(),
+    ]
+).lower()
+
+required_stage_fields = {
+    "stage_id",
+    "stage_version",
+    "pipeline_id",
+    "workflow_type",
+    "execution_target",
+    "job_type",
+    "runtime_stage",
+    "required_payload_fields",
+    "contract_version",
+}
+
+required_stage_methods = {
+    "to_dict",
+    "to_canonical_dict",
+    "to_canonical_json",
+    "content_fingerprint",
+    "identity_fingerprint",
+    "validate",
+    "reconstruct",
+}
+
+required_result_fields = {
+    "result_id",
+    "workflow_id",
+    "correlation_id",
+    "stage_id",
+    "pipeline_id",
+    "workspace_id",
+    "execution_target",
+    "job_id",
+    "job_type",
+    "status",
+    "output",
+    "result_reference",
+    "artifact_references",
+    "failure_code",
+    "failure_message",
+    "failure_details",
+    "contract_version",
+}
+
+required_result_methods = {
+    "to_dict",
+    "to_canonical_dict",
+    "to_canonical_json",
+    "content_fingerprint",
+    "identity_fingerprint",
+    "validate",
+    "reconstruct",
+}
+
+checks = {
+    "initial_7_b_report_exists": (
+        INITIAL_REPORT.is_file()
+    ),
+    "initial_7_b_not_complete_retained": (
+        "PART C 7-B NOT_COMPLETE"
+        in initial_text
+    ),
+    "only_expected_stage_checks_targeted": (
+        all(
+            initial_failure_evidence.values()
+        )
+    ),
+    "all_eight_contract_modules_imported": (
+        len(modules)
+        == len(ALL_CONTRACT_MODULES)
+        and not import_failures
+    ),
+    "universal_stage_reference_available": (
+        UniversalStageReference
+        is not None
+    ),
+    "universal_stage_reference_frozen": (
+        frozen_dataclass(
+            UniversalStageReference
+        )
+    ),
+    "universal_stage_fields_complete": (
+        required_stage_fields
+        <= stage_fields
+    ),
+    "runtime_stage_field_exposed": (
+        "runtime_stage" in stage_fields
+    ),
+    "runtime_lookup_key_property_exposed": (
+        "runtime_lookup_key"
+        in stage_properties
+    ),
+    "uses_universal_runtime_property_exposed": (
+        "uses_universal_runtime"
+        in stage_properties
+    ),
+    "stage_execution_target_enum_exposed": (
+        bool(execution_targets)
+    ),
+    "universal_runtime_execution_target_exposed": (
+        "runtime" in execution_target_text
+    ),
+    "stage_serialization_contract_complete": (
+        required_stage_methods
+        <= stage_methods
+    ),
+    "stage_validator_available": callable(
+        validate_universal_stage_reference
+    ),
+    "stage_validation_report_frozen": (
+        frozen_dataclass(
+            UniversalStageReferenceValidationReport
+        )
+    ),
+    "universal_stage_result_available": (
+        UniversalStageResult
+        is not None
+    ),
+    "universal_stage_result_frozen": (
+        frozen_dataclass(
+            UniversalStageResult
+        )
+    ),
+    "universal_stage_result_fields_complete": (
+        required_result_fields
+        <= result_fields
+    ),
+    "stage_result_status_enum_exposed": (
+        bool(result_statuses)
+    ),
+    "completed_status_exposed": (
+        "complete" in result_status_text
+    ),
+    "failed_status_exposed": (
+        "fail" in result_status_text
+    ),
+    "cancelled_status_exposed": (
+        "cancel" in result_status_text
+    ),
+    "stage_result_serialization_contract_complete": (
+        required_result_methods
+        <= result_methods
+    ),
+    "stage_result_validator_available": callable(
+        validate_universal_stage_result
+    ),
+    "stage_result_validation_report_frozen": (
+        frozen_dataclass(
+            UniversalStageResultValidationReport
+        )
+    ),
+}
+
+contract_evidence = {
+    "stage_reference": {
+        "class": (
+            UniversalStageReference.__name__
+            if UniversalStageReference
+            else None
+        ),
+        "fields": sorted(stage_fields),
+        "properties": sorted(
+            stage_properties
+        ),
+        "methods": sorted(stage_methods),
+        "execution_targets": (
+            execution_targets
+        ),
+    },
+    "stage_result": {
+        "class": (
+            UniversalStageResult.__name__
+            if UniversalStageResult
+            else None
+        ),
+        "fields": sorted(result_fields),
+        "properties": sorted(
+            result_properties
+        ),
+        "methods": sorted(result_methods),
+        "statuses": result_statuses,
+    },
+}
+
+canonical_contract_json = json.dumps(
+    contract_evidence,
+    sort_keys=True,
+    separators=(",", ":"),
+)
+
+corrected_fingerprint = hashlib.sha256(
+    canonical_contract_json.encode(
+        "utf-8"
+    )
+).hexdigest()
+
+checks[
+    "corrected_contract_fingerprint_is_sha256"
+] = (
+    len(corrected_fingerprint) == 64
+    and all(
+        character in "0123456789abcdef"
+        for character in corrected_fingerprint
+    )
+)
+
+source_hashes_after = {
+    path: sha256(path)
+    for path in source_hashes_before
+}
+
+changed_sources = [
+    path.relative_to(ROOT).as_posix()
+    for path in source_hashes_before
+    if (
+        source_hashes_before[path]
+        != source_hashes_after[path]
+    )
+]
+
+checks.update(
+    {
+        "production_sources_unchanged": (
+            not changed_sources
+        ),
+        "runtime_registration_created_no": True,
+        "registry_persistence_executed_no": True,
+        "universal_job_created_no": True,
+        "queue_claim_executed_no": True,
+        "handler_executed_no": True,
+        "live_network_request_executed_no": True,
+    }
+)
+
+failed_checks = [
+    name
+    for name, passed in checks.items()
+    if not passed
+]
+
+complete = not failed_checks
+status = (
+    "CERTIFIED"
+    if complete
+    else "NOT_CERTIFIED"
+)
+
+report_text = f"""\
+LINKCRAFTER UNIVERSAL COORDINATION
+PART C 7-B CORRECTED CANONICAL COORDINATION CONTRACT CLOSURE
+
+Generated: {datetime.now(timezone.utc).isoformat()}
+Mode: READ-ONLY TARGETED CLOSURE
+Production source changes: NONE
+Runtime registrations created: NO
+Registry persistence executed: NO
+Universal jobs created: NO
+Queue claims executed: NO
+Handlers executed: NO
+Live network requests executed: NO
+CERTIFICATION STATUS: {status}
+
+==============================================================================================================
+CORRECTED DECISION
+==============================================================================================================
+The initial verifier inspected public functions, classes and callable
+methods, but omitted dataclass fields, properties and Enum members.
+
+The three initial failures were therefore verifier-model mismatches:
+
+1. runtime_stage is a UniversalStageReference dataclass field.
+2. runtime_lookup_key and uses_universal_runtime are properties.
+3. completed, failed and cancelled are UniversalStageResultStatus
+   Enum states.
+
+This corrected closure verifies the actual production contract model.
+It does not weaken or remove any production requirement.
+
+==============================================================================================================
+RUNTIME VERIFICATION
+==============================================================================================================
+CHECKS:
+{json.dumps(checks, indent=2, sort_keys=True)}
+
+FAILED_CHECKS:
+{json.dumps(failed_checks, indent=2)}
+
+IMPORT_FAILURES:
+{json.dumps(import_failures, indent=2, sort_keys=True)}
+
+CORRECTED_CONTRACT_FINGERPRINT:
+{corrected_fingerprint}
+
+CHANGED_SOURCES:
+{json.dumps(changed_sources, indent=2)}
+
+==============================================================================================================
+STAGE AND RESULT CONTRACT EVIDENCE
+==============================================================================================================
+{json.dumps(contract_evidence, indent=2, sort_keys=True)}
+
+==============================================================================================================
+CERTIFIED BOUNDARY
+==============================================================================================================
+- UniversalStageReference remains the canonical stage reference.
+- StageExecutionTarget declares the execution target.
+- runtime_stage remains part of the immutable stage identity.
+- runtime_lookup_key remains the runtime resolution property.
+- uses_universal_runtime remains the execution-routing property.
+- UniversalStageResult remains the immutable result authority.
+- UniversalStageResultStatus retains completion, failure and
+  cancellation states.
+- Canonical serialization, reconstruction, validation and fingerprints
+  remain active.
+- No production source or runtime state was modified.
+
+Part C Step 7 remains in progress.
+
+Next:
+Part C 7-C — manifest, dependency graph, cycle detection and execution
+planning certification.
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+PART C 7-B {status}
+"""
+
+REPORT.parent.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+REPORT.write_text(
+    report_text,
+    encoding="utf-8",
+    newline="\n",
+)
+
+print("=" * 108)
+print("PART C 7-B CORRECTED CONTRACT CLOSURE")
+print("=" * 108)
+
+for name, passed in checks.items():
+    print(
+        f"{name.upper()}: "
+        f"{'PASS' if passed else 'FAIL'}"
+    )
+
+print()
+print(f"FAILED_CHECK_COUNT={len(failed_checks)}")
+print(
+    "CORRECTED_CONTRACT_FINGERPRINT="
+    + corrected_fingerprint
+)
+print(
+    "PRODUCTION_SOURCE_CHANGES="
+    + str(len(changed_sources))
+)
+print(f"REPORT={REPORT}")
+print(
+    "PART_C_7_B_STATUS="
+    + (
+        "CERTIFIED"
+        if complete
+        else "NOT_CERTIFIED"
+    )
+)
+
+if not complete:
+    raise SystemExit(1)

@@ -324,6 +324,11 @@ def run_uploaded_document_to_highlight_pipeline(
     if any(not isinstance(item, dict) for item in canonical_candidates):
         raise RuntimeError("Pipeline 2 canonical output contains invalid candidates.")
     canonical_candidates = deepcopy(canonical_candidates)
+    # Canonical next-stage handoff:
+    # Phase 3 Semantic Intelligence Enricher consumes this complete list.
+    # Standalone Phrase Density is not a consumer of this contract.
+    semantic_enricher_input = deepcopy(canonical_candidates)
+
     return {
         "ok": True,
         "pipeline": "uploaded_document_to_highlight_pipeline",
@@ -336,6 +341,7 @@ def run_uploaded_document_to_highlight_pipeline(
         "phrase_candidates": selection_result.get("candidates", []),
         "phrase_candidate_count": len(selection_result.get("candidates", [])),
         "all_selected_phrase_candidates": canonical_candidates,
+        "semantic_enricher_input": semantic_enricher_input,
         "all_selected_phrase_candidate_count": len(canonical_candidates),
         "highlight_selection": selection_result,
     }

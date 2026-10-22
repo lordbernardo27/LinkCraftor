@@ -1,0 +1,605 @@
+LINKCRAFTER CONNECT DOMAIN PIPELINE REGISTRATION
+A3.1-B SITEMAP DEPENDENCY REPLACEMENT AUTHORITY INSPECTION
+
+Generated: 2026-10-20T10:13:10.4805852+00:00
+Mode: READ-ONLY TARGETED INSPECTION
+Production source changes: NONE
+Pipeline handlers executed: NO
+Network requests executed: NO
+Runtime registrations created: NO
+Production jobs created: NO
+Project root: C:\Users\HP\Documents\LinkCraftor
+INSPECTION STATUS: NOT_COMPLETE
+
+==============================================================================================================
+RUNTIME VERIFICATION
+==============================================================================================================
+================================================================================================================
+A3.1-B - SITEMAP REPLACEMENT AUTHORITY INSPECTION
+================================================================================================================
+CONNECT_DOMAIN_PIPELINE_EXISTS: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain
+LINKING_TARGET_COORDINATOR_EXISTS: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\pipelines\connect_domain\linking_target_pipeline\coordinator.py
+COORDINATOR_SOURCE_SYNTAX: PASS
+
+================================================================================================================
+A3.1-B1 - EXACT SITEMAP DEPENDENCY
+================================================================================================================
+ACTIVE_SITEMAP_REFERENCES_DISCOVERED: PASS
+  count=32
+COORDINATOR_SITEMAP_REFERENCES:
+{"line": 54, "source": "    _fetch_and_expand_sitemaps = sr._fetch_and_expand_sitemaps"}
+{"line": 95, "source": "    sitemap_candidates = ["}
+{"line": 96, "source": "        f\"https://{domain}/sitemap.xml\","}
+{"line": 97, "source": "        f\"https://{domain}/sitemap_index.xml\","}
+{"line": 98, "source": "        f\"https://{domain}/sitemap-index.xml\","}
+{"line": 99, "source": "        f\"https://{domain}/wp-sitemap.xml\","}
+{"line": 100, "source": "        f\"https://www.{domain}/sitemap.xml\","}
+{"line": 101, "source": "        f\"https://www.{domain}/sitemap_index.xml\","}
+{"line": 102, "source": "        f\"https://www.{domain}/sitemap-index.xml\","}
+{"line": 103, "source": "        f\"https://www.{domain}/wp-sitemap.xml\","}
+{"line": 106, "source": "    # Also discover sitemap URLs declared inside robots.txt."}
+{"line": 114, "source": "                    if line.lower().startswith(\"sitemap:\"):"}
+{"line": 116, "source": "                        if sm and sm not in sitemap_candidates:"}
+{"line": 117, "source": "                            sitemap_candidates.append(sm)"}
+{"line": 122, "source": "    sitemap_errors = []"}
+{"line": 123, "source": "    sitemap_used = None"}
+{"line": 125, "source": "    for sitemap_url in sitemap_candidates:"}
+{"line": 126, "source": "        urls, errors = _fetch_and_expand_sitemaps(sitemap_url)"}
+{"line": 127, "source": "        sitemap_errors.extend(errors or [])"}
+{"line": 131, "source": "            sitemap_used = sitemap_url"}
+{"line": 140, "source": "            \"error\": \"no_sitemap_urls_found\","}
+{"line": 141, "source": "            \"sitemap_candidates\": sitemap_candidates,"}
+{"line": 142, "source": "            \"sitemap_errors\": sitemap_errors[:20],"}
+{"line": 166, "source": "                \"sitemap_url\": sitemap_used,"}
+{"line": 167, "source": "                \"sitemap_urls\": all_urls,"}
+{"line": 168, "source": "                \"sitemap_urls_count\": len(all_urls),"}
+{"line": 177, "source": "        \"errors\": sitemap_errors[:100],"}
+{"line": 197, "source": "            \"source\": \"sitemap_seed\","}
+{"line": 289, "source": "            \"sitemap_url_count\": len(all_urls),"}
+{"line": 322, "source": "            \"sitemap_url_count\": len(all_urls),"}
+{"line": 333, "source": "        \"sitemap_used\": sitemap_used,"}
+{"line": 334, "source": "        \"sitemap_url_count\": len(all_urls),"}
+RUN_LINKING_TARGET_PIPELINE_DISCOVERED: PASS
+
+RUN_LINKING_TARGET_PIPELINE_SOURCE:
+def run_linking_target_pipeline(payload):
+    """Execute Connect Domain Pipeline 1 ù Linking Target Pipeline."""
+    sr = _site_reader()
+
+    _normalize_domain = sr._normalize_domain
+    _workspace_id_from_domain = sr._workspace_id_from_domain
+    _http_get = sr._http_get
+    _fetch_and_expand_sitemaps = sr._fetch_and_expand_sitemaps
+    _domain_from_url = sr._domain_from_url
+    save_site_sources = sr.save_site_sources
+    save_site_pages = sr.save_site_pages
+    load_site_pages_payload = sr.load_site_pages_payload
+    build_canonical_live_domain_target_pool = sr.build_canonical_live_domain_target_pool
+    save_canonical_live_domain_target_pool = sr.save_canonical_live_domain_target_pool
+
+    domain = _normalize_domain(payload.domain)
+
+    if not domain:
+        raise HTTPException(
+            status_code=400,
+            detail="A valid domain is required.",
+        )
+
+    # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
+    requested_workspace_id = str(payload.workspace_id or "").strip()
+    workspace_id = requested_workspace_id or _workspace_id_from_domain(domain)
+
+    data_dir = Path("backend/server/data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    ws_meta_path = data_dir / f"workspace_{workspace_id}.json"
+
+    created = False
+
+    if not ws_meta_path.exists():
+        obj = {
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        ws_meta_path.write_text(
+            json.dumps(obj, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+        created = True
+
+    sitemap_candidates = [
+        f"https://{domain}/sitemap.xml",
+        f"https://{domain}/sitemap_index.xml",
+        f"https://{domain}/sitemap-index.xml",
+        f"https://{domain}/wp-sitemap.xml",
+        f"https://www.{domain}/sitemap.xml",
+        f"https://www.{domain}/sitemap_index.xml",
+        f"https://www.{domain}/sitemap-index.xml",
+        f"https://www.{domain}/wp-sitemap.xml",
+    ]
+
+    # Also discover sitemap URLs declared inside robots.txt.
+    for robots_url in [f"https://{domain}/robots.txt", f"https://www.{domain}/robots.txt"]:
+        try:
+            code, content, ct = _http_get(robots_url)
+            if code < 400 and content:
+                robots_txt = content.decode("utf-8", errors="replace")
+                for line in robots_txt.splitlines():
+                    line = line.strip()
+                    if line.lower().startswith("sitemap:"):
+                        sm = line.split(":", 1)[1].strip()
+                        if sm and sm not in sitemap_candidates:
+                            sitemap_candidates.append(sm)
+        except Exception:
+            pass
+
+    all_urls = []
+    sitemap_errors = []
+    sitemap_used = None
+
+    for sitemap_url in sitemap_candidates:
+        urls, errors = _fetch_and_expand_sitemaps(sitemap_url)
+        sitemap_errors.extend(errors or [])
+
+        if urls:
+            all_urls = [str(u).strip() for u in urls if str(u).strip()]
+            sitemap_used = sitemap_url
+            break
+
+    if not all_urls:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "no_sitemap_urls_found",
+            "sitemap_candidates": sitemap_candidates,
+            "sitemap_errors": sitemap_errors[:20],
+        }
+
+    cleaner_result = clean_urls(
+        all_urls,
+        domain,
+        exclude_informational=True,
+        exclude_taxonomy=True,
+    )
+
+    cleaned_urls = cleaner_result.urls
+    rejected_urls = cleaner_result.rejected
+    rejection_reason_counts = cleaner_result.reason_counts
+    explicit_content_urls = cleaner_result.explicit_urls
+    uncertain_content_urls = cleaner_result.uncertain_urls
+
+    save_site_sources(workspace_id, {
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "sources": [
+            {
+                "source_type": "connected_domain",
+                "domain": domain,
+                "sitemap_url": sitemap_used,
+                "sitemap_urls": all_urls,
+                "sitemap_urls_count": len(all_urls),
+                "url_cleaner_input_count": len(all_urls),
+                "cleaned_urls_count": len(cleaned_urls),
+                "explicit_content_urls_count": len(explicit_content_urls),
+                "uncertain_content_urls_count": len(uncertain_content_urls),
+                "rejected_urls_count": len(rejected_urls),
+                "rejection_reason_counts": rejection_reason_counts,
+            }
+        ],
+        "errors": sitemap_errors[:100],
+        "rejected_urls_sample": rejected_urls[:200],
+    })
+
+    pages = {}
+    now = datetime.now(timezone.utc).isoformat()
+
+    for url in cleaned_urls:
+        path = urlparse(url).path or ""
+        slug = path.strip("/").split("/")[-1] if path.strip("/") else url
+        title = re.sub(r"[-_]+", " ", slug).strip().title() if slug else url
+
+        pages[url] = {
+            "url": url,
+            "domain": domain,
+            "title": title,
+            "h1": title,
+            "description": "",
+            "headings": [],
+            "body_text": "",
+            "source": "sitemap_seed",
+            "source_type": "connected_domain_seed",
+            "ingested_at": now,
+            "metadata": {
+                "seed_only": True,
+                "selection_reason": "generic_structure_cleaner_v2_priority_seed"
+            }
+        }
+
+    save_site_pages(workspace_id, {
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "updated_at": now,
+        "pages": pages,
+    })
+
+    # LC_CONNECT_DOMAIN_EXISTING_WORKSPACE_6_3
+    try:
+        workspace_profile_dir = Path("backend/server/data/workspaces") / workspace_id
+        workspace_profile_dir.mkdir(parents=True, exist_ok=True)
+        workspace_profile_path = workspace_profile_dir / "workspace_profile.json"
+
+        profile = {}
+        if workspace_profile_path.exists():
+            try:
+                profile = json.loads(workspace_profile_path.read_text(encoding="utf-8"))
+                if not isinstance(profile, dict):
+                    profile = {}
+            except Exception:
+                profile = {}
+
+        now_profile = datetime.now(timezone.utc).isoformat()
+
+        profile["workspace_id"] = workspace_id
+        profile["workspace_name"] = profile.get("workspace_name") or workspace_id.replace("ws_", "").replace("_", " ").title()
+        profile["workspace_mode"] = profile.get("workspace_mode") or "domain"
+        profile["domain"] = domain
+        profile["connection_status"] = "connected"
+        profile["connected_at"] = profile.get("connected_at") or now_profile
+        profile["updated_at"] = now_profile
+
+        if not profile.get("source_type"):
+            profile["source_type"] = "domain"
+
+        if "site_url" not in profile:
+            profile["site_url"] = ""
+
+        workspace_profile_path.write_text(
+            json.dumps(profile, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as profile_err:
+        print("[connect_domain] workspace profile update failed:", profile_err)
+
+    try:
+        site_pages_payload = load_site_pages_payload(
+            workspace_id
+        )
+
+        certified_pages = (
+            site_pages_payload.get("pages")
+            or []
+        )
+
+        certified_domain = str(
+            site_pages_payload.get("domain")
+            or domain
+        ).strip()
+
+        live_result = build_canonical_live_domain_target_pool(
+            certified_pages,
+            workspace_id=workspace_id,
+            domain=certified_domain,
+        )
+
+        save_canonical_live_domain_target_pool(
+            live_result
+        )
+
+        live_counts = {
+            "input_count": live_result.input_count,
+            "created_count": live_result.created_count,
+            "rejected_count": live_result.rejected_count,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "live_domain_target_pool_build_failed",
+            "detail": str(e)[:300],
+            "sitemap_url_count": len(all_urls),
+            "cleaned_urls_count": len(cleaned_urls),
+        }
+
+    try:
+        active_result = build_active_target_set(
+            workspace_id=workspace_id,
+            live_domain_payload={
+                "workspace_id": workspace_id,
+                "items": live_result.target_dicts(),
+            },
+        )
+
+        active_target_set_path = save_active_target_set(
+            active_result
+        )
+
+        active_counts = dict(
+            active_result.active_counts
+        )
+
+        active_source_counts = dict(
+            active_result.source_counts
+        )
+
+    except Exception as e:
+        return {
+            "ok": False,
+            "workspace_id": workspace_id,
+            "domain": domain,
+            "created": created,
+            "error": "active_target_set_build_failed",
+            "detail": str(e)[:300],
+            "sitemap_url_count": len(all_urls),
+            "cleaned_urls_count": len(cleaned_urls),
+            "live_domain_counts": live_counts,
+        }
+
+    return {
+        "ok": True,
+        "workspace_id": workspace_id,
+        "domain": domain,
+        "created": created,
+        "workspace_file": str(ws_meta_path),
+        "sitemap_used": sitemap_used,
+        "sitemap_url_count": len(all_urls),
+        "cleaned_urls_count": len(cleaned_urls),
+        "active_live_domain_urls_count": active_counts["live_domain"],
+        "active_target_set_path": str(active_target_set_path),
+        "active_target_set_counts": active_counts,
+        "active_target_set_source_counts": active_source_counts,
+        "live_domain_counts": live_counts,
+    }
+SITEMAP_EXPANSION_CALL_ACTIVE: PASS
+  ['HTTPException', 'Path', '_fetch_and_expand_sitemaps', '_http_get', '_normalize_domain', '_site_reader', '_workspace_id_from_domain', 'build_active_target_set', 'build_canonical_live_domain_target_pool', 'clean_urls', 'content.decode', 'data_dir.mkdir', 'datetime.now', 'dict', 'isinstance', 'isoformat', 'json.dumps', 'json.loads', 'len', 'line.lower', 'line.split', 'line.strip', 'live_result.target_dicts', 'load_site_pages_payload', 'path.strip', 'print', 'profile.get', 're.sub', 'replace', 'robots_txt.splitlines', 'save_active_target_set', 'save_canonical_live_domain_target_pool', 'save_site_pages', 'save_site_sources', 'site_pages_payload.get', 'sitemap_candidates.append', 'sitemap_errors.extend', 'split', 'startswith', 'str', 'strip', 'title', 'urlparse', 'workspace_id.replace', 'workspace_profile_dir.mkdir', 'workspace_profile_path.exists', 'workspace_profile_path.read_text', 'workspace_profile_path.write_text', 'ws_meta_path.exists', 'ws_meta_path.write_text']
+
+================================================================================================================
+A3.1-B2 - SITEMAP IMPORT AND OWNERSHIP
+================================================================================================================
+COORDINATOR_IMPORTS:
+{"line": 17, "module": "__future__", "symbols": ["annotations"]}
+{"line": 19, "module": "", "symbols": ["json"]}
+{"line": 20, "module": "", "symbols": ["re"]}
+{"line": 21, "module": "datetime", "symbols": ["datetime", "timezone"]}
+{"line": 22, "module": "pathlib", "symbols": ["Path"]}
+{"line": 23, "module": "urllib.parse", "symbols": ["urlparse"]}
+{"line": 25, "module": "fastapi", "symbols": ["HTTPException"]}
+{"line": 27, "module": "backend.server.pipelines.connect_domain.linking_target_pipeline.url_cleaner", "symbols": ["clean_urls"]}
+{"line": 28, "module": "backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set", "symbols": ["build_active_target_set", "load_optional_source_payload", "save_active_target_set"]}
+
+SITEMAP_IMPORTS:
+SITEMAP_AUTHORITY_IMPORT_IDENTIFIED: FAIL
+  []
+
+================================================================================================================
+A3.1-B3 - SITEMAP DATA-FLOW BOUNDARY
+================================================================================================================
+SITEMAP_VARIABLES:
+  _fetch_and_expand_sitemaps
+  sitemap_candidates
+  sitemap_errors
+  sitemap_url
+  sitemap_used
+
+SITEMAP_STATEMENTS:
+{"line": 54, "source": "_fetch_and_expand_sitemaps = sr._fetch_and_expand_sitemaps", "type": "Assign"}
+{"line": 95, "source": "sitemap_candidates = [f'https://{domain}/sitemap.xml', f'https://{domain}/sitemap_index.xml', f'https://{domain}/sitemap-index.xml', f'https://{domain}/wp-sitemap.xml', f'https://www.{domain}/sitemap.xml', f'https://www.{domain}/sitemap_index.xml', f'https://www.{domain}/sitemap-index.xml', f'https://www.{domain}/wp-sitemap.xml']", "type": "Assign"}
+{"line": 107, "source": "for robots_url in [f'https://{domain}/robots.txt', f'https://www.{domain}/robots.txt']:\n    try:\n        code, content, ct = _http_get(robots_url)\n        if code < 400 and content:\n            robots_txt = content.decode('utf-8', errors='replace')\n            for line in robots_txt.splitlines():\n                line = line.strip()\n                if line.lower().startswith('sitemap:'):\n                    sm = line.split(':', 1)[1].strip()\n                    if sm and sm not in sitemap_candidates:\n                        sitemap_candidates.append(sm)\n    except Exception:\n        pass", "type": "For"}
+{"line": 110, "source": "if code < 400 and content:\n    robots_txt = content.decode('utf-8', errors='replace')\n    for line in robots_txt.splitlines():\n        line = line.strip()\n        if line.lower().startswith('sitemap:'):\n            sm = line.split(':', 1)[1].strip()\n            if sm and sm not in sitemap_candidates:\n                sitemap_candidates.append(sm)", "type": "If"}
+{"line": 112, "source": "for line in robots_txt.splitlines():\n    line = line.strip()\n    if line.lower().startswith('sitemap:'):\n        sm = line.split(':', 1)[1].strip()\n        if sm and sm not in sitemap_candidates:\n            sitemap_candidates.append(sm)", "type": "For"}
+{"line": 114, "source": "if line.lower().startswith('sitemap:'):\n    sm = line.split(':', 1)[1].strip()\n    if sm and sm not in sitemap_candidates:\n        sitemap_candidates.append(sm)", "type": "If"}
+{"line": 116, "source": "if sm and sm not in sitemap_candidates:\n    sitemap_candidates.append(sm)", "type": "If"}
+{"line": 117, "source": "sitemap_candidates.append(sm)", "type": "Expr"}
+{"line": 122, "source": "sitemap_errors = []", "type": "Assign"}
+{"line": 123, "source": "sitemap_used = None", "type": "Assign"}
+{"line": 125, "source": "for sitemap_url in sitemap_candidates:\n    urls, errors = _fetch_and_expand_sitemaps(sitemap_url)\n    sitemap_errors.extend(errors or [])\n    if urls:\n        all_urls = [str(u).strip() for u in urls if str(u).strip()]\n        sitemap_used = sitemap_url\n        break", "type": "For"}
+{"line": 126, "source": "urls, errors = _fetch_and_expand_sitemaps(sitemap_url)", "type": "Assign"}
+{"line": 127, "source": "sitemap_errors.extend(errors or [])", "type": "Expr"}
+{"line": 129, "source": "if urls:\n    all_urls = [str(u).strip() for u in urls if str(u).strip()]\n    sitemap_used = sitemap_url\n    break", "type": "If"}
+{"line": 131, "source": "sitemap_used = sitemap_url", "type": "Assign"}
+{"line": 134, "source": "if not all_urls:\n    return {'ok': False, 'workspace_id': workspace_id, 'domain': domain, 'created': created, 'error': 'no_sitemap_urls_found', 'sitemap_candidates': sitemap_candidates, 'sitemap_errors': sitemap_errors[:20]}", "type": "If"}
+{"line": 158, "source": "save_site_sources(workspace_id, {'workspace_id': workspace_id, 'domain': domain, 'updated_at': datetime.now(timezone.utc).isoformat(), 'sources': [{'source_type': 'connected_domain', 'domain': domain, 'sitemap_url': sitemap_used, 'sitemap_urls': all_urls, 'sitemap_urls_count': len(all_urls), 'url_cleaner_input_count': len(all_urls), 'cleaned_urls_count': len(cleaned_urls), 'explicit_content_urls_count': len(explicit_content_urls), 'uncertain_content_urls_count': len(uncertain_content_urls), 'rejected_urls_count': len(rejected_urls), 'rejection_reason_counts': rejection_reason_counts}], 'errors': sitemap_errors[:100], 'rejected_urls_sample': rejected_urls[:200]})", "type": "Expr"}
+{"line": 184, "source": "for url in cleaned_urls:\n    path = urlparse(url).path or ''\n    slug = path.strip('/').split('/')[-1] if path.strip('/') else url\n    title = re.sub('[-_]+', ' ', slug).strip().title() if slug else url\n    pages[url] = {'url': url, 'domain': domain, 'title': title, 'h1': title, 'description': '', 'headings': [], 'body_text': '', 'source': 'sitemap_seed', 'source_type': 'connected_domain_seed', 'ingested_at': now, 'metadata': {'seed_only': True, 'selection_reason': 'generic_structure_cleaner_v2_priority_seed'}}", "type": "For"}
+{"line": 189, "source": "pages[url] = {'url': url, 'domain': domain, 'title': title, 'h1': title, 'description': '', 'headings': [], 'body_text': '', 'source': 'sitemap_seed', 'source_type': 'connected_domain_seed', 'ingested_at': now, 'metadata': {'seed_only': True, 'selection_reason': 'generic_structure_cleaner_v2_priority_seed'}}", "type": "Assign"}
+SITEMAP_DATA_FLOW_IDENTIFIED: PASS
+  ['_fetch_and_expand_sitemaps', 'sitemap_candidates', 'sitemap_errors', 'sitemap_url', 'sitemap_used']
+
+================================================================================================================
+A3.1-B4 - DOWNSTREAM URL CONSUMERS
+================================================================================================================
+DOWNSTREAM_URL_CONSUMERS:
+{"arguments": ["all_urls", "domain"], "call": "clean_urls", "line": 145}
+{"arguments": ["workspace_id", "{'workspace_id': workspace_id, 'domain': domain, 'updated_at': datetime.now(timezone.utc).isoformat(), 'sources': [{'source_type': 'connected_domain', 'domain': domain, 'sitemap_url': sitemap_used, 'sitemap_urls': all_urls, 'sitemap_urls_count': len(all_urls), 'url_cleaner_input_count': len(all_urls), 'cleaned_urls_count': len(cleaned_urls), 'explicit_content_urls_count': len(explicit_content_urls), 'uncertain_content_urls_count': len(uncertain_content_urls), 'rejected_urls_count': len(rejected_urls), 'rejection_reason_counts': rejection_reason_counts}], 'errors': sitemap_errors[:100], 'rejected_urls_sample': rejected_urls[:200]}"], "call": "save_site_sources", "line": 158}
+{"arguments": ["workspace_id", "{'workspace_id': workspace_id, 'domain': domain, 'updated_at': now, 'pages': pages}"], "call": "save_site_pages", "line": 206}
+{"arguments": ["certified_pages"], "call": "build_canonical_live_domain_target_pool", "line": 266}
+{"arguments": [], "call": "build_active_target_set", "line": 294}
+DOWNSTREAM_URL_CONSUMERS_IDENTIFIED: PASS
+  count=5
+
+================================================================================================================
+A3.1-B5 - NON-SITEMAP DISCOVERY AUTHORITIES
+================================================================================================================
+NON_SITEMAP_DISCOVERY_DEFINITIONS:
+{"arguments": ["crawler_session_id"], "file": "backend/server/crawler/seed_registration_engine.py", "line": 104, "name": "normalize_optional_crawler_session_id", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/crawler/session_coordinator.py", "line": 105, "name": "generate_crawler_session_id", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "session_name", "limits", "metadata", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 211, "name": "create_crawler_session_request", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id", "target_status", "current_phase", "failure_reason", "metadata_updates"], "file": "backend/server/crawler/session_coordinator.py", "line": 295, "name": "transition_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 401, "name": "start_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 425, "name": "pause_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 443, "name": "resume_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 461, "name": "request_stop_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 485, "name": "complete_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id", "failure_reason"], "file": "backend/server/crawler/session_coordinator.py", "line": 504, "name": "fail_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id", "cancellation_reason"], "file": "backend/server/crawler/session_coordinator.py", "line": 525, "name": "cancel_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_coordinator.py", "line": 546, "name": "get_crawler_session_status", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/crawler/session_coordinator.py", "line": 592, "name": "explain_crawler_session_coordinator_v1", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/crawler/session_models.py", "line": 82, "name": "CrawlSessionStatus", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/crawler/session_models.py", "line": 127, "name": "CrawlSessionStatistics", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/crawler/session_models.py", "line": 190, "name": "CrawlSessionLimits", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/crawler/session_models.py", "line": 249, "name": "CrawlSession", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/crawler/session_models.py", "line": 480, "name": "explain_crawler_session_models_v1", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/crawler/session_repository.py", "line": 101, "name": "crawler_session_store_path", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/crawler/session_repository.py", "line": 125, "name": "empty_crawler_session_store", "type": "FunctionDef"}
+{"arguments": ["store", "workspace_id"], "file": "backend/server/crawler/session_repository.py", "line": 151, "name": "validate_crawler_session_store", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/crawler/session_repository.py", "line": 262, "name": "load_crawler_session_store", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "store"], "file": "backend/server/crawler/session_repository.py", "line": 321, "name": "save_crawler_session_store", "type": "FunctionDef"}
+{"arguments": ["session", "overwrite"], "file": "backend/server/crawler/session_repository.py", "line": 395, "name": "create_crawler_session", "type": "FunctionDef"}
+{"arguments": ["session", "create_if_missing"], "file": "backend/server/crawler/session_repository.py", "line": 446, "name": "update_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_repository.py", "line": 499, "name": "get_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_repository.py", "line": 530, "name": "require_crawler_session", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/crawler/session_repository.py", "line": 551, "name": "list_crawler_sessions", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id"], "file": "backend/server/crawler/session_repository.py", "line": 585, "name": "crawler_session_exists", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/crawler/session_repository.py", "line": 601, "name": "count_crawler_sessions", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "crawl_session_id", "missing_ok"], "file": "backend/server/crawler/session_repository.py", "line": 619, "name": "delete_crawler_session", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/crawler/session_repository.py", "line": 667, "name": "explain_crawler_session_repository_v1", "type": "FunctionDef"}
+{"arguments": ["article"], "file": "backend/server/engine/article_body_extractor.py", "line": 680, "name": "classify_article_crawl_status", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/engine/article_body_extractor.py", "line": 709, "name": "crawl_status_report", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/engine/article_body_extractor.py", "line": 749, "name": "_crawl_state_path", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/engine/article_body_extractor.py", "line": 754, "name": "load_crawl_state", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "state"], "file": "backend/server/engine/article_body_extractor.py", "line": 779, "name": "save_crawl_state", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "batch_size", "timeout", "allowed_domain", "delay_seconds", "max_batch_size"], "file": "backend/server/engine/article_body_extractor.py", "line": 787, "name": "resumeable_article_body_crawl", "type": "FunctionDef"}
+{"arguments": ["workspace_id", "batch_size", "workers", "timeout", "allowed_domain", "max_batch_size", "max_workers"], "file": "backend/server/engine/article_body_extractor.py", "line": 1018, "name": "parallel_article_body_crawl", "type": "FunctionDef"}
+{"arguments": ["runtime_root"], "file": "backend/server/owner/runtime_architecture_version_read_model.py", "line": 154, "name": "discover_runtime_subsystem_versions", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/routes/site_reader.py", "line": 621, "name": "site_reader_health", "type": "FunctionDef"}
+{"arguments": ["workspace_id"], "file": "backend/server/routes/site_reader.py", "line": 626, "name": "site_reader_debug_state", "type": "FunctionDef"}
+{"arguments": ["raw_body", "title", "url", "metadata"], "file": "backend/server/stores/article_body_cleaning_engine.py", "line": 166, "name": "clean_crawled_article_body_v1", "type": "FunctionDef"}
+{"arguments": ["phrase", "component", "capability", "section_id", "doc_id", "snippet", "intelligence"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 483, "name": "_build_discovery_candidate", "type": "FunctionDef"}
+{"arguments": ["model", "run"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 1941, "name": "semantic_discovery", "type": "FunctionDef"}
+{"arguments": ["model", "run"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 2076, "name": "relationship_discovery", "type": "FunctionDef"}
+{"arguments": ["model", "run"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 2225, "name": "content_context_discovery", "type": "FunctionDef"}
+{"arguments": ["model", "run"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 2409, "name": "long_tail_discovery", "type": "FunctionDef"}
+{"arguments": ["model", "run"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 2547, "name": "pattern_discovery", "type": "FunctionDef"}
+{"arguments": ["model", "run"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 2888, "name": "external_authority_discovery", "type": "FunctionDef"}
+{"arguments": ["text", "html", "title", "extractor_candidates", "document_id", "workspace_id", "vertical", "max_candidates", "components", "diagnostics"], "file": "backend/server/stores/phrase_discovery_engine.py", "line": 3093, "name": "discover_phrases", "type": "FunctionDef"}
+{"arguments": ["candidate"], "file": "backend/server/stores/phrase_merger.py", "line": 94, "name": "_recover_discovery_occurrence", "type": "FunctionDef"}
+{"arguments": ["node", "page_url"], "file": "backend/server/stores/universal_dom_article_reconstruction_engine.py", "line": 2584, "name": "_udare_v17_extract_links_from_node", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/api/runtime_api_certification.py", "line": 123, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/execution_engine/execution_engine_certification.py", "line": 304, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": ["module", "predicate"], "file": "backend/server/runtime/execution_engine/job_queue_worker_integration.py", "line": 222, "name": "_discover_named_callables", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/observability/observability_certification.py", "line": 118, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/persistence/persistence_state_integrity_certification.py", "line": 121, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/reliability/reliability_recovery_certification.py", "line": 114, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/resource_governance/resource_governance_certification.py", "line": 139, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": ["module"], "file": "backend/server/runtime/security/runtime_security_certification.py", "line": 292, "name": "_discover_certifier", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 30, "name": "UniversalWorkerDiscoveryError", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 48, "name": "UniversalWorkerDiscoverability", "type": "ClassDef"}
+{"arguments": ["value"], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 78, "name": "_validate_discovery_enabled", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 97, "name": "UniversalWorkerDiscoveryCandidate", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 169, "name": "UniversalWorkerDiscoveryDecision", "type": "ClassDef"}
+{"arguments": [], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 286, "name": "UniversalWorkerDiscoveryResult", "type": "ClassDef"}
+{"arguments": ["registration", "discovery_enabled"], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 382, "name": "create_universal_worker_discovery_candidate", "type": "FunctionDef"}
+{"arguments": ["candidate"], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 394, "name": "decide_universal_worker_discoverability", "type": "FunctionDef"}
+{"arguments": ["candidates"], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 431, "name": "discover_universal_workers", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/runtime/universal_worker/discovery.py", "line": 549, "name": "explain_universal_worker_discovery_v1", "type": "FunctionDef"}
+{"arguments": [], "file": "backend/server/pipelines/connect_domain/linking_target_pipeline/coordinator.py", "line": 35, "name": "_site_reader", "type": "FunctionDef"}
+
+NON_SITEMAP_DISCOVERY_IMPORTS:
+{"file": "backend/server/crawler/session_coordinator.py", "line": 40, "module": "session_models", "symbols": ["CrawlSession", "CrawlSessionLimits", "CrawlSessionStatistics", "CrawlSessionStatus", "required_string"]}
+{"file": "backend/server/crawler/session_coordinator.py", "line": 47, "module": "session_repository", "symbols": ["create_crawler_session", "require_crawler_session", "update_crawler_session"]}
+{"file": "backend/server/crawler/session_repository.py", "line": 37, "module": "session_models", "symbols": ["CRAWLER_SESSION_SCHEMA_VERSION", "CrawlSession", "required_string"]}
+{"file": "backend/server/crawler/__init__.py", "line": 7, "module": "session_models", "symbols": ["CRAWLER_SESSION_SCHEMA_VERSION", "CrawlSession", "CrawlSessionLimits", "CrawlSessionStatistics", "CrawlSessionStatus", "TERMINAL_CRAWL_SESSION_STATUSES", "explain_crawler_session_models_v1"]}
+{"file": "backend/server/crawler/__init__.py", "line": 17, "module": "session_repository", "symbols": ["CRAWLER_SESSION_REPOSITORY_SCHEMA_VERSION", "CRAWLER_SESSION_STORE_ROOT", "count_crawler_sessions", "crawler_session_exists", "crawler_session_store_path", "create_crawler_session", "delete_crawler_session", "empty_crawler_session_store", "explain_crawler_session_repository_v1", "get_crawler_session", "list_crawler_sessions", "load_crawler_session_store", "require_crawler_session", "save_crawler_session_store", "update_crawler_session", "validate_crawler_session_store"]}
+{"file": "backend/server/crawler/__init__.py", "line": 36, "module": "session_coordinator", "symbols": ["ALLOWED_CRAWLER_SESSION_TRANSITIONS", "CRAWLER_SESSION_COORDINATOR_SCHEMA_VERSION", "cancel_crawler_session", "complete_crawler_session", "create_crawler_session_request", "explain_crawler_session_coordinator_v1", "fail_crawler_session", "generate_crawler_session_id", "get_crawler_session_status", "pause_crawler_session", "request_stop_crawler_session", "resume_crawler_session", "start_crawler_session", "transition_crawler_session", "validate_transition"]}
+{"file": "backend/server/crawler/__init__.py", "line": 84, "module": "seed_registration_engine", "symbols": ["UNIVERSAL_WEB_SEED_REGISTRATION_SCHEMA_VERSION", "build_universal_web_seed_registration_record", "build_universal_web_seed_registration_result", "explain_universal_web_seed_registration_engine_v1", "generate_universal_web_seed_id", "normalize_optional_crawler_session_id", "normalize_optional_seed_id", "normalize_registration_metadata", "register_universal_web_seed"]}
+{"file": "backend/server/routes/site_reader.py", "line": 45, "module": "backend.server.site_reader.html_extract", "symbols": ["extract_headings_and_body"]}
+{"file": "backend/server/routes/site_reader.py", "line": 47, "module": "backend.server.site_reader.phrase_generators", "symbols": ["generate_phrase_bundle_for_page"]}
+{"file": "backend/server/routes/site_reader.py", "line": 51, "module": "backend.server.site_reader.store", "symbols": ["load_site_pages", "load_site_phrase_index", "load_site_sources", "save_site_pages", "save_site_phrase_index", "save_site_sources"]}
+{"file": "backend/server/stores/article_cleaning_pipeline.py", "line": 5, "module": "backend.server.stores.article_body_cleaning_engine", "symbols": ["clean_crawled_article_body_v1"]}
+{"file": "backend/server/stores/phrase_merger.py", "line": 5, "module": "backend.server.stores.phrase_discovery_engine", "symbols": ["_DocumentModel"]}
+{"file": "backend/server/pipelines/upload_document/uploaded_document_to_highlight_pipeline/coordinator.py", "line": 23, "module": "backend.server.stores.phrase_discovery_engine", "symbols": ["discover_phrases"]}
+NON_SITEMAP_REPLACEMENT_CANDIDATES_DISCOVERED: PASS
+  {'definitions': 72, 'imports': 13}
+
+================================================================================================================
+A3.1-B6 - GLOBAL ACTIVE SITEMAP INVENTORY
+================================================================================================================
+ACTIVE_SITEMAP_REFERENCE_FILES:
+{"file": "backend/server/main.py", "matches": [{"line": 141, "source": "from backend.server.routes.external.sitemap_import import router as sitemap_import_runtime_router"}, {"line": 887, "source": "if not _already_mounted(\"backend.server.routes.external.sitemap_import\", \"/api/external/sitemap_import_runtime\"):"}, {"line": 889, "source": "sitemap_import_runtime_router,"}, {"line": 890, "source": "prefix=\"/api/external/sitemap_import_runtime\","}]}
+{"file": "backend/server/crawler/seed_controls.py", "matches": [{"line": 28, "source": "- parse sitemaps or feeds."}, {"line": 742, "source": "\"sitemap parsing\","}]}
+{"file": "backend/server/crawler/seed_eligibility.py", "matches": [{"line": 30, "source": "- parse sitemaps;"}, {"line": 98, "source": "INVALID_SITEMAP_TARGET = \"invalid_sitemap_target\""}, {"line": 839, "source": "== UniversalWebSeedType.SITEMAP"}, {"line": 844, "source": "SeedEligibilityReasonCode.INVALID_SITEMAP_TARGET"}]}
+{"file": "backend/server/crawler/seed_models.py", "matches": [{"line": 25, "source": "- parse sitemaps or feeds;"}, {"line": 55, "source": "SITEMAP = \"sitemap\""}, {"line": 553, "source": "\"sitemap parsing\","}]}
+{"file": "backend/server/crawler/seed_protection.py", "matches": [{"line": 32, "source": "- parse sitemaps or feeds;"}, {"line": 75, "source": "SITEMAP_TARGET = \"sitemap_target\""}, {"line": 107, "source": "UniversalWebSeedType.SITEMAP: ("}, {"line": 108, "source": "SeedComparisonFamily.SITEMAP_TARGET"}, {"line": 125, "source": "SeedComparisonFamily.SITEMAP_TARGET,"}, {"line": 1233, "source": "\"sitemap parsing\","}]}
+{"file": "backend/server/crawler/seed_registration_engine.py", "matches": [{"line": 24, "source": "- parse sitemaps or feeds;"}, {"line": 400, "source": "\"sitemap parsing\","}]}
+{"file": "backend/server/crawler/seed_repository.py", "matches": [{"line": 28, "source": "- parse sitemaps or feeds;"}, {"line": 809, "source": "\"sitemap parsing\","}]}
+{"file": "backend/server/engine/profiles.py", "matches": [{"line": 26, "source": "\"sitemap\": 1.0,"}, {"line": 66, "source": "\"sitemap\": 1.0,"}, {"line": 106, "source": "\"sitemap\": 0.95,"}, {"line": 145, "source": "\"sitemap\": 1.0,"}, {"line": 186, "source": "\"sitemap\": 1.0,"}]}
+{"file": "backend/server/engine/scoring.py", "matches": [{"line": 65, "source": "\"sitemap\": 1.0,"}]}
+{"file": "backend/server/owner_backup_runtime_owner_phase1_20260928_104159/main.py", "matches": [{"line": 139, "source": "from backend.server.routes.external.sitemap_import import router as sitemap_import_runtime_router"}, {"line": 874, "source": "if not _already_mounted(\"backend.server.routes.external.sitemap_import\", \"/api/external/sitemap_import_runtime\"):"}, {"line": 876, "source": "sitemap_import_runtime_router,"}, {"line": 877, "source": "prefix=\"/api/external/sitemap_import_runtime\","}]}
+{"file": "backend/server/routes/imported_targets_urls_compat.py", "matches": [{"line": 182, "source": "for key in (\"file\", \"upload\", \"uploads\", \"files\", \"files[]\", \"sitemap\", \"sitemapFile\"):"}]}
+{"file": "backend/server/routes/planning.py", "matches": [{"line": 53, "source": "NOTE: imported sitemap URLs are NOT used to evaluate draft matching."}, {"line": 164, "source": "\"sitemap_urls\": len(imported_list),"}]}
+{"file": "backend/server/routes/rb2_run.py", "matches": [{"line": 700, "source": "\"hint\": \"No candidate pool found. Sync sitemap (/sync_sitemap_ingest) or import URLs (/api/urls/import) for this workspace first.\","}]}
+{"file": "backend/server/routes/site_reader.py", "matches": [{"line": 105, "source": "# HTTP hardening (sitemap + page fetch)"}, {"line": 276, "source": "def _parse_sitemap_kind_and_locs(xml_bytes: bytes) -> Tuple[str, List[str]]:"}, {"line": 284, "source": "if tag.endswith(\"sitemapindex\"):"}, {"line": 291, "source": "def _fetch_and_expand_sitemaps("}, {"line": 292, "source": "sitemap_url: str,"}, {"line": 293, "source": "max_sitemaps: int = 250,"}, {"line": 296, "source": "Recursively expands sitemap indexes to URL lists."}, {"line": 305, "source": "queue: List[str] = [(sitemap_url or \"\").strip()]"}, {"line": 306, "source": "while queue and len(seen) < max_sitemaps:"}, {"line": 315, "source": "errors.append({\"url\": sm, \"code\": code, \"error\": \"sitemap_fetch_failed\"})"}, {"line": 319, "source": "kind, locs = _parse_sitemap_kind_and_locs(xml_bytes)"}, {"line": 328, "source": "errors.append({\"url\": sm, \"code\": code, \"error\": \"unknown_sitemap_format\"})"}, {"line": 341, "source": "r\"/sitemap(?:[_-]index)?\\.xml$|/wp-sitemap\\.xml$|\""}]}
+{"file": "backend/server/routes/workspace_autosave.py", "matches": [{"line": 202, "source": "write_json(root / \"imports\" / \"imported_sitemaps.json\", imports_data)"}, {"line": 291, "source": "imported_sitemaps = read_json(root / \"imports\" / \"imported_sitemaps.json\") or {}"}, {"line": 302, "source": "\"imported_sitemaps\": imported_sitemaps,"}, {"line": 406, "source": "# Keep legacy sitemap_url only if an old caller still sends it."}, {"line": 407, "source": "if payload.get(\"sitemap_url\") is not None:"}, {"line": 408, "source": "data[\"sitemap_url\"] = str(payload.get(\"sitemap_url\") or \"\").strip()"}]}
+{"file": "backend/server/stores/canonical_url_selector_v2.py", "matches": [{"line": 869, "source": "def explain_sitemap_confidence_v2("}, {"line": 887, "source": "\"sitemap_confidence\": 0.0,"}, {"line": 894, "source": "\"layer\": \"1.7.5.5_sitemap_confidence_explanation_v2\","}, {"line": 960, "source": "\"sitemap_confidence\": confidence,"}, {"line": 962, "source": "\"confidence_reason\": \"sitemap_confidence_explained_from_existing_signals\","}, {"line": 975, "source": "\"layer\": \"1.7.5.5_sitemap_confidence_explanation_v2\","}]}
+{"file": "backend/server/stores/phrase_quality_gate.py", "matches": [{"line": 144, "source": "\"entity\", \"intent\", \"list_item\", \"sitemap_title\","}, {"line": 375, "source": "Titles, headings, entities, imported topics, sitemap titles, and list items may be broader."}, {"line": 470, "source": "elif source in {\"heading_h2\", \"heading_h3\", \"sitemap_title\", \"draft_title\"}:"}]}
+{"file": "backend/server/stores/sitemap_canonical_matcher_v2.py", "matches": [{"line": 204, "source": "if not _is_valid_sitemap_title("}, {"line": 305, "source": "def _is_valid_sitemap_title("}]}
+{"file": "backend/server/stores/universal_noun_families.py", "matches": [{"line": 10, "source": "\"metadata\", \"title\", \"headings\", \"crawl\", \"indexing\", \"sitemap\","}]}
+{"file": "backend/server/stores/universal_page_type_classifier.py", "matches": [{"line": 42, "source": "\"sitemap\","}, {"line": 364, "source": "\"sitemap\": \"sitemap\","}]}
+{"file": "backend/server/stores/workspace_session_store.py", "matches": [{"line": 104, "source": "\"imported_sitemaps\": root / \"imports\" / \"imported_sitemaps.json\","}, {"line": 118, "source": "\"imported_sitemaps\": {"}, {"line": 185, "source": "\"imported_sitemaps\": True,"}, {"line": 192, "source": "\"imported_sitemaps\": \"imports/imported_sitemaps.json\","}]}
+{"file": "backend/server/routes/external/import_runs.py", "matches": [{"line": 88, "source": "if ev not in (\"owner_sitemap_commit_auto\", \"owner_import_rollback\", \"owner_resolver_add\"):"}]}
+{"file": "backend/server/routes/external/sitemap_import.py", "matches": [{"line": 32, "source": "router = APIRouter(tags=[\"external-sitemap-import-runtime\"])"}, {"line": 36, "source": "# Migrated sitemap helper layer copied from legacy external.py"}, {"line": 110, "source": "def _discover_sitemaps_from_robots(domain: str) -> Dict[str, Any]:"}, {"line": 125, "source": "sitemaps: List[str] = []"}, {"line": 131, "source": "if line.lower().startswith(\"sitemap:\"):"}, {"line": 134, "source": "sitemaps.append(sm)"}, {"line": 136, "source": "if not sitemaps:"}, {"line": 139, "source": "sitemaps = ["}, {"line": 140, "source": "f\"{base_https}/sitemap.xml\","}, {"line": 141, "source": "f\"{base_https}/sitemap-index.xml\","}, {"line": 142, "source": "f\"{base_https}/sitemap_index.xml\","}, {"line": 143, "source": "f\"{base_https}/sitemap/sitemap.xml\","}, {"line": 144, "source": "f\"{base_https}/sitemaps/sitemap.xml\","}, {"line": 145, "source": "f\"{base_https}/sitemap.xml.gz\","}, {"line": 146, "source": "f\"{base_https}/sitemap-index.xml.gz\","}, {"line": 147, "source": "f\"{base_https}/sitemap_index.xml.gz\","}, {"line": 152, "source": "for s in sitemaps:"}, {"line": 157, "source": "return {\"robots_url\": robots_url, \"method_used\": method_used, \"sitemaps_found\": deduped}"}, {"line": 164, "source": "def _is_sitemap_index(xml_text: str) -> bool:"}, {"line": 165, "source": "return bool(re.search(r\"<\\s*sitemapindex\\b\", xml_text, flags=re.IGNORECASE))"}, {"line": 170, "source": "return u2.endswith(\".xml\") or u2.endswith(\".xml.gz\") or \"sitemap\" in u2"}, {"line": 199, "source": "def _normalize_hosts(domain: Optional[str], allowed_hosts: List[str], sitemap_url: Optional[str]) -> List[str]:"}, {"line": 212, "source": "if sitemap_url:"}, {"line": 213, "source": "h = _host_of_url(sitemap_url)"}, {"line": 259, "source": "imported_by: str = \"owner_sitemap_import\","}, {"line": 260, "source": "import_reason: str = \"authority_sitemap_import\","}, {"line": 333, "source": "# 2) Upsert the incoming sitemap URLs."}, {"line": 351, "source": "\"source\": \"authority_sitemap\","}, {"line": 377, "source": "existing[\"source\"] = existing.get(\"source\") or \"authority_sitemap\""}, {"line": 396, "source": "class SitemapFilters(BaseModel):"}, {"line": 406, "source": "class OwnerSitemapImportRequest(BaseModel):"}, {"line": 409, "source": "sitemap_url: Optional[str] = None"}, {"line": 410, "source": "filters: Optional[SitemapFilters] = None"}, {"line": 415, "source": "@router.get(\"/sitemap_import/status\")"}, {"line": 416, "source": "def sitemap_import_status() -> Dict[str, Any]:"}, {"line": 419, "source": "\"router\": \"external.sitemap_import\","}, {"line": 421, "source": "\"/owner/sitemap/import\","}, {"line": 426, "source": "@router.post(\"/owner/sitemap/import\")"}, {"line": 427, "source": "async def owner_sitemap_import(payload: OwnerSitemapImportRequest = Body(...)):"}, {"line": 439, "source": "sitemap_url = (payload.sitemap_url or \"\").strip()"}, {"line": 441, "source": "if sitemap_url:"}, {"line": 446, "source": "if not domain and not sitemap_url:"}, {"line": 447, "source": "raise HTTPException(status_code=400, detail=\"Provide domain OR sitemap_url (or set domain in source config)\")"}, {"line": 448, "source": "if domain_in and sitemap_url:"}, {"line": 449, "source": "raise HTTPException(status_code=400, detail=\"Provide only one: domain OR sitemap_url\")"}, {"line": 490, "source": "allowed_hosts = _normalize_hosts(domain, eff_allowed_hosts or [], sitemap_url)"}, {"line": 492, "source": "_audit(\"owner_sitemap_import_request\", {"}, {"line": 495, "source": "\"sitemap_url\": sitemap_url or None,"}, {"line": 509, "source": "discovered = _discover_sitemaps_from_robots(domain)"}, {"line": 511, "source": "discovered = {\"robots_url\": None, \"method_used\": \"direct_sitemap_url\", \"sitemaps_found\": [sitemap_url]}"}, {"line": 513, "source": "_audit(\"owner_sitemap_discovered\", {"}, {"line": 516, "source": "\"sitemaps_found_count\": len(discovered.get(\"sitemaps_found\") or []),"}, {"line": 521, "source": "queue: List[str] = list(discovered.get(\"sitemaps_found\") or [])"}, {"line": 522, "source": "seen_sitemaps = set()"}, {"line": 524, "source": "sitemaps_processed = 0"}, {"line": 525, "source": "sitemap_indexes_seen = 0"}, {"line": 526, "source": "child_sitemaps_enqueued = 0"}, {"line": 547, "source": "if sm_url in seen_sitemaps:"}, {"line": 549, "source": "seen_sitemaps.add(sm_url)"}, {"line": 556, "source": "fetch_error_samples.append({\"sitemap_url\": sm_url, \"error\": str(e)})"}, {"line": 557, "source": "_audit(\"owner_sitemap_fetch_error\", {"}, {"line": 559, "source": "\"sitemap_url\": sm_url,"}, {"line": 564, "source": "sitemaps_processed += 1"}, {"line": 568, "source": "if _is_sitemap_index(xml):"}, {"line": 569, "source": "sitemap_indexes_seen += 1"}, {"line": 574, "source": "if child in seen_sitemaps:"}, {"line": 578, "source": "child_sitemaps_enqueued += 1"}, {"line": 612, "source": "_audit(\"owner_sitemap_step4_recursive\", {"}, {"line": 614, "source": "\"sitemaps_processed\": sitemaps_processed,"}, {"line": 641, "source": "imported_by=\"owner_sitemap_import\","}, {"line": 642, "source": "import_reason=\"authority_sitemap_import\","}, {"line": 647, "source": "_audit(\"owner_sitemap_commit_auto\", {"}, {"line": 660, "source": "\"event\": \"owner_sitemap_commit_auto\","}, {"line": 673, "source": "\"sitemap_url\": sitemap_url or None,"}, {"line": 687, "source": "\"sitemaps_seeded\": len(discovered.get(\"sitemaps_found\") or []),"}, {"line": 688, "source": "\"sitemaps_processed\": sitemaps_processed,"}, {"line": 689, "source": "\"sitemap_indexes_seen\": sitemap_indexes_seen,"}, {"line": 690, "source": "\"child_sitemaps_enqueued\": child_sitemaps_enqueued,"}, {"line": 706, "source": "\"max_sitemaps_total\": \"unlimited\","}]}
+{"file": "backend/server/pools/target_pools/imported_target_pool.py", "matches": [{"line": 263, "source": "def _read_xml_sitemap(fp: Path) -> List[Tuple[str, str]]:"}, {"line": 265, "source": "Accept sitemap-like XML:"}, {"line": 644, "source": "add_pairs(str(xml_fp), _read_xml_sitemap(xml_fp))"}, {"line": 651, "source": "add_pairs(str(xml_fp), _read_xml_sitemap(xml_fp))"}, {"line": 668, "source": "(str(xml_fp), _read_xml_sitemap(xml_fp) if xml_fp.exists() else []),"}]}
+{"file": "backend/server/pipelines/connect_domain/linking_target_pipeline/coordinator.py", "matches": [{"line": 54, "source": "_fetch_and_expand_sitemaps = sr._fetch_and_expand_sitemaps"}, {"line": 95, "source": "sitemap_candidates = ["}, {"line": 96, "source": "f\"https://{domain}/sitemap.xml\","}, {"line": 97, "source": "f\"https://{domain}/sitemap_index.xml\","}, {"line": 98, "source": "f\"https://{domain}/sitemap-index.xml\","}, {"line": 99, "source": "f\"https://{domain}/wp-sitemap.xml\","}, {"line": 100, "source": "f\"https://www.{domain}/sitemap.xml\","}, {"line": 101, "source": "f\"https://www.{domain}/sitemap_index.xml\","}, {"line": 102, "source": "f\"https://www.{domain}/sitemap-index.xml\","}, {"line": 103, "source": "f\"https://www.{domain}/wp-sitemap.xml\","}, {"line": 106, "source": "# Also discover sitemap URLs declared inside robots.txt."}, {"line": 114, "source": "if line.lower().startswith(\"sitemap:\"):"}, {"line": 116, "source": "if sm and sm not in sitemap_candidates:"}, {"line": 117, "source": "sitemap_candidates.append(sm)"}, {"line": 122, "source": "sitemap_errors = []"}, {"line": 123, "source": "sitemap_used = None"}, {"line": 125, "source": "for sitemap_url in sitemap_candidates:"}, {"line": 126, "source": "urls, errors = _fetch_and_expand_sitemaps(sitemap_url)"}, {"line": 127, "source": "sitemap_errors.extend(errors or [])"}, {"line": 131, "source": "sitemap_used = sitemap_url"}, {"line": 140, "source": "\"error\": \"no_sitemap_urls_found\","}, {"line": 141, "source": "\"sitemap_candidates\": sitemap_candidates,"}, {"line": 142, "source": "\"sitemap_errors\": sitemap_errors[:20],"}, {"line": 166, "source": "\"sitemap_url\": sitemap_used,"}, {"line": 167, "source": "\"sitemap_urls\": all_urls,"}, {"line": 168, "source": "\"sitemap_urls_count\": len(all_urls),"}, {"line": 177, "source": "\"errors\": sitemap_errors[:100],"}, {"line": 197, "source": "\"source\": \"sitemap_seed\","}, {"line": 289, "source": "\"sitemap_url_count\": len(all_urls),"}, {"line": 322, "source": "\"sitemap_url_count\": len(all_urls),"}, {"line": 333, "source": "\"sitemap_used\": sitemap_used,"}, {"line": 334, "source": "\"sitemap_url_count\": len(all_urls),"}]}
+{"file": "backend/server/owner/backup_phase2_18_live_provider_20261007_100832/main.py", "matches": [{"line": 140, "source": "from backend.server.routes.external.sitemap_import import router as sitemap_import_runtime_router"}, {"line": 885, "source": "if not _already_mounted(\"backend.server.routes.external.sitemap_import\", \"/api/external/sitemap_import_runtime\"):"}, {"line": 887, "source": "sitemap_import_runtime_router,"}, {"line": 888, "source": "prefix=\"/api/external/sitemap_import_runtime\","}]}
+GLOBAL_SITEMAP_SCOPE_INVENTORIED: PASS
+  files=26
+
+================================================================================================================
+A3.1-B7 - REPLACEMENT DECISION
+================================================================================================================
+DECISION: REMOVE_ACTIVE_SITEMAP_DEPENDENCY
+REPLACEMENT_REQUIREMENT: Use an existing non-sitemap direct-domain or page-link discovery authority that returns same-site page URLs.
+PRESERVATION_REQUIREMENT: The replacement must continue feeding canonical URLs into clean_urls() and all downstream target stages.
+PROHIBITED: Do not retain sitemap discovery as a fallback, hidden option, compatibility mode or registration dependency.
+
+================================================================================================================
+A3.1-B8 - SAFETY AND FINAL RESULT
+================================================================================================================
+COORDINATOR_SOURCE_UNCHANGED: PASS
+PRODUCTION_SOURCE_CHANGES_NONE: PASS
+PIPELINE_HANDLER_EXECUTED_NO: PASS
+NETWORK_REQUEST_EXECUTED_NO: PASS
+RUNTIME_REGISTRATION_CREATED_NO: PASS
+PRODUCTION_JOB_CREATED_NO: PASS
+CHECKS_PASSED=16
+CHECKS_FAILED=1
+FAILED_CHECKS:
+  - SITEMAP_AUTHORITY_IMPORT_IDENTIFIED
+A3_1_B_REPLACEMENT_INSPECTION=FAIL
+FINAL RESULT: A3.1-B NOT_COMPLETE
+
+
+==============================================================================================================
+STANDARD ERROR
+==============================================================================================================
+C:\Users\HP\Documents\LinkCraftor\backend\server\routes\engine_decisions.py:99: SyntaxWarning: invalid escape sequence '\s'
+  return str(s or "").lower().strip().replace("\s+", " ")
+
+A3.1-B replacement inspection failed.
+
+Inspector exit code: 1
+
+==============================================================================================================
+DECISION
+==============================================================================================================
+The sitemap-dependent path will not be ignored or registered.
+
+The next production repair must:
+- remove sitemap imports, discovery, expansion and evidence;
+- select the existing direct-domain/page-link discovery authority;
+- preserve canonical URL cleaning and downstream target generation;
+- prohibit sitemap fallback or compatibility behavior;
+- pass isolated pipeline regression before being retained.
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+A3.1-B NOT_COMPLETE

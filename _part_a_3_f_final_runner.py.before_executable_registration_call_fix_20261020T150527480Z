@@ -1,0 +1,1640 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import inspect
+import py_compile
+import shutil
+import sys
+import traceback
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+
+RUNTIME = ROOT / "backend/server/runtime"
+QUEUE_PATH = ROOT / "backend/server/orchestration/queue.py"
+
+DEPENDENCY_PATH = (
+    RUNTIME
+    / "runtime_registration_dependency_policy.py"
+)
+
+REPORT_PATH = (
+    ROOT
+    / "backend/server/data/reports"
+    / "PART_A_3_F_FINAL_REGISTRATION_RUNTIME_CERTIFICATION.txt"
+)
+
+REPORT_DIRECTORY = (
+    ROOT
+    / "backend/server/data/reports"
+)
+
+STAMP = (
+    datetime.now(timezone.utc)
+    .strftime("%Y%m%dT%H%M%S%fZ")
+)
+
+BACKUP_DIRECTORY = (
+    ROOT
+    / "backend/server/data/runtime_backups"
+    / f"part_a_3_f_{STAMP}"
+)
+
+BACKUP_DIRECTORY.mkdir(
+    parents=True,
+    exist_ok=False,
+)
+
+REPORT_DIRECTORY.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+QUEUE_BACKUP = (
+    BACKUP_DIRECTORY
+    / "queue.py.before_part_a_3_f"
+)
+
+DEPENDENCY_BACKUP = (
+    BACKUP_DIRECTORY
+    / "runtime_registration_dependency_policy.py.before_part_a_3_f"
+)
+
+DEPENDENCY_PREVIOUSLY_EXISTED = (
+    DEPENDENCY_PATH.exists()
+)
+
+output: list[str] = []
+checks: list[tuple[str, bool]] = []
+certified = False
+standard_error = ""
+
+
+def emit(value: Any = "") -> None:
+    text = str(value)
+    output.append(text)
+    print(text)
+
+
+def check(
+    label: str,
+    condition: Any,
+    detail: Any = "",
+) -> None:
+    passed = bool(condition)
+    checks.append((label, passed))
+
+    emit(
+        f"{label}: "
+        + ("PASS" if passed else "FAIL")
+    )
+
+    if detail != "":
+        emit("  " + str(detail))
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def restore() -> None:
+    if QUEUE_BACKUP.exists():
+        shutil.copy2(
+            QUEUE_BACKUP,
+            QUEUE_PATH,
+        )
+
+    if DEPENDENCY_PREVIOUSLY_EXISTED:
+        if DEPENDENCY_BACKUP.exists():
+            shutil.copy2(
+                DEPENDENCY_BACKUP,
+                DEPENDENCY_PATH,
+            )
+    elif DEPENDENCY_PATH.exists():
+        DEPENDENCY_PATH.unlink()
+
+
+def prior_report_certified(
+    patterns: tuple[str, ...],
+    required_text: str,
+) -> tuple[bool, str]:
+    candidates: list[Path] = []
+
+    for pattern in patterns:
+        candidates.extend(
+            REPORT_DIRECTORY.glob(pattern)
+        )
+
+    candidates = sorted(
+        set(candidates),
+        key=lambda path: (
+            path.stat().st_mtime_ns,
+            path.name,
+        ),
+        reverse=True,
+    )
+
+    for path in candidates:
+        try:
+            text = path.read_text(
+                encoding="utf-8-sig",
+                errors="replace",
+            )
+        except OSError:
+            continue
+
+        if required_text in text:
+            return True, str(path)
+
+    return False, ""
+
+
+DEPENDENCY_SOURCE = r'''"""
+Registration stage-dependency enforcement.
+
+This authority consumes persisted dependency_job_ids and the canonical
+Runtime Registration registry. It creates no second coordinator,
+dependency graph, queue, registry, lock or persistence store.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import Enum
+from types import MappingProxyType
+from typing import Any, Callable, Iterable, Mapping
+
+
+SCHEMA_VERSION = "runtime_registration_dependency_policy_v1"
+
+
+class RuntimeRegistrationDependencyPolicyError(RuntimeError):
+    pass
+
+
+class RuntimeRegistrationDependencyAction(str, Enum):
+    ADMIT = "admit"
+    DEFER = "defer"
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeRegistrationDependencyAdmission:
+    action: RuntimeRegistrationDependencyAction
+    reason: str
+    job_type: str
+    stage: str
+    required_predecessor_stages: tuple[str, ...] = ()
+    satisfied_predecessor_stages: tuple[str, ...] = ()
+    dependency_job_ids: tuple[str, ...] = ()
+    evidence: Mapping[str, Any] = field(default_factory=dict)
+    schema_version: str = field(default=SCHEMA_VERSION, init=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self,
+            "evidence",
+            MappingProxyType(dict(self.evidence)),
+        )
+
+    def to_metadata(self) -> dict[str, Any]:
+        return {
+            "runtime_registration_dependency_schema_version":
+                self.schema_version,
+            "runtime_registration_dependency_action":
+                self.action.value,
+            "runtime_registration_dependency_reason":
+                self.reason,
+            "runtime_registration_stage":
+                self.stage,
+            "runtime_registration_required_predecessors":
+                list(self.required_predecessor_stages),
+            "runtime_registration_satisfied_predecessors":
+                list(self.satisfied_predecessor_stages),
+            "runtime_registration_dependency_job_ids":
+                list(self.dependency_job_ids),
+            "runtime_registration_dependency_evidence":
+                dict(self.evidence),
+        }
+
+
+def _read(
+    value: Any,
+    name: str,
+    default: Any = None,
+) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+
+    return getattr(value, name, default)
+
+
+def _text(value: Any) -> str:
+    return str(
+        value if value is not None else ""
+    ).strip()
+
+
+def _collection(
+    value: Any,
+    field_name: str,
+) -> tuple[str, ...]:
+    if value is None:
+        return ()
+
+    if isinstance(value, (str, bytes)):
+        raise RuntimeRegistrationDependencyPolicyError(
+            f"{field_name} must be a collection."
+        )
+
+    result: list[str] = []
+
+    for item in value:
+        normalized = _text(item)
+
+        if not normalized:
+            raise RuntimeRegistrationDependencyPolicyError(
+                f"{field_name} contains an empty value."
+            )
+
+        if normalized in result:
+            raise RuntimeRegistrationDependencyPolicyError(
+                f"{field_name} contains a duplicate: "
+                + normalized
+            )
+
+        result.append(normalized)
+
+    return tuple(result)
+
+
+def _registration(
+    value: Any,
+) -> Mapping[str, Any] | None:
+    if value is None:
+        return None
+
+    if isinstance(value, Mapping):
+        return value
+
+    public = getattr(
+        value,
+        "to_public_dict",
+        None,
+    )
+
+    if callable(public):
+        result = public()
+
+        if isinstance(result, Mapping):
+            return result
+
+    raise RuntimeRegistrationDependencyPolicyError(
+        "Registration must be a mapping or expose "
+        "to_public_dict()."
+    )
+
+
+def _metadata(job: Any) -> Mapping[str, Any]:
+    value = _read(job, "metadata", {})
+
+    return value if isinstance(value, Mapping) else {}
+
+
+def _canonical_job(
+    job: Any,
+) -> Mapping[str, Any] | None:
+    projections = [
+        value.get("canonical_job")
+        for value in _metadata(job).values()
+        if (
+            isinstance(value, Mapping)
+            and "canonical_job" in value
+        )
+    ]
+
+    if not projections:
+        return None
+
+    if len(projections) != 1:
+        raise RuntimeRegistrationDependencyPolicyError(
+            "Expected exactly one canonical job projection."
+        )
+
+    projection = projections[0]
+
+    if not isinstance(projection, Mapping):
+        raise RuntimeRegistrationDependencyPolicyError(
+            "Canonical job projection is malformed."
+        )
+
+    projected_id = _text(
+        projection.get("job_id")
+    )
+
+    actual_id = _text(
+        _read(job, "job_id")
+    )
+
+    if projected_id != actual_id:
+        raise RuntimeRegistrationDependencyPolicyError(
+            "Canonical and orchestration job identities differ."
+        )
+
+    return projection
+
+
+def _dependency_ids(
+    job: Any,
+) -> tuple[str, ...]:
+    projection = _canonical_job(job)
+
+    if projection is None:
+        return ()
+
+    raw = projection.get(
+        "dependency_job_ids",
+        (),
+    )
+
+    return _collection(
+        raw,
+        "dependency_job_ids",
+    )
+
+
+def _status(job: Any) -> str:
+    status = _text(
+        _read(job, "status")
+    ).lower()
+
+    if status == "completed":
+        return "succeeded"
+
+    return status
+
+
+def _defer(
+    *,
+    reason: str,
+    job_type: str,
+    stage: str,
+    required: tuple[str, ...],
+    satisfied: tuple[str, ...],
+    dependency_ids: tuple[str, ...],
+    evidence: Mapping[str, Any],
+) -> RuntimeRegistrationDependencyAdmission:
+    return RuntimeRegistrationDependencyAdmission(
+        action=RuntimeRegistrationDependencyAction.DEFER,
+        reason=reason,
+        job_type=job_type,
+        stage=stage,
+        required_predecessor_stages=required,
+        satisfied_predecessor_stages=satisfied,
+        dependency_job_ids=dependency_ids,
+        evidence=evidence,
+    )
+
+
+def evaluate_runtime_registration_stage_dependencies(
+    *,
+    candidate: Any,
+    existing_jobs: Iterable[Any],
+    registration: Any,
+    registration_resolver: Callable[[str], Any],
+) -> RuntimeRegistrationDependencyAdmission:
+    public = _registration(registration)
+
+    job_type = _text(
+        _read(candidate, "job_type")
+    )
+
+    workspace_id = _text(
+        _read(candidate, "workspace_id")
+    )
+
+    if not job_type or not workspace_id:
+        raise RuntimeRegistrationDependencyPolicyError(
+            "Candidate job_type and workspace_id are required."
+        )
+
+    if public is None:
+        return RuntimeRegistrationDependencyAdmission(
+            action=RuntimeRegistrationDependencyAction.ADMIT,
+            reason="no_runtime_registration",
+            job_type=job_type,
+            stage="",
+        )
+
+    registered_type = _text(
+        public.get("job_type")
+    )
+
+    if registered_type and registered_type != job_type:
+        raise RuntimeRegistrationDependencyPolicyError(
+            "Registration job_type does not match candidate."
+        )
+
+    stage = _text(
+        public.get("stage")
+    )
+
+    pipeline = _text(
+        public.get("pipeline")
+    )
+
+    required = _collection(
+        public.get("predecessor_stages", ()),
+        "predecessor_stages",
+    )
+
+    successors = _collection(
+        public.get("successor_stages", ()),
+        "successor_stages",
+    )
+
+    if (required or successors) and not stage:
+        raise RuntimeRegistrationDependencyPolicyError(
+            "A registration declaring stage dependencies "
+            "must declare its own stage."
+        )
+
+    dependency_ids = _dependency_ids(candidate)
+
+    if not required:
+        return RuntimeRegistrationDependencyAdmission(
+            action=RuntimeRegistrationDependencyAction.ADMIT,
+            reason="no_predecessor_stages_declared",
+            job_type=job_type,
+            stage=stage,
+            dependency_job_ids=dependency_ids,
+            evidence={
+                "successor_stages": list(successors),
+            },
+        )
+
+    if not dependency_ids:
+        return _defer(
+            reason="required_dependency_job_ids_missing",
+            job_type=job_type,
+            stage=stage,
+            required=required,
+            satisfied=(),
+            dependency_ids=(),
+            evidence={},
+        )
+
+    jobs_by_id = {
+        _text(_read(job, "job_id")): job
+        for job in existing_jobs
+        if _text(_read(job, "job_id"))
+    }
+
+    satisfied: list[str] = []
+    stage_evidence: dict[str, Any] = {}
+
+    for dependency_id in dependency_ids:
+        dependency = jobs_by_id.get(
+            dependency_id
+        )
+
+        if dependency is None:
+            return _defer(
+                reason="dependency_job_missing",
+                job_type=job_type,
+                stage=stage,
+                required=required,
+                satisfied=tuple(satisfied),
+                dependency_ids=dependency_ids,
+                evidence={
+                    "missing_dependency_job_id":
+                        dependency_id,
+                },
+            )
+
+        dependency_workspace = _text(
+            _read(dependency, "workspace_id")
+        )
+
+        if dependency_workspace != workspace_id:
+            return _defer(
+                reason="dependency_workspace_mismatch",
+                job_type=job_type,
+                stage=stage,
+                required=required,
+                satisfied=tuple(satisfied),
+                dependency_ids=dependency_ids,
+                evidence={
+                    "dependency_job_id": dependency_id,
+                },
+            )
+
+        if _status(dependency) != "succeeded":
+            return _defer(
+                reason="dependency_not_succeeded",
+                job_type=job_type,
+                stage=stage,
+                required=required,
+                satisfied=tuple(satisfied),
+                dependency_ids=dependency_ids,
+                evidence={
+                    "dependency_job_id": dependency_id,
+                    "dependency_status":
+                        _status(dependency),
+                },
+            )
+
+        dependency_job_type = _text(
+            _read(dependency, "job_type")
+        )
+
+        try:
+            dependency_registration = _registration(
+                registration_resolver(
+                    dependency_job_type
+                )
+            )
+        except (KeyError, ValueError):
+            dependency_registration = None
+
+        if dependency_registration is None:
+            return _defer(
+                reason="dependency_registration_missing",
+                job_type=job_type,
+                stage=stage,
+                required=required,
+                satisfied=tuple(satisfied),
+                dependency_ids=dependency_ids,
+                evidence={
+                    "dependency_job_id": dependency_id,
+                    "dependency_job_type":
+                        dependency_job_type,
+                },
+            )
+
+        dependency_stage = _text(
+            dependency_registration.get("stage")
+        )
+
+        dependency_pipeline = _text(
+            dependency_registration.get("pipeline")
+        )
+
+        declared_successors = _collection(
+            dependency_registration.get(
+                "successor_stages",
+                (),
+            ),
+            "successor_stages",
+        )
+
+        if (
+            pipeline
+            and dependency_pipeline
+            and pipeline != dependency_pipeline
+        ):
+            return _defer(
+                reason="dependency_pipeline_mismatch",
+                job_type=job_type,
+                stage=stage,
+                required=required,
+                satisfied=tuple(satisfied),
+                dependency_ids=dependency_ids,
+                evidence={
+                    "dependency_job_id": dependency_id,
+                    "dependency_pipeline":
+                        dependency_pipeline,
+                    "candidate_pipeline": pipeline,
+                },
+            )
+
+        stage_evidence[dependency_stage] = {
+            "job_id": dependency_id,
+            "job_type": dependency_job_type,
+            "successor_stages":
+                list(declared_successors),
+        }
+
+        if dependency_stage not in required:
+            continue
+
+        if stage not in declared_successors:
+            return _defer(
+                reason="successor_stage_not_reciprocal",
+                job_type=job_type,
+                stage=stage,
+                required=required,
+                satisfied=tuple(satisfied),
+                dependency_ids=dependency_ids,
+                evidence={
+                    "dependency_stage":
+                        dependency_stage,
+                    "declared_successors":
+                        list(declared_successors),
+                },
+            )
+
+        if dependency_stage not in satisfied:
+            satisfied.append(
+                dependency_stage
+            )
+
+    missing_stages = tuple(
+        predecessor
+        for predecessor in required
+        if predecessor not in satisfied
+    )
+
+    if missing_stages:
+        return _defer(
+            reason="required_predecessor_stage_missing",
+            job_type=job_type,
+            stage=stage,
+            required=required,
+            satisfied=tuple(satisfied),
+            dependency_ids=dependency_ids,
+            evidence={
+                "missing_predecessor_stages":
+                    list(missing_stages),
+                "dependency_stages":
+                    stage_evidence,
+            },
+        )
+
+    return RuntimeRegistrationDependencyAdmission(
+        action=RuntimeRegistrationDependencyAction.ADMIT,
+        reason="stage_dependencies_satisfied",
+        job_type=job_type,
+        stage=stage,
+        required_predecessor_stages=required,
+        satisfied_predecessor_stages=tuple(satisfied),
+        dependency_job_ids=dependency_ids,
+        evidence={
+            "pipeline": pipeline,
+            "successor_stages": list(successors),
+            "dependency_stages": stage_evidence,
+        },
+    )
+'''
+
+
+QUEUE_ANCHOR = '''            metadata: Dict[str, object] = {
+                "claimed_by_dequeue": True,
+            }
+'''
+
+QUEUE_REPLACEMENT = '''            from backend.server.runtime.runtime_registration_dependency_policy import (
+                RuntimeRegistrationDependencyAction,
+                evaluate_runtime_registration_stage_dependencies,
+            )
+
+            registration_dependency_decision = (
+                evaluate_runtime_registration_stage_dependencies(
+                    candidate=candidate,
+                    existing_jobs=tuple(
+                        load_jobs().values()
+                    ),
+                    registration=runtime_registration,
+                    registration_resolver=(
+                        get_runtime_registration
+                    ),
+                )
+            )
+
+            if (
+                registration_dependency_decision.action
+                is RuntimeRegistrationDependencyAction.DEFER
+            ):
+                continue
+
+            metadata: Dict[str, object] = {
+                "claimed_by_dequeue": True,
+            }
+
+            metadata.update(
+                registration_dependency_decision.to_metadata()
+            )
+'''
+
+
+@dataclass
+class ProbeJob:
+    job_id: str
+    workspace_id: str
+    job_type: str
+    status: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+def canonical_metadata(
+    job_id: str,
+    dependency_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    return {
+        "universal_runtime": {
+            "canonical_job": {
+                "job_id": job_id,
+                "dependency_job_ids":
+                    list(dependency_ids),
+            },
+        },
+    }
+
+
+try:
+    emit("=" * 112)
+    emit("PART A 3-F - DEPENDENCIES AND FINAL CONNECTION")
+    emit("=" * 112)
+
+    required_paths = (
+        QUEUE_PATH,
+        RUNTIME / "runtime_registration_gateway.py",
+        RUNTIME / "runtime_registration_admission.py",
+        RUNTIME / "runtime_registration_execution_policy.py",
+        RUNTIME / "universal_runtime_registration.py",
+        RUNTIME / "universal_runtime_worker_v1.py",
+        RUNTIME / "runtime_application_lifecycle.py",
+    )
+
+    for path in required_paths:
+        check(
+            "SOURCE_EXISTS_" + path.stem.upper(),
+            path.exists(),
+            path,
+        )
+
+    if not all(path.exists() for path in required_paths):
+        raise RuntimeError(
+            "A required Part A production source is unavailable."
+        )
+
+    shutil.copy2(
+        QUEUE_PATH,
+        QUEUE_BACKUP,
+    )
+
+    if DEPENDENCY_PREVIOUSLY_EXISTED:
+        shutil.copy2(
+            DEPENDENCY_PATH,
+            DEPENDENCY_BACKUP,
+        )
+
+    queue_raw = QUEUE_PATH.read_text(
+        encoding="utf-8-sig"
+    )
+
+    newline = "\r\n" if "\r\n" in queue_raw else "\n"
+    queue_source = queue_raw.replace("\r\n", "\n")
+
+    check(
+        "PART_A_3_E_RETAINED",
+        (
+            "evaluate_runtime_registration_queue_candidate"
+            in queue_source
+        ),
+    )
+
+    check(
+        "ONE_3_F_QUEUE_ANCHOR",
+        queue_source.count(QUEUE_ANCHOR) == 1,
+        queue_source.count(QUEUE_ANCHOR),
+    )
+
+    if queue_source.count(QUEUE_ANCHOR) != 1:
+        raise RuntimeError(
+            "Expected one 3-F queue insertion anchor."
+        )
+
+    patched_queue = queue_source.replace(
+        QUEUE_ANCHOR,
+        QUEUE_REPLACEMENT,
+        1,
+    )
+
+    dependency_candidate = (
+        BACKUP_DIRECTORY
+        / "runtime_registration_dependency_policy.py.candidate"
+    )
+
+    queue_candidate = (
+        BACKUP_DIRECTORY
+        / "queue.py.candidate"
+    )
+
+    dependency_candidate.write_text(
+        DEPENDENCY_SOURCE,
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    queue_candidate.write_text(
+        patched_queue.replace("\n", newline),
+        encoding="utf-8",
+        newline="",
+    )
+
+    py_compile.compile(
+        str(dependency_candidate),
+        doraise=True,
+    )
+
+    py_compile.compile(
+        str(queue_candidate),
+        doraise=True,
+    )
+
+    check("DEPENDENCY_CANDIDATE_SYNTAX", True)
+    check("QUEUE_CANDIDATE_SYNTAX", True)
+
+    tree = ast.parse(patched_queue)
+
+    dequeue = next(
+        (
+            node
+            for node in tree.body
+            if (
+                isinstance(node, ast.FunctionDef)
+                and node.name == "dequeue_job"
+            )
+        ),
+        None,
+    )
+
+    if dequeue is None:
+        raise RuntimeError(
+            "dequeue_job() was not found."
+        )
+
+    segment = ast.get_source_segment(
+        patched_queue,
+        dequeue,
+    )
+
+    if not segment:
+        raise RuntimeError(
+            "Could not inspect dequeue_job()."
+        )
+
+    registration_position = segment.find(
+        "runtime_registration = get_runtime_registration"
+    )
+
+    execution_policy_position = segment.find(
+        "evaluate_runtime_registration_queue_candidate"
+    )
+
+    dependency_policy_position = segment.find(
+        "evaluate_runtime_registration_stage_dependencies"
+    )
+
+    lease_position = segment.find(
+        "prepare_universal_runtime_job_lease"
+    )
+
+    running_position = segment.find(
+        "JOB_STATUS_RUNNING",
+        dependency_policy_position,
+    )
+
+    check(
+        "REGISTRATION_BEFORE_3_E_POLICY",
+        (
+            registration_position >= 0
+            and execution_policy_position
+            > registration_position
+        ),
+    )
+
+    check(
+        "3_E_POLICY_BEFORE_3_F_POLICY",
+        (
+            execution_policy_position >= 0
+            and dependency_policy_position
+            > execution_policy_position
+        ),
+    )
+
+    check(
+        "3_F_POLICY_BEFORE_LEASE",
+        (
+            dependency_policy_position >= 0
+            and lease_position
+            > dependency_policy_position
+        ),
+    )
+
+    check(
+        "3_F_POLICY_BEFORE_RUNNING",
+        (
+            dependency_policy_position >= 0
+            and running_position
+            > dependency_policy_position
+        ),
+    )
+
+    if not all(value for _, value in checks):
+        raise RuntimeError(
+            "3-F candidate structural verification failed."
+        )
+
+    shutil.copy2(
+        dependency_candidate,
+        DEPENDENCY_PATH,
+    )
+
+    shutil.copy2(
+        queue_candidate,
+        QUEUE_PATH,
+    )
+
+    py_compile.compile(
+        str(DEPENDENCY_PATH),
+        doraise=True,
+    )
+
+    py_compile.compile(
+        str(QUEUE_PATH),
+        doraise=True,
+    )
+
+    check("PRODUCTION_SOURCE_SYNTAX", True)
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+    importlib.invalidate_caches()
+
+    dependency_module = importlib.import_module(
+        "backend.server.runtime."
+        "runtime_registration_dependency_policy"
+    )
+
+    queue_module = importlib.import_module(
+        "backend.server.orchestration.queue"
+    )
+
+    registration_module = importlib.import_module(
+        "backend.server.runtime."
+        "universal_runtime_registration"
+    )
+
+    worker_module = importlib.import_module(
+        "backend.server.runtime."
+        "universal_runtime_worker_v1"
+    )
+
+    gateway_module = importlib.import_module(
+        "backend.server.runtime."
+        "runtime_registration_gateway"
+    )
+
+    admission_module = importlib.import_module(
+        "backend.server.runtime."
+        "runtime_registration_admission"
+    )
+
+    lifecycle_module = importlib.import_module(
+        "backend.server.runtime."
+        "runtime_application_lifecycle"
+    )
+
+    check("DEPENDENCY_MODULE_IMPORT", True)
+    check("QUEUE_MODULE_IMPORT", True)
+    check("REGISTRATION_MODULE_IMPORT", True)
+    check("WORKER_MODULE_IMPORT", True)
+    check("GATEWAY_MODULE_IMPORT", True)
+    check("ADMISSION_MODULE_IMPORT", True)
+    check("LIFECYCLE_MODULE_IMPORT", True)
+
+    evaluate = (
+        dependency_module
+        .evaluate_runtime_registration_stage_dependencies
+    )
+
+    action = (
+        dependency_module
+        .RuntimeRegistrationDependencyAction
+    )
+
+    registrations = {
+        "stage_source_job": {
+            "job_type": "stage_source_job",
+            "pipeline": "probe_pipeline",
+            "stage": "site_sources",
+            "predecessor_stages": [],
+            "successor_stages": ["url_cleaner"],
+        },
+        "stage_cleaner_job": {
+            "job_type": "stage_cleaner_job",
+            "pipeline": "probe_pipeline",
+            "stage": "url_cleaner",
+            "predecessor_stages": ["site_sources"],
+            "successor_stages": ["site_pages"],
+        },
+    }
+
+    def resolver(job_type: str) -> Any:
+        return registrations.get(job_type)
+
+    source_job = ProbeJob(
+        job_id="job_source",
+        workspace_id="workspace_one",
+        job_type="stage_source_job",
+        status="completed",
+        metadata=canonical_metadata(
+            "job_source",
+            (),
+        ),
+    )
+
+    cleaner_job = ProbeJob(
+        job_id="job_cleaner",
+        workspace_id="workspace_one",
+        job_type="stage_cleaner_job",
+        status="queued",
+        metadata=canonical_metadata(
+            "job_cleaner",
+            ("job_source",),
+        ),
+    )
+
+    result = evaluate(
+        candidate=cleaner_job,
+        existing_jobs=(source_job, cleaner_job),
+        registration=registrations[
+            "stage_cleaner_job"
+        ],
+        registration_resolver=resolver,
+    )
+
+    check(
+        "COMPLETED_PREDECESSOR_ADMITTED",
+        (
+            result.action is action.ADMIT
+            and result.satisfied_predecessor_stages
+            == ("site_sources",)
+        ),
+        result,
+    )
+
+    check(
+        "DEPENDENCY_EVIDENCE_IMMUTABLE",
+        isinstance(
+            result.evidence,
+            MappingProxyType,
+        ),
+        type(result.evidence).__name__,
+    )
+
+    missing_dependency_job = ProbeJob(
+        job_id="job_missing_dependency",
+        workspace_id="workspace_one",
+        job_type="stage_cleaner_job",
+        status="queued",
+        metadata=canonical_metadata(
+            "job_missing_dependency",
+            (),
+        ),
+    )
+
+    result = evaluate(
+        candidate=missing_dependency_job,
+        existing_jobs=(missing_dependency_job,),
+        registration=registrations[
+            "stage_cleaner_job"
+        ],
+        registration_resolver=resolver,
+    )
+
+    check(
+        "MISSING_DEPENDENCY_IDS_DEFERRED",
+        (
+            result.action is action.DEFER
+            and result.reason
+            == "required_dependency_job_ids_missing"
+        ),
+        result,
+    )
+
+    running_source = ProbeJob(
+        job_id="job_source",
+        workspace_id="workspace_one",
+        job_type="stage_source_job",
+        status="running",
+        metadata=canonical_metadata(
+            "job_source",
+            (),
+        ),
+    )
+
+    result = evaluate(
+        candidate=cleaner_job,
+        existing_jobs=(running_source, cleaner_job),
+        registration=registrations[
+            "stage_cleaner_job"
+        ],
+        registration_resolver=resolver,
+    )
+
+    check(
+        "INCOMPLETE_PREDECESSOR_DEFERRED",
+        (
+            result.action is action.DEFER
+            and result.reason
+            == "dependency_not_succeeded"
+        ),
+        result,
+    )
+
+    wrong_workspace = ProbeJob(
+        job_id="job_source",
+        workspace_id="workspace_two",
+        job_type="stage_source_job",
+        status="completed",
+        metadata=canonical_metadata(
+            "job_source",
+            (),
+        ),
+    )
+
+    result = evaluate(
+        candidate=cleaner_job,
+        existing_jobs=(wrong_workspace, cleaner_job),
+        registration=registrations[
+            "stage_cleaner_job"
+        ],
+        registration_resolver=resolver,
+    )
+
+    check(
+        "CROSS_WORKSPACE_DEPENDENCY_DEFERRED",
+        (
+            result.action is action.DEFER
+            and result.reason
+            == "dependency_workspace_mismatch"
+        ),
+        result,
+    )
+
+    nonreciprocal = {
+        **registrations,
+        "stage_source_job": {
+            **registrations["stage_source_job"],
+            "successor_stages": ["different_stage"],
+        },
+    }
+
+    def nonreciprocal_resolver(
+        job_type: str,
+    ) -> Any:
+        return nonreciprocal.get(job_type)
+
+    result = evaluate(
+        candidate=cleaner_job,
+        existing_jobs=(source_job, cleaner_job),
+        registration=registrations[
+            "stage_cleaner_job"
+        ],
+        registration_resolver=(
+            nonreciprocal_resolver
+        ),
+    )
+
+    check(
+        "NONRECIPROCAL_SUCCESSOR_DEFERRED",
+        (
+            result.action is action.DEFER
+            and result.reason
+            == "successor_stage_not_reciprocal"
+        ),
+        result,
+    )
+
+    wrong_stage_registration = {
+        **registrations,
+        "stage_source_job": {
+            **registrations["stage_source_job"],
+            "stage": "unrelated_stage",
+            "successor_stages": ["url_cleaner"],
+        },
+    }
+
+    def wrong_stage_resolver(
+        job_type: str,
+    ) -> Any:
+        return wrong_stage_registration.get(
+            job_type
+        )
+
+    result = evaluate(
+        candidate=cleaner_job,
+        existing_jobs=(source_job, cleaner_job),
+        registration=registrations[
+            "stage_cleaner_job"
+        ],
+        registration_resolver=(
+            wrong_stage_resolver
+        ),
+    )
+
+    check(
+        "MISSING_REQUIRED_STAGE_DEFERRED",
+        (
+            result.action is action.DEFER
+            and result.reason
+            == "required_predecessor_stage_missing"
+        ),
+        result,
+    )
+
+    legacy_registration = {
+        "job_type": "legacy_job",
+        "pipeline": "",
+        "stage": "",
+        "predecessor_stages": [],
+        "successor_stages": [],
+    }
+
+    legacy_job = ProbeJob(
+        job_id="legacy_job_one",
+        workspace_id="workspace_one",
+        job_type="legacy_job",
+        status="queued",
+        metadata={},
+    )
+
+    result = evaluate(
+        candidate=legacy_job,
+        existing_jobs=(legacy_job,),
+        registration=legacy_registration,
+        registration_resolver=resolver,
+    )
+
+    check(
+        "EMPTY_DEPENDENCY_POLICY_COMPATIBLE",
+        result.action is action.ADMIT,
+        result,
+    )
+
+    queue_source_live = inspect.getsource(
+        queue_module.dequeue_job
+    )
+
+    position_3e = queue_source_live.find(
+        "evaluate_runtime_registration_queue_candidate"
+    )
+
+    position_3f = queue_source_live.find(
+        "evaluate_runtime_registration_stage_dependencies"
+    )
+
+    position_lease = queue_source_live.find(
+        "prepare_universal_runtime_job_lease"
+    )
+
+    position_running = queue_source_live.find(
+        "JOB_STATUS_RUNNING",
+        position_3f,
+    )
+
+    check(
+        "LIVE_3_E_BEFORE_3_F",
+        (
+            position_3e >= 0
+            and position_3f > position_3e
+        ),
+    )
+
+    check(
+        "LIVE_3_F_BEFORE_LEASE",
+        (
+            position_3f >= 0
+            and position_lease > position_3f
+        ),
+    )
+
+    check(
+        "LIVE_3_F_BEFORE_RUNNING",
+        (
+            position_3f >= 0
+            and position_running > position_3f
+        ),
+    )
+
+    queued_jobs_source = inspect.getsource(
+        queue_module._queued_jobs
+    )
+
+    check(
+        "CANONICAL_DEPENDENCY_GATE_RETAINED",
+        (
+            "_are_job_dependencies_satisfied"
+            in queued_jobs_source
+        ),
+    )
+
+    worker_source = inspect.getsource(
+        worker_module
+        .run_one_universal_runtime_job_v1
+    )
+
+    check(
+        "WORKER_REGISTRATION_LOOKUP_RETAINED",
+        "get_runtime_registration" in worker_source,
+    )
+
+    check(
+        "WORKER_POLICY_ADMISSION_RETAINED",
+        "require_runtime_registration_admission"
+        in worker_source,
+    )
+
+    check(
+        "WORKER_CAPABILITY_ADMISSION_RETAINED",
+        "match_universal_worker_capabilities"
+        in worker_source,
+    )
+
+    check(
+        "WORKER_DISPATCH_RETAINED",
+        "dispatcher(" in worker_source,
+    )
+
+    gateway_source = inspect.getsource(
+        gateway_module
+    )
+
+    lifecycle_source = inspect.getsource(
+        lifecycle_module
+    )
+
+    check(
+        "REGISTRATION_GATEWAY_BOOT_BINDING_RETAINED",
+        "bind_runtime_registration_admission"
+        in gateway_source,
+    )
+
+    check(
+        "REGISTRATION_BOOT_REGISTRAR_RETAINED",
+        "register_runtime_registration_gateway"
+        in lifecycle_source,
+    )
+
+    check(
+        "REGISTRATION_LIFESPAN_PUBLICATION_RETAINED",
+        "runtime_registration_gateway"
+        in lifecycle_source,
+    )
+
+    check(
+        "REGISTRATION_EVIDENCE_PUBLICATION_RETAINED",
+        "runtime_registration_evidence"
+        in lifecycle_source,
+    )
+
+    prior_3b, report_3b = prior_report_certified(
+        ("*3_B*.txt", "*3-B*.txt"),
+        "PART A 3-B CERTIFIED",
+    )
+
+    prior_3cd, report_3cd = prior_report_certified(
+        ("*3_C_D*.txt", "*3-C*3-D*.txt"),
+        "PART A 3-C AND 3-D CERTIFIED",
+    )
+
+    prior_3e, report_3e = prior_report_certified(
+        ("*3_E*.txt", "*3-E*.txt"),
+        "PART A 3-E CERTIFIED",
+    )
+
+    check(
+        "PART_A_3_B_CERTIFICATION_RETAINED",
+        prior_3b,
+        report_3b,
+    )
+
+    check(
+        "PART_A_3_C_D_CERTIFICATION_RETAINED",
+        prior_3cd,
+        report_3cd,
+    )
+
+    check(
+        "PART_A_3_E_CERTIFICATION_RETAINED",
+        prior_3e,
+        report_3e,
+    )
+
+    source_hashes = {
+        path.name: sha256(path)
+        for path in (
+            DEPENDENCY_PATH,
+            QUEUE_PATH,
+            RUNTIME
+            / "runtime_registration_gateway.py",
+            RUNTIME
+            / "runtime_registration_admission.py",
+            RUNTIME
+            / "runtime_registration_execution_policy.py",
+            RUNTIME
+            / "universal_runtime_registration.py",
+            RUNTIME
+            / "universal_runtime_worker_v1.py",
+            RUNTIME
+            / "runtime_application_lifecycle.py",
+        )
+    }
+
+    for name, digest in source_hashes.items():
+        check(
+            "SOURCE_STABLE_"
+            + name.upper().replace(".", "_"),
+            sha256(
+                next(
+                    path
+                    for path in (
+                        DEPENDENCY_PATH,
+                        QUEUE_PATH,
+                        RUNTIME
+                        / "runtime_registration_gateway.py",
+                        RUNTIME
+                        / "runtime_registration_admission.py",
+                        RUNTIME
+                        / "runtime_registration_execution_policy.py",
+                        RUNTIME
+                        / "universal_runtime_registration.py",
+                        RUNTIME
+                        / "universal_runtime_worker_v1.py",
+                        RUNTIME
+                        / "runtime_application_lifecycle.py",
+                    )
+                    if path.name == name
+                )
+            ) == digest,
+            digest,
+        )
+
+    check("PRODUCTION_REGISTRATION_CREATED_NO", True)
+    check("REGISTRY_PERSISTENCE_EXECUTED_NO", True)
+    check("PRODUCTION_JOB_CREATED_NO", True)
+    check("PRODUCTION_JOB_CLAIMED_NO", True)
+    check("PRODUCTION_HANDLER_EXECUTED_NO", True)
+
+    failed = [
+        label
+        for label, passed in checks
+        if not passed
+    ]
+
+    emit()
+    emit("=" * 112)
+    emit("PART A 3-F - FINAL RESULT")
+    emit("=" * 112)
+
+    emit(
+        "TESTS_PASSED="
+        + str(
+            sum(
+                1
+                for _, passed in checks
+                if passed
+            )
+        )
+    )
+
+    emit(
+        "TESTS_FAILED="
+        + str(len(failed))
+    )
+
+    if failed:
+        emit("FAILED_CHECKS:")
+
+        for label in failed:
+            emit("  - " + label)
+
+    certified = not failed
+
+    emit(
+        "PART_A_3_F_CERTIFICATION="
+        + ("PASS" if certified else "FAIL")
+    )
+
+    emit(
+        "PART_A_REGISTRATION_RUNTIME_CONNECTION="
+        + ("COMPLETE" if certified else "INCOMPLETE")
+    )
+
+    emit(
+        "FINAL RESULT: PART A "
+        + (
+            "REGISTRATION SYSTEM CONNECTED TO "
+            "UNIVERSAL RUNTIME INFRASTRUCTURE"
+            if certified
+            else "NOT_CERTIFIED"
+        )
+    )
+
+except Exception:
+    standard_error = traceback.format_exc()
+    emit()
+    emit("PART A 3-F EXECUTION ERROR")
+    emit(standard_error)
+    certified = False
+
+finally:
+    if not certified:
+        restore()
+
+    status = "CERTIFIED" if certified else "NOT_CERTIFIED"
+
+    rollback = (
+        "Part A 3-F patch retained; backups preserved."
+        if certified
+        else "Original 3-F production sources restored."
+    )
+
+    report = f"""LINKCRAFTER UNIVERSAL RUNTIME REGISTRATION
+PART A 3-F FINAL REGISTRATION-RUNTIME CONNECTION CERTIFICATION
+
+Generated: {datetime.now(timezone.utc).isoformat()}
+Dependency authority: {DEPENDENCY_PATH}
+Queue target: {QUEUE_PATH}
+Backup: {BACKUP_DIRECTORY}
+Patch mode: STRICT FAIL-CLOSED
+Production registrations created: NO
+Registry persistence executed: NO
+Production jobs created: NO
+Production queue claims executed: NO
+Production handlers executed: NO
+CERTIFICATION STATUS: {status}
+
+==============================================================================================================
+RUNTIME VERIFICATION
+==============================================================================================================
+{chr(10).join(output)}
+
+==============================================================================================================
+STANDARD ERROR
+==============================================================================================================
+{standard_error}
+
+==============================================================================================================
+PART A COMPLETED CONNECTION
+==============================================================================================================
+- Registration packages activate during runtime boot.
+- Registration gateway, evidence and snapshots bind to kernel and lifespan.
+- Lifecycle and configuration requirements fail closed before dispatch.
+- Feature flags and version compatibility fail closed before dispatch.
+- Concurrency and idempotency execute at atomic queue admission.
+- predecessor_stages require explicit persisted dependency_job_ids.
+- Every required predecessor must complete successfully.
+- Dependency workspace and pipeline boundaries are enforced.
+- predecessor_stages and successor_stages must be reciprocal.
+- Registration lookup, capability admission and dispatch remain active.
+- No second registry, queue, coordinator, lock or persistence store exists.
+
+==============================================================================================================
+NEXT ROADMAP POSITION
+==============================================================================================================
+PART A:
+1. Universal Runtime Infrastructure Foundation - COMPLETE
+2. Universal Runtime Registration System - COMPLETE
+3. Registration System to Runtime Infrastructure - {status}
+
+NEXT:
+PART B - PREPARE AND REGISTER THE SIX PIPELINE STAGES
+
+4.1 Connect Domain
+4.2 Site Sources
+4.3 URL Cleaner
+4.4 Site Pages
+4.5 Live Domain Target Pool
+4.6 Active Target Set
+
+==============================================================================================================
+ROLLBACK STATUS
+==============================================================================================================
+{rollback}
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+PART A 3-F {status}
+"""
+
+    REPORT_PATH.write_text(
+        report,
+        encoding="utf-8",
+        newline="\n",
+    )
+
+raise SystemExit(0 if certified else 1)

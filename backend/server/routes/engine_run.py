@@ -747,6 +747,92 @@ def engine_run(payload: EngineRunRequest = Body(...)):
     # the "before" debug field would already show display_status/runtime_zone.
     selected_before_density = copy.deepcopy(selection_result.get("selected", []))
 
+    # Phase 3.10: advisory Enricher branch.
+    # Legacy Density and Editor highlight behavior stay unchanged.
+    semantic_advisory_runtime = {
+        "status": "unavailable",
+        "handoff_prepared": False,
+        "scorer_invoked": False,
+        "linking_performed": False,
+        "semantic_certification_performed": False,
+    }
+
+    semantic_input = canonical_highlight_result.get(
+        "semantic_enricher_input"
+    )
+
+    if (
+        not isinstance(semantic_input, list)
+        or semantic_input != canonical_selected_phrase_candidates
+    ):
+        raise RuntimeError(
+            "Canonical Selector-to-Enricher handoff mismatch."
+        )
+
+    try:
+        from backend.server.engine.semantic_intelligence_enricher import (
+            enrich_selected_phrase_candidates,
+        )
+        from backend.server.engine.semantic_enricher_scorer_handoff import (
+            prepare_original_scorer_handoff,
+        )
+
+        enrichment_package = enrich_selected_phrase_candidates(
+            selected_candidates=copy.deepcopy(semantic_input),
+            workspace_id=ws,
+        )
+
+        advisory_handoff = prepare_original_scorer_handoff(
+            enrichment_package=enrichment_package
+        )
+
+        if (
+            advisory_handoff.get("candidates_forwarded")
+            != len(canonical_selected_phrase_candidates)
+            or advisory_handoff.get("candidates_removed") != 0
+            or advisory_handoff.get("production_scorer_invoked") is not False
+            or advisory_handoff.get("scoring_performed") is not False
+            or advisory_handoff.get("linking_performed") is not False
+        ):
+            raise RuntimeError("Unsafe advisory handoff result.")
+
+        operational = enrichment_package.get("operational_health")
+        if not isinstance(operational, dict):
+            raise RuntimeError("Invalid operational health report.")
+
+        semantic_advisory_runtime = {
+            "status": "prepared",
+            "candidate_count": advisory_handoff[
+                "candidates_forwarded"
+            ],
+            "operational_health": operational.get(
+                "status", "unknown"
+            ),
+            "degraded_sources": copy.deepcopy(
+                operational.get("degraded_sources", [])
+            ),
+            "handoff_prepared": True,
+            "scorer_invoked": False,
+            "linking_performed": False,
+            "semantic_certification_performed": False,
+        }
+
+    except Exception as semantic_exc:
+        semantic_advisory_runtime = {
+            "status": "unavailable",
+            "error_type": type(semantic_exc).__name__,
+            "handoff_prepared": False,
+            "scorer_invoked": False,
+            "linking_performed": False,
+            "semantic_certification_performed": False,
+        }
+
+    # LEGACY EDITOR COMPATIBILITY PATH (TEMPORARY)
+    # The new canonical Selector-to-Enricher handoff is
+    # maintained independently by the pipeline coordinator.
+    # Legacy Density remains active only for existing
+    # Editor compatibility until the new output is ready.
+    # Preserve Density implementation for Phase 4 review.
     density_result = apply_highlight_density(
         article_text=joined_text,
         selected_candidates=selection_result.get("selected", []),
@@ -867,6 +953,7 @@ def engine_run(payload: EngineRunRequest = Body(...)):
             "canonical_all_selected_phrase_candidate_count": len(canonical_selected_phrase_candidates),
             "selection_stats": selection_result.get("stats", {}),
             "density_stats": density_result.get("stats", {}),
+            "semantic_advisory": semantic_advisory_runtime,
             "selection_rejected_sample": selection_result.get("rejected", [])[:10],
             "final_highlight_count": len(final_highlights),
             "priority_phrase_set": priority_phrase_set_result,

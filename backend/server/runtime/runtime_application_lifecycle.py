@@ -98,6 +98,12 @@ from backend.server.runtime.runtime_versioning import (
     RuntimeVersionManager,
 )
 
+from backend.server.runtime.runtime_registration_gateway import (
+    RUNTIME_REGISTRATION_GATEWAY_KEY,
+    RuntimeRegistrationGateway,
+    register_runtime_registration_gateway,
+)
+
 @asynccontextmanager
 async def linkcraftor_runtime_lifespan(
     application: Any,
@@ -108,7 +114,7 @@ async def linkcraftor_runtime_lifespan(
     application.state.runtime_lifecycle_status = "BOOTING"
 
     try:
-        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway,))
+        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway,register_runtime_registration_gateway, ))
 
     except Exception as exc:
         application.state.runtime_lifecycle_status = (
@@ -174,6 +180,20 @@ async def linkcraftor_runtime_lifespan(
         _record_mapping(
             runtime_compatibility.snapshot()
         )
+    )
+
+    registration_gateway = boot_context.kernel.get_component(
+        RUNTIME_REGISTRATION_GATEWAY_KEY,
+        RuntimeRegistrationGateway,
+    )
+    application.state.runtime_registration_gateway = (
+        registration_gateway
+    )
+    application.state.runtime_registration_evidence = _record_mapping(
+        registration_gateway.evidence()
+    )
+    application.state.runtime_registration_snapshot = _record_mapping(
+        registration_gateway.snapshot()
     )
 
     application.state.runtime_boot_process = boot_process

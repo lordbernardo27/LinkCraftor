@@ -22,9 +22,18 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Callable, Iterable, Mapping
 
+from backend.server.runtime.runtime_registration_package import (
+    RuntimeRegistrationPackage,
+    create_runtime_registration_package,
+)
+
+
+LEGACY_REGISTRATION_SCHEMA_VERSION = (
+    "universal_runtime_registration_v1"
+)
 
 REGISTRATION_SCHEMA_VERSION = (
-    "universal_runtime_registration_v1"
+    "universal_runtime_registration_v2"
 )
 
 REGISTRY_ROOT = (
@@ -396,41 +405,49 @@ def register_runtime_handler(
     stage: str = "",
     description: str = "",
     required_payload_fields: Iterable[Any] | None = None,
+    required_worker_capabilities: Iterable[Any] | None = None,
     predecessor_stages: Iterable[Any] | None = None,
     successor_stages: Iterable[Any] | None = None,
     idempotency_fields: Iterable[Any] | None = None,
     retry_policy: Mapping[str, Any] | None = None,
     concurrency_policy: Mapping[str, Any] | None = None,
+    lifecycle_policy: Mapping[str, Any] | None = None,
+    configuration_requirements: Mapping[str, Any] | None = None,
+    feature_flag_key: str | None = None,
+    runtime_version_requirements: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     replace: bool = False,
     persist: bool = False,
     _loaded_from_persistence: bool = False,
+    _registered_at: str = "",
+    _registration_fingerprint: str | None = None,
+    _persistent: bool | None = None,
 ) -> dict[str, Any]:
+    """
+    Register one handler through the canonical package factory.
+
+    Complete persistence rehydration remains in A2.2-I.
+    """
+
     canonical_job_type = _normalize_name(
         job_type,
         field_name="job_type",
     )
 
-    canonical_pipeline = (
-        _normalize_optional_name(
-            pipeline,
-            fallback="universal_knowledge",
-            field_name="pipeline",
-        )
+    canonical_pipeline = _normalize_optional_name(
+        pipeline,
+        fallback="universal_knowledge",
+        field_name="pipeline",
     )
 
-    canonical_stage = (
-        _normalize_optional_name(
-            stage,
-            fallback=canonical_job_type,
-            field_name="stage",
-        )
+    canonical_stage = _normalize_optional_name(
+        stage,
+        fallback=canonical_job_type,
+        field_name="stage",
     )
 
-    resolved_handler, handler_ref = (
-        _resolve_handler(
-            handler
-        )
+    resolved_handler, handler_ref = _resolve_handler(
+        handler
     )
 
     if (
@@ -442,60 +459,65 @@ def register_runtime_handler(
             "functions."
         )
 
+    if (
+        _persistent is not None
+        and not isinstance(_persistent, bool)
+    ):
+        raise TypeError(
+            "_persistent must be a Boolean or None."
+        )
+
     persistent = bool(
-        persist
-        or _loaded_from_persistence
+        _persistent
+        if _persistent is not None
+        else (
+            persist
+            or _loaded_from_persistence
+        )
     )
 
-    registration = RuntimeHandlerRegistration(
+    canonical_registered_at = (
+        str(_registered_at or "").strip()
+        or utc_now()
+    )
+
+    registration = create_runtime_registration_package(
         job_type=canonical_job_type,
-        pipeline=canonical_pipeline,
-        stage=canonical_stage,
         handler_ref=handler_ref,
         handler=resolved_handler,
-        description=str(
-            description or ""
-        ).strip(),
+        pipeline=canonical_pipeline,
+        stage=canonical_stage,
+        description=description,
         required_payload_fields=(
-            _normalize_string_tuple(
-                required_payload_fields
-            )
+            required_payload_fields
         ),
-        predecessor_stages=(
-            _normalize_string_tuple(
-                predecessor_stages
-            )
+        required_worker_capabilities=(
+            required_worker_capabilities
         ),
-        successor_stages=(
-            _normalize_string_tuple(
-                successor_stages
-            )
+        predecessor_stages=predecessor_stages,
+        successor_stages=successor_stages,
+        idempotency_fields=idempotency_fields,
+        retry_policy=retry_policy,
+        concurrency_policy=concurrency_policy,
+        lifecycle_policy=lifecycle_policy,
+        configuration_requirements=(
+            configuration_requirements
         ),
-        idempotency_fields=(
-            _normalize_string_tuple(
-                idempotency_fields
-            )
+        feature_flag_key=feature_flag_key,
+        runtime_version_requirements=(
+            runtime_version_requirements
         ),
-        retry_policy=_normalize_mapping(
-            retry_policy
-        ),
-        concurrency_policy=(
-            _normalize_mapping(
-                concurrency_policy
-            )
-        ),
-        metadata=_normalize_mapping(
-            metadata
-        ),
+        metadata=metadata,
         persistent=persistent,
-        registered_at=utc_now(),
+        registered_at=canonical_registered_at,
+        registration_fingerprint=(
+            _registration_fingerprint
+        ),
     )
 
     with _REGISTRY_LOCK:
-        existing = (
-            _RUNTIME_HANDLER_REGISTRY.get(
-                canonical_job_type
-            )
+        existing = _RUNTIME_HANDLER_REGISTRY.get(
+            canonical_job_type
         )
 
         if (
@@ -507,12 +529,27 @@ def register_runtime_handler(
                 f"job_type: {canonical_job_type}"
             )
 
+        had_existing = existing is not None
+
         _RUNTIME_HANDLER_REGISTRY[
             canonical_job_type
         ] = registration
 
         if persist:
-            _persist_registry_snapshot()
+            try:
+                _persist_registry_snapshot()
+            except Exception:
+                if had_existing:
+                    _RUNTIME_HANDLER_REGISTRY[
+                        canonical_job_type
+                    ] = existing
+                else:
+                    _RUNTIME_HANDLER_REGISTRY.pop(
+                        canonical_job_type,
+                        None,
+                    )
+
+                raise
 
     return registration.to_public_dict()
 
@@ -524,11 +561,16 @@ def runtime_handler(
     stage: str = "",
     description: str = "",
     required_payload_fields: Iterable[Any] | None = None,
+    required_worker_capabilities: Iterable[Any] | None = None,
     predecessor_stages: Iterable[Any] | None = None,
     successor_stages: Iterable[Any] | None = None,
     idempotency_fields: Iterable[Any] | None = None,
     retry_policy: Mapping[str, Any] | None = None,
     concurrency_policy: Mapping[str, Any] | None = None,
+    lifecycle_policy: Mapping[str, Any] | None = None,
+    configuration_requirements: Mapping[str, Any] | None = None,
+    feature_flag_key: str | None = None,
+    runtime_version_requirements: Mapping[str, Any] | None = None,
     metadata: Mapping[str, Any] | None = None,
     replace: bool = False,
     persist: bool = False,
@@ -536,6 +578,10 @@ def runtime_handler(
     [Callable[..., Any]],
     Callable[..., Any],
 ]:
+    """
+    Declare and register a handler using the full package contract.
+    """
+
     def decorator(
         handler: Callable[..., Any],
     ) -> Callable[..., Any]:
@@ -548,18 +594,21 @@ def runtime_handler(
             required_payload_fields=(
                 required_payload_fields
             ),
-            predecessor_stages=(
-                predecessor_stages
+            required_worker_capabilities=(
+                required_worker_capabilities
             ),
-            successor_stages=(
-                successor_stages
-            ),
-            idempotency_fields=(
-                idempotency_fields
-            ),
+            predecessor_stages=predecessor_stages,
+            successor_stages=successor_stages,
+            idempotency_fields=idempotency_fields,
             retry_policy=retry_policy,
-            concurrency_policy=(
-                concurrency_policy
+            concurrency_policy=concurrency_policy,
+            lifecycle_policy=lifecycle_policy,
+            configuration_requirements=(
+                configuration_requirements
+            ),
+            feature_flag_key=feature_flag_key,
+            runtime_version_requirements=(
+                runtime_version_requirements
             ),
             metadata=metadata,
             replace=replace,
@@ -590,7 +639,15 @@ def unregister_runtime_handler(
         )
 
         if persist:
-            _persist_registry_snapshot()
+            try:
+                _persist_registry_snapshot()
+            except Exception:
+                if registration is not None:
+                    _RUNTIME_HANDLER_REGISTRY[
+                        canonical_job_type
+                    ] = registration
+
+                raise
 
     if registration is None:
         return None
@@ -606,10 +663,148 @@ def clear_runtime_registration_memory() -> None:
         _PERSISTED_REGISTRY_LOADED = False
 
 
+def _registration_from_persisted_record(
+    *,
+    record: Mapping[str, Any],
+    document_schema: str,
+) -> RuntimeRegistrationPackage:
+    """
+    Construct one persisted package without mutating registry state.
+    """
+
+    if not isinstance(record, Mapping):
+        raise RuntimeError(
+            "Runtime registration record must be a JSON object."
+        )
+
+    canonical_job_type = _normalize_name(
+        record.get("job_type", ""),
+        field_name="job_type",
+    )
+
+    canonical_pipeline = _normalize_optional_name(
+        record.get("pipeline", ""),
+        fallback="universal_knowledge",
+        field_name="pipeline",
+    )
+
+    canonical_stage = _normalize_optional_name(
+        record.get("stage", ""),
+        fallback=canonical_job_type,
+        field_name="stage",
+    )
+
+    handler_reference = str(
+        record.get("handler_ref", "")
+        or ""
+    ).strip()
+
+    resolved_handler, resolved_reference = _resolve_handler(
+        handler_reference
+    )
+
+    if resolved_reference != handler_reference:
+        raise RuntimeError(
+            "Persisted handler reference changed during resolution."
+        )
+
+    persisted_fingerprint: str | None = None
+
+    if document_schema == REGISTRATION_SCHEMA_VERSION:
+        persisted_fingerprint = str(
+            record.get(
+                "registration_fingerprint",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not persisted_fingerprint:
+            raise RuntimeError(
+                "Schema-v2 registration records require "
+                "registration_fingerprint."
+            )
+
+    return create_runtime_registration_package(
+        job_type=canonical_job_type,
+        handler_ref=resolved_reference,
+        handler=resolved_handler,
+        pipeline=canonical_pipeline,
+        stage=canonical_stage,
+        description=record.get(
+            "description",
+            "",
+        ),
+        required_payload_fields=record.get(
+            "required_payload_fields",
+            [],
+        ),
+        required_worker_capabilities=record.get(
+            "required_worker_capabilities",
+            [],
+        ),
+        predecessor_stages=record.get(
+            "predecessor_stages",
+            [],
+        ),
+        successor_stages=record.get(
+            "successor_stages",
+            [],
+        ),
+        idempotency_fields=record.get(
+            "idempotency_fields",
+            [],
+        ),
+        retry_policy=record.get(
+            "retry_policy",
+            {},
+        ),
+        concurrency_policy=record.get(
+            "concurrency_policy",
+            {},
+        ),
+        lifecycle_policy=record.get(
+            "lifecycle_policy",
+            {},
+        ),
+        configuration_requirements=record.get(
+            "configuration_requirements",
+            {},
+        ),
+        feature_flag_key=record.get(
+            "feature_flag_key",
+            None,
+        ),
+        runtime_version_requirements=record.get(
+            "runtime_version_requirements",
+            {},
+        ),
+        metadata=record.get(
+            "metadata",
+            {},
+        ),
+        persistent=True,
+        registered_at=record.get(
+            "registered_at",
+            "",
+        ),
+        registration_fingerprint=(
+            persisted_fingerprint
+        ),
+    )
+
+
 def load_persisted_runtime_registrations(
     *,
     force: bool = False,
 ) -> dict[str, Any]:
+    """
+    Load registry evidence atomically.
+
+    Every record is validated and reconstructed before live registry
+    state is replaced.
+    """
+
     global _PERSISTED_REGISTRY_LOADED
 
     with _REGISTRY_LOCK:
@@ -625,20 +820,6 @@ def load_persisted_runtime_registrations(
                     _RUNTIME_HANDLER_REGISTRY
                 ),
             }
-
-        if force:
-            persistent_job_types = [
-                job_type
-                for job_type, registration
-                in _RUNTIME_HANDLER_REGISTRY.items()
-                if registration.persistent
-            ]
-
-            for job_type in persistent_job_types:
-                _RUNTIME_HANDLER_REGISTRY.pop(
-                    job_type,
-                    None,
-                )
 
         if not REGISTRY_PATH.is_file():
             _PERSISTED_REGISTRY_LOADED = True
@@ -662,6 +843,23 @@ def load_persisted_runtime_registrations(
                 "must be a JSON object."
             )
 
+        document_schema = str(
+            document.get(
+                "schema_version",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if document_schema not in {
+            LEGACY_REGISTRATION_SCHEMA_VERSION,
+            REGISTRATION_SCHEMA_VERSION,
+        }:
+            raise RuntimeError(
+                "Unsupported runtime registration schema: "
+                f"{document_schema!r}."
+            )
+
         records = document.get(
             "registrations",
             [],
@@ -672,82 +870,65 @@ def load_persisted_runtime_registrations(
                 "Runtime registration records must be a list."
             )
 
-        loaded_job_types: list[str] = []
+        declared_count = document.get(
+            "registration_count",
+            len(records),
+        )
+
+        if (
+            not isinstance(declared_count, int)
+            or isinstance(declared_count, bool)
+            or declared_count != len(records)
+        ):
+            raise RuntimeError(
+                "Runtime registration_count does not match "
+                "the registration records."
+            )
+
+        loaded_records: dict[
+            str,
+            RuntimeRegistrationPackage,
+        ] = {}
 
         for record in records:
-            if not isinstance(record, dict):
+            registration = (
+                _registration_from_persisted_record(
+                    record=record,
+                    document_schema=document_schema,
+                )
+            )
+
+            if registration.job_type in loaded_records:
                 raise RuntimeError(
-                    "Runtime registration record must be "
-                    "a JSON object."
+                    "Duplicate persisted runtime registration: "
+                    f"{registration.job_type}"
                 )
 
-            public_record = register_runtime_handler(
-                job_type=record.get(
-                    "job_type",
-                    "",
-                ),
-                handler=record.get(
-                    "handler_ref",
-                    "",
-                ),
-                pipeline=record.get(
-                    "pipeline",
-                    "",
-                ),
-                stage=record.get(
-                    "stage",
-                    "",
-                ),
-                description=record.get(
-                    "description",
-                    "",
-                ),
-                required_payload_fields=(
-                    record.get(
-                        "required_payload_fields",
-                        [],
-                    )
-                ),
-                predecessor_stages=(
-                    record.get(
-                        "predecessor_stages",
-                        [],
-                    )
-                ),
-                successor_stages=(
-                    record.get(
-                        "successor_stages",
-                        [],
-                    )
-                ),
-                idempotency_fields=(
-                    record.get(
-                        "idempotency_fields",
-                        [],
-                    )
-                ),
-                retry_policy=record.get(
-                    "retry_policy",
-                    {},
-                ),
-                concurrency_policy=(
-                    record.get(
-                        "concurrency_policy",
-                        {},
-                    )
-                ),
-                metadata=record.get(
-                    "metadata",
-                    {},
-                ),
-                replace=True,
-                persist=False,
-                _loaded_from_persistence=True,
-            )
+            loaded_records[
+                registration.job_type
+            ] = registration
 
-            loaded_job_types.append(
-                public_record["job_type"]
-            )
+        # Mutation starts only after every record has passed.
+        staged_registry = dict(
+            _RUNTIME_HANDLER_REGISTRY
+        )
+
+        if force:
+            staged_registry = {
+                job_type: registration
+                for job_type, registration
+                in staged_registry.items()
+                if not registration.persistent
+            }
+
+        staged_registry.update(
+            loaded_records
+        )
+
+        _RUNTIME_HANDLER_REGISTRY.clear()
+        _RUNTIME_HANDLER_REGISTRY.update(
+            staged_registry
+        )
 
         _PERSISTED_REGISTRY_LOADED = True
 
@@ -755,11 +936,12 @@ def load_persisted_runtime_registrations(
             "ok": True,
             "loaded": True,
             "reason": "registry_loaded",
+            "schema_version": document_schema,
             "registration_count": len(
-                loaded_job_types
+                loaded_records
             ),
             "job_types": sorted(
-                loaded_job_types
+                loaded_records
             ),
         }
 
@@ -918,10 +1100,69 @@ def _invoke_handler(
         for parameter in parameters.values()
     )
 
-    if (
-        "job" in parameters
-        or accepts_var_keyword
+    # Preserve the canonical legacy job-aware contract.
+    if "job" in parameters:
+        return handler(
+            job=job
+        )
+
+    payload = job.get(
+        "payload",
+        {},
+    )
+
+    if not isinstance(
+        payload,
+        Mapping,
     ):
+        raise TypeError(
+            "Universal runtime job payload must be a mapping."
+        )
+
+    keyword_parameter_names = {
+        name
+        for name, parameter in parameters.items()
+        if parameter.kind
+        in {
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        }
+    }
+
+    keyword_only_parameters = [
+        parameter
+        for parameter in parameters.values()
+        if parameter.kind
+        == inspect.Parameter.KEYWORD_ONLY
+    ]
+
+    payload_arguments = {
+        name: payload[name]
+        for name in keyword_parameter_names
+        if name in payload
+    }
+
+    # Registered stage handlers consume canonical payload fields
+    # through named positional-or-keyword or keyword-only parameters.
+    if (
+        payload_arguments
+        or keyword_only_parameters
+    ):
+        if accepts_var_keyword:
+            payload_arguments.update(
+                {
+                    name: value
+                    for name, value in payload.items()
+                    if name not in payload_arguments
+                }
+            )
+
+        return handler(
+            **payload_arguments
+        )
+
+    # Preserve handlers whose only declared contract is **kwargs.
+    if accepts_var_keyword:
         return handler(
             job=job
         )
@@ -936,6 +1177,7 @@ def _invoke_handler(
         }
     ]
 
+    # Preserve legacy unnamed single-job positional handlers.
     if positional_parameters:
         return handler(job)
 

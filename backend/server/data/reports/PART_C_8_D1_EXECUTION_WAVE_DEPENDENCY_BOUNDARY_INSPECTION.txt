@@ -1,0 +1,992 @@
+LINKCRAFTER UNIVERSAL COORDINATION
+PART C 8-D1 EXECUTION-WAVE AND DEPENDENCY BOUNDARY INSPECTION
+
+Generated: 2026-10-21T23:44:15.518541+00:00
+Mode: READ-ONLY TARGETED INSPECTION
+Production source changes: NONE
+Runtime registrations created: NO
+Registry persistence executed: NO
+Universal Jobs created: NO
+Queue claims executed: NO
+Handlers executed: NO
+Live network requests executed: NO
+INSPECTION STATUS: COMPLETE
+
+==============================================================================================================
+INSPECTION DECISION
+==============================================================================================================
+AGGREGATE GATEWAY DECISION: IMPLEMENTATION_REQUIRED
+DEPENDENCY STRATEGY: ENRICH_CANONICAL_MAPPING_REQUEST
+IDEMPOTENCY STRATEGY: DEFER_TO_PART_C_8_E_RECONCILIATION_AUTHORITY
+
+This step performs no submission. It freezes the boundary needed to submit execution waves without violating the Phase 5.2 mapping contract.
+
+==============================================================================================================
+CHECKS
+==============================================================================================================
+{
+  "aggregate_gateway_inventory_completed": true,
+  "all_required_modules_imported": true,
+  "all_required_sources_exist": true,
+  "all_required_sources_pass_syntax": true,
+  "dependency_override_probe_completed": true,
+  "dependency_policy_available": true,
+  "handler_executed_no": true,
+  "idempotency_override_probe_completed": true,
+  "live_network_request_executed_no": true,
+  "mapping_result_contract_available": true,
+  "part_c_8_c_certified": true,
+  "production_sources_unchanged": true,
+  "queue_claim_executed_no": true,
+  "registry_persistence_executed_no": true,
+  "runtime_registration_created_no": true,
+  "single_mapping_gateway_retained": true,
+  "universal_job_created_no": true,
+  "wave_index_available": true
+}
+
+FAILED_CHECKS:
+[]
+
+==============================================================================================================
+BOUNDARY EVIDENCE
+==============================================================================================================
+{
+  "aggregate_gateway_candidates": [
+    {
+      "calls": [
+        "CoordinationRuntimeBridgeResult",
+        "CoordinationRuntimeBridgeValidationError",
+        "RuntimeHandoffIntent",
+        "_execution_target_name",
+        "_normalize_required_fields",
+        "_validate_plan_structure",
+        "append",
+        "get",
+        "isinstance",
+        "items",
+        "len",
+        "str",
+        "strip",
+        "tuple"
+      ],
+      "function": "bridge_execution_plan_to_runtime",
+      "line": 865,
+      "parameters": [
+        "execution_plan",
+        "stage_references",
+        "context"
+      ],
+      "source": "backend/server/coordination/runtime_integration/coordination_runtime_bridge.py",
+      "submits_runtime_mapping": false
+    },
+    {
+      "calls": [
+        "WorkflowJobCorrelationValidationError",
+        "isinstance"
+      ],
+      "function": "_clean_wave_index",
+      "line": 115,
+      "parameters": [
+        "value"
+      ],
+      "source": "backend/server/coordination/runtime_integration/workflow_job_correlation.py",
+      "submits_runtime_mapping": false
+    }
+  ],
+  "critical_callables": {
+    "RuntimeJobMapping.__post_init__": {
+      "available": true,
+      "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+      "name": "__post_init__",
+      "signature": "(self) -> 'None'",
+      "source": "    def __post_init__(\n        self,\n    ) -> None:\n\n        _clean_required_text(\n            self.workflow_id,\n            field_name=\"workflow_id\",\n        )\n\n        _clean_required_text(\n            self.correlation_id,\n            field_name=\"correlation_id\",\n        )\n\n        _clean_required_text(\n            self.stage_id,\n            field_name=\"stage_id\",\n        )\n\n        if (\n            not isinstance(\n                self.wave_index,\n                int,\n            )\n            or isinstance(\n                self.wave_index,\n                bool,\n            )\n            or self.wave_index < 0\n        ):\n\n            raise RuntimeJobMappingValidationError(\n                \"wave_index must be a non-negative integer.\",\n                violations=(\n                    \"wave_index must be a non-negative integer\",\n                ),\n            )\n\n        if not isinstance(\n            self.creation_request,\n            UniversalJobCreationRequest,\n        ):\n\n            raise RuntimeJobMappingValidationError(\n                (\n                    \"creation_request must be \"\n                    \"UniversalJobCreationRequest.\"\n                ),\n                violations=(\n                    (\n                        \"creation_request must be \"\n                        \"UniversalJobCreationRequest\"\n                    ),\n                ),\n            )\n\n        if (\n            self.creation_request.pipeline_run_id\n            is not None\n        ):\n\n            raise RuntimeJobMappingValidationError(\n                (\n                    \"Phase 5.2 must not establish \"\n                    \"pipeline_run_id.\"\n                ),\n                violations=(\n                    \"pipeline_run_id belongs downstream of Phase 5.2\",\n                ),\n            )\n\n        if (\n            self.creation_request.job_id\n            is not None\n        ):\n\n            raise RuntimeJobMappingValidationError(\n                \"Phase 5.2 must not generate job_id.\",\n                violations=(\n                    \"job_id belongs to Universal Job Creation Engine\",\n                ),\n            )\n\n        if (\n            self.creation_request.idempotency_key\n            is not None\n        ):\n\n            raise RuntimeJobMappingValidationError(\n                (\n                    \"Phase 5.2 must not generate \"\n                    \"idempotency_key.\"\n                ),\n                violations=(\n                    (\n                        \"idempotency_key requires a separate \"\n                        \"authoritative identity policy\"\n                    ),\n                ),\n            )\n"
+    },
+    "map_runtime_handoff_intent_to_creation_request": {
+      "available": true,
+      "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+      "name": "map_runtime_handoff_intent_to_creation_request",
+      "signature": "(*, intent: 'RuntimeHandoffIntent') -> 'RuntimeJobMapping'",
+      "source": "def map_runtime_handoff_intent_to_creation_request(\n    *,\n    intent: RuntimeHandoffIntent,\n) -> RuntimeJobMapping:\n\n    \"\"\"\n    Convert one frozen Phase 5.1 handoff intent into one immutable\n    UniversalJobCreationRequest.\n\n    No job creation, registration lookup, persistence, queue write,\n    dispatch, execution, or workflow/job correlation occurs here.\n    \"\"\"\n\n    if not isinstance(\n        intent,\n        RuntimeHandoffIntent,\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"intent must be \"\n                \"RuntimeHandoffIntent.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.2 input must be \"\n                    \"RuntimeHandoffIntent\"\n                ),\n            ),\n        )\n\n    workflow_id = _clean_required_text(\n        intent.workflow_id,\n        field_name=\"workflow_id\",\n    )\n\n    workspace_id = _clean_required_text(\n        intent.workspace_id,\n        field_name=\"workspace_id\",\n    )\n\n    correlation_id = _clean_required_text(\n        intent.correlation_id,\n        field_name=\"correlation_id\",\n    )\n\n    stage_id = _clean_required_text(\n        intent.stage_id,\n        field_name=\"stage_id\",\n    )\n\n    pipeline_id = _clean_required_text(\n        intent.pipeline_id,\n        field_name=\"pipeline_id\",\n    )\n\n    job_type = _clean_required_text(\n        intent.job_type,\n        field_name=\"job_type\",\n    )\n\n    runtime_stage = _clean_required_text(\n        intent.runtime_stage,\n        field_name=\"runtime_stage\",\n    )\n\n    payload = _freeze_mapping(\n        intent.payload,\n        field_name=\"intent.payload\",\n    )\n\n    metadata = _build_creation_metadata(\n        intent\n    )\n\n    request = UniversalJobCreationRequest(\n        workspace_id=workspace_id,\n        job_type=job_type,\n        payload=payload,\n        metadata=metadata,\n        pipeline=pipeline_id,\n        stage=runtime_stage,\n        enqueue=True,\n    )\n\n    return RuntimeJobMapping(\n        workflow_id=workflow_id,\n        correlation_id=correlation_id,\n        stage_id=stage_id,\n        wave_index=intent.wave_index,\n        creation_request=request,\n    )\n"
+    },
+    "map_runtime_handoffs_to_job_requests": {
+      "available": true,
+      "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+      "name": "map_runtime_handoffs_to_job_requests",
+      "signature": "(*, bridge_result: 'CoordinationRuntimeBridgeResult') -> 'RuntimeJobMappingResult'",
+      "source": "def map_runtime_handoffs_to_job_requests(\n    *,\n    bridge_result: CoordinationRuntimeBridgeResult,\n) -> RuntimeJobMappingResult:\n\n    \"\"\"\n    Map one complete frozen Phase 5.1 bridge result.\n\n    Intent ordering is preserved exactly.\n    Empty bridge results produce zero mappings.\n    \"\"\"\n\n    if not isinstance(\n        bridge_result,\n        CoordinationRuntimeBridgeResult,\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"bridge_result must be \"\n                \"CoordinationRuntimeBridgeResult.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.2 input must be the \"\n                    \"Phase 5.1 bridge result\"\n                ),\n            ),\n        )\n\n    workflow_id = _clean_required_text(\n        bridge_result.workflow_id,\n        field_name=\"bridge_result.workflow_id\",\n    )\n\n    if (\n        bridge_result.handoff_count\n        != len(\n            bridge_result.intents\n        )\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"Phase 5.1 handoff_count does not \"\n                \"match intents length.\"\n            ),\n            violations=(\n                (\n                    \"bridge_result.handoff_count must equal \"\n                    \"len(bridge_result.intents)\"\n                ),\n            ),\n        )\n\n    if (\n        tuple(\n            bridge_result.planned_stage_ids\n        )\n        != tuple(\n            intent.stage_id\n            for intent\n            in bridge_result.intents\n        )\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"Phase 5.1 planned_stage_ids do not \"\n                \"match intent ordering.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.2 requires certified Phase 5.1 \"\n                    \"intent ordering\"\n                ),\n            ),\n        )\n\n    mappings = tuple(\n        map_runtime_handoff_intent_to_creation_request(\n            intent=intent\n        )\n        for intent\n        in bridge_result.intents\n    )\n\n    stage_ids = tuple(\n        mapping.stage_id\n        for mapping\n        in mappings\n    )\n\n    return RuntimeJobMappingResult(\n        workflow_id=workflow_id,\n        mapping_count=len(\n            mappings\n        ),\n        mappings=mappings,\n        stage_ids=stage_ids,\n    )\n"
+    },
+    "submit_runtime_job_mapping": {
+      "available": true,
+      "module": "backend.server.coordination.runtime_integration.runtime_execution_gateway",
+      "name": "submit_runtime_job_mapping",
+      "signature": "(*, mapping: 'RuntimeJobMapping', submitter: 'Callable[..., Mapping[str, Any]]' = <function submit_universal_job at 0x000001A2C1700B80>, correlation_registry: 'WorkflowJobCorrelationRegistry | None' = None) -> 'RuntimeExecutionGatewayResult'",
+      "source": "def submit_runtime_job_mapping(\n    *,\n    mapping: RuntimeJobMapping,\n    submitter: Callable[\n        ...,\n        Mapping[str, Any],\n    ] = submit_universal_job,\n    correlation_registry: (\n        WorkflowJobCorrelationRegistry\n        | None\n    ) = None,\n) -> RuntimeExecutionGatewayResult:\n    \"\"\"\n    Submit one mapped registered stage and\n    correlate its canonical job identity.\n    \"\"\"\n\n    request = _validate_mapping(\n        mapping\n    )\n\n    registration = (\n        _resolve_registration(\n            request\n        )\n    )\n\n    if not callable(submitter):\n        raise RuntimeExecutionGatewayError(\n            \"submitter must be callable.\",\n            code=\"job_submission_failure\",\n            violations=(\"submitter\",),\n        )\n\n    submitted_job = submitter(\n        **_submitter_arguments(\n            request,\n            registration,\n        )\n    )\n\n    if not isinstance(\n        submitted_job,\n        Mapping,\n    ):\n        raise RuntimeExecutionGatewayError(\n            (\n                \"Universal Job submitter \"\n                \"must return a mapping.\"\n            ),\n            code=\"job_submission_failure\",\n            violations=(\n                \"submitted_job\",\n            ),\n        )\n\n    job_id = (\n        _validate_submitted_identity(\n            request=request,\n            submitted_job=submitted_job,\n        )\n    )\n\n    (\n        created,\n        reused,\n        queued,\n        outcome,\n    ) = _submission_flags(\n        submitted_job\n    )\n\n    if (\n        created == reused\n        or not queued\n    ):\n        raise RuntimeExecutionGatewayError(\n            (\n                \"Universal Job submission did not \"\n                \"provide a valid queued outcome.\"\n            ),\n            code=\"job_submission_failure\",\n            violations=(\n                \"created\",\n                \"reused_existing_job\",\n                \"queued\",\n            ),\n        )\n\n    effective_registry = (\n        correlation_registry\n        if correlation_registry is not None\n        else (\n            get_workflow_job_correlation_registry()\n        )\n    )\n\n    if not isinstance(\n        effective_registry,\n        WorkflowJobCorrelationRegistry,\n    ):\n        raise RuntimeExecutionGatewayError(\n            (\n                \"correlation_registry must be \"\n                \"WorkflowJobCorrelationRegistry.\"\n            ),\n            code=\"correlation_failure\",\n            violations=(\n                \"correlation_registry\",\n            ),\n        )\n\n    correlation = correlate_submitted_job(\n        mapping=mapping,\n        submitted_job=submitted_job,\n        registry=effective_registry,\n    )\n\n    registration_fingerprint = _text(\n        registration.get(\n            \"registration_fingerprint\"\n        )\n    )\n\n    evidence = {\n        \"gateway_version\": (\n            RUNTIME_EXECUTION_GATEWAY_VERSION\n        ),\n        \"mapping_version\": (\n            mapping.mapping_version\n        ),\n        \"registration_fingerprint\": (\n            registration_fingerprint\n        ),\n        \"registration_resolved\": True,\n        \"canonical_submitter\": (\n            \"submit_universal_job\"\n        ),\n        \"correlation_registered\": True,\n        \"handler_dispatched\": False,\n    }\n\n    return RuntimeExecutionGatewayResult(\n        contract_version=(\n            RUNTIME_EXECUTION_GATEWAY_CONTRACT_VERSION\n        ),\n        submission_outcome=outcome,\n        created=created,\n        reused_existing_job=reused,\n        queued=queued,\n        job_id=job_id,\n        job_type=_text(\n            request.job_type\n        ),\n        workflow_id=_text(\n            mapping.workflow_id\n        ),\n        workspace_id=_text(\n            request.workspace_id\n        ),\n        correlation_id=_text(\n            mapping.correlation_id\n        ),\n        stage_id=_text(\n            mapping.stage_id\n        ),\n        runtime_stage=_text(\n            request.stage\n        ),\n        dependency_job_ids=tuple(\n            request.dependency_job_ids\n        ),\n        idempotency_key=(\n            _text(\n                request.idempotency_key\n            )\n            if request.idempotency_key\n            else None\n        ),\n        mapping=mapping,\n        submitted_job=submitted_job,\n        correlation=correlation,\n        evidence=evidence,\n    )\n"
+    }
+  },
+  "critical_classes": {
+    "ExecutionPlan": {
+      "annotations": {
+        "cycle_detection_version": "str",
+        "graph_version": "str",
+        "planned_stage_ids": "tuple[str, ...]",
+        "planner_version": "str",
+        "runnable_stage_resolver_version": "str",
+        "wave_count": "int",
+        "waves": "tuple[ExecutionWave, ...]",
+        "workflow_id": "str"
+      },
+      "available": true,
+      "dataclass": true,
+      "fields": [
+        "workflow_id",
+        "wave_count",
+        "waves",
+        "planned_stage_ids",
+        "graph_version",
+        "cycle_detection_version",
+        "runnable_stage_resolver_version",
+        "planner_version"
+      ],
+      "frozen": true,
+      "module": "backend.server.coordination.dependency_planning.execution_planner",
+      "name": "ExecutionPlan",
+      "signature": "(workflow_id: 'str', wave_count: 'int', waves: 'tuple[ExecutionWave, ...]', planned_stage_ids: 'tuple[str, ...]', graph_version: 'str', cycle_detection_version: 'str', runnable_stage_resolver_version: 'str', planner_version: 'str') -> None",
+      "uses_slots": true
+    },
+    "ExecutionWave": {
+      "annotations": {
+        "execution_semantics": "str",
+        "stage_ids": "tuple[str, ...]",
+        "wave_index": "int"
+      },
+      "available": true,
+      "dataclass": true,
+      "fields": [
+        "wave_index",
+        "stage_ids",
+        "execution_semantics"
+      ],
+      "frozen": true,
+      "module": "backend.server.coordination.dependency_planning.execution_planner",
+      "name": "ExecutionWave",
+      "signature": "(wave_index: 'int', stage_ids: 'tuple[str, ...]', execution_semantics: 'str') -> None",
+      "uses_slots": true
+    },
+    "RuntimeJobMapping": {
+      "annotations": {
+        "correlation_id": "str",
+        "creation_request": "UniversalJobCreationRequest",
+        "mapping_version": "str",
+        "stage_id": "str",
+        "wave_index": "int",
+        "workflow_id": "str"
+      },
+      "available": true,
+      "dataclass": true,
+      "fields": [
+        "workflow_id",
+        "correlation_id",
+        "stage_id",
+        "wave_index",
+        "creation_request",
+        "mapping_version"
+      ],
+      "frozen": true,
+      "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+      "name": "RuntimeJobMapping",
+      "signature": "(workflow_id: 'str', correlation_id: 'str', stage_id: 'str', wave_index: 'int', creation_request: 'UniversalJobCreationRequest', mapping_version: 'str' = 'runtime_job_mapping_entry_v5.2.0') -> None",
+      "uses_slots": true
+    },
+    "RuntimeJobMappingResult": {
+      "annotations": {
+        "mapper_version": "str",
+        "mapping_count": "int",
+        "mappings": "tuple[RuntimeJobMapping, ...]",
+        "schema_version": "str",
+        "stage_ids": "tuple[str, ...]",
+        "workflow_id": "str"
+      },
+      "available": true,
+      "dataclass": true,
+      "fields": [
+        "workflow_id",
+        "mapping_count",
+        "mappings",
+        "stage_ids",
+        "mapper_version",
+        "schema_version"
+      ],
+      "frozen": true,
+      "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+      "name": "RuntimeJobMappingResult",
+      "signature": "(workflow_id: 'str', mapping_count: 'int', mappings: 'tuple[RuntimeJobMapping, ...]', stage_ids: 'tuple[str, ...]', mapper_version: 'str' = 'runtime_job_mapping_v5.2.0', schema_version: 'str' = 'runtime_job_mapping_schema_v1') -> None",
+      "uses_slots": true
+    },
+    "UniversalJobCreationRequest": {
+      "annotations": {
+        "batch_id": "Optional[str]",
+        "created_at": "Optional[str]",
+        "dependency_job_ids": "Tuple[str, ...]",
+        "enqueue": "bool",
+        "idempotency_key": "Optional[str]",
+        "job_id": "Optional[str]",
+        "job_id_prefix": "str",
+        "job_type": "str",
+        "maximum_attempts": "Optional[int]",
+        "metadata": "Mapping[str, Any]",
+        "parent_job_id": "Optional[str]",
+        "payload": "Mapping[str, Any]",
+        "payload_reference": "Optional[str]",
+        "pipeline": "str",
+        "pipeline_run_id": "Optional[str]",
+        "priority": "Any",
+        "product_id": "str",
+        "scheduled_at": "Optional[str]",
+        "stage": "str",
+        "user_id": "str",
+        "workspace_id": "str"
+      },
+      "available": true,
+      "dataclass": true,
+      "fields": [
+        "workspace_id",
+        "job_type",
+        "payload",
+        "metadata",
+        "user_id",
+        "product_id",
+        "pipeline",
+        "stage",
+        "payload_reference",
+        "priority",
+        "parent_job_id",
+        "dependency_job_ids",
+        "batch_id",
+        "pipeline_run_id",
+        "idempotency_key",
+        "maximum_attempts",
+        "enqueue",
+        "job_id",
+        "job_id_prefix",
+        "created_at",
+        "scheduled_at"
+      ],
+      "frozen": true,
+      "module": "backend.server.runtime.universal_jobs.creation_engine",
+      "name": "UniversalJobCreationRequest",
+      "signature": "(workspace_id: 'str', job_type: 'str', payload: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Tuple[str, ...]' = (), batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None, scheduled_at: 'Optional[str]' = None) -> None",
+      "uses_slots": false
+    }
+  },
+  "dependency_override_probe": {
+    "accepted": true,
+    "dependency_job_ids": [
+      "uj_part_c_8_d_predecessor"
+    ],
+    "error_message": null,
+    "error_type": null
+  },
+  "dependency_strategy": "ENRICH_CANONICAL_MAPPING_REQUEST",
+  "gateway_decision": "IMPLEMENTATION_REQUIRED",
+  "idempotency_override_probe": {
+    "accepted": false,
+    "error_message": "Phase 5.2 must not generate idempotency_key.",
+    "error_type": "RuntimeJobMappingValidationError",
+    "idempotency_key": null
+  },
+  "idempotency_strategy": "DEFER_TO_PART_C_8_E_RECONCILIATION_AUTHORITY",
+  "mapping_validation_messages": [
+    "\n    One immutable Phase 5.2 mapping.\n\n    creation_request is the exact downstream Runtime creation-request\n    contract. No Universal Job has been created at this stage.\n    ",
+    "\nLinkCraftor Universal Coordination Framework\nPhase 5.2 - Runtime Job Mapping\n\nCanonical responsibility:\n    Deterministically convert frozen Phase 5.1 RuntimeHandoffIntent objects\n    into canonical UniversalJobCreationRequest objects.\n\nBoundary:\n    Mapping only.\n\nThis component does NOT:\n    - create UniversalJob objects\n    - call the Universal Job Creation Engine\n    - perform Runtime Registration lookup\n    - submit jobs\n    - persist jobs\n    - enqueue jobs\n    - dispatch handlers\n    - execute business logic\n    - establish workflow/job correlation\n    - process Runtime completion\n    - process Runtime failure\n",
+    "Base Phase 5.2 Runtime Job Mapping error.",
+    "Phase 5.2 input must be RuntimeHandoffIntent",
+    "Phase 5.2 input must be the Phase 5.1 bridge result",
+    "Phase 5.2 must not establish pipeline_run_id.",
+    "Phase 5.2 must not generate idempotency_key.",
+    "Phase 5.2 must not generate job_id.",
+    "Phase 5.2 refuses to overwrite existing coordination metadata",
+    "Phase 5.2 requires certified Phase 5.1 intent ordering",
+    "Raised when Phase 5.2 mapping input violates the contract.",
+    "idempotency_key requires a separate authoritative identity policy",
+    "idempotency_key_generation",
+    "pipeline_run_id belongs downstream of Phase 5.2"
+  ],
+  "public_apis": {
+    "bridge": {
+      "classes": {
+        "CoordinationRuntimeBridgeError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "CoordinationRuntimeBridgeError",
+          "signature": "",
+          "uses_slots": false
+        },
+        "CoordinationRuntimeBridgeResult": {
+          "annotations": {
+            "bridge_version": "str",
+            "handoff_count": "int",
+            "intents": "tuple[RuntimeHandoffIntent, ...]",
+            "planned_stage_ids": "tuple[str, ...]",
+            "planner_version": "str",
+            "schema_version": "str",
+            "wave_count": "int",
+            "workflow_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "handoff_count",
+            "intents",
+            "planned_stage_ids",
+            "wave_count",
+            "planner_version",
+            "bridge_version",
+            "schema_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "CoordinationRuntimeBridgeResult",
+          "signature": "(workflow_id: 'str', handoff_count: 'int', intents: 'tuple[RuntimeHandoffIntent, ...]', planned_stage_ids: 'tuple[str, ...]', wave_count: 'int', planner_version: 'str', bridge_version: 'str' = 'coordination_runtime_bridge_v5.1.0', schema_version: 'str' = 'coordination_runtime_bridge_schema_v1') -> None",
+          "uses_slots": true
+        },
+        "CoordinationRuntimeBridgeValidationError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "CoordinationRuntimeBridgeValidationError",
+          "signature": "(message: 'str', *, violations: 'Iterable[str]' = ()) -> 'None'",
+          "uses_slots": false
+        },
+        "RuntimeHandoffContext": {
+          "annotations": {
+            "context_version": "str",
+            "correlation_id": "str",
+            "metadata": "Mapping[str, Any]",
+            "payload_by_stage": "Mapping[str, Mapping[str, Any]]",
+            "workflow_id": "str",
+            "workspace_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "workspace_id",
+            "correlation_id",
+            "payload_by_stage",
+            "metadata",
+            "context_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "RuntimeHandoffContext",
+          "signature": "(workflow_id: 'str', workspace_id: 'str', correlation_id: 'str', payload_by_stage: 'Mapping[str, Mapping[str, Any]]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, context_version: 'str' = 'runtime_handoff_context_v5.1.0') -> None",
+          "uses_slots": true
+        },
+        "RuntimeHandoffIntent": {
+          "annotations": {
+            "correlation_id": "str",
+            "execution_semantics": "str",
+            "intent_version": "str",
+            "job_type": "str",
+            "metadata": "Mapping[str, Any]",
+            "payload": "Mapping[str, Any]",
+            "pipeline_id": "str",
+            "required_payload_fields": "tuple[str, ...]",
+            "runtime_stage": "str",
+            "stage_id": "str",
+            "stage_reference_contract_version": "str",
+            "stage_version": "str",
+            "wave_index": "int",
+            "workflow_id": "str",
+            "workflow_type": "str",
+            "workspace_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "workspace_id",
+            "correlation_id",
+            "stage_id",
+            "stage_version",
+            "pipeline_id",
+            "workflow_type",
+            "job_type",
+            "runtime_stage",
+            "required_payload_fields",
+            "wave_index",
+            "execution_semantics",
+            "payload",
+            "metadata",
+            "stage_reference_contract_version",
+            "intent_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "RuntimeHandoffIntent",
+          "signature": "(workflow_id: 'str', workspace_id: 'str', correlation_id: 'str', stage_id: 'str', stage_version: 'str', pipeline_id: 'str', workflow_type: 'str', job_type: 'str', runtime_stage: 'str', required_payload_fields: 'tuple[str, ...]', wave_index: 'int', execution_semantics: 'str', payload: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', stage_reference_contract_version: 'str', intent_version: 'str' = 'runtime_handoff_intent_v5.1.0') -> None",
+          "uses_slots": true
+        }
+      },
+      "functions": {
+        "bridge_execution_plan_to_runtime": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "bridge_execution_plan_to_runtime",
+          "signature": "(*, execution_plan: 'ExecutionPlan', stage_references: 'Mapping[str, UniversalStageReference]', context: 'RuntimeHandoffContext') -> 'CoordinationRuntimeBridgeResult'",
+          "source": "def bridge_execution_plan_to_runtime(\n    *,\n    execution_plan: ExecutionPlan,\n    stage_references: Mapping[\n        str,\n        UniversalStageReference,\n    ],\n    context: RuntimeHandoffContext,\n) -> CoordinationRuntimeBridgeResult:\n    \"\"\"\n    Convert one certified immediate Phase 4.5 plan into Runtime handoff intents.\n\n    No Universal Job is created.\n    No Runtime Registration lookup occurs.\n    No queue, handler, worker, persistence, workflow-state, completion, or\n    failure operation occurs.\n    \"\"\"\n\n    if not isinstance(\n        execution_plan,\n        ExecutionPlan,\n    ):\n        raise CoordinationRuntimeBridgeValidationError(\n            \"execution_plan must be an ExecutionPlan.\",\n            violations=(\n                \"execution_plan must be Phase 4.5 ExecutionPlan\",\n            ),\n        )\n\n    if not isinstance(\n        context,\n        RuntimeHandoffContext,\n    ):\n        raise CoordinationRuntimeBridgeValidationError(\n            \"context must be RuntimeHandoffContext.\",\n            violations=(\n                \"context must be RuntimeHandoffContext\",\n            ),\n        )\n\n    if not isinstance(\n        stage_references,\n        Mapping,\n    ):\n        raise CoordinationRuntimeBridgeValidationError(\n            \"stage_references must be a mapping.\",\n            violations=(\n                \"stage_references must map stage_id to UniversalStageReference\",\n            ),\n        )\n\n    plan_workflow_id = str(\n        execution_plan.workflow_id\n        or \"\"\n    ).strip()\n\n    if not plan_workflow_id:\n        raise CoordinationRuntimeBridgeValidationError(\n            \"ExecutionPlan workflow_id is required.\",\n            violations=(\n                \"ExecutionPlan.workflow_id is required\",\n            ),\n        )\n\n    if (\n        plan_workflow_id\n        != context.workflow_id\n    ):\n        raise CoordinationRuntimeBridgeValidationError(\n            \"ExecutionPlan and handoff context workflow IDs do not match.\",\n            violations=(\n                \"execution_plan.workflow_id must equal context.workflow_id\",\n            ),\n        )\n\n    (\n        planned_stage_ids,\n        wave_rows,\n    ) = _validate_plan_structure(\n        execution_plan\n    )\n\n    normalized_references = {}\n\n    for (\n        key,\n        reference,\n    ) in stage_references.items():\n\n        key_id = str(\n            key\n        ).strip()\n\n        if not isinstance(\n            reference,\n            UniversalStageReference,\n        ):\n            raise CoordinationRuntimeBridgeValidationError(\n                \"stage_references contains a non-UniversalStageReference value.\",\n                violations=(\n                    f\"stage reference {key_id!r} has invalid type\",\n                ),\n            )\n\n        reference_stage_id = str(\n            reference.stage_id\n            or \"\"\n        ).strip()\n\n        if (\n            key_id\n            != reference_stage_id\n        ):\n            raise CoordinationRuntimeBridgeValidationError(\n                \"Stage Reference mapping key does not match stage_id.\",\n                violations=(\n                    f\"mapping key {key_id!r} does not match \"\n                    f\"StageReference.stage_id {reference_stage_id!r}\",\n                ),\n            )\n\n        normalized_references[\n            key_id\n        ] = reference\n\n    intents = []\n\n    for (\n        wave_index,\n        execution_semantics,\n        stage_ids,\n    ) in wave_rows:\n\n        for stage_id in stage_ids:\n\n            reference = (\n                normalized_references.get(\n                    stage_id\n                )\n            )\n\n            if reference is None:\n                raise CoordinationRuntimeBridgeValidationError(\n                    \"ExecutionPlan references a stage with no Stage Reference.\",\n                    violations=(\n                        f\"missing Stage Reference for {stage_id!r}\",\n                    ),\n                )\n\n            execution_target = (\n                _execution_target_name(\n                    reference.execution_target\n                )\n            )\n\n            if (\n                execution_target\n                != UNIVERSAL_RUNTIME_EXECUTION_TARGET\n            ):\n                raise CoordinationRuntimeBridgeValidationError(\n                    \"Planned stage is not a UNIVERSAL_RUNTIME stage.\",\n                    violations=(\n                        f\"stage {stage_id!r} execution_target is \"\n                        f\"{execution_target!r}, expected \"\n                        f\"{UNIVERSAL_RUNTIME_EXECUTION_TARGET!r}\",\n                    ),\n                )\n\n            job_type = str(\n                reference.job_type\n                or \"\"\n            ).strip()\n\n            if not job_type:\n                raise CoordinationRuntimeBridgeValidationError(\n                    \"Runtime Stage Reference has no job_type.\",\n                    violations=(\n                        f\"stage {stage_id!r} requires job_type\",\n                    ),\n                )\n\n            runtime_stage = str(\n                reference.runtime_stage\n                or \"\"\n            ).strip()\n\n            if not runtime_stage:\n                raise CoordinationRuntimeBridgeValidationError(\n                    \"Runtime Stage Reference has no runtime_stage.\",\n                    violations=(\n                        f\"stage {stage_id!r} requires runtime_stage\",\n                    ),\n                )\n\n            required_payload_fields = (\n                _normalize_required_fields(\n                    reference.required_payload_fields\n                )\n            )\n\n            payload = (\n                context.payload_by_stage.get(\n                    stage_id,\n                    _EMPTY_MAP,\n                )\n            )\n\n            if not isinstance(\n                payload,\n                Mapping,\n            ):\n                raise CoordinationRuntimeBridgeValidationError(\n                    \"Stage payload must be a mapping.\",\n                    violations=(\n                        f\"payload for {stage_id!r} must be a mapping\",\n                    ),\n                )\n\n            missing = tuple(\n                field_name\n                for field_name\n                in required_payload_fields\n                if (\n                    field_name\n                    not in payload\n                    or payload[\n                        field_name\n                    ]\n                    is None\n                )\n            )\n\n            if missing:\n                raise CoordinationRuntimeBridgeValidationError(\n                    \"Runtime handoff payload is incomplete.\",\n                    violations=tuple(\n                        f\"stage {stage_id!r} missing required payload field \"\n                        f\"{field_name!r}\"\n                        for field_name\n                        in missing\n                    ),\n                )\n\n            reference_metadata = (\n                reference.metadata\n                if isinstance(\n                    reference.metadata,\n                    Mapping,\n                )\n                else _EMPTY_MAP\n            )\n\n            intent_metadata = {\n                \"coordination_context\": (\n                    context.metadata\n                ),\n                \"stage_reference\": (\n                    reference_metadata\n                ),\n                \"execution_target\": (\n                    UNIVERSAL_RUNTIME_EXECUTION_TARGET\n                ),\n            }\n\n            intents.append(\n                RuntimeHandoffIntent(\n                    workflow_id=(\n                        context.workflow_id\n                    ),\n                    workspace_id=(\n                        context.workspace_id\n                    ),\n                    correlation_id=(\n                        context.correlation_id\n                    ),\n                    stage_id=stage_id,\n                    stage_version=str(\n                        reference.stage_version\n                        or \"\"\n                    ).strip(),\n                    pipeline_id=str(\n                        reference.pipeline_id\n                        or \"\"\n                    ).strip(),\n                    workflow_type=str(\n                        reference.workflow_type\n                        or \"\"\n                    ).strip(),\n                    job_type=job_type,\n                    runtime_stage=(\n                        runtime_stage\n                    ),\n                    required_payload_fields=(\n                        required_payload_fields\n                    ),\n                    wave_index=wave_index,\n                    execution_semantics=(\n                        execution_semantics\n                    ),\n                    payload=payload,\n                    metadata=(\n                        intent_metadata\n                    ),\n                    stage_reference_contract_version=str(\n                        reference.contract_version\n                        or \"\"\n                    ).strip(),\n                )\n            )\n\n    intents_tuple = tuple(\n        intents\n    )\n\n    if (\n        tuple(\n            intent.stage_id\n            for intent\n            in intents_tuple\n        )\n        != planned_stage_ids\n    ):\n        raise CoordinationRuntimeBridgeValidationError(\n            \"Runtime handoff intent ordering diverged from the ExecutionPlan.\",\n            violations=(\n                \"handoff intent ordering must preserve planned_stage_ids\",\n            ),\n        )\n\n    return CoordinationRuntimeBridgeResult(\n        workflow_id=(\n            context.workflow_id\n        ),\n        handoff_count=len(\n            intents_tuple\n        ),\n        intents=intents_tuple,\n        planned_stage_ids=(\n            planned_stage_ids\n        ),\n        wave_count=(\n            execution_plan.wave_count\n        ),\n        planner_version=str(\n            execution_plan.planner_version\n            or \"\"\n        ).strip(),\n    )\n"
+        },
+        "coordination_runtime_bridge_snapshot": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "coordination_runtime_bridge_snapshot",
+          "signature": "(result: 'CoordinationRuntimeBridgeResult') -> 'Mapping[str, Any]'",
+          "source": "def coordination_runtime_bridge_snapshot(\n    result: CoordinationRuntimeBridgeResult,\n) -> Mapping[str, Any]:\n    \"\"\"\n    Return immutable Phase 5.1 handoff evidence.\n    \"\"\"\n\n    if not isinstance(\n        result,\n        CoordinationRuntimeBridgeResult,\n    ):\n        raise CoordinationRuntimeBridgeValidationError(\n            \"result must be CoordinationRuntimeBridgeResult.\",\n            violations=(\n                \"result must be CoordinationRuntimeBridgeResult\",\n            ),\n        )\n\n    return result.to_dict()\n"
+        },
+        "create_runtime_handoff_context": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "create_runtime_handoff_context",
+          "signature": "(*, workflow_id: 'str', workspace_id: 'str', correlation_id: 'str', payload_by_stage: 'Mapping[str, Mapping[str, Any]] | None' = None, metadata: 'Mapping[str, Any] | None' = None) -> 'RuntimeHandoffContext'",
+          "source": "def create_runtime_handoff_context(\n    *,\n    workflow_id: str,\n    workspace_id: str,\n    correlation_id: str,\n    payload_by_stage: Mapping[\n        str,\n        Mapping[str, Any],\n    ] | None = None,\n    metadata: Mapping[str, Any] | None = None,\n) -> RuntimeHandoffContext:\n    \"\"\"\n    Construct one immutable Coordination-side handoff context.\n    \"\"\"\n\n    return RuntimeHandoffContext(\n        workflow_id=workflow_id,\n        workspace_id=workspace_id,\n        correlation_id=correlation_id,\n        payload_by_stage=(\n            _EMPTY_MAP\n            if payload_by_stage is None\n            else payload_by_stage\n        ),\n        metadata=(\n            _EMPTY_MAP\n            if metadata is None\n            else metadata\n        ),\n    )\n"
+        },
+        "explain_coordination_runtime_bridge_v5_1": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.coordination_runtime_bridge",
+          "name": "explain_coordination_runtime_bridge_v5_1",
+          "signature": "() -> 'Mapping[str, Any]'",
+          "source": "def explain_coordination_runtime_bridge_v5_1(\n) -> Mapping[str, Any]:\n    \"\"\"\n    Describe the canonical Phase 5.1 architectural boundary.\n    \"\"\"\n\n    return _freeze_value(\n        {\n            \"phase\": \"5.1\",\n            \"component\": (\n                \"Coordination -> Runtime Bridge\"\n            ),\n            \"version\": (\n                COORDINATION_RUNTIME_BRIDGE_VERSION\n            ),\n            \"schema_version\": (\n                COORDINATION_RUNTIME_BRIDGE_SCHEMA_VERSION\n            ),\n            \"upstream_authority\": (\n                \"Phase 4.5 ExecutionPlan\"\n            ),\n            \"downstream_authority\": (\n                \"Phase 5.2 Runtime Job Mapping\"\n            ),\n            \"canonical_operation\": (\n                \"bridge_execution_plan_to_runtime\"\n            ),\n            \"owns\": (\n                \"accept certified immediate execution plans\",\n                \"validate workflow identity consistency\",\n                \"validate planned Stage Reference coverage\",\n                \"validate UNIVERSAL_RUNTIME execution targets\",\n                \"preserve immediate execution-wave semantics\",\n                \"preserve deterministic stage ordering\",\n                \"validate required Coordination payload availability\",\n                \"create immutable Runtime handoff intents\",\n                \"preserve runtime routing identity from Stage Reference\",\n                \"produce immutable bridge evidence\",\n            ),\n            \"does_not_own\": (\n                \"UniversalJob construction\",\n                \"job ID creation\",\n                \"job persistence\",\n                \"queue insertion\",\n                \"Runtime Registration lookup\",\n                \"handler lookup\",\n                \"handler dispatch\",\n                \"handler execution\",\n                \"worker selection\",\n                \"worker capacity\",\n                \"retry execution\",\n                \"Runtime status mutation\",\n                \"workflow/job correlation persistence\",\n                \"completion intake\",\n                \"failure intake\",\n                \"Stage Result creation\",\n                \"workflow lifecycle mutation\",\n                \"business-stage execution\",\n            ),\n            \"execution_properties\": {\n                \"read_only\": True,\n                \"deterministic\": True,\n                \"fail_closed\": True,\n                \"workflow_mutation\": False,\n                \"runtime_job_creation\": False,\n                \"runtime_registration_lookup\": False,\n                \"dispatch\": False,\n                \"business_execution\": False,\n                \"persistence\": False,\n                \"queue_write\": False,\n                \"completion_processing\": False,\n                \"failure_processing\": False,\n            },\n            \"future_authority\": {\n                \"5.2\": \"Runtime Job Mapping\",\n                \"5.3\": \"Workflow/Job Correlation\",\n                \"5.4\": \"Runtime Completion Intake\",\n                \"5.5\": \"Runtime Failure Intake\",\n                \"5.6\": \"Runtime Integration Certification\",\n            },\n        }\n    )\n"
+        }
+      }
+    },
+    "correlation": {
+      "classes": {
+        "WorkflowJobCorrelation": {
+          "annotations": {
+            "correlation_id": "str",
+            "job_id": "str",
+            "job_type": "str",
+            "pipeline_id": "str",
+            "runtime_stage": "str",
+            "stage_id": "str",
+            "stage_version": "str",
+            "wave_index": "int",
+            "workflow_id": "str",
+            "workflow_type": "str",
+            "workspace_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "correlation_id",
+            "stage_id",
+            "stage_version",
+            "workflow_type",
+            "workspace_id",
+            "job_id",
+            "job_type",
+            "pipeline_id",
+            "runtime_stage",
+            "wave_index"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "WorkflowJobCorrelation",
+          "signature": "(workflow_id: 'str', correlation_id: 'str', stage_id: 'str', stage_version: 'str', workflow_type: 'str', workspace_id: 'str', job_id: 'str', job_type: 'str', pipeline_id: 'str', runtime_stage: 'str', wave_index: 'int') -> None",
+          "uses_slots": true
+        },
+        "WorkflowJobCorrelationConflictError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "WorkflowJobCorrelationConflictError",
+          "signature": "(message: 'str', *, job_id: 'str') -> 'None'",
+          "uses_slots": false
+        },
+        "WorkflowJobCorrelationError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "WorkflowJobCorrelationError",
+          "signature": "",
+          "uses_slots": false
+        },
+        "WorkflowJobCorrelationRegistry": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "WorkflowJobCorrelationRegistry",
+          "signature": "() -> 'None'",
+          "uses_slots": false
+        },
+        "WorkflowJobCorrelationValidationError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "WorkflowJobCorrelationValidationError",
+          "signature": "(message: 'str', *, violations: 'tuple[str, ...]' = ()) -> 'None'",
+          "uses_slots": false
+        }
+      },
+      "functions": {
+        "correlate_submitted_job": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "correlate_submitted_job",
+          "signature": "(*, mapping: 'RuntimeJobMapping', submitted_job: 'Mapping[str, Any]', registry: 'WorkflowJobCorrelationRegistry') -> 'WorkflowJobCorrelation'",
+          "source": "def correlate_submitted_job(\n    *,\n    mapping: RuntimeJobMapping,\n    submitted_job: Mapping[str, Any],\n    registry: WorkflowJobCorrelationRegistry,\n) -> WorkflowJobCorrelation:\n\n    if not isinstance(\n        mapping,\n        RuntimeJobMapping,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            \"mapping must be RuntimeJobMapping.\",\n            violations=(\n                (\n                    \"Phase 5.3 requires certified \"\n                    \"Phase 5.2 mapping\"\n                ),\n            ),\n        )\n\n    if not isinstance(\n        registry,\n        WorkflowJobCorrelationRegistry,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"registry must be \"\n                \"WorkflowJobCorrelationRegistry.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.3 requires \"\n                    \"WorkflowJobCorrelationRegistry\"\n                ),\n            ),\n        )\n\n    submitted = _require_submitted_job_mapping(\n        submitted_job\n    )\n\n    request = mapping.creation_request\n\n    # ---------------------------------------------------------------------\n    # Phase 5.3.1 corrective validation\n    #\n    # Correlation may only be created from a canonically submitted Runtime\n    # job. Request-side coordination evidence alone is insufficient.\n    # ---------------------------------------------------------------------\n\n    submission = submitted.get(\n        \"submission\"\n    )\n\n    if not isinstance(\n        submission,\n        Mapping,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job is missing \"\n                \"canonical submission evidence.\"\n            ),\n            violations=(\n                \"submitted_job.submission must be a mapping\",\n            ),\n        )\n\n    if (\n        submission.get(\n            \"persisted\"\n        )\n        is not True\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job does not prove \"\n                \"canonical persistence.\"\n            ),\n            violations=(\n                \"submission.persisted must be literal True\",\n            ),\n        )\n\n    if (\n        submission.get(\n            \"queued\"\n        )\n        is not True\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job does not prove \"\n                \"canonical queue ingress.\"\n            ),\n            violations=(\n                \"submission.queued must be literal True\",\n            ),\n        )\n\n    if (\n        submission.get(\n            \"canonical_identity_preserved\"\n        )\n        is not True\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job does not prove \"\n                \"canonical identity preservation.\"\n            ),\n            violations=(\n                (\n                    \"submission.canonical_identity_preserved \"\n                    \"must be literal True\"\n                ),\n            ),\n        )\n\n    submitted_metadata = submitted.get(\n        \"metadata\"\n    )\n\n    if not isinstance(\n        submitted_metadata,\n        Mapping,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job is missing \"\n                \"canonical metadata.\"\n            ),\n            violations=(\n                \"submitted_job.metadata must be a mapping\",\n            ),\n        )\n\n    submitted_coordination = (\n        submitted_metadata.get(\n            \"coordination\"\n        )\n    )\n\n    if not isinstance(\n        submitted_coordination,\n        Mapping,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job is missing \"\n                \"coordination identity evidence.\"\n            ),\n            violations=(\n                (\n                    \"submitted_job.metadata.coordination \"\n                    \"must be a mapping\"\n                ),\n            ),\n        )\n\n    submitted_job_id = _clean_required_text(\n        submitted.get(\"job_id\"),\n        field_name=\"submitted_job.job_id\",\n    )\n\n    submitted_workspace_id = _clean_required_text(\n        submitted.get(\"workspace_id\"),\n        field_name=\"submitted_job.workspace_id\",\n    )\n\n    submitted_job_type = _clean_required_text(\n        submitted.get(\"job_type\"),\n        field_name=\"submitted_job.job_type\",\n    )\n\n    submitted_pipeline = _clean_required_text(\n        submitted.get(\"pipeline\"),\n        field_name=\"submitted_job.pipeline\",\n    )\n\n    submitted_stage = _clean_required_text(\n        submitted.get(\"stage\"),\n        field_name=\"submitted_job.stage\",\n    )\n\n    expected_workspace_id = _clean_required_text(\n        request.workspace_id,\n        field_name=\"creation_request.workspace_id\",\n    )\n\n    expected_job_type = _clean_required_text(\n        request.job_type,\n        field_name=\"creation_request.job_type\",\n    )\n\n    expected_pipeline = _clean_required_text(\n        request.pipeline,\n        field_name=\"creation_request.pipeline\",\n    )\n\n    expected_stage = _clean_required_text(\n        request.stage,\n        field_name=\"creation_request.stage\",\n    )\n\n    mismatches = []\n\n    if submitted_workspace_id != expected_workspace_id:\n        mismatches.append(\n            \"workspace_id mismatch\"\n        )\n\n    if submitted_job_type != expected_job_type:\n        mismatches.append(\n            \"job_type mismatch\"\n        )\n\n    if submitted_pipeline != expected_pipeline:\n        mismatches.append(\n            \"pipeline mismatch\"\n        )\n\n    if submitted_stage != expected_stage:\n        mismatches.append(\n            \"stage mismatch\"\n        )\n\n    if mismatches:\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime job does not match \"\n                \"the certified Phase 5.2 mapping.\"\n            ),\n            violations=tuple(\n                mismatches\n            ),\n        )\n\n    coordination = request.metadata.get(\n        \"coordination\"\n    )\n\n    if not isinstance(\n        coordination,\n        Mapping,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Phase 5.2 creation request is missing \"\n                \"coordination metadata.\"\n            ),\n            violations=(\n                (\n                    \"creation_request.metadata.coordination \"\n                    \"must exist\"\n                ),\n            ),\n        )\n\n    workflow_id = _clean_required_text(\n        mapping.workflow_id,\n        field_name=\"workflow_id\",\n    )\n\n    correlation_id = _clean_required_text(\n        mapping.correlation_id,\n        field_name=\"correlation_id\",\n    )\n\n    stage_id = _clean_required_text(\n        mapping.stage_id,\n        field_name=\"stage_id\",\n    )\n\n    metadata_workflow_id = _clean_required_text(\n        coordination.get(\"workflow_id\"),\n        field_name=\"coordination.workflow_id\",\n    )\n\n    metadata_correlation_id = _clean_required_text(\n        coordination.get(\"correlation_id\"),\n        field_name=\"coordination.correlation_id\",\n    )\n\n    metadata_stage_id = _clean_required_text(\n        coordination.get(\"stage_id\"),\n        field_name=\"coordination.stage_id\",\n    )\n\n    if metadata_workflow_id != workflow_id:\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Phase 5.2 workflow identity evidence \"\n                \"does not match RuntimeJobMapping.\"\n            ),\n            violations=(\n                \"workflow_id evidence mismatch\",\n            ),\n        )\n\n    if metadata_correlation_id != correlation_id:\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Phase 5.2 correlation identity evidence \"\n                \"does not match RuntimeJobMapping.\"\n            ),\n            violations=(\n                \"correlation_id evidence mismatch\",\n            ),\n        )\n\n    if metadata_stage_id != stage_id:\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Phase 5.2 stage identity evidence \"\n                \"does not match RuntimeJobMapping.\"\n            ),\n            violations=(\n                \"stage_id evidence mismatch\",\n            ),\n        )\n\n    submitted_workflow_id = _clean_required_text(\n        submitted_coordination.get(\n            \"workflow_id\"\n        ),\n        field_name=(\n            \"submitted coordination.workflow_id\"\n        ),\n    )\n\n    submitted_correlation_id = _clean_required_text(\n        submitted_coordination.get(\n            \"correlation_id\"\n        ),\n        field_name=(\n            \"submitted coordination.correlation_id\"\n        ),\n    )\n\n    submitted_stage_id = _clean_required_text(\n        submitted_coordination.get(\n            \"stage_id\"\n        ),\n        field_name=(\n            \"submitted coordination.stage_id\"\n        ),\n    )\n\n    submitted_stage_version = _clean_required_text(\n        submitted_coordination.get(\n            \"stage_version\"\n        ),\n        field_name=(\n            \"submitted coordination.stage_version\"\n        ),\n    )\n\n    submitted_workflow_type = _clean_required_text(\n        submitted_coordination.get(\n            \"workflow_type\"\n        ),\n        field_name=(\n            \"submitted coordination.workflow_type\"\n        ),\n    )\n\n    submitted_wave_index = _clean_wave_index(\n        submitted_coordination.get(\n            \"wave_index\"\n        )\n    )\n\n    expected_stage_version = _clean_required_text(\n        coordination.get(\n            \"stage_version\"\n        ),\n        field_name=(\n            \"coordination.stage_version\"\n        ),\n    )\n\n    expected_workflow_type = _clean_required_text(\n        coordination.get(\n            \"workflow_type\"\n        ),\n        field_name=(\n            \"coordination.workflow_type\"\n        ),\n    )\n\n    expected_wave_index = _clean_wave_index(\n        mapping.wave_index\n    )\n\n    submitted_identity_mismatches = []\n\n    if submitted_workflow_id != workflow_id:\n        submitted_identity_mismatches.append(\n            \"submitted workflow_id mismatch\"\n        )\n\n    if submitted_correlation_id != correlation_id:\n        submitted_identity_mismatches.append(\n            \"submitted correlation_id mismatch\"\n        )\n\n    if submitted_stage_id != stage_id:\n        submitted_identity_mismatches.append(\n            \"submitted stage_id mismatch\"\n        )\n\n    if (\n        submitted_stage_version\n        != expected_stage_version\n    ):\n        submitted_identity_mismatches.append(\n            \"submitted stage_version mismatch\"\n        )\n\n    if (\n        submitted_workflow_type\n        != expected_workflow_type\n    ):\n        submitted_identity_mismatches.append(\n            \"submitted workflow_type mismatch\"\n        )\n\n    if (\n        submitted_wave_index\n        != expected_wave_index\n    ):\n        submitted_identity_mismatches.append(\n            \"submitted wave_index mismatch\"\n        )\n\n    if submitted_identity_mismatches:\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"Submitted Runtime coordination evidence \"\n                \"does not match certified Coordination \"\n                \"identity authority.\"\n            ),\n            violations=tuple(\n                submitted_identity_mismatches\n            ),\n        )\n\n    correlation = WorkflowJobCorrelation(\n        workflow_id=workflow_id,\n        correlation_id=correlation_id,\n        stage_id=stage_id,\n        stage_version=expected_stage_version,\n        workflow_type=expected_workflow_type,\n        workspace_id=submitted_workspace_id,\n        job_id=submitted_job_id,\n        job_type=submitted_job_type,\n        pipeline_id=expected_pipeline,\n        runtime_stage=expected_stage,\n        wave_index=_clean_wave_index(\n            mapping.wave_index\n        ),\n    )\n\n    return registry.register(\n        correlation\n    )\n"
+        },
+        "explain_workflow_job_correlation_v5_3": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "explain_workflow_job_correlation_v5_3",
+          "signature": "() -> 'Mapping[str, Any]'",
+          "source": "def explain_workflow_job_correlation_v5_3(\n) -> Mapping[str, Any]:\n\n    return MappingProxyType(\n        {\n            \"phase\":\n                \"5.3\",\n\n            \"component\":\n                \"Workflow/Job Correlation\",\n\n            \"version\":\n                WORKFLOW_JOB_CORRELATION_VERSION,\n\n            \"schema_version\":\n                WORKFLOW_JOB_CORRELATION_SCHEMA_VERSION,\n\n            \"coordination_input\":\n                \"RuntimeJobMapping\",\n\n            \"runtime_identity_input\":\n                \"successful submitted canonical job\",\n\n            \"binding_time\":\n                \"after successful canonical submission\",\n\n            \"primary_reverse_lookup\":\n                \"job_id\",\n\n            \"duplicate_policy\":\n                MappingProxyType(\n                    {\n                        \"exact_duplicate\":\n                            \"idempotent_reuse\",\n\n                        \"conflicting_duplicate\":\n                            \"fail_closed\",\n                    }\n                ),\n\n            \"cross_validation\":\n                (\n                    \"workspace_id\",\n                    \"job_type\",\n                    \"pipeline\",\n                    \"stage\",\n                ),\n\n            \"identity_boundaries\":\n                MappingProxyType(\n                    {\n                        \"job_id_generation\":\n                            False,\n\n                        \"job_id_rewrite\":\n                            False,\n\n                        \"workflow_id_to_pipeline_run_id\":\n                            False,\n\n                        \"correlation_id_to_pipeline_run_id\":\n                            False,\n\n                        \"orchestration_run_id_generation\":\n                            False,\n                    }\n                ),\n\n            \"execution_properties\":\n                MappingProxyType(\n                    {\n                        \"universal_job_creation\":\n                            False,\n\n                        \"runtime_registration_lookup\":\n                            False,\n\n                        \"submission\":\n                            False,\n\n                        \"runtime_persistence\":\n                            False,\n\n                        \"queue_write\":\n                            False,\n\n                        \"dispatch\":\n                            False,\n\n                        \"business_execution\":\n                            False,\n\n                        \"workflow_lifecycle_transition\":\n                            False,\n\n                        \"completion_processing\":\n                            False,\n\n                        \"failure_processing\":\n                            False,\n\n                        \"persistent_correlation_storage\":\n                            False,\n                    }\n                ),\n\n            \"persistence_owner\":\n                \"Phase 8 Workflow State Persistence\",\n        }\n    )\n"
+        },
+        "get_workflow_job_correlation_registry": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "get_workflow_job_correlation_registry",
+          "signature": "() -> 'WorkflowJobCorrelationRegistry'",
+          "source": "def get_workflow_job_correlation_registry(\n) -> WorkflowJobCorrelationRegistry:\n\n    return _default_registry\n"
+        },
+        "register_workflow_job_correlation": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "register_workflow_job_correlation",
+          "signature": "(*, mapping: 'RuntimeJobMapping', submitted_job: 'Mapping[str, Any]', registry: 'WorkflowJobCorrelationRegistry | None' = None) -> 'WorkflowJobCorrelation'",
+          "source": "def register_workflow_job_correlation(\n    *,\n    mapping: RuntimeJobMapping,\n    submitted_job: Mapping[str, Any],\n    registry: WorkflowJobCorrelationRegistry | None = None,\n) -> WorkflowJobCorrelation:\n\n    effective_registry = (\n        registry\n        if registry is not None\n        else _default_registry\n    )\n\n    return correlate_submitted_job(\n        mapping=mapping,\n        submitted_job=submitted_job,\n        registry=effective_registry,\n    )\n"
+        },
+        "resolve_workflow_job_correlation": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "resolve_workflow_job_correlation",
+          "signature": "(*, job_id: 'str', registry: 'WorkflowJobCorrelationRegistry | None' = None) -> 'WorkflowJobCorrelation'",
+          "source": "def resolve_workflow_job_correlation(\n    *,\n    job_id: str,\n    registry: WorkflowJobCorrelationRegistry | None = None,\n) -> WorkflowJobCorrelation:\n\n    effective_registry = (\n        registry\n        if registry is not None\n        else _default_registry\n    )\n\n    return effective_registry.require_by_job_id(\n        job_id\n    )\n"
+        },
+        "workflow_job_correlation_snapshot": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.workflow_job_correlation",
+          "name": "workflow_job_correlation_snapshot",
+          "signature": "(correlation: 'WorkflowJobCorrelation') -> 'Mapping[str, Any]'",
+          "source": "def workflow_job_correlation_snapshot(\n    correlation: WorkflowJobCorrelation,\n) -> Mapping[str, Any]:\n\n    if not isinstance(\n        correlation,\n        WorkflowJobCorrelation,\n    ):\n        raise WorkflowJobCorrelationValidationError(\n            (\n                \"correlation must be \"\n                \"WorkflowJobCorrelation.\"\n            ),\n            violations=(\n                (\n                    \"snapshot input must be \"\n                    \"WorkflowJobCorrelation\"\n                ),\n            ),\n        )\n\n    return MappingProxyType(\n        {\n            \"workflow_id\":\n                correlation.workflow_id,\n\n            \"correlation_id\":\n                correlation.correlation_id,\n\n            \"stage_id\":\n                correlation.stage_id,\n\n            \"stage_version\":\n                correlation.stage_version,\n\n            \"workflow_type\":\n                correlation.workflow_type,\n\n            \"workspace_id\":\n                correlation.workspace_id,\n\n            \"job_id\":\n                correlation.job_id,\n\n            \"job_type\":\n                correlation.job_type,\n\n            \"pipeline_id\":\n                correlation.pipeline_id,\n\n            \"runtime_stage\":\n                correlation.runtime_stage,\n\n            \"wave_index\":\n                correlation.wave_index,\n\n            \"version\":\n                WORKFLOW_JOB_CORRELATION_VERSION,\n\n            \"schema_version\":\n                WORKFLOW_JOB_CORRELATION_SCHEMA_VERSION,\n        }\n    )\n"
+        }
+      }
+    },
+    "dependency_policy": {
+      "classes": {
+        "RuntimeRegistrationDependencyAction": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.runtime.runtime_registration_dependency_policy",
+          "name": "RuntimeRegistrationDependencyAction",
+          "signature": "(*values)",
+          "uses_slots": false
+        },
+        "RuntimeRegistrationDependencyAdmission": {
+          "annotations": {
+            "action": "RuntimeRegistrationDependencyAction",
+            "dependency_job_ids": "tuple[str, ...]",
+            "evidence": "Mapping[str, Any]",
+            "job_type": "str",
+            "reason": "str",
+            "required_predecessor_stages": "tuple[str, ...]",
+            "satisfied_predecessor_stages": "tuple[str, ...]",
+            "schema_version": "str",
+            "stage": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "action",
+            "reason",
+            "job_type",
+            "stage",
+            "required_predecessor_stages",
+            "satisfied_predecessor_stages",
+            "dependency_job_ids",
+            "evidence",
+            "schema_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.runtime.runtime_registration_dependency_policy",
+          "name": "RuntimeRegistrationDependencyAdmission",
+          "signature": "(action: 'RuntimeRegistrationDependencyAction', reason: 'str', job_type: 'str', stage: 'str', required_predecessor_stages: 'tuple[str, ...]' = (), satisfied_predecessor_stages: 'tuple[str, ...]' = (), dependency_job_ids: 'tuple[str, ...]' = (), evidence: 'Mapping[str, Any]' = <factory>) -> None",
+          "uses_slots": true
+        },
+        "RuntimeRegistrationDependencyPolicyError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.runtime.runtime_registration_dependency_policy",
+          "name": "RuntimeRegistrationDependencyPolicyError",
+          "signature": "",
+          "uses_slots": false
+        }
+      },
+      "functions": {
+        "evaluate_runtime_registration_stage_dependencies": {
+          "available": true,
+          "module": "backend.server.runtime.runtime_registration_dependency_policy",
+          "name": "evaluate_runtime_registration_stage_dependencies",
+          "signature": "(*, candidate: 'Any', existing_jobs: 'Iterable[Any]', registration: 'Any', registration_resolver: 'Callable[[str], Any]') -> 'RuntimeRegistrationDependencyAdmission'",
+          "source": "def evaluate_runtime_registration_stage_dependencies(\n    *,\n    candidate: Any,\n    existing_jobs: Iterable[Any],\n    registration: Any,\n    registration_resolver: Callable[[str], Any],\n) -> RuntimeRegistrationDependencyAdmission:\n    public = _registration(registration)\n\n    job_type = _text(\n        _read(candidate, \"job_type\")\n    )\n\n    workspace_id = _text(\n        _read(candidate, \"workspace_id\")\n    )\n\n    if not job_type or not workspace_id:\n        raise RuntimeRegistrationDependencyPolicyError(\n            \"Candidate job_type and workspace_id are required.\"\n        )\n\n    if public is None:\n        return RuntimeRegistrationDependencyAdmission(\n            action=RuntimeRegistrationDependencyAction.ADMIT,\n            reason=\"no_runtime_registration\",\n            job_type=job_type,\n            stage=\"\",\n        )\n\n    registered_type = _text(\n        public.get(\"job_type\")\n    )\n\n    if registered_type and registered_type != job_type:\n        raise RuntimeRegistrationDependencyPolicyError(\n            \"Registration job_type does not match candidate.\"\n        )\n\n    stage = _text(\n        public.get(\"stage\")\n    )\n\n    pipeline = _text(\n        public.get(\"pipeline\")\n    )\n\n    required = _collection(\n        public.get(\"predecessor_stages\", ()),\n        \"predecessor_stages\",\n    )\n\n    successors = _collection(\n        public.get(\"successor_stages\", ()),\n        \"successor_stages\",\n    )\n\n    if (required or successors) and not stage:\n        raise RuntimeRegistrationDependencyPolicyError(\n            \"A registration declaring stage dependencies \"\n            \"must declare its own stage.\"\n        )\n\n    dependency_ids = _dependency_ids(candidate)\n\n    if not required:\n        return RuntimeRegistrationDependencyAdmission(\n            action=RuntimeRegistrationDependencyAction.ADMIT,\n            reason=\"no_predecessor_stages_declared\",\n            job_type=job_type,\n            stage=stage,\n            dependency_job_ids=dependency_ids,\n            evidence={\n                \"successor_stages\": list(successors),\n            },\n        )\n\n    if not dependency_ids:\n        return _defer(\n            reason=\"required_dependency_job_ids_missing\",\n            job_type=job_type,\n            stage=stage,\n            required=required,\n            satisfied=(),\n            dependency_ids=(),\n            evidence={},\n        )\n\n    jobs_by_id = {\n        _text(_read(job, \"job_id\")): job\n        for job in existing_jobs\n        if _text(_read(job, \"job_id\"))\n    }\n\n    satisfied: list[str] = []\n    stage_evidence: dict[str, Any] = {}\n\n    for dependency_id in dependency_ids:\n        dependency = jobs_by_id.get(\n            dependency_id\n        )\n\n        if dependency is None:\n            return _defer(\n                reason=\"dependency_job_missing\",\n                job_type=job_type,\n                stage=stage,\n                required=required,\n                satisfied=tuple(satisfied),\n                dependency_ids=dependency_ids,\n                evidence={\n                    \"missing_dependency_job_id\":\n                        dependency_id,\n                },\n            )\n\n        dependency_workspace = _text(\n            _read(dependency, \"workspace_id\")\n        )\n\n        if dependency_workspace != workspace_id:\n            return _defer(\n                reason=\"dependency_workspace_mismatch\",\n                job_type=job_type,\n                stage=stage,\n                required=required,\n                satisfied=tuple(satisfied),\n                dependency_ids=dependency_ids,\n                evidence={\n                    \"dependency_job_id\": dependency_id,\n                },\n            )\n\n        if _status(dependency) != \"succeeded\":\n            return _defer(\n                reason=\"dependency_not_succeeded\",\n                job_type=job_type,\n                stage=stage,\n                required=required,\n                satisfied=tuple(satisfied),\n                dependency_ids=dependency_ids,\n                evidence={\n                    \"dependency_job_id\": dependency_id,\n                    \"dependency_status\":\n                        _status(dependency),\n                },\n            )\n\n        dependency_job_type = _text(\n            _read(dependency, \"job_type\")\n        )\n\n        try:\n            dependency_registration = _registration(\n                registration_resolver(\n                    dependency_job_type\n                )\n            )\n        except (KeyError, ValueError):\n            dependency_registration = None\n\n        if dependency_registration is None:\n            return _defer(\n                reason=\"dependency_registration_missing\",\n                job_type=job_type,\n                stage=stage,\n                required=required,\n                satisfied=tuple(satisfied),\n                dependency_ids=dependency_ids,\n                evidence={\n                    \"dependency_job_id\": dependency_id,\n                    \"dependency_job_type\":\n                        dependency_job_type,\n                },\n            )\n\n        dependency_stage = _text(\n            dependency_registration.get(\"stage\")\n        )\n\n        dependency_pipeline = _text(\n            dependency_registration.get(\"pipeline\")\n        )\n\n        declared_successors = _collection(\n            dependency_registration.get(\n                \"successor_stages\",\n                (),\n            ),\n            \"successor_stages\",\n        )\n\n        if (\n            pipeline\n            and dependency_pipeline\n            and pipeline != dependency_pipeline\n        ):\n            return _defer(\n                reason=\"dependency_pipeline_mismatch\",\n                job_type=job_type,\n                stage=stage,\n                required=required,\n                satisfied=tuple(satisfied),\n                dependency_ids=dependency_ids,\n                evidence={\n                    \"dependency_job_id\": dependency_id,\n                    \"dependency_pipeline\":\n                        dependency_pipeline,\n                    \"candidate_pipeline\": pipeline,\n                },\n            )\n\n        stage_evidence[dependency_stage] = {\n            \"job_id\": dependency_id,\n            \"job_type\": dependency_job_type,\n            \"successor_stages\":\n                list(declared_successors),\n        }\n\n        if dependency_stage not in required:\n            continue\n\n        if stage not in declared_successors:\n            return _defer(\n                reason=\"successor_stage_not_reciprocal\",\n                job_type=job_type,\n                stage=stage,\n                required=required,\n                satisfied=tuple(satisfied),\n                dependency_ids=dependency_ids,\n                evidence={\n                    \"dependency_stage\":\n                        dependency_stage,\n                    \"declared_successors\":\n                        list(declared_successors),\n                },\n            )\n\n        if dependency_stage not in satisfied:\n            satisfied.append(\n                dependency_stage\n            )\n\n    missing_stages = tuple(\n        predecessor\n        for predecessor in required\n        if predecessor not in satisfied\n    )\n\n    if missing_stages:\n        return _defer(\n            reason=\"required_predecessor_stage_missing\",\n            job_type=job_type,\n            stage=stage,\n            required=required,\n            satisfied=tuple(satisfied),\n            dependency_ids=dependency_ids,\n            evidence={\n                \"missing_predecessor_stages\":\n                    list(missing_stages),\n                \"dependency_stages\":\n                    stage_evidence,\n            },\n        )\n\n    return RuntimeRegistrationDependencyAdmission(\n        action=RuntimeRegistrationDependencyAction.ADMIT,\n        reason=\"stage_dependencies_satisfied\",\n        job_type=job_type,\n        stage=stage,\n        required_predecessor_stages=required,\n        satisfied_predecessor_stages=tuple(satisfied),\n        dependency_job_ids=dependency_ids,\n        evidence={\n            \"pipeline\": pipeline,\n            \"successor_stages\": list(successors),\n            \"dependency_stages\": stage_evidence,\n        },\n    )\n"
+        }
+      }
+    },
+    "gateway": {
+      "classes": {
+        "RuntimeExecutionGatewayError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.runtime_execution_gateway",
+          "name": "RuntimeExecutionGatewayError",
+          "signature": "(message: 'str', *, code: 'str', violations: 'tuple[str, ...]' = ()) -> 'None'",
+          "uses_slots": false
+        },
+        "RuntimeExecutionGatewayResult": {
+          "annotations": {
+            "contract_version": "str",
+            "correlation": "WorkflowJobCorrelation",
+            "correlation_id": "str",
+            "created": "bool",
+            "dependency_job_ids": "tuple[str, ...]",
+            "evidence": "Mapping[str, Any]",
+            "idempotency_key": "str | None",
+            "job_id": "str",
+            "job_type": "str",
+            "mapping": "RuntimeJobMapping",
+            "queued": "bool",
+            "reused_existing_job": "bool",
+            "runtime_stage": "str",
+            "stage_id": "str",
+            "submission_outcome": "str",
+            "submitted_job": "Mapping[str, Any]",
+            "workflow_id": "str",
+            "workspace_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "contract_version",
+            "submission_outcome",
+            "created",
+            "reused_existing_job",
+            "queued",
+            "job_id",
+            "job_type",
+            "workflow_id",
+            "workspace_id",
+            "correlation_id",
+            "stage_id",
+            "runtime_stage",
+            "dependency_job_ids",
+            "idempotency_key",
+            "mapping",
+            "submitted_job",
+            "correlation",
+            "evidence"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_execution_gateway",
+          "name": "RuntimeExecutionGatewayResult",
+          "signature": "(contract_version: 'str', submission_outcome: 'str', created: 'bool', reused_existing_job: 'bool', queued: 'bool', job_id: 'str', job_type: 'str', workflow_id: 'str', workspace_id: 'str', correlation_id: 'str', stage_id: 'str', runtime_stage: 'str', dependency_job_ids: 'tuple[str, ...]', idempotency_key: 'str | None', mapping: 'RuntimeJobMapping', submitted_job: 'Mapping[str, Any]', correlation: 'WorkflowJobCorrelation', evidence: 'Mapping[str, Any]') -> None",
+          "uses_slots": true
+        }
+      },
+      "functions": {
+        "explain_runtime_execution_gateway_v1": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_execution_gateway",
+          "name": "explain_runtime_execution_gateway_v1",
+          "signature": "() -> 'dict[str, Any]'",
+          "source": "def explain_runtime_execution_gateway_v1(\n) -> dict[str, Any]:\n    return {\n        \"component\": (\n            \"Universal Coordination \"\n            \"Runtime Execution Gateway\"\n        ),\n        \"version\": (\n            RUNTIME_EXECUTION_GATEWAY_VERSION\n        ),\n        \"contract_version\": (\n            RUNTIME_EXECUTION_GATEWAY_CONTRACT_VERSION\n        ),\n        \"canonical_request\": (\n            \"RuntimeJobMapping\"\n        ),\n        \"canonical_submitter\": (\n            \"submit_universal_job\"\n        ),\n        \"canonical_correlation\": (\n            \"correlate_submitted_job\"\n        ),\n        \"direct_handler_dispatch\": False,\n    }\n"
+        },
+        "submit_runtime_job_mapping": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_execution_gateway",
+          "name": "submit_runtime_job_mapping",
+          "signature": "(*, mapping: 'RuntimeJobMapping', submitter: 'Callable[..., Mapping[str, Any]]' = <function submit_universal_job at 0x000001A2C1700B80>, correlation_registry: 'WorkflowJobCorrelationRegistry | None' = None) -> 'RuntimeExecutionGatewayResult'",
+          "source": "def submit_runtime_job_mapping(\n    *,\n    mapping: RuntimeJobMapping,\n    submitter: Callable[\n        ...,\n        Mapping[str, Any],\n    ] = submit_universal_job,\n    correlation_registry: (\n        WorkflowJobCorrelationRegistry\n        | None\n    ) = None,\n) -> RuntimeExecutionGatewayResult:\n    \"\"\"\n    Submit one mapped registered stage and\n    correlate its canonical job identity.\n    \"\"\"\n\n    request = _validate_mapping(\n        mapping\n    )\n\n    registration = (\n        _resolve_registration(\n            request\n        )\n    )\n\n    if not callable(submitter):\n        raise RuntimeExecutionGatewayError(\n            \"submitter must be callable.\",\n            code=\"job_submission_failure\",\n            violations=(\"submitter\",),\n        )\n\n    submitted_job = submitter(\n        **_submitter_arguments(\n            request,\n            registration,\n        )\n    )\n\n    if not isinstance(\n        submitted_job,\n        Mapping,\n    ):\n        raise RuntimeExecutionGatewayError(\n            (\n                \"Universal Job submitter \"\n                \"must return a mapping.\"\n            ),\n            code=\"job_submission_failure\",\n            violations=(\n                \"submitted_job\",\n            ),\n        )\n\n    job_id = (\n        _validate_submitted_identity(\n            request=request,\n            submitted_job=submitted_job,\n        )\n    )\n\n    (\n        created,\n        reused,\n        queued,\n        outcome,\n    ) = _submission_flags(\n        submitted_job\n    )\n\n    if (\n        created == reused\n        or not queued\n    ):\n        raise RuntimeExecutionGatewayError(\n            (\n                \"Universal Job submission did not \"\n                \"provide a valid queued outcome.\"\n            ),\n            code=\"job_submission_failure\",\n            violations=(\n                \"created\",\n                \"reused_existing_job\",\n                \"queued\",\n            ),\n        )\n\n    effective_registry = (\n        correlation_registry\n        if correlation_registry is not None\n        else (\n            get_workflow_job_correlation_registry()\n        )\n    )\n\n    if not isinstance(\n        effective_registry,\n        WorkflowJobCorrelationRegistry,\n    ):\n        raise RuntimeExecutionGatewayError(\n            (\n                \"correlation_registry must be \"\n                \"WorkflowJobCorrelationRegistry.\"\n            ),\n            code=\"correlation_failure\",\n            violations=(\n                \"correlation_registry\",\n            ),\n        )\n\n    correlation = correlate_submitted_job(\n        mapping=mapping,\n        submitted_job=submitted_job,\n        registry=effective_registry,\n    )\n\n    registration_fingerprint = _text(\n        registration.get(\n            \"registration_fingerprint\"\n        )\n    )\n\n    evidence = {\n        \"gateway_version\": (\n            RUNTIME_EXECUTION_GATEWAY_VERSION\n        ),\n        \"mapping_version\": (\n            mapping.mapping_version\n        ),\n        \"registration_fingerprint\": (\n            registration_fingerprint\n        ),\n        \"registration_resolved\": True,\n        \"canonical_submitter\": (\n            \"submit_universal_job\"\n        ),\n        \"correlation_registered\": True,\n        \"handler_dispatched\": False,\n    }\n\n    return RuntimeExecutionGatewayResult(\n        contract_version=(\n            RUNTIME_EXECUTION_GATEWAY_CONTRACT_VERSION\n        ),\n        submission_outcome=outcome,\n        created=created,\n        reused_existing_job=reused,\n        queued=queued,\n        job_id=job_id,\n        job_type=_text(\n            request.job_type\n        ),\n        workflow_id=_text(\n            mapping.workflow_id\n        ),\n        workspace_id=_text(\n            request.workspace_id\n        ),\n        correlation_id=_text(\n            mapping.correlation_id\n        ),\n        stage_id=_text(\n            mapping.stage_id\n        ),\n        runtime_stage=_text(\n            request.stage\n        ),\n        dependency_job_ids=tuple(\n            request.dependency_job_ids\n        ),\n        idempotency_key=(\n            _text(\n                request.idempotency_key\n            )\n            if request.idempotency_key\n            else None\n        ),\n        mapping=mapping,\n        submitted_job=submitted_job,\n        correlation=correlation,\n        evidence=evidence,\n    )\n"
+        }
+      }
+    },
+    "mapping": {
+      "classes": {
+        "RuntimeJobMapping": {
+          "annotations": {
+            "correlation_id": "str",
+            "creation_request": "UniversalJobCreationRequest",
+            "mapping_version": "str",
+            "stage_id": "str",
+            "wave_index": "int",
+            "workflow_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "correlation_id",
+            "stage_id",
+            "wave_index",
+            "creation_request",
+            "mapping_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "RuntimeJobMapping",
+          "signature": "(workflow_id: 'str', correlation_id: 'str', stage_id: 'str', wave_index: 'int', creation_request: 'UniversalJobCreationRequest', mapping_version: 'str' = 'runtime_job_mapping_entry_v5.2.0') -> None",
+          "uses_slots": true
+        },
+        "RuntimeJobMappingError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "RuntimeJobMappingError",
+          "signature": "",
+          "uses_slots": false
+        },
+        "RuntimeJobMappingResult": {
+          "annotations": {
+            "mapper_version": "str",
+            "mapping_count": "int",
+            "mappings": "tuple[RuntimeJobMapping, ...]",
+            "schema_version": "str",
+            "stage_ids": "tuple[str, ...]",
+            "workflow_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "mapping_count",
+            "mappings",
+            "stage_ids",
+            "mapper_version",
+            "schema_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "RuntimeJobMappingResult",
+          "signature": "(workflow_id: 'str', mapping_count: 'int', mappings: 'tuple[RuntimeJobMapping, ...]', stage_ids: 'tuple[str, ...]', mapper_version: 'str' = 'runtime_job_mapping_v5.2.0', schema_version: 'str' = 'runtime_job_mapping_schema_v1') -> None",
+          "uses_slots": true
+        },
+        "RuntimeJobMappingValidationError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "RuntimeJobMappingValidationError",
+          "signature": "(message: 'str', *, violations: 'tuple[str, ...]' = ()) -> 'None'",
+          "uses_slots": false
+        }
+      },
+      "functions": {
+        "explain_runtime_job_mapping_v5_2": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "explain_runtime_job_mapping_v5_2",
+          "signature": "() -> 'Mapping[str, Any]'",
+          "source": "def explain_runtime_job_mapping_v5_2(\n) -> Mapping[str, Any]:\n\n    return MappingProxyType(\n        {\n            \"phase\":\n                \"5.2\",\n\n            \"component\":\n                \"Runtime Job Mapping\",\n\n            \"version\":\n                RUNTIME_JOB_MAPPING_VERSION,\n\n            \"schema_version\":\n                RUNTIME_JOB_MAPPING_SCHEMA_VERSION,\n\n            \"upstream_authority\":\n                \"Phase 5.1 RuntimeHandoffIntent\",\n\n            \"downstream_authority\":\n                \"Universal Job Creation Engine\",\n\n            \"canonical_operation\":\n                \"map_runtime_handoffs_to_job_requests\",\n\n            \"direct_mapping\":\n                MappingProxyType(\n                    {\n                        \"workspace_id\":\n                            \"workspace_id\",\n\n                        \"job_type\":\n                            \"job_type\",\n\n                        \"payload\":\n                            \"payload\",\n\n                        \"pipeline_id\":\n                            \"pipeline\",\n\n                        \"runtime_stage\":\n                            \"stage\",\n                    }\n                ),\n\n            \"correlation_boundary\":\n                MappingProxyType(\n                    {\n                        \"workflow_id_to_pipeline_run_id\":\n                            False,\n\n                        \"correlation_id_to_pipeline_run_id\":\n                            False,\n\n                        \"pipeline_run_id\":\n                            None,\n\n                        \"phase_5_3_owns_correlation\":\n                            True,\n                    }\n                ),\n\n            \"execution_properties\":\n                MappingProxyType(\n                    {\n                        \"read_only\":\n                            True,\n\n                        \"deterministic\":\n                            True,\n\n                        \"fail_closed\":\n                            True,\n\n                        \"universal_job_creation\":\n                            False,\n\n                        \"job_id_generation\":\n                            False,\n\n                        \"pipeline_run_id_generation\":\n                            False,\n\n                        \"idempotency_key_generation\":\n                            False,\n\n                        \"runtime_registration_lookup\":\n                            False,\n\n                        \"submission\":\n                            False,\n\n                        \"persistence\":\n                            False,\n\n                        \"queue_write\":\n                            False,\n\n                        \"dispatch\":\n                            False,\n\n                        \"business_execution\":\n                            False,\n\n                        \"completion_processing\":\n                            False,\n\n                        \"failure_processing\":\n                            False,\n\n                        \"workflow_job_correlation\":\n                            False,\n                    }\n                ),\n        }\n    )\n"
+        },
+        "map_runtime_handoff_intent_to_creation_request": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "map_runtime_handoff_intent_to_creation_request",
+          "signature": "(*, intent: 'RuntimeHandoffIntent') -> 'RuntimeJobMapping'",
+          "source": "def map_runtime_handoff_intent_to_creation_request(\n    *,\n    intent: RuntimeHandoffIntent,\n) -> RuntimeJobMapping:\n\n    \"\"\"\n    Convert one frozen Phase 5.1 handoff intent into one immutable\n    UniversalJobCreationRequest.\n\n    No job creation, registration lookup, persistence, queue write,\n    dispatch, execution, or workflow/job correlation occurs here.\n    \"\"\"\n\n    if not isinstance(\n        intent,\n        RuntimeHandoffIntent,\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"intent must be \"\n                \"RuntimeHandoffIntent.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.2 input must be \"\n                    \"RuntimeHandoffIntent\"\n                ),\n            ),\n        )\n\n    workflow_id = _clean_required_text(\n        intent.workflow_id,\n        field_name=\"workflow_id\",\n    )\n\n    workspace_id = _clean_required_text(\n        intent.workspace_id,\n        field_name=\"workspace_id\",\n    )\n\n    correlation_id = _clean_required_text(\n        intent.correlation_id,\n        field_name=\"correlation_id\",\n    )\n\n    stage_id = _clean_required_text(\n        intent.stage_id,\n        field_name=\"stage_id\",\n    )\n\n    pipeline_id = _clean_required_text(\n        intent.pipeline_id,\n        field_name=\"pipeline_id\",\n    )\n\n    job_type = _clean_required_text(\n        intent.job_type,\n        field_name=\"job_type\",\n    )\n\n    runtime_stage = _clean_required_text(\n        intent.runtime_stage,\n        field_name=\"runtime_stage\",\n    )\n\n    payload = _freeze_mapping(\n        intent.payload,\n        field_name=\"intent.payload\",\n    )\n\n    metadata = _build_creation_metadata(\n        intent\n    )\n\n    request = UniversalJobCreationRequest(\n        workspace_id=workspace_id,\n        job_type=job_type,\n        payload=payload,\n        metadata=metadata,\n        pipeline=pipeline_id,\n        stage=runtime_stage,\n        enqueue=True,\n    )\n\n    return RuntimeJobMapping(\n        workflow_id=workflow_id,\n        correlation_id=correlation_id,\n        stage_id=stage_id,\n        wave_index=intent.wave_index,\n        creation_request=request,\n    )\n"
+        },
+        "map_runtime_handoffs_to_job_requests": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "map_runtime_handoffs_to_job_requests",
+          "signature": "(*, bridge_result: 'CoordinationRuntimeBridgeResult') -> 'RuntimeJobMappingResult'",
+          "source": "def map_runtime_handoffs_to_job_requests(\n    *,\n    bridge_result: CoordinationRuntimeBridgeResult,\n) -> RuntimeJobMappingResult:\n\n    \"\"\"\n    Map one complete frozen Phase 5.1 bridge result.\n\n    Intent ordering is preserved exactly.\n    Empty bridge results produce zero mappings.\n    \"\"\"\n\n    if not isinstance(\n        bridge_result,\n        CoordinationRuntimeBridgeResult,\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"bridge_result must be \"\n                \"CoordinationRuntimeBridgeResult.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.2 input must be the \"\n                    \"Phase 5.1 bridge result\"\n                ),\n            ),\n        )\n\n    workflow_id = _clean_required_text(\n        bridge_result.workflow_id,\n        field_name=\"bridge_result.workflow_id\",\n    )\n\n    if (\n        bridge_result.handoff_count\n        != len(\n            bridge_result.intents\n        )\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"Phase 5.1 handoff_count does not \"\n                \"match intents length.\"\n            ),\n            violations=(\n                (\n                    \"bridge_result.handoff_count must equal \"\n                    \"len(bridge_result.intents)\"\n                ),\n            ),\n        )\n\n    if (\n        tuple(\n            bridge_result.planned_stage_ids\n        )\n        != tuple(\n            intent.stage_id\n            for intent\n            in bridge_result.intents\n        )\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"Phase 5.1 planned_stage_ids do not \"\n                \"match intent ordering.\"\n            ),\n            violations=(\n                (\n                    \"Phase 5.2 requires certified Phase 5.1 \"\n                    \"intent ordering\"\n                ),\n            ),\n        )\n\n    mappings = tuple(\n        map_runtime_handoff_intent_to_creation_request(\n            intent=intent\n        )\n        for intent\n        in bridge_result.intents\n    )\n\n    stage_ids = tuple(\n        mapping.stage_id\n        for mapping\n        in mappings\n    )\n\n    return RuntimeJobMappingResult(\n        workflow_id=workflow_id,\n        mapping_count=len(\n            mappings\n        ),\n        mappings=mappings,\n        stage_ids=stage_ids,\n    )\n"
+        },
+        "runtime_job_mapping_snapshot": {
+          "available": true,
+          "module": "backend.server.coordination.runtime_integration.runtime_job_mapping",
+          "name": "runtime_job_mapping_snapshot",
+          "signature": "(result: 'RuntimeJobMappingResult') -> 'Mapping[str, Any]'",
+          "source": "def runtime_job_mapping_snapshot(\n    result: RuntimeJobMappingResult,\n) -> Mapping[str, Any]:\n\n    if not isinstance(\n        result,\n        RuntimeJobMappingResult,\n    ):\n\n        raise RuntimeJobMappingValidationError(\n            (\n                \"result must be \"\n                \"RuntimeJobMappingResult.\"\n            ),\n            violations=(\n                \"snapshot input must be RuntimeJobMappingResult\",\n            ),\n        )\n\n    return MappingProxyType(\n        {\n            \"workflow_id\":\n                result.workflow_id,\n\n            \"mapping_count\":\n                result.mapping_count,\n\n            \"stage_ids\":\n                result.stage_ids,\n\n            \"mappings\":\n                tuple(\n                    MappingProxyType(\n                        {\n                            \"workflow_id\":\n                                item.workflow_id,\n\n                            \"correlation_id\":\n                                item.correlation_id,\n\n                            \"stage_id\":\n                                item.stage_id,\n\n                            \"wave_index\":\n                                item.wave_index,\n\n                            \"creation_request\":\n                                item.creation_request,\n                        }\n                    )\n                    for item\n                    in result.mappings\n                ),\n\n            \"mapper_version\":\n                result.mapper_version,\n\n            \"schema_version\":\n                result.schema_version,\n        }\n    )\n"
+        }
+      }
+    },
+    "planner": {
+      "classes": {
+        "ExecutionPlan": {
+          "annotations": {
+            "cycle_detection_version": "str",
+            "graph_version": "str",
+            "planned_stage_ids": "tuple[str, ...]",
+            "planner_version": "str",
+            "runnable_stage_resolver_version": "str",
+            "wave_count": "int",
+            "waves": "tuple[ExecutionWave, ...]",
+            "workflow_id": "str"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "workflow_id",
+            "wave_count",
+            "waves",
+            "planned_stage_ids",
+            "graph_version",
+            "cycle_detection_version",
+            "runnable_stage_resolver_version",
+            "planner_version"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "ExecutionPlan",
+          "signature": "(workflow_id: 'str', wave_count: 'int', waves: 'tuple[ExecutionWave, ...]', planned_stage_ids: 'tuple[str, ...]', graph_version: 'str', cycle_detection_version: 'str', runnable_stage_resolver_version: 'str', planner_version: 'str') -> None",
+          "uses_slots": true
+        },
+        "ExecutionPlanRunnabilityMismatchError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "ExecutionPlanRunnabilityMismatchError",
+          "signature": "",
+          "uses_slots": false
+        },
+        "ExecutionPlanWorkflowMismatchError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "ExecutionPlanWorkflowMismatchError",
+          "signature": "",
+          "uses_slots": false
+        },
+        "ExecutionPlannerError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "ExecutionPlannerError",
+          "signature": "",
+          "uses_slots": false
+        },
+        "ExecutionWave": {
+          "annotations": {
+            "execution_semantics": "str",
+            "stage_ids": "tuple[str, ...]",
+            "wave_index": "int"
+          },
+          "available": true,
+          "dataclass": true,
+          "fields": [
+            "wave_index",
+            "stage_ids",
+            "execution_semantics"
+          ],
+          "frozen": true,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "ExecutionWave",
+          "signature": "(wave_index: 'int', stage_ids: 'tuple[str, ...]', execution_semantics: 'str') -> None",
+          "uses_slots": true
+        },
+        "InvalidExecutionPlanningRequestError": {
+          "annotations": {},
+          "available": true,
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "InvalidExecutionPlanningRequestError",
+          "signature": "",
+          "uses_slots": false
+        }
+      },
+      "functions": {
+        "create_execution_plan": {
+          "available": true,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "create_execution_plan",
+          "signature": "(graph: 'DependencyGraph', resolution: 'RunnableStageResolution') -> 'ExecutionPlan'",
+          "source": "def create_execution_plan(\n    graph: DependencyGraph,\n    resolution: RunnableStageResolution,\n) -> ExecutionPlan:\n    \"\"\"\n    Create one immediate execution wave from Phase 4.4 runnable stages.\n\n    All currently runnable stages remain in the same wave.\n\n    Lexical ordering inside the wave is deterministic representation only.\n    It does not impose serial execution.\n    \"\"\"\n\n    _validate_planning_inputs(\n        graph,\n        resolution,\n    )\n\n    planned_stage_ids = tuple(\n        sorted(\n            resolution.runnable_stage_ids\n        )\n    )\n\n    if planned_stage_ids:\n        waves = (\n            ExecutionWave(\n                wave_index=1,\n                stage_ids=planned_stage_ids,\n                execution_semantics=(\n                    \"parallel_eligible\"\n                ),\n            ),\n        )\n\n    else:\n        waves = ()\n\n    return ExecutionPlan(\n        workflow_id=resolution.workflow_id,\n        wave_count=len(\n            waves\n        ),\n        waves=waves,\n        planned_stage_ids=planned_stage_ids,\n        graph_version=graph.graph_version,\n        cycle_detection_version=(\n            CYCLE_DETECTION_VERSION\n        ),\n        runnable_stage_resolver_version=(\n            RUNNABLE_STAGE_RESOLVER_VERSION\n        ),\n        planner_version=(\n            EXECUTION_PLANNER_VERSION\n        ),\n    )\n"
+        },
+        "execution_plan_snapshot": {
+          "available": true,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "execution_plan_snapshot",
+          "signature": "(graph: 'DependencyGraph', resolution: 'RunnableStageResolution') -> 'Mapping[str, Any]'",
+          "source": "def execution_plan_snapshot(\n    graph: DependencyGraph,\n    resolution: RunnableStageResolution,\n) -> Mapping[str, Any]:\n    plan = create_execution_plan(\n        graph,\n        resolution,\n    )\n\n    return _freeze(\n        {\n            \"planner_version\":\n                EXECUTION_PLANNER_VERSION,\n\n            \"schema_version\":\n                EXECUTION_PLANNER_SCHEMA_VERSION,\n\n            \"workflow_id\":\n                plan.workflow_id,\n\n            \"graph_version\":\n                plan.graph_version,\n\n            \"cycle_detection_version\":\n                plan.cycle_detection_version,\n\n            \"runnable_stage_resolver_version\":\n                plan.runnable_stage_resolver_version,\n\n            \"wave_count\":\n                plan.wave_count,\n\n            \"waves\":\n                tuple(\n                    wave.to_dict()\n                    for wave\n                    in plan.waves\n                ),\n\n            \"planned_stage_ids\":\n                plan.planned_stage_ids,\n        }\n    )\n"
+        },
+        "explain_execution_planner_v4_5": {
+          "available": true,
+          "module": "backend.server.coordination.dependency_planning.execution_planner",
+          "name": "explain_execution_planner_v4_5",
+          "signature": "() -> 'Mapping[str, Any]'",
+          "source": "def explain_execution_planner_v4_5(\n) -> Mapping[str, Any]:\n    return _freeze(\n        {\n            \"phase\":\n                \"4.5\",\n\n            \"component\":\n                \"Execution Planner\",\n\n            \"version\":\n                EXECUTION_PLANNER_VERSION,\n\n            \"schema_version\":\n                EXECUTION_PLANNER_SCHEMA_VERSION,\n\n            \"topology_authority\":\n                \"Phase 4.1 DependencyGraph\",\n\n            \"validation_authority\":\n                \"Phase 4.2 Dependency Validation\",\n\n            \"acyclic_authority\":\n                \"Phase 4.3 Cycle Detection\",\n\n            \"runnability_authority\":\n                \"Phase 4.4 RunnableStageResolution\",\n\n            \"upstream_versions\": {\n                \"4.1\":\n                    DEPENDENCY_GRAPH_VERSION,\n\n                \"4.2\":\n                    DEPENDENCY_VALIDATION_VERSION,\n\n                \"4.3\":\n                    CYCLE_DETECTION_VERSION,\n\n                \"4.4\":\n                    RUNNABLE_STAGE_RESOLVER_VERSION,\n            },\n\n            \"planning_scope\": {\n                \"mode\":\n                    \"immediate_current_execution_wave\",\n\n                \"future_stage_prediction\":\n                    False,\n\n                \"full_remaining_workflow_topological_plan\":\n                    False,\n\n                \"only_currently_runnable_stages\":\n                    True,\n            },\n\n            \"wave_semantics\": {\n                \"simultaneously_runnable_stages\":\n                    \"one execution wave\",\n\n                \"within_wave_order\":\n                    \"lexical deterministic\",\n\n                \"lexical_order_meaning\":\n                    \"serialization and evidence only\",\n\n                \"forced_serial_execution\":\n                    False,\n\n                \"artificial_dependencies\":\n                    False,\n\n                \"empty_runnable_set\":\n                    \"valid empty plan\",\n            },\n\n            \"exclusions\": {\n                \"blocked_stages\":\n                    \"excluded\",\n\n                \"untracked_stages\":\n                    \"excluded\",\n            },\n\n            \"runtime_policy\": {\n                \"worker_capacity\":\n                    \"not considered\",\n\n                \"queue_state\":\n                    \"not considered\",\n\n                \"priority\":\n                    \"not considered\",\n\n                \"retries\":\n                    \"not considered\",\n\n                \"cost\":\n                    \"not considered\",\n\n                \"resource_availability\":\n                    \"not considered\",\n\n                \"job_creation\":\n                    False,\n\n                \"dispatch\":\n                    False,\n            },\n\n            \"owns\": (\n                \"immediate execution-wave construction\",\n                \"deterministic execution-plan representation\",\n                \"parallel eligibility preservation\",\n                \"planning input identity validation\",\n                \"immutable execution-plan evidence\",\n            ),\n\n            \"does_not_own\": (\n                \"dependency graph construction\",\n                \"dependency semantic validation\",\n                \"cycle detection\",\n                \"runnable-stage eligibility\",\n                \"future workflow prediction\",\n                \"full remaining-workflow topological planning\",\n                \"planning certification\",\n                \"Runtime Registration\",\n                \"Runtime job creation\",\n                \"Runtime dispatch\",\n                \"worker selection\",\n                \"queue scheduling\",\n                \"priority scheduling\",\n                \"stage handoff\",\n                \"fan-out/fan-in policy\",\n                \"conditional execution\",\n                \"skip semantics\",\n                \"workflow persistence\",\n                \"workflow recovery\",\n            ),\n\n            \"future_authority\": {\n                \"4.6\":\n                    \"Planning Certification\",\n\n                \"5\":\n                    \"Runtime Integration\",\n\n                \"7\":\n                    \"Advanced Orchestration\",\n            },\n\n            \"execution_properties\": {\n                \"read_only\":\n                    True,\n\n                \"deterministic\":\n                    True,\n\n                \"side_effect_free\":\n                    True,\n\n                \"graph_mutation\":\n                    False,\n\n                \"resolution_mutation\":\n                    False,\n\n                \"runtime_execution\":\n                    False,\n\n                \"runtime_job_creation\":\n                    False,\n\n                \"persistence\":\n                    False,\n            },\n        }\n    )\n"
+        }
+      }
+    }
+  },
+  "source_hashes": {
+    "bridge": "2dd7af262c879b4dd58a484ab7470d9ea9883a80dde3c77f1dc1acdfd35cd0e2",
+    "correlation": "13b007b1f74a131250476432b14381cc81c916f48ce121b44877964a18a73ab6",
+    "dependency_policy": "4052b20540683384300571fbabc0cab501563dba79d500608e626bb9a92ef071",
+    "gateway": "b0660484b7566a42eedbb6d637ada6b4a119c9137281acff51e87a83067b37a2",
+    "mapping": "49227b0686ded28418de7def2110164318ddca3858469a05f5a596388ba84e6a",
+    "planner": "808743f566978530b2fc774dbd70a5ffa820f0efe431512e882e0cf0f7b81958",
+    "queue": "54c3654d534a05b0fc5ec19708409ca41ce95fb057d6fb6c76159fa14cfc19de"
+  }
+}
+
+EXECUTION_ERROR:
+null
+
+==============================================================================================================
+NEXT STEP
+==============================================================================================================
+Use this evidence to implement Part C 8-D2 execution-wave submission through the certified single-mapping gateway.
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+PART C 8-D1 COMPLETE

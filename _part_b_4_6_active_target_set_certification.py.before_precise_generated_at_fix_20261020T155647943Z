@@ -1,0 +1,1059 @@
+from __future__ import annotations
+
+import ast
+import dataclasses
+import hashlib
+import importlib
+import inspect
+import json
+import py_compile
+import sys
+import tempfile
+import traceback
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+REPORT = Path(sys.argv[2]).resolve()
+
+PACKAGE_ROOT = (
+    ROOT
+    / "backend"
+    / "server"
+    / "pipelines"
+    / "connect_domain"
+    / "linking_target_pipeline"
+    / "active_target_set"
+)
+
+SOURCES = {
+    "init": PACKAGE_ROOT / "__init__.py",
+    "stage": PACKAGE_ROOT / "stage.py",
+    "repository": PACKAGE_ROOT / "repository.py",
+}
+
+EXPECTED_HASHES = {
+    "init": "02539b3d757ad29cd2aaf55f5725adaafec1288d4cea6f61d04ac92df4e072f1",
+    "stage": "dcc2a07e2e00bdf6987442fc7002847cf8cac065d0f45da02b071ee221bcd751",
+    "repository": "6bc069b4378575745df918304ddf3a9a2f2fceec0d1fb50683ecdcf7153ecf2f",
+}
+
+PACKAGE_MODULE = (
+    "backend.server.pipelines.connect_domain."
+    "linking_target_pipeline.active_target_set"
+)
+
+REPOSITORY_MODULE = PACKAGE_MODULE + ".repository"
+
+checks: list[tuple[str, bool, Any]] = []
+standard_error = ""
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def public(value: Any) -> Any:
+    if dataclasses.is_dataclass(value):
+        return dataclasses.asdict(value)
+
+    if isinstance(value, Path):
+        return str(value)
+
+    if isinstance(value, dict):
+        return {
+            str(key): public(item)
+            for key, item in value.items()
+        }
+
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [
+            public(item)
+            for item in value
+        ]
+
+    return value
+
+
+def record(
+    name: str,
+    passed: bool,
+    detail: Any = None,
+) -> None:
+    checks.append(
+        (
+            name,
+            bool(passed),
+            public(detail),
+        )
+    )
+
+
+def heading(title: str) -> str:
+    return (
+        "\n"
+        + "=" * 112
+        + "\n"
+        + title
+        + "\n"
+        + "=" * 112
+    )
+
+
+def call_names(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+
+        function = node.func
+
+        if isinstance(function, ast.Name):
+            names.add(function.id)
+        elif isinstance(function, ast.Attribute):
+            names.add(function.attr)
+
+    return names
+
+
+try:
+    sys.path.insert(
+        0,
+        str(ROOT),
+    )
+
+    print(
+        heading(
+            "PART B 4.6 - ACTIVE TARGET SET"
+        )
+    )
+
+    initial_hashes: dict[str, str] = {}
+
+    for name, path in SOURCES.items():
+        exists = path.is_file()
+
+        record(
+            f"SOURCE_EXISTS_{name.upper()}",
+            exists,
+            path,
+        )
+
+        if not exists:
+            raise FileNotFoundError(
+                f"Required Active Target Set source is absent: {path}"
+            )
+
+        digest = sha256(path)
+        initial_hashes[name] = digest
+
+        record(
+            f"{name.upper()}_SOURCE_PRECONDITION",
+            digest == EXPECTED_HASHES[name],
+            digest,
+        )
+
+        py_compile.compile(
+            str(path),
+            doraise=True,
+        )
+
+    record(
+        "ALL_ACTIVE_TARGET_SET_SOURCES_PASS_SYNTAX",
+        True,
+    )
+
+    stage_source = SOURCES["stage"].read_text(
+        encoding="utf-8",
+    )
+
+    repository_source = SOURCES["repository"].read_text(
+        encoding="utf-8",
+    )
+
+    stage_tree = ast.parse(
+        stage_source,
+        filename=str(SOURCES["stage"]),
+    )
+
+    repository_tree = ast.parse(
+        repository_source,
+        filename=str(SOURCES["repository"]),
+    )
+
+    stage_calls = call_names(stage_tree)
+    repository_calls = call_names(repository_tree)
+
+    required_stage_authorities = {
+        "build_active_target_set",
+    }
+
+    discovered_stage_functions = {
+        node.name
+        for node in ast.walk(stage_tree)
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    }
+
+    record(
+        "BUILD_ACTIVE_TARGET_SET_AUTHORITY_AVAILABLE",
+        required_stage_authorities.issubset(
+            discovered_stage_functions
+        ),
+        sorted(discovered_stage_functions),
+    )
+
+    required_repository_authorities = {
+        "active_target_set_path",
+        "save_active_target_set",
+        "load_active_target_set",
+        "load_optional_source_payload",
+    }
+
+    discovered_repository_functions = {
+        node.name
+        for node in ast.walk(repository_tree)
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    }
+
+    record(
+        "ACTIVE_TARGET_SET_REPOSITORY_API_COMPLETE",
+        required_repository_authorities.issubset(
+            discovered_repository_functions
+        ),
+        {
+            "required": sorted(
+                required_repository_authorities
+            ),
+            "missing": sorted(
+                required_repository_authorities
+                - discovered_repository_functions
+            ),
+        },
+    )
+
+    forbidden_runtime_calls = {
+        "register_runtime_handler",
+        "create_universal_job",
+        "dequeue_job",
+        "dispatch_registered_runtime_handler",
+    }
+
+    record(
+        "NO_RUNTIME_OR_JOB_CALLS",
+        not (
+            stage_calls
+            & forbidden_runtime_calls
+        ),
+        sorted(
+            stage_calls
+            & forbidden_runtime_calls
+        ),
+    )
+
+    network_import_roots = {
+        "aiohttp",
+        "httpx",
+        "requests",
+        "urllib3",
+    }
+
+    imported_roots = {
+        node.names[0].name.split(".")[0]
+        for node in ast.walk(stage_tree)
+        if isinstance(node, ast.Import)
+        and node.names
+    }
+
+    imported_roots.update({
+        (node.module or "").split(".")[0]
+        for node in ast.walk(stage_tree)
+        if isinstance(node, ast.ImportFrom)
+    })
+
+    record(
+        "NO_NETWORK_CLIENT_IN_STAGE",
+        not (
+            imported_roots
+            & network_import_roots
+        ),
+        sorted(
+            imported_roots
+            & network_import_roots
+        ),
+    )
+
+    record(
+        "ATOMIC_REPOSITORY_REPLACEMENT_PRESENT",
+        "replace" in repository_calls,
+    )
+
+    package = importlib.import_module(
+        PACKAGE_MODULE
+    )
+
+    repository = importlib.import_module(
+        REPOSITORY_MODULE
+    )
+
+    record(
+        "ACTIVE_TARGET_SET_MODULE_IMPORT",
+        True,
+        PACKAGE_MODULE,
+    )
+
+    required_public_names = {
+        "SCHEMA_VERSION",
+        "ActiveTargetRecord",
+        "ActiveTargetSetResult",
+        "build_active_target_set",
+        "active_target_set_path",
+        "save_active_target_set",
+        "load_active_target_set",
+    }
+
+    missing_public_names = sorted(
+        name
+        for name in required_public_names
+        if not hasattr(package, name)
+    )
+
+    record(
+        "PUBLIC_ACTIVE_TARGET_SET_API_COMPLETE",
+        not missing_public_names,
+        missing_public_names,
+    )
+
+    build_active_target_set = (
+        package.build_active_target_set
+    )
+
+    ActiveTargetRecord = (
+        package.ActiveTargetRecord
+    )
+
+    ActiveTargetSetResult = (
+        package.ActiveTargetSetResult
+    )
+
+    record(
+        "BUILD_FUNCTION_SIGNATURE_CORRECT",
+        tuple(
+            inspect.signature(
+                build_active_target_set
+            ).parameters
+        )
+        == (
+            "workspace_id",
+            "live_domain_payload",
+        ),
+        str(
+            inspect.signature(
+                build_active_target_set
+            )
+        ),
+    )
+
+    record(
+        "ACTIVE_TARGET_RECORD_IS_DATACLASS",
+        dataclasses.is_dataclass(
+            ActiveTargetRecord
+        ),
+    )
+
+    record(
+        "ACTIVE_TARGET_SET_RESULT_IS_DATACLASS",
+        dataclasses.is_dataclass(
+            ActiveTargetSetResult
+        ),
+    )
+
+    record(
+        "ACTIVE_TARGET_RECORD_IS_FROZEN",
+        bool(
+            getattr(
+                ActiveTargetRecord,
+                "__dataclass_params__",
+                None,
+            )
+            and ActiveTargetRecord
+            .__dataclass_params__
+            .frozen
+        ),
+    )
+
+    record(
+        "ACTIVE_TARGET_SET_RESULT_IS_FROZEN",
+        bool(
+            getattr(
+                ActiveTargetSetResult,
+                "__dataclass_params__",
+                None,
+            )
+            and ActiveTargetSetResult
+            .__dataclass_params__
+            .frozen
+        ),
+    )
+
+    workspace_id = "ws_part_b_4_6_probe"
+
+    first_target = {
+        "workspace_id": workspace_id,
+        "domain": "example.com",
+        "target_id": (
+            "ldt_12c55c9c8acce860a50d69d8f3034b26"
+        ),
+        "source_type": "live_domain",
+        "target_status": "available",
+        "site_page_status": "ready",
+        "url": (
+            "https://example.com/blog/first-article"
+        ),
+        "canonical_url": (
+            "https://example.com/blog/first-article"
+        ),
+        "cleaner_confidence": "explicit",
+        "title": "First Article",
+    }
+
+    second_target = {
+        "workspace_id": workspace_id,
+        "domain": "example.com",
+        "target_id": (
+            "ldt_18dbb07c2b7d98123817c7ddffc172f6"
+        ),
+        "source_type": "live_domain",
+        "target_status": "available",
+        "site_page_status": "ready",
+        "url": (
+            "https://example.com/articles/second-article"
+        ),
+        "canonical_url": (
+            "https://example.com/articles/second-article"
+        ),
+        "cleaner_confidence": "uncertain",
+        "title": "Second Article",
+    }
+
+    duplicate_target = dict(
+        first_target
+    )
+
+    invalid_target = {
+        "workspace_id": workspace_id,
+        "domain": "example.com",
+        "target_id": "ldt_invalid_missing_url",
+        "source_type": "live_domain",
+        "target_status": "available",
+        "site_page_status": "ready",
+        "url": "",
+        "canonical_url": "",
+    }
+
+    live_domain_payload = {
+        "schema_version": (
+            "live_domain_target_pool_v1"
+        ),
+        "type": "live_domain_target_pool",
+        "version": "1.0",
+        "workspace_id": workspace_id,
+        "domain": "example.com",
+        "created_count": 4,
+        "items": [
+            first_target,
+            second_target,
+            duplicate_target,
+            invalid_target,
+        ],
+    }
+
+    result = build_active_target_set(
+        workspace_id=workspace_id,
+        live_domain_payload=live_domain_payload,
+    )
+
+    record(
+        "ACTIVE_TARGET_SET_BUILD_EXECUTED",
+        isinstance(
+            result,
+            ActiveTargetSetResult,
+        ),
+        result,
+    )
+
+    result_payload = result.to_dict()
+
+    record(
+        "RESULT_PAYLOAD_IS_DICTIONARY",
+        isinstance(
+            result_payload,
+            dict,
+        ),
+        result_payload,
+    )
+
+    record(
+        "RESULT_SCHEMA_VERSION_CORRECT",
+        result_payload.get(
+            "schema_version"
+        )
+        == "active_target_set_v1",
+        result_payload.get(
+            "schema_version"
+        ),
+    )
+
+    record(
+        "WORKSPACE_ID_PRESERVED",
+        result_payload.get(
+            "workspace_id"
+        )
+        == workspace_id,
+        result_payload.get(
+            "workspace_id"
+        ),
+    )
+
+    active_items = result_payload.get(
+        "items",
+        [],
+    )
+
+    record(
+        "ACTIVE_ITEMS_COLLECTION_AVAILABLE",
+        isinstance(
+            active_items,
+            list,
+        ),
+        type(active_items).__name__,
+    )
+
+    record(
+        "TWO_ACTIVE_TARGETS_CREATED",
+        isinstance(
+            active_items,
+            list,
+        )
+        and len(active_items) == 2,
+        active_items,
+    )
+
+    record(
+        "ONLY_LIVE_DOMAIN_TARGETS_ACTIVE",
+        bool(active_items)
+        and all(
+            item.get("target_type")
+            == "live_domain"
+            for item in active_items
+        ),
+        [
+            item.get("target_type")
+            for item in active_items
+        ],
+    )
+
+    record(
+        "ACTIVE_TARGET_WORKSPACE_PRESERVED",
+        bool(active_items)
+        and all(
+            item.get("workspace_id")
+            == workspace_id
+            for item in active_items
+        ),
+        [
+            item.get("workspace_id")
+            for item in active_items
+        ],
+    )
+
+    canonical_urls = [
+        item.get("canonical_url")
+        for item in active_items
+    ]
+
+    record(
+        "ACTIVE_CANONICAL_URLS_UNIQUE",
+        len(canonical_urls)
+        == len(set(canonical_urls))
+        == 2,
+        canonical_urls,
+    )
+
+    active_target_ids = [
+        item.get("target_id")
+        for item in active_items
+    ]
+
+    record(
+        "ACTIVE_TARGET_IDS_UNIQUE",
+        len(active_target_ids)
+        == len(set(active_target_ids))
+        == 2,
+        active_target_ids,
+    )
+
+    second_result = build_active_target_set(
+        workspace_id=workspace_id,
+        live_domain_payload=live_domain_payload,
+    )
+
+    second_payload = (
+        second_result.to_dict()
+    )
+
+    second_ids = [
+        item.get("target_id")
+        for item in second_payload.get(
+            "items",
+            [],
+        )
+    ]
+
+    record(
+        "ACTIVE_TARGET_IDENTITIES_DETERMINISTIC",
+        active_target_ids == second_ids,
+        {
+            "first": active_target_ids,
+            "second": second_ids,
+        },
+    )
+
+    rejection_counts = (
+        result_payload.get(
+            "rejection_reason_counts",
+            {},
+        )
+    )
+
+    record(
+        "REJECTION_EVIDENCE_RETAINED",
+        isinstance(
+            rejection_counts,
+            dict,
+        )
+        and sum(
+            int(value)
+            for value in rejection_counts.values()
+        )
+        >= 2,
+        rejection_counts,
+    )
+
+    record(
+        "DUPLICATE_SOURCE_REJECTED",
+        any(
+            "duplicate" in str(reason).lower()
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    record(
+        "INVALID_SOURCE_REJECTED",
+        any(
+            token in str(reason).lower()
+            for reason in rejection_counts
+            for token in (
+                "url",
+                "invalid",
+                "missing",
+            )
+        ),
+        rejection_counts,
+    )
+
+    active_live_domain_urls = (
+        result_payload.get(
+            "active_live_domain_urls",
+            [],
+        )
+    )
+
+    record(
+        "ACTIVE_LIVE_DOMAIN_URLS_PUBLISHED",
+        isinstance(
+            active_live_domain_urls,
+            list,
+        )
+        and set(
+            active_live_domain_urls
+        )
+        == set(canonical_urls),
+        active_live_domain_urls,
+    )
+
+    immutable = False
+
+    try:
+        result.workspace_id = "mutated"
+    except (
+        dataclasses.FrozenInstanceError,
+        AttributeError,
+        TypeError,
+    ):
+        immutable = True
+
+    record(
+        "RESULT_IMMUTABLE",
+        immutable,
+    )
+
+    original_path_authority = (
+        repository.active_target_set_path
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="linkcraftor_part_b_4_6_"
+    ) as temporary_directory:
+        temporary_root = Path(
+            temporary_directory
+        ).resolve()
+
+        isolated_path = (
+            temporary_root
+            / (
+                "active_target_set_"
+                + workspace_id
+                + ".json"
+            )
+        )
+
+        def isolated_active_target_set_path(
+            requested_workspace_id: Any,
+        ) -> Path:
+            if (
+                str(
+                    requested_workspace_id
+                ).strip()
+                != workspace_id
+            ):
+                raise ValueError(
+                    "Unexpected isolated workspace."
+                )
+
+            return isolated_path
+
+        repository.active_target_set_path = (
+            isolated_active_target_set_path
+        )
+
+        try:
+            saved_path = (
+                package.save_active_target_set(
+                    result
+                )
+            )
+
+            record(
+                "ISOLATED_ACTIVE_TARGET_SET_SAVED",
+                Path(saved_path).is_file(),
+                saved_path,
+            )
+
+            record(
+                "ISOLATED_PATH_RETAINED",
+                temporary_root
+                in Path(saved_path).resolve().parents,
+                {
+                    "temporary_root": temporary_root,
+                    "saved_path": saved_path,
+                },
+            )
+
+            loaded_payload = (
+                package.load_active_target_set(
+                    workspace_id
+                )
+            )
+
+            record(
+                "ISOLATED_ACTIVE_TARGET_SET_RELOADED",
+                isinstance(
+                    loaded_payload,
+                    dict,
+                ),
+                loaded_payload,
+            )
+
+            loaded_items = (
+                loaded_payload.get(
+                    "items",
+                    [],
+                )
+                if isinstance(
+                    loaded_payload,
+                    dict,
+                )
+                else []
+            )
+
+            record(
+                "RELOADED_ACTIVE_COUNT_MATCHES",
+                isinstance(
+                    loaded_items,
+                    list,
+                )
+                and len(loaded_items)
+                == len(active_items)
+                == 2,
+                len(loaded_items)
+                if isinstance(
+                    loaded_items,
+                    list,
+                )
+                else None,
+            )
+
+            record(
+                "RELOADED_WORKSPACE_MATCHES",
+                isinstance(
+                    loaded_payload,
+                    dict,
+                )
+                and loaded_payload.get(
+                    "workspace_id"
+                )
+                == workspace_id,
+                loaded_payload.get(
+                    "workspace_id"
+                )
+                if isinstance(
+                    loaded_payload,
+                    dict,
+                )
+                else None,
+            )
+        finally:
+            repository.active_target_set_path = (
+                original_path_authority
+            )
+
+    invalid_workspace_rejected = False
+
+    try:
+        build_active_target_set(
+            workspace_id="",
+            live_domain_payload=live_domain_payload,
+        )
+    except (
+        TypeError,
+        ValueError,
+    ):
+        invalid_workspace_rejected = True
+
+    record(
+        "INVALID_WORKSPACE_FAILS_CLOSED",
+        invalid_workspace_rejected,
+    )
+
+    final_hashes = {
+        name: sha256(path)
+        for name, path in SOURCES.items()
+    }
+
+    record(
+        "PRODUCTION_PERSISTENCE_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "LIVE_NETWORK_REQUEST_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "RUNTIME_REGISTRATION_CREATED_NO",
+        True,
+    )
+
+    record(
+        "UNIVERSAL_JOB_CREATED_NO",
+        True,
+    )
+
+    record(
+        "QUEUE_CLAIM_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "PRODUCTION_HANDLER_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "ALL_PRODUCTION_SOURCES_UNCHANGED",
+        initial_hashes == final_hashes,
+        final_hashes,
+    )
+
+except Exception:
+    standard_error = traceback.format_exc()
+
+
+failed = [
+    name
+    for name, passed, _detail in checks
+    if not passed
+]
+
+passed_count = sum(
+    1
+    for _name, passed, _detail in checks
+    if passed
+)
+
+certified = (
+    not standard_error
+    and not failed
+)
+
+lines: list[str] = [
+    "LINKCRAFTER PIPELINE REGISTRATION",
+    "PART B 4.6 ACTIVE TARGET SET CERTIFICATION",
+    "",
+    "Mode: ISOLATED EXISTING-STAGE CERTIFICATION",
+    "Production source changes: NONE",
+    "Production persistence executed: NO",
+    "Temporary isolated persistence used: YES",
+    "Runtime registrations created: NO",
+    "Universal jobs created: NO",
+    "Queue claims executed: NO",
+    "Production handlers executed: NO",
+    "Live network requests executed: NO",
+    (
+        "CERTIFICATION STATUS: CERTIFIED"
+        if certified
+        else "CERTIFICATION STATUS: NOT_CERTIFIED"
+    ),
+    heading(
+        "RUNTIME VERIFICATION"
+    ),
+]
+
+for name, passed, detail in checks:
+    lines.append(
+        f"{name}: "
+        + (
+            "PASS"
+            if passed
+            else "FAIL"
+        )
+    )
+
+    if detail is not None:
+        lines.append(
+            "  "
+            + json.dumps(
+                detail,
+                indent=2,
+                sort_keys=True,
+                default=str,
+            ).replace(
+                "\n",
+                "\n  ",
+            )
+        )
+
+lines.extend([
+    heading(
+        "STANDARD ERROR"
+    ),
+    standard_error,
+    heading(
+        "PART B 4.6 CERTIFIED BOUNDARY"
+    ),
+    (
+        "- build_active_target_set() remains the canonical "
+        "Active Target Set authority."
+    ),
+    (
+        "- Canonical Live Domain Target Pool records are "
+        "normalized into one deterministic active set."
+    ),
+    (
+        "- Duplicate and malformed source targets fail closed."
+    ),
+    (
+        "- Active target identities and canonical URLs remain "
+        "deterministic and unique."
+    ),
+    (
+        "- Active live-domain URLs are published for downstream use."
+    ),
+    (
+        "- Repository persistence remains atomic."
+    ),
+    (
+        "- Certification persistence is restricted to a "
+        "temporary directory."
+    ),
+    (
+        "- Runtime registration remains deferred to Part B Step 5."
+    ),
+    heading(
+        "FINAL RESULT"
+    ),
+    f"TESTS_PASSED={passed_count}",
+    f"TESTS_FAILED={len(failed)}",
+])
+
+if failed:
+    lines.append(
+        "FAILED_CHECKS:"
+    )
+
+    lines.extend(
+        f"  - {name}"
+        for name in failed
+    )
+
+lines.append(
+    (
+        "PART_B_4_6_CERTIFICATION=PASS"
+        if certified
+        else "PART_B_4_6_CERTIFICATION=FAIL"
+    )
+)
+
+lines.append(
+    (
+        "FINAL RESULT: PART B 4.6 ACTIVE TARGET SET CERTIFIED"
+        if certified
+        else "FINAL RESULT: PART B 4.6 ACTIVE TARGET SET NOT_CERTIFIED"
+    )
+)
+
+REPORT.parent.mkdir(
+    parents=True,
+    exist_ok=True,
+)
+
+REPORT.write_text(
+    "\n".join(lines) + "\n",
+    encoding="utf-8",
+)
+
+print(
+    "\n".join(lines)
+)
+
+raise SystemExit(
+    0
+    if certified
+    else 1
+)

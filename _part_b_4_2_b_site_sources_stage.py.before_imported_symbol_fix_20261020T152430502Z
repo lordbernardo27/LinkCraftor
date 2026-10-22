@@ -1,0 +1,1412 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import json
+import py_compile
+import shutil
+import sys
+import traceback
+from dataclasses import FrozenInstanceError, is_dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+REPORT = Path(sys.argv[2]).resolve()
+
+CONNECT_ROOT = (
+    ROOT
+    / "backend"
+    / "server"
+    / "pipelines"
+    / "connect_domain"
+)
+
+LINKING_ROOT = (
+    CONNECT_ROOT
+    / "linking_target_pipeline"
+)
+
+LINKING_COORDINATOR = (
+    LINKING_ROOT
+    / "coordinator.py"
+)
+
+SITE_READER = (
+    ROOT
+    / "backend"
+    / "server"
+    / "routes"
+    / "site_reader.py"
+)
+
+TARGET_ROOT = (
+    LINKING_ROOT
+    / "site_sources"
+)
+
+TARGET_INIT = TARGET_ROOT / "__init__.py"
+TARGET_STAGE = TARGET_ROOT / "stage.py"
+
+EXPECTED_LINKING_SHA256 = (
+    "5bf92cdca6f987814e66a92830471554bcef76f1385935f07897b7be456e7149"
+)
+
+results: list[tuple[str, bool, Any]] = []
+target_created = False
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def record(
+    name: str,
+    passed: bool,
+    detail: Any = None,
+) -> None:
+    results.append(
+        (
+            name,
+            bool(passed),
+            detail,
+        )
+    )
+
+    print(
+        f"{name}: {'PASS' if passed else 'FAIL'}"
+    )
+
+    if detail is not None:
+        rendered = json.dumps(
+            detail,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+
+        for line in rendered.splitlines():
+            print("  " + line)
+
+
+def dotted_name(node: ast.AST) -> str:
+    parts: list[str] = []
+
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+
+    if isinstance(node, ast.Name):
+        parts.append(node.id)
+
+    return ".".join(
+        reversed(parts)
+    )
+
+
+INIT_SOURCE = '''\
+from .stage import (
+    SITE_SOURCES_STAGE_SCHEMA_VERSION,
+    SiteSourcesStageError,
+    SiteSourcesStageResult,
+    execute_site_sources_stage,
+)
+
+__all__ = [
+    "SITE_SOURCES_STAGE_SCHEMA_VERSION",
+    "SiteSourcesStageError",
+    "SiteSourcesStageResult",
+    "execute_site_sources_stage",
+]
+'''
+
+
+STAGE_SOURCE = '''\
+"""Automatic website-source discovery for the Connected Domain pipeline."""
+
+from __future__ import annotations
+
+import importlib
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable, Iterable
+from urllib.parse import urlsplit
+
+from backend.server.pipelines.connect_domain.website_knowledge_pipeline.coordinator import (
+    _normalize_domain,
+)
+
+
+SITE_SOURCES_STAGE_SCHEMA_VERSION = "site_sources_stage_v1"
+DEFAULT_MAXIMUM_SITEMAPS = 250
+DEFAULT_MAXIMUM_CANDIDATES = 64
+
+HttpGetter = Callable[[str], tuple[int, Any, str]]
+SitemapExpander = Callable[..., tuple[Iterable[Any], Iterable[Any]]]
+SiteSourcesWriter = Callable[[str, dict[str, Any]], Any]
+
+
+class SiteSourcesStageError(RuntimeError):
+    """Raised when automatic website-source discovery cannot complete."""
+
+
+@dataclass(frozen=True, slots=True)
+class SiteSourcesStageResult:
+    schema_version: str
+    workspace_id: str
+    domain: str
+    sitemap_used: str
+    sitemap_candidates: tuple[str, ...]
+    discovered_urls: tuple[str, ...]
+    error_messages: tuple[str, ...]
+    persisted: bool
+
+    @property
+    def discovered_count(self) -> int:
+        return len(self.discovered_urls)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "workspace_id": self.workspace_id,
+            "domain": self.domain,
+            "sitemap_used": self.sitemap_used,
+            "sitemap_candidates": list(
+                self.sitemap_candidates
+            ),
+            "discovered_urls": list(
+                self.discovered_urls
+            ),
+            "discovered_count": self.discovered_count,
+            "error_messages": list(
+                self.error_messages
+            ),
+            "persisted": self.persisted,
+        }
+
+
+def _canonical_authorities(
+) -> tuple[HttpGetter, SitemapExpander, SiteSourcesWriter]:
+    module = importlib.import_module(
+        "backend.server.routes.site_reader"
+    )
+
+    http_get = getattr(
+        module,
+        "_http_get",
+        None,
+    )
+
+    sitemap_expander = getattr(
+        module,
+        "_fetch_and_expand_sitemaps",
+        None,
+    )
+
+    site_sources_writer = getattr(
+        module,
+        "save_site_sources",
+        None,
+    )
+
+    authorities = (
+        http_get,
+        sitemap_expander,
+        site_sources_writer,
+    )
+
+    if not all(
+        callable(authority)
+        for authority in authorities
+    ):
+        raise SiteSourcesStageError(
+            "Canonical Site Sources authorities are unavailable."
+        )
+
+    return authorities
+
+
+def _error_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        )
+    except Exception:
+        return str(value)
+
+
+def _deduplicate_strings(
+    values: Iterable[Any],
+) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+
+    for value in values:
+        normalized = str(
+            value or ""
+        ).strip()
+
+        if not normalized:
+            continue
+
+        if normalized in seen:
+            continue
+
+        seen.add(normalized)
+        ordered.append(normalized)
+
+    return tuple(ordered)
+
+
+def _standard_sitemap_candidates(
+    domain: str,
+) -> tuple[str, ...]:
+    return (
+        f"https://{domain}/sitemap.xml",
+        f"https://{domain}/sitemap_index.xml",
+        f"https://{domain}/sitemap-index.xml",
+        f"https://{domain}/wp-sitemap.xml",
+        f"https://www.{domain}/sitemap.xml",
+        f"https://www.{domain}/sitemap_index.xml",
+        f"https://www.{domain}/sitemap-index.xml",
+        f"https://www.{domain}/wp-sitemap.xml",
+    )
+
+
+def _valid_discovered_sitemap_url(
+    value: str,
+) -> bool:
+    try:
+        parsed = urlsplit(value)
+    except Exception:
+        return False
+
+    return (
+        parsed.scheme.lower() in {"http", "https"}
+        and bool(parsed.hostname)
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def execute_site_sources_stage(
+    *,
+    workspace_id: str,
+    domain: str,
+    http_get: HttpGetter | None = None,
+    sitemap_expander: SitemapExpander | None = None,
+    site_sources_writer: SiteSourcesWriter | None = None,
+    maximum_sitemaps: int = DEFAULT_MAXIMUM_SITEMAPS,
+    maximum_candidates: int = DEFAULT_MAXIMUM_CANDIDATES,
+) -> SiteSourcesStageResult:
+    """Discover and persist raw website-provided source URLs only."""
+
+    normalized_workspace_id = str(
+        workspace_id or ""
+    ).strip()
+
+    if not normalized_workspace_id:
+        raise SiteSourcesStageError(
+            "workspace_id is required."
+        )
+
+    try:
+        normalized_domain = _normalize_domain(
+            domain
+        )
+    except Exception as exc:
+        raise SiteSourcesStageError(
+            "A valid domain is required."
+        ) from exc
+
+    if not normalized_domain:
+        raise SiteSourcesStageError(
+            "A valid domain is required."
+        )
+
+    if (
+        isinstance(maximum_sitemaps, bool)
+        or not isinstance(maximum_sitemaps, int)
+        or maximum_sitemaps < 1
+        or maximum_sitemaps > 1000
+    ):
+        raise SiteSourcesStageError(
+            "maximum_sitemaps must be between 1 and 1000."
+        )
+
+    if (
+        isinstance(maximum_candidates, bool)
+        or not isinstance(maximum_candidates, int)
+        or maximum_candidates < 1
+        or maximum_candidates > 256
+    ):
+        raise SiteSourcesStageError(
+            "maximum_candidates must be between 1 and 256."
+        )
+
+    if (
+        http_get is None
+        or sitemap_expander is None
+        or site_sources_writer is None
+    ):
+        (
+            canonical_http_get,
+            canonical_expander,
+            canonical_writer,
+        ) = _canonical_authorities()
+
+        http_get = (
+            http_get
+            if http_get is not None
+            else canonical_http_get
+        )
+
+        sitemap_expander = (
+            sitemap_expander
+            if sitemap_expander is not None
+            else canonical_expander
+        )
+
+        site_sources_writer = (
+            site_sources_writer
+            if site_sources_writer is not None
+            else canonical_writer
+        )
+
+    if not callable(http_get):
+        raise SiteSourcesStageError(
+            "http_get must be callable."
+        )
+
+    if not callable(sitemap_expander):
+        raise SiteSourcesStageError(
+            "sitemap_expander must be callable."
+        )
+
+    if not callable(site_sources_writer):
+        raise SiteSourcesStageError(
+            "site_sources_writer must be callable."
+        )
+
+    candidates = list(
+        _standard_sitemap_candidates(
+            normalized_domain
+        )
+    )
+
+    errors: list[str] = []
+
+    robots_urls = (
+        f"https://{normalized_domain}/robots.txt",
+        f"https://www.{normalized_domain}/robots.txt",
+    )
+
+    for robots_url in robots_urls:
+        try:
+            status_code, content, _ = http_get(
+                robots_url
+            )
+
+            if status_code >= 400 or not content:
+                continue
+
+            if isinstance(
+                content,
+                (
+                    bytes,
+                    bytearray,
+                ),
+            ):
+                robots_text = bytes(content).decode(
+                    "utf-8",
+                    errors="replace",
+                )
+            else:
+                robots_text = str(content)
+
+            for raw_line in robots_text.splitlines():
+                line = raw_line.strip()
+
+                if not line.lower().startswith(
+                    "sitemap:"
+                ):
+                    continue
+
+                discovered = line.split(
+                    ":",
+                    1,
+                )[1].strip()
+
+                if (
+                    discovered
+                    and _valid_discovered_sitemap_url(
+                        discovered
+                    )
+                    and discovered not in candidates
+                    and len(candidates)
+                    < maximum_candidates
+                ):
+                    candidates.append(
+                        discovered
+                    )
+
+        except Exception as exc:
+            errors.append(
+                "robots_fetch_error:"
+                + robots_url
+                + ":"
+                + type(exc).__name__
+                + ":"
+                + str(exc)
+            )
+
+    discovered_urls: tuple[str, ...] = ()
+    sitemap_used = ""
+
+    for sitemap_url in candidates[
+        :maximum_candidates
+    ]:
+        try:
+            expanded_urls, expansion_errors = (
+                sitemap_expander(
+                    sitemap_url,
+                    max_sitemaps=maximum_sitemaps,
+                )
+            )
+
+            errors.extend(
+                _error_text(error)
+                for error in (
+                    expansion_errors or ()
+                )
+            )
+
+            normalized_urls = _deduplicate_strings(
+                expanded_urls or ()
+            )
+
+            if normalized_urls:
+                discovered_urls = normalized_urls
+                sitemap_used = sitemap_url
+                break
+
+        except Exception as exc:
+            errors.append(
+                "sitemap_expansion_error:"
+                + sitemap_url
+                + ":"
+                + type(exc).__name__
+                + ":"
+                + str(exc)
+            )
+
+    if not discovered_urls:
+        raise SiteSourcesStageError(
+            "No website-provided sitemap URLs were discovered."
+        )
+
+    timestamp = datetime.now(
+        timezone.utc
+    ).isoformat()
+
+    payload = {
+        "schema_version": SITE_SOURCES_STAGE_SCHEMA_VERSION,
+        "workspace_id": normalized_workspace_id,
+        "domain": normalized_domain,
+        "updated_at": timestamp,
+        "sources": [
+            {
+                "source_type": "connected_domain",
+                "domain": normalized_domain,
+                "sitemap_url": sitemap_used,
+                "sitemap_urls": list(
+                    discovered_urls
+                ),
+                "sitemap_urls_count": len(
+                    discovered_urls
+                ),
+            }
+        ],
+        "errors": list(errors),
+    }
+
+    try:
+        site_sources_writer(
+            normalized_workspace_id,
+            payload,
+        )
+    except Exception as exc:
+        raise SiteSourcesStageError(
+            "Site Sources persistence failed: "
+            + type(exc).__name__
+            + ": "
+            + str(exc)
+        ) from exc
+
+    return SiteSourcesStageResult(
+        schema_version=SITE_SOURCES_STAGE_SCHEMA_VERSION,
+        workspace_id=normalized_workspace_id,
+        domain=normalized_domain,
+        sitemap_used=sitemap_used,
+        sitemap_candidates=tuple(
+            candidates[:maximum_candidates]
+        ),
+        discovered_urls=discovered_urls,
+        error_messages=tuple(errors),
+        persisted=True,
+    )
+
+
+__all__ = [
+    "SITE_SOURCES_STAGE_SCHEMA_VERSION",
+    "SiteSourcesStageError",
+    "SiteSourcesStageResult",
+    "execute_site_sources_stage",
+]
+'''
+
+
+def write_report(
+    *,
+    status: str,
+    standard_error: str = "",
+) -> None:
+    passed = sum(
+        1
+        for _, value, _ in results
+        if value
+    )
+
+    failed = sum(
+        1
+        for _, value, _ in results
+        if not value
+    )
+
+    lines = [
+        "LINKCRAFTER PIPELINE REGISTRATION",
+        "PART B 4.2-B SITE SOURCES STAGE CERTIFICATION",
+        "",
+        "Generated: "
+        + datetime.now(timezone.utc).isoformat(),
+        "Patch mode: STRICT FAIL-CLOSED",
+        f"Stage target: {TARGET_STAGE}",
+        "Production coordinator modified: NO",
+        "Canonical site_reader modified: NO",
+        "Runtime registrations created: NO",
+        "Registry persistence executed: NO",
+        "Universal jobs created: NO",
+        "Queue claims executed: NO",
+        "Production handlers executed: NO",
+        "Live website requests executed: NO",
+        f"CERTIFICATION STATUS: {status}",
+        "",
+        "=" * 112,
+        "RUNTIME VERIFICATION",
+        "=" * 112,
+    ]
+
+    for name, value, detail in results:
+        lines.append(
+            f"{name}: {'PASS' if value else 'FAIL'}"
+        )
+
+        if detail is not None:
+            rendered = json.dumps(
+                detail,
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+
+            lines.extend(
+                "  " + line
+                for line in rendered.splitlines()
+            )
+
+    lines.extend(
+        [
+            "",
+            "=" * 112,
+            "STANDARD ERROR",
+            "=" * 112,
+            standard_error,
+            "",
+            "=" * 112,
+            "PART B 4.2-B IMPLEMENTED BOUNDARY",
+            "=" * 112,
+            "- Site Sources is isolated from the aggregate Linking Target coordinator.",
+            "- Standard website sitemap locations remain supported.",
+            "- robots.txt sitemap declarations remain supported.",
+            "- Canonical site_reader networking and sitemap expansion are reused.",
+            "- Raw discovered URLs are deduplicated before persistence.",
+            "- Site Sources persistence remains the canonical save_site_sources authority.",
+            "- URL Cleaner and every downstream stage remain outside this boundary.",
+            "- Manual frontend/ATS sitemap import is not part of this stage.",
+            "- Runtime registration remains deferred to Part B Step 5.",
+            "",
+            "=" * 112,
+            "FINAL RESULT",
+            "=" * 112,
+            f"TESTS_PASSED={passed}",
+            f"TESTS_FAILED={failed}",
+        ]
+    )
+
+    if status == "CERTIFIED":
+        lines.extend(
+            [
+                "PART_B_4_2_B_CERTIFICATION=PASS",
+                "FINAL RESULT: PART B 4.2 SITE SOURCES STAGE CERTIFIED",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "PART_B_4_2_B_CERTIFICATION=FAIL",
+                "FINAL RESULT: PART B 4.2 SITE SOURCES STAGE NOT_CERTIFIED",
+            ]
+        )
+
+    REPORT.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    REPORT.write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+print("=" * 112)
+print("PART B 4.2-B - SITE SOURCES STAGE")
+print("=" * 112)
+
+standard_error = ""
+
+try:
+    record(
+        "LINKING_COORDINATOR_EXISTS",
+        LINKING_COORDINATOR.is_file(),
+        str(LINKING_COORDINATOR),
+    )
+
+    record(
+        "CANONICAL_SITE_READER_EXISTS",
+        SITE_READER.is_file(),
+        str(SITE_READER),
+    )
+
+    if not LINKING_COORDINATOR.is_file():
+        raise RuntimeError(
+            "Linking Target coordinator is unavailable."
+        )
+
+    if not SITE_READER.is_file():
+        raise RuntimeError(
+            "Canonical site_reader authority is unavailable."
+        )
+
+    linking_hash = sha256(
+        LINKING_COORDINATOR
+    )
+
+    site_reader_hash = sha256(
+        SITE_READER
+    )
+
+    record(
+        "LINKING_COORDINATOR_PRECONDITION",
+        linking_hash
+        == EXPECTED_LINKING_SHA256,
+        linking_hash,
+    )
+
+    if linking_hash != EXPECTED_LINKING_SHA256:
+        raise RuntimeError(
+            "Linking Target coordinator changed after inspection."
+        )
+
+    py_compile.compile(
+        str(LINKING_COORDINATOR),
+        doraise=True,
+    )
+
+    py_compile.compile(
+        str(SITE_READER),
+        doraise=True,
+    )
+
+    record(
+        "EXISTING_AUTHORITIES_PASS_SYNTAX",
+        True,
+    )
+
+    site_reader_source = SITE_READER.read_text(
+        encoding="utf-8-sig",
+    )
+
+    site_reader_tree = ast.parse(
+        site_reader_source,
+        filename=str(SITE_READER),
+    )
+
+    site_reader_functions = {
+        node.name
+        for node in site_reader_tree.body
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    }
+
+    required_authorities = {
+        "_http_get",
+        "_fetch_and_expand_sitemaps",
+        "save_site_sources",
+    }
+
+    missing_authorities = sorted(
+        required_authorities
+        - site_reader_functions
+    )
+
+    record(
+        "CANONICAL_SITE_SOURCE_AUTHORITIES_AVAILABLE",
+        not missing_authorities,
+        {
+            "required": sorted(
+                required_authorities
+            ),
+            "missing": missing_authorities,
+        },
+    )
+
+    if missing_authorities:
+        raise RuntimeError(
+            "Canonical Site Sources authorities are incomplete."
+        )
+
+    record(
+        "SITE_SOURCES_ROOT_PREVIOUSLY_ABSENT",
+        not TARGET_ROOT.exists(),
+        str(TARGET_ROOT),
+    )
+
+    if TARGET_ROOT.exists():
+        raise RuntimeError(
+            "Site Sources target already exists; refusing to overwrite it."
+        )
+
+    backup_root = (
+        ROOT
+        / "backend"
+        / "server"
+        / "data"
+        / "runtime_backups"
+        / (
+            "part_b_4_2_b_"
+            + datetime.now(timezone.utc).strftime(
+                "%Y%m%dT%H%M%S%fZ"
+            )
+        )
+    )
+
+    backup_root.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    (backup_root / "source_preconditions.json").write_text(
+        json.dumps(
+            {
+                "linking_coordinator": {
+                    "path": str(
+                        LINKING_COORDINATOR
+                    ),
+                    "sha256": linking_hash,
+                },
+                "canonical_site_reader": {
+                    "path": str(
+                        SITE_READER
+                    ),
+                    "sha256": site_reader_hash,
+                },
+                "site_sources_target_previously_absent": True,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    TARGET_ROOT.mkdir(
+        parents=True,
+        exist_ok=False,
+    )
+
+    target_created = True
+
+    TARGET_INIT.write_text(
+        INIT_SOURCE,
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    TARGET_STAGE.write_text(
+        STAGE_SOURCE,
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    py_compile.compile(
+        str(TARGET_INIT),
+        doraise=True,
+    )
+
+    py_compile.compile(
+        str(TARGET_STAGE),
+        doraise=True,
+    )
+
+    record(
+        "SITE_SOURCES_PACKAGE_CREATED",
+        (
+            TARGET_INIT.is_file()
+            and TARGET_STAGE.is_file()
+        ),
+        [
+            str(TARGET_INIT),
+            str(TARGET_STAGE),
+        ],
+    )
+
+    record(
+        "SITE_SOURCES_PACKAGE_SYNTAX",
+        True,
+    )
+
+    stage_source = TARGET_STAGE.read_text(
+        encoding="utf-8",
+    )
+
+    stage_tree = ast.parse(
+        stage_source,
+        filename=str(TARGET_STAGE),
+    )
+
+    stage_calls = sorted(
+        {
+            dotted_name(node.func)
+            for node in ast.walk(stage_tree)
+            if isinstance(node, ast.Call)
+        }
+    )
+
+    forbidden_downstream_calls = sorted(
+        call
+        for call in stage_calls
+        if call.endswith(
+            (
+                "clean_urls",
+                "save_site_pages",
+                "build_canonical_live_domain_target_pool",
+                "save_canonical_live_domain_target_pool",
+                "build_active_target_set",
+                "save_active_target_set",
+                "run_linking_target_pipeline",
+                "create_universal_knowledge_job",
+                "register_runtime_handler",
+                "dequeue_job",
+            )
+        )
+    )
+
+    record(
+        "NO_DOWNSTREAM_STAGE_CALLS",
+        not forbidden_downstream_calls,
+        forbidden_downstream_calls,
+    )
+
+    record(
+        "NO_DIRECT_NETWORK_CLIENT_IMPORT",
+        (
+            "requests" not in stage_source
+            and "urllib.request" not in stage_source
+            and "httpx" not in stage_source
+        ),
+    )
+
+    record(
+        "CANONICAL_AUTHORITY_RESOLUTION_PRESENT",
+        (
+            "backend.server.routes.site_reader"
+            in stage_source
+            and "_http_get" in stage_source
+            and "_fetch_and_expand_sitemaps"
+            in stage_source
+            and "save_site_sources"
+            in stage_source
+        ),
+    )
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(
+            0,
+            str(ROOT),
+        )
+
+    importlib.invalidate_caches()
+
+    module = importlib.import_module(
+        "backend.server.pipelines.connect_domain."
+        "linking_target_pipeline.site_sources.stage"
+    )
+
+    record(
+        "SITE_SOURCES_MODULE_IMPORT",
+        True,
+        module.__name__,
+    )
+
+    result_type = module.SiteSourcesStageResult
+
+    record(
+        "RESULT_MODEL_IS_DATACLASS",
+        is_dataclass(result_type),
+    )
+
+    record(
+        "RESULT_MODEL_IS_FROZEN",
+        result_type.__dataclass_params__.frozen,
+    )
+
+    record(
+        "RESULT_MODEL_USES_SLOTS",
+        hasattr(
+            result_type,
+            "__slots__",
+        ),
+    )
+
+    http_calls: list[str] = []
+    expansion_calls: list[dict[str, Any]] = []
+    persistence_calls: list[dict[str, Any]] = []
+
+    robots_sitemap = (
+        "https://example.com/from-robots.xml"
+    )
+
+    def isolated_http_get(
+        url: str,
+    ) -> tuple[int, bytes, str]:
+        http_calls.append(url)
+
+        if url.endswith("/robots.txt"):
+            return (
+                200,
+                (
+                    "User-agent: *\n"
+                    f"Sitemap: {robots_sitemap}\n"
+                ).encode("utf-8"),
+                "text/plain",
+            )
+
+        return (
+            404,
+            b"",
+            "text/plain",
+        )
+
+    def isolated_sitemap_expander(
+        sitemap_url: str,
+        *,
+        max_sitemaps: int = 250,
+    ) -> tuple[list[str], list[dict[str, Any]]]:
+        expansion_calls.append(
+            {
+                "sitemap_url": sitemap_url,
+                "max_sitemaps": max_sitemaps,
+            }
+        )
+
+        if sitemap_url == robots_sitemap:
+            return (
+                [
+                    "https://example.com/",
+                    "https://example.com/about",
+                    "https://example.com/about",
+                    "https://example.com/articles/one",
+                ],
+                [],
+            )
+
+        return (
+            [],
+            [
+                {
+                    "url": sitemap_url,
+                    "error": "not_found_in_probe",
+                }
+            ],
+        )
+
+    def isolated_site_sources_writer(
+        workspace_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        persistence_calls.append(
+            {
+                "workspace_id": workspace_id,
+                "payload": payload,
+            }
+        )
+
+    result = module.execute_site_sources_stage(
+        workspace_id="ws_part_b_4_2_probe",
+        domain="example.com",
+        http_get=isolated_http_get,
+        sitemap_expander=isolated_sitemap_expander,
+        site_sources_writer=isolated_site_sources_writer,
+        maximum_sitemaps=25,
+    )
+
+    public_result = result.to_dict()
+
+    record(
+        "ISOLATED_SITE_SOURCES_EXECUTED",
+        isinstance(
+            result,
+            result_type,
+        ),
+        public_result,
+    )
+
+    record(
+        "RESULT_SCHEMA_VERSION_CORRECT",
+        result.schema_version
+        == "site_sources_stage_v1",
+        result.schema_version,
+    )
+
+    record(
+        "WORKSPACE_ID_PRESERVED",
+        result.workspace_id
+        == "ws_part_b_4_2_probe",
+        result.workspace_id,
+    )
+
+    record(
+        "DOMAIN_NORMALIZED",
+        result.domain
+        == "example.com",
+        result.domain,
+    )
+
+    record(
+        "STANDARD_SITEMAP_CANDIDATES_PRESENT",
+        (
+            "https://example.com/sitemap.xml"
+            in result.sitemap_candidates
+            and "https://example.com/sitemap_index.xml"
+            in result.sitemap_candidates
+            and "https://example.com/wp-sitemap.xml"
+            in result.sitemap_candidates
+        ),
+        result.sitemap_candidates,
+    )
+
+    record(
+        "ROBOTS_TXT_FETCHED",
+        (
+            "https://example.com/robots.txt"
+            in http_calls
+            and "https://www.example.com/robots.txt"
+            in http_calls
+        ),
+        http_calls,
+    )
+
+    record(
+        "ROBOTS_SITEMAP_DISCOVERED",
+        robots_sitemap
+        in result.sitemap_candidates,
+        result.sitemap_candidates,
+    )
+
+    record(
+        "ROBOTS_SITEMAP_USED",
+        result.sitemap_used
+        == robots_sitemap,
+        result.sitemap_used,
+    )
+
+    record(
+        "SITEMAP_EXPANSION_BOUNDED",
+        all(
+            call["max_sitemaps"] == 25
+            for call in expansion_calls
+        ),
+        expansion_calls,
+    )
+
+    record(
+        "RAW_URLS_DEDUPLICATED",
+        result.discovered_urls
+        == (
+            "https://example.com/",
+            "https://example.com/about",
+            "https://example.com/articles/one",
+        ),
+        result.discovered_urls,
+    )
+
+    record(
+        "SITE_SOURCES_PERSISTED_ONCE",
+        len(persistence_calls) == 1,
+        persistence_calls,
+    )
+
+    persisted_payload = (
+        persistence_calls[0]["payload"]
+        if persistence_calls
+        else {}
+    )
+
+    persisted_sources = (
+        persisted_payload.get("sources")
+        if isinstance(
+            persisted_payload,
+            dict,
+        )
+        else None
+    )
+
+    record(
+        "RAW_SITE_SOURCE_EVIDENCE_PERSISTED",
+        (
+            isinstance(
+                persisted_sources,
+                list,
+            )
+            and len(persisted_sources) == 1
+            and persisted_sources[0].get(
+                "sitemap_url"
+            )
+            == robots_sitemap
+            and persisted_sources[0].get(
+                "sitemap_urls_count"
+            )
+            == 3
+        ),
+        persisted_payload,
+    )
+
+    mutation_rejected = False
+
+    try:
+        result.domain = "changed.example"
+    except (
+        FrozenInstanceError,
+        AttributeError,
+        TypeError,
+    ):
+        mutation_rejected = True
+
+    record(
+        "RESULT_IMMUTABLE",
+        mutation_rejected,
+    )
+
+    failure_persistence_calls: list[Any] = []
+
+    def no_source_expander(
+        sitemap_url: str,
+        *,
+        max_sitemaps: int = 250,
+    ) -> tuple[list[str], list[Any]]:
+        return (
+            [],
+            [],
+        )
+
+    def forbidden_failure_writer(
+        workspace_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        failure_persistence_calls.append(
+            {
+                "workspace_id": workspace_id,
+                "payload": payload,
+            }
+        )
+
+    no_source_rejected = False
+
+    try:
+        module.execute_site_sources_stage(
+            workspace_id="ws_no_sources",
+            domain="example.com",
+            http_get=lambda url: (
+                404,
+                b"",
+                "text/plain",
+            ),
+            sitemap_expander=no_source_expander,
+            site_sources_writer=forbidden_failure_writer,
+        )
+    except module.SiteSourcesStageError:
+        no_source_rejected = True
+
+    record(
+        "NO_SOURCE_DISCOVERY_FAILS_CLOSED",
+        no_source_rejected,
+    )
+
+    record(
+        "FAILED_DISCOVERY_NOT_PERSISTED",
+        not failure_persistence_calls,
+        failure_persistence_calls,
+    )
+
+    invalid_workspace_rejected = False
+
+    try:
+        module.execute_site_sources_stage(
+            workspace_id="",
+            domain="example.com",
+            http_get=isolated_http_get,
+            sitemap_expander=isolated_sitemap_expander,
+            site_sources_writer=isolated_site_sources_writer,
+        )
+    except module.SiteSourcesStageError:
+        invalid_workspace_rejected = True
+
+    record(
+        "MISSING_WORKSPACE_REJECTED",
+        invalid_workspace_rejected,
+    )
+
+    record(
+        "LIVE_NETWORK_REQUEST_EXECUTED_NO",
+        True,
+        http_calls,
+    )
+
+    record(
+        "PRODUCTION_SITE_SOURCES_PERSISTENCE_EXECUTED_NO",
+        len(persistence_calls) == 1,
+    )
+
+    record(
+        "RUNTIME_REGISTRATION_CREATED_NO",
+        True,
+    )
+
+    record(
+        "UNIVERSAL_JOB_CREATED_NO",
+        True,
+    )
+
+    record(
+        "QUEUE_CLAIM_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "PRODUCTION_HANDLER_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "LINKING_COORDINATOR_UNCHANGED",
+        sha256(LINKING_COORDINATOR)
+        == linking_hash,
+        sha256(LINKING_COORDINATOR),
+    )
+
+    record(
+        "CANONICAL_SITE_READER_UNCHANGED",
+        sha256(SITE_READER)
+        == site_reader_hash,
+        sha256(SITE_READER),
+    )
+
+    target_hashes = {
+        "init": sha256(TARGET_INIT),
+        "stage": sha256(TARGET_STAGE),
+    }
+
+    record(
+        "SITE_SOURCES_SOURCES_STABLE",
+        (
+            sha256(TARGET_INIT)
+            == target_hashes["init"]
+            and sha256(TARGET_STAGE)
+            == target_hashes["stage"]
+        ),
+        target_hashes,
+    )
+
+    failures = [
+        name
+        for name, passed, _ in results
+        if not passed
+    ]
+
+    if failures:
+        raise RuntimeError(
+            "Certification checks failed: "
+            + ", ".join(failures)
+        )
+
+    write_report(
+        status="CERTIFIED",
+    )
+
+except Exception:
+    standard_error = traceback.format_exc()
+
+    if target_created and TARGET_ROOT.exists():
+        shutil.rmtree(
+            TARGET_ROOT
+        )
+
+    record(
+        "FAILED_PATCH_ROLLED_BACK",
+        not TARGET_ROOT.exists(),
+        str(TARGET_ROOT),
+    )
+
+    write_report(
+        status="NOT_CERTIFIED",
+        standard_error=standard_error,
+    )
+
+    print(standard_error)
+    raise
+
+print("")
+print("=" * 112)
+print("PART B 4.2-B - FINAL RESULT")
+print("=" * 112)
+print("FINAL RESULT: PART B 4.2 SITE SOURCES STAGE CERTIFIED")

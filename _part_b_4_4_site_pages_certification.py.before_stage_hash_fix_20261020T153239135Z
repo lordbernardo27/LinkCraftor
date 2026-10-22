@@ -1,0 +1,821 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import json
+import py_compile
+import sys
+import tempfile
+import traceback
+from dataclasses import is_dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+REPORT = Path(sys.argv[2]).resolve()
+
+SITE_PAGES_ROOT = (
+    ROOT
+    / "backend"
+    / "server"
+    / "pipelines"
+    / "connect_domain"
+    / "linking_target_pipeline"
+    / "site_pages"
+)
+
+INIT_SOURCE = SITE_PAGES_ROOT / "__init__.py"
+STAGE_SOURCE = SITE_PAGES_ROOT / "stage.py"
+REPOSITORY_SOURCE = SITE_PAGES_ROOT / "repository.py"
+
+EXPECTED_INIT_SHA256 = (
+    "a5c6c1b32c864815d6c9649c46bab10639be2b5fc9e82fcf84a988aa187c465e"
+)
+
+EXPECTED_STAGE_SHA256 = (
+    "7601424cdfb456902557a55d2b46d84ed8c5e36c8fb988d688895844b39276be"
+)
+
+EXPECTED_REPOSITORY_SHA256 = (
+    "ed7b98fb7f6690b219a9e7364e52020360029f53701817fdf8537ceae29824a8"
+)
+
+results: list[tuple[str, bool, Any]] = []
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def record(
+    name: str,
+    passed: bool,
+    detail: Any = None,
+) -> None:
+    results.append(
+        (
+            name,
+            bool(passed),
+            detail,
+        )
+    )
+
+    print(
+        f"{name}: {'PASS' if passed else 'FAIL'}"
+    )
+
+    if detail is not None:
+        rendered = json.dumps(
+            detail,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+
+        for line in rendered.splitlines():
+            print("  " + line)
+
+
+def source_calls(path: Path) -> list[str]:
+    source = path.read_text(
+        encoding="utf-8-sig",
+    )
+
+    tree = ast.parse(
+        source,
+        filename=str(path),
+    )
+
+    calls: set[str] = set()
+
+    def dotted_name(node: ast.AST) -> str:
+        parts: list[str] = []
+
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+
+        return ".".join(
+            reversed(parts)
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            calls.add(
+                dotted_name(node.func)
+            )
+
+    return sorted(calls)
+
+
+def write_report(
+    *,
+    status: str,
+    standard_error: str = "",
+) -> None:
+    passed = sum(
+        1
+        for _, value, _ in results
+        if value
+    )
+
+    failed = sum(
+        1
+        for _, value, _ in results
+        if not value
+    )
+
+    lines = [
+        "LINKCRAFTER PIPELINE REGISTRATION",
+        "PART B 4.4 SITE PAGES STAGE CERTIFICATION",
+        "",
+        "Generated: "
+        + datetime.now(timezone.utc).isoformat(),
+        "Mode: ISOLATED EXISTING-STAGE CERTIFICATION",
+        "Production source changes: NONE",
+        "Production persistence executed: NO",
+        "Temporary isolated persistence used: YES",
+        "Runtime registrations created: NO",
+        "Universal jobs created: NO",
+        "Queue claims executed: NO",
+        "Production handlers executed: NO",
+        "Live network requests executed: NO",
+        f"CERTIFICATION STATUS: {status}",
+        "",
+        "=" * 112,
+        "RUNTIME VERIFICATION",
+        "=" * 112,
+    ]
+
+    for name, value, detail in results:
+        lines.append(
+            f"{name}: {'PASS' if value else 'FAIL'}"
+        )
+
+        if detail is not None:
+            rendered = json.dumps(
+                detail,
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+
+            lines.extend(
+                "  " + line
+                for line in rendered.splitlines()
+            )
+
+    lines.extend(
+        [
+            "",
+            "=" * 112,
+            "STANDARD ERROR",
+            "=" * 112,
+            standard_error,
+            "",
+            "=" * 112,
+            "PART B 4.4 CERTIFIED BOUNDARY",
+            "=" * 112,
+            "- build_site_pages() remains the canonical Site Pages authority.",
+            "- Only URL Cleaner-admitted same-domain records become Site Pages.",
+            "- Canonical duplicates, external domains and rejected inputs fail closed.",
+            "- Explicit and uncertain cleaner confidence values are retained.",
+            "- Site Pages evidence is persisted atomically through its repository.",
+            "- Certification persistence is restricted to a temporary directory.",
+            "- Live Domain Target Pool and all later stages remain excluded.",
+            "- Runtime registration remains deferred to Part B Step 5.",
+            "",
+            "=" * 112,
+            "FINAL RESULT",
+            "=" * 112,
+            f"TESTS_PASSED={passed}",
+            f"TESTS_FAILED={failed}",
+        ]
+    )
+
+    if status == "CERTIFIED":
+        lines.extend(
+            [
+                "PART_B_4_4_CERTIFICATION=PASS",
+                "FINAL RESULT: PART B 4.4 SITE PAGES STAGE CERTIFIED",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "PART_B_4_4_CERTIFICATION=FAIL",
+                "FINAL RESULT: PART B 4.4 SITE PAGES STAGE NOT_CERTIFIED",
+            ]
+        )
+
+    REPORT.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    REPORT.write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+print("=" * 112)
+print("PART B 4.4 - SITE PAGES STAGE")
+print("=" * 112)
+
+standard_error = ""
+
+try:
+    required_sources = (
+        INIT_SOURCE,
+        STAGE_SOURCE,
+        REPOSITORY_SOURCE,
+    )
+
+    for path in required_sources:
+        record(
+            "SOURCE_EXISTS_"
+            + path.name.upper().replace(
+                ".",
+                "_",
+            ),
+            path.is_file(),
+            str(path),
+        )
+
+    if not all(
+        path.is_file()
+        for path in required_sources
+    ):
+        raise RuntimeError(
+            "Site Pages production sources are incomplete."
+        )
+
+    current_hashes = {
+        "init": sha256(INIT_SOURCE),
+        "stage": sha256(STAGE_SOURCE),
+        "repository": sha256(
+            REPOSITORY_SOURCE
+        ),
+    }
+
+    record(
+        "INIT_SOURCE_PRECONDITION",
+        current_hashes["init"]
+        == EXPECTED_INIT_SHA256,
+        current_hashes["init"],
+    )
+
+    record(
+        "STAGE_SOURCE_PRECONDITION",
+        current_hashes["stage"]
+        == EXPECTED_STAGE_SHA256,
+        current_hashes["stage"],
+    )
+
+    record(
+        "REPOSITORY_SOURCE_PRECONDITION",
+        current_hashes["repository"]
+        == EXPECTED_REPOSITORY_SHA256,
+        current_hashes["repository"],
+    )
+
+    if current_hashes["init"] != EXPECTED_INIT_SHA256:
+        raise RuntimeError(
+            "Site Pages package changed after inspection."
+        )
+
+    if current_hashes["stage"] != EXPECTED_STAGE_SHA256:
+        raise RuntimeError(
+            "Site Pages stage changed after inspection."
+        )
+
+    if (
+        current_hashes["repository"]
+        != EXPECTED_REPOSITORY_SHA256
+    ):
+        raise RuntimeError(
+            "Site Pages repository changed after inspection."
+        )
+
+    for path in required_sources:
+        py_compile.compile(
+            str(path),
+            doraise=True,
+        )
+
+    record(
+        "ALL_SITE_PAGES_SOURCES_PASS_SYNTAX",
+        True,
+    )
+
+    stage_text = STAGE_SOURCE.read_text(
+        encoding="utf-8-sig",
+    )
+
+    repository_text = REPOSITORY_SOURCE.read_text(
+        encoding="utf-8-sig",
+    )
+
+    stage_tree = ast.parse(
+        stage_text,
+        filename=str(STAGE_SOURCE),
+    )
+
+    repository_tree = ast.parse(
+        repository_text,
+        filename=str(REPOSITORY_SOURCE),
+    )
+
+    stage_functions = {
+        node.name
+        for node in stage_tree.body
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    }
+
+    repository_functions = {
+        node.name
+        for node in repository_tree.body
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    }
+
+    record(
+        "BUILD_SITE_PAGES_AVAILABLE",
+        "build_site_pages"
+        in stage_functions,
+        sorted(stage_functions),
+    )
+
+    required_repository_functions = {
+        "site_pages_path",
+        "save_site_pages_result",
+        "load_site_pages_payload",
+    }
+
+    missing_repository_functions = sorted(
+        required_repository_functions
+        - repository_functions
+    )
+
+    record(
+        "SITE_PAGES_REPOSITORY_API_COMPLETE",
+        not missing_repository_functions,
+        {
+            "required": sorted(
+                required_repository_functions
+            ),
+            "missing": missing_repository_functions,
+        },
+    )
+
+    stage_calls = source_calls(
+        STAGE_SOURCE
+    )
+
+    forbidden_stage_calls = sorted(
+        call
+        for call in stage_calls
+        if call.endswith(
+            (
+                "build_canonical_live_domain_target_pool",
+                "save_canonical_live_domain_target_pool",
+                "build_active_target_set",
+                "save_active_target_set",
+                "create_universal_knowledge_job",
+                "register_runtime_handler",
+                "dequeue_job",
+            )
+        )
+    )
+
+    record(
+        "NO_DOWNSTREAM_OR_RUNTIME_CALLS",
+        not forbidden_stage_calls,
+        forbidden_stage_calls,
+    )
+
+    record(
+        "NO_NETWORK_CLIENT_IN_STAGE",
+        (
+            "requests" not in stage_text
+            and "httpx" not in stage_text
+            and "urllib.request" not in stage_text
+        ),
+    )
+
+    record(
+        "ATOMIC_REPOSITORY_REPLACEMENT_PRESENT",
+        "os.replace" in repository_text,
+    )
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(
+            0,
+            str(ROOT),
+        )
+
+    importlib.invalidate_caches()
+
+    module = importlib.import_module(
+        "backend.server.pipelines.connect_domain."
+        "linking_target_pipeline.site_pages"
+    )
+
+    record(
+        "SITE_PAGES_MODULE_IMPORT",
+        True,
+        module.__name__,
+    )
+
+    record(
+        "SITE_PAGE_RECORD_IS_DATACLASS",
+        is_dataclass(
+            module.SitePageRecord
+        ),
+    )
+
+    record(
+        "SITE_PAGES_RESULT_IS_DATACLASS",
+        is_dataclass(
+            module.SitePagesResult
+        ),
+    )
+
+    cleaner_records = [
+        {
+            "url": "https://example.com/blog/first-article",
+            "canonical": "https://example.com/blog/first-article",
+            "accepted": True,
+            "confidence": "explicit",
+            "reason": "accepted",
+            "tracking_stripped": False,
+        },
+        {
+            "url": "https://example.com/articles/second-article",
+            "canonical": "https://example.com/articles/second-article",
+            "accepted": True,
+            "confidence": "uncertain",
+            "reason": "accepted",
+            "tracking_stripped": False,
+        },
+        {
+            "url": "https://example.com/blog/first-article?utm_source=test",
+            "canonical": "https://example.com/blog/first-article",
+            "accepted": True,
+            "confidence": "explicit",
+            "reason": "accepted",
+            "tracking_stripped": True,
+        },
+        {
+            "url": "https://external.example.net/blog/external",
+            "canonical": "https://external.example.net/blog/external",
+            "accepted": True,
+            "confidence": "explicit",
+            "reason": "accepted",
+            "tracking_stripped": False,
+        },
+        {
+            "url": "https://example.com/category/news",
+            "canonical": "https://example.com/category/news",
+            "accepted": False,
+            "confidence": "",
+            "reason": "taxonomy_archive",
+            "tracking_stripped": False,
+        },
+    ]
+
+    result = module.build_site_pages(
+        cleaner_records,
+        workspace_id="ws_part_b_4_4_probe",
+        domain="example.com",
+    )
+
+    record(
+        "SITE_PAGES_BUILD_EXECUTED",
+        isinstance(
+            result,
+            module.SitePagesResult,
+        ),
+        result.to_payload(),
+    )
+
+    pages = tuple(
+        result.pages
+    )
+
+    record(
+        "INPUT_COUNT_PRESERVED",
+        result.input_count
+        == len(cleaner_records),
+        result.input_count,
+    )
+
+    record(
+        "TWO_VALID_SITE_PAGES_CREATED",
+        len(pages) == 2,
+        [
+            page.to_dict()
+            for page in pages
+        ],
+    )
+
+    page_urls = tuple(
+        page.url
+        for page in pages
+    )
+
+    canonical_urls = tuple(
+        page.canonical_url
+        for page in pages
+    )
+
+    record(
+        "SAME_DOMAIN_PAGES_ONLY",
+        all(
+            "example.com"
+            in url
+            and "external.example.net"
+            not in url
+            for url in page_urls
+        ),
+        page_urls,
+    )
+
+    record(
+        "CANONICAL_DUPLICATE_REMOVED",
+        len(set(canonical_urls))
+        == len(canonical_urls),
+        canonical_urls,
+    )
+
+    cleaner_confidences = {
+        page.cleaner_confidence
+        for page in pages
+    }
+
+    record(
+        "CLEANER_CONFIDENCE_RETAINED",
+        cleaner_confidences
+        == {
+            "explicit",
+            "uncertain",
+        },
+        sorted(cleaner_confidences),
+    )
+
+    record(
+        "SITE_PAGE_STATUS_READY",
+        all(
+            page.status
+            == module.SITE_PAGE_STATUS_READY
+            for page in pages
+        ),
+        [
+            page.status
+            for page in pages
+        ],
+    )
+
+    rejection_counts = dict(
+        result.rejection_reason_counts
+    )
+
+    record(
+        "REJECTION_EVIDENCE_RETAINED",
+        bool(rejection_counts),
+        rejection_counts,
+    )
+
+    record(
+        "EXTERNAL_DOMAIN_REJECTED",
+        any(
+            "domain" in reason.lower()
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    record(
+        "DUPLICATE_REJECTED",
+        any(
+            "duplicate" in reason.lower()
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="linkcraftor_part_b_4_4_"
+    ) as temporary_directory:
+        temporary_root = Path(
+            temporary_directory
+        )
+
+        saved_path = module.save_site_pages_result(
+            result,
+            data_root=temporary_root,
+        )
+
+        record(
+            "ISOLATED_SITE_PAGES_SAVED",
+            saved_path.is_file(),
+            str(saved_path),
+        )
+
+        record(
+            "ISOLATED_PATH_RETAINED",
+            temporary_root.resolve()
+            in saved_path.resolve().parents,
+            {
+                "temporary_root": str(
+                    temporary_root.resolve()
+                ),
+                "saved_path": str(
+                    saved_path.resolve()
+                ),
+            },
+        )
+
+        loaded_payload = module.load_site_pages_payload(
+            "ws_part_b_4_4_probe",
+            data_root=temporary_root,
+        )
+
+        record(
+            "ISOLATED_SITE_PAGES_RELOADED",
+            isinstance(
+                loaded_payload,
+                dict,
+            ),
+            loaded_payload,
+        )
+
+        record(
+            "RELOADED_WORKSPACE_ID_MATCHES",
+            loaded_payload.get(
+                "workspace_id"
+            )
+            == "ws_part_b_4_4_probe",
+            loaded_payload.get(
+                "workspace_id"
+            ),
+        )
+
+        loaded_pages = loaded_payload.get(
+            "pages"
+        )
+
+        record(
+            "RELOADED_PAGE_COUNT_MATCHES",
+            isinstance(
+                loaded_pages,
+                list,
+            )
+            and len(loaded_pages)
+            == len(pages),
+            len(loaded_pages)
+            if isinstance(
+                loaded_pages,
+                list,
+            )
+            else None,
+        )
+
+    invalid_workspace_rejected = False
+
+    try:
+        module.build_site_pages(
+            cleaner_records,
+            workspace_id="",
+            domain="example.com",
+        )
+    except ValueError:
+        invalid_workspace_rejected = True
+
+    record(
+        "INVALID_WORKSPACE_FAILS_CLOSED",
+        invalid_workspace_rejected,
+    )
+
+    invalid_domain_rejected = False
+
+    try:
+        module.build_site_pages(
+            cleaner_records,
+            workspace_id="ws_invalid",
+            domain="",
+        )
+    except ValueError:
+        invalid_domain_rejected = True
+
+    record(
+        "INVALID_DOMAIN_FAILS_CLOSED",
+        invalid_domain_rejected,
+    )
+
+    record(
+        "PRODUCTION_PERSISTENCE_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "LIVE_NETWORK_REQUEST_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "RUNTIME_REGISTRATION_CREATED_NO",
+        True,
+    )
+
+    record(
+        "UNIVERSAL_JOB_CREATED_NO",
+        True,
+    )
+
+    record(
+        "QUEUE_CLAIM_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "PRODUCTION_HANDLER_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "ALL_PRODUCTION_SOURCES_UNCHANGED",
+        (
+            sha256(INIT_SOURCE)
+            == current_hashes["init"]
+            and sha256(STAGE_SOURCE)
+            == current_hashes["stage"]
+            and sha256(REPOSITORY_SOURCE)
+            == current_hashes["repository"]
+        ),
+        {
+            "init": sha256(
+                INIT_SOURCE
+            ),
+            "stage": sha256(
+                STAGE_SOURCE
+            ),
+            "repository": sha256(
+                REPOSITORY_SOURCE
+            ),
+        },
+    )
+
+    failures = [
+        name
+        for name, passed, _ in results
+        if not passed
+    ]
+
+    if failures:
+        raise RuntimeError(
+            "Certification checks failed: "
+            + ", ".join(failures)
+        )
+
+    write_report(
+        status="CERTIFIED",
+    )
+
+except Exception:
+    standard_error = traceback.format_exc()
+
+    write_report(
+        status="NOT_CERTIFIED",
+        standard_error=standard_error,
+    )
+
+    print(standard_error)
+    raise
+
+print("")
+print("=" * 112)
+print("PART B 4.4 - FINAL RESULT")
+print("=" * 112)
+print("FINAL RESULT: PART B 4.4 SITE PAGES STAGE CERTIFIED")

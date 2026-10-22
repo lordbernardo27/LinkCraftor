@@ -31,12 +31,6 @@ from urllib.parse import urlsplit, urlunsplit
 
 SCHEMA_VERSION = "active_target_set_v1"
 
-TARGET_TYPES = {
-    "document",
-    "draft",
-    "imported",
-    "live_domain",
-}
 
 
 def _clean_text(value: Any) -> str:
@@ -148,9 +142,6 @@ class ActiveTargetSetResult:
     workspace_id: str
     source_counts: Dict[str, int]
     active_counts: Dict[str, int]
-    active_document_ids: List[str]
-    active_draft_ids: List[str]
-    active_imported_urls: List[str]
     active_live_domain_urls: List[str]
     items: List[ActiveTargetRecord]
     rejected_count: int
@@ -175,15 +166,6 @@ class ActiveTargetSetResult:
             "updated_at": generated_at,
             "source_counts": dict(self.source_counts),
             "active_counts": dict(self.active_counts),
-            "active_document_ids": list(
-                self.active_document_ids
-            ),
-            "active_draft_ids": list(
-                self.active_draft_ids
-            ),
-            "active_imported_urls": list(
-                self.active_imported_urls
-            ),
             "active_live_domain_urls": list(
                 self.active_live_domain_urls
             ),
@@ -230,23 +212,6 @@ def _source_id(
     canonical_url: str,
 ) -> str:
     candidates = {
-        "document": [
-            item.get("document_id"),
-            item.get("source_document_id"),
-            item.get("target_id"),
-            item.get("url"),
-        ],
-        "draft": [
-            item.get("draft_id"),
-            item.get("document_id"),
-            item.get("target_id"),
-            item.get("url"),
-        ],
-        "imported": [
-            item.get("target_id"),
-            item.get("import_id"),
-            item.get("url"),
-        ],
         "live_domain": [
             item.get("target_id"),
             item.get("canonical_url"),
@@ -268,21 +233,11 @@ def _record_url(
     target_type: str,
     item: Mapping[str, Any],
 ) -> str:
-    candidates: Iterable[Any]
-
-    if target_type == "draft":
-        candidates = (
-            item.get("published_url"),
-            item.get("planned_url"),
-            item.get("placeholder_url"),
-            item.get("url"),
-        )
-    else:
-        candidates = (
-            item.get("canonical_url"),
-            item.get("url"),
-            item.get("link_target"),
-        )
+    candidates: Iterable[Any] = (
+        item.get("canonical_url"),
+        item.get("url"),
+        item.get("link_target"),
+    )
 
     for candidate in candidates:
         cleaned = _clean_text(candidate)
@@ -434,9 +389,6 @@ def build_active_target_set(
     *,
     workspace_id: str,
     live_domain_payload: Mapping[str, Any] | None = None,
-    document_payload: Mapping[str, Any] | None = None,
-    imported_payload: Mapping[str, Any] | None = None,
-    draft_payload: Mapping[str, Any] | None = None,
 ) -> ActiveTargetSetResult:
     workspace = _clean_text(workspace_id)
 
@@ -450,21 +402,6 @@ def build_active_target_set(
             "live_domain",
             "live_domain_target_pool",
             live_domain_payload,
-        ),
-        (
-            "document",
-            "document_registry_pool",
-            document_payload,
-        ),
-        (
-            "imported",
-            "imported_target_pool",
-            imported_payload,
-        ),
-        (
-            "draft",
-            "draft_target_pool",
-            draft_payload,
         ),
     ]
 
@@ -524,30 +461,6 @@ def build_active_target_set(
         ),
     )
 
-    active_document_ids = sorted(
-        {
-            item.source_id
-            for item in items
-            if item.target_type == "document"
-        }
-    )
-
-    active_draft_ids = sorted(
-        {
-            item.source_id
-            for item in items
-            if item.target_type == "draft"
-        }
-    )
-
-    active_imported_urls = sorted(
-        {
-            item.canonical_url
-            for item in items
-            if item.target_type == "imported"
-        }
-    )
-
     active_live_domain_urls = sorted(
         {
             item.canonical_url
@@ -558,9 +471,6 @@ def build_active_target_set(
 
     active_counts = {
         "total": len(items),
-        "document": len(active_document_ids),
-        "draft": len(active_draft_ids),
-        "imported": len(active_imported_urls),
         "live_domain": len(
             active_live_domain_urls
         ),
@@ -571,11 +481,6 @@ def build_active_target_set(
         workspace_id=workspace,
         source_counts=source_counts,
         active_counts=active_counts,
-        active_document_ids=active_document_ids,
-        active_draft_ids=active_draft_ids,
-        active_imported_urls=(
-            active_imported_urls
-        ),
         active_live_domain_urls=(
             active_live_domain_urls
         ),

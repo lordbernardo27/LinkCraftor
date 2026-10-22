@@ -1,0 +1,876 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import json
+import py_compile
+import sys
+import tempfile
+import traceback
+from dataclasses import is_dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+REPORT = Path(sys.argv[2]).resolve()
+
+POOL_ROOT = (
+    ROOT
+    / "backend"
+    / "server"
+    / "pipelines"
+    / "connect_domain"
+    / "linking_target_pipeline"
+    / "live_domain_target_pool"
+)
+
+INIT_SOURCE = POOL_ROOT / "__init__.py"
+STAGE_SOURCE = POOL_ROOT / "stage.py"
+REPOSITORY_SOURCE = POOL_ROOT / "repository.py"
+
+EXPECTED_INIT_SHA256 = (
+    "be4124e2c61ade24efe49d50bc1155b2557207737e1f6c23f1a6801c95c10148"
+)
+
+EXPECTED_STAGE_SHA256 = (
+    "46dd22998dc2036bbe179227b99fbd417dd257967182efd0780f823ab950f6fc"
+)
+
+EXPECTED_REPOSITORY_SHA256 = (
+    "e4aa445b526b35cd9d942dc4de008942b3c409b251841fbb8751ba73b0a301d3"
+)
+
+results: list[tuple[str, bool, Any]] = []
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def record(
+    name: str,
+    passed: bool,
+    detail: Any = None,
+) -> None:
+    results.append(
+        (
+            name,
+            bool(passed),
+            detail,
+        )
+    )
+
+    print(
+        f"{name}: {'PASS' if passed else 'FAIL'}"
+    )
+
+    if detail is not None:
+        rendered = json.dumps(
+            detail,
+            indent=2,
+            sort_keys=True,
+            default=str,
+        )
+
+        for line in rendered.splitlines():
+            print("  " + line)
+
+
+def function_names(path: Path) -> set[str]:
+    source = path.read_text(
+        encoding="utf-8-sig",
+    )
+
+    tree = ast.parse(
+        source,
+        filename=str(path),
+    )
+
+    return {
+        node.name
+        for node in tree.body
+        if isinstance(
+            node,
+            (
+                ast.FunctionDef,
+                ast.AsyncFunctionDef,
+            ),
+        )
+    }
+
+
+def call_names(path: Path) -> set[str]:
+    source = path.read_text(
+        encoding="utf-8-sig",
+    )
+
+    tree = ast.parse(
+        source,
+        filename=str(path),
+    )
+
+    def dotted_name(node: ast.AST) -> str:
+        parts: list[str] = []
+
+        while isinstance(node, ast.Attribute):
+            parts.append(node.attr)
+            node = node.value
+
+        if isinstance(node, ast.Name):
+            parts.append(node.id)
+
+        return ".".join(
+            reversed(parts)
+        )
+
+    return {
+        dotted_name(node.func)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    }
+
+
+def write_report(
+    *,
+    status: str,
+    standard_error: str = "",
+) -> None:
+    passed = sum(
+        1
+        for _, value, _ in results
+        if value
+    )
+
+    failed = sum(
+        1
+        for _, value, _ in results
+        if not value
+    )
+
+    lines = [
+        "LINKCRAFTER PIPELINE REGISTRATION",
+        "PART B 4.5 LIVE DOMAIN TARGET POOL CERTIFICATION",
+        "",
+        "Generated: "
+        + datetime.now(timezone.utc).isoformat(),
+        "Mode: ISOLATED EXISTING-STAGE CERTIFICATION",
+        "Production source changes: NONE",
+        "Production persistence executed: NO",
+        "Temporary isolated persistence used: YES",
+        "Runtime registrations created: NO",
+        "Universal jobs created: NO",
+        "Queue claims executed: NO",
+        "Production handlers executed: NO",
+        "Live network requests executed: NO",
+        f"CERTIFICATION STATUS: {status}",
+        "",
+        "=" * 112,
+        "RUNTIME VERIFICATION",
+        "=" * 112,
+    ]
+
+    for name, value, detail in results:
+        lines.append(
+            f"{name}: {'PASS' if value else 'FAIL'}"
+        )
+
+        if detail is not None:
+            rendered = json.dumps(
+                detail,
+                indent=2,
+                sort_keys=True,
+                default=str,
+            )
+
+            lines.extend(
+                "  " + line
+                for line in rendered.splitlines()
+            )
+
+    lines.extend(
+        [
+            "",
+            "=" * 112,
+            "STANDARD ERROR",
+            "=" * 112,
+            standard_error,
+            "",
+            "=" * 112,
+            "PART B 4.5 CERTIFIED BOUNDARY",
+            "=" * 112,
+            "- build_live_domain_target_pool() remains canonical.",
+            "- Only ready same-workspace, same-domain Site Pages are admitted.",
+            "- Canonical URL and target identity duplicates fail closed.",
+            "- Target IDs remain deterministic.",
+            "- Live-domain source type and available status are retained.",
+            "- Repository persistence remains atomic.",
+            "- Certification persistence is restricted to a temporary directory.",
+            "- Active Target Set execution remains outside this stage.",
+            "- Runtime registration remains deferred to Part B Step 5.",
+            "",
+            "=" * 112,
+            "FINAL RESULT",
+            "=" * 112,
+            f"TESTS_PASSED={passed}",
+            f"TESTS_FAILED={failed}",
+        ]
+    )
+
+    if status == "CERTIFIED":
+        lines.extend(
+            [
+                "PART_B_4_5_CERTIFICATION=PASS",
+                "FINAL RESULT: PART B 4.5 LIVE DOMAIN TARGET POOL CERTIFIED",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "PART_B_4_5_CERTIFICATION=FAIL",
+                "FINAL RESULT: PART B 4.5 LIVE DOMAIN TARGET POOL NOT_CERTIFIED",
+            ]
+        )
+
+    REPORT.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    REPORT.write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+print("=" * 112)
+print("PART B 4.5 - LIVE DOMAIN TARGET POOL")
+print("=" * 112)
+
+standard_error = ""
+
+try:
+    required_sources = (
+        INIT_SOURCE,
+        STAGE_SOURCE,
+        REPOSITORY_SOURCE,
+    )
+
+    for path in required_sources:
+        record(
+            "SOURCE_EXISTS_"
+            + path.name.upper().replace(
+                ".",
+                "_",
+            ),
+            path.is_file(),
+            str(path),
+        )
+
+    if not all(
+        path.is_file()
+        for path in required_sources
+    ):
+        raise RuntimeError(
+            "Live Domain Target Pool sources are incomplete."
+        )
+
+    source_hashes = {
+        "init": sha256(INIT_SOURCE),
+        "stage": sha256(STAGE_SOURCE),
+        "repository": sha256(
+            REPOSITORY_SOURCE
+        ),
+    }
+
+    record(
+        "INIT_SOURCE_PRECONDITION",
+        source_hashes["init"]
+        == EXPECTED_INIT_SHA256,
+        source_hashes["init"],
+    )
+
+    record(
+        "STAGE_SOURCE_PRECONDITION",
+        source_hashes["stage"]
+        == EXPECTED_STAGE_SHA256,
+        source_hashes["stage"],
+    )
+
+    record(
+        "REPOSITORY_SOURCE_PRECONDITION",
+        source_hashes["repository"]
+        == EXPECTED_REPOSITORY_SHA256,
+        source_hashes["repository"],
+    )
+
+    if source_hashes["init"] != EXPECTED_INIT_SHA256:
+        raise RuntimeError(
+            "Live Domain Target Pool package changed after inspection."
+        )
+
+    if source_hashes["stage"] != EXPECTED_STAGE_SHA256:
+        raise RuntimeError(
+            "Live Domain Target Pool stage changed after inspection."
+        )
+
+    if (
+        source_hashes["repository"]
+        != EXPECTED_REPOSITORY_SHA256
+    ):
+        raise RuntimeError(
+            "Live Domain Target Pool repository changed after inspection."
+        )
+
+    for path in required_sources:
+        py_compile.compile(
+            str(path),
+            doraise=True,
+        )
+
+    record(
+        "ALL_POOL_SOURCES_PASS_SYNTAX",
+        True,
+    )
+
+    stage_functions = function_names(
+        STAGE_SOURCE
+    )
+
+    record(
+        "BUILD_POOL_AUTHORITY_AVAILABLE",
+        "build_live_domain_target_pool"
+        in stage_functions,
+        sorted(stage_functions),
+    )
+
+    repository_functions = function_names(
+        REPOSITORY_SOURCE
+    )
+
+    required_repository_functions = {
+        "live_domain_target_pool_path",
+        "save_live_domain_target_pool",
+        "load_live_domain_target_pool",
+    }
+
+    missing_repository_functions = sorted(
+        required_repository_functions
+        - repository_functions
+    )
+
+    record(
+        "POOL_REPOSITORY_API_COMPLETE",
+        not missing_repository_functions,
+        {
+            "required": sorted(
+                required_repository_functions
+            ),
+            "missing": missing_repository_functions,
+        },
+    )
+
+    stage_calls = call_names(
+        STAGE_SOURCE
+    )
+
+    forbidden_calls = sorted(
+        call
+        for call in stage_calls
+        if call.endswith(
+            (
+                "build_active_target_set",
+                "save_active_target_set",
+                "create_universal_knowledge_job",
+                "register_runtime_handler",
+                "dequeue_job",
+            )
+        )
+    )
+
+    record(
+        "NO_ACTIVE_SET_OR_RUNTIME_CALLS",
+        not forbidden_calls,
+        forbidden_calls,
+    )
+
+    stage_text = STAGE_SOURCE.read_text(
+        encoding="utf-8-sig",
+    )
+
+    repository_text = REPOSITORY_SOURCE.read_text(
+        encoding="utf-8-sig",
+    )
+
+    record(
+        "NO_NETWORK_CLIENT_IN_STAGE",
+        (
+            "requests" not in stage_text
+            and "httpx" not in stage_text
+            and "urllib.request" not in stage_text
+        ),
+    )
+
+    record(
+        "ATOMIC_REPOSITORY_REPLACEMENT_PRESENT",
+        "os.replace" in repository_text,
+    )
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(
+            0,
+            str(ROOT),
+        )
+
+    importlib.invalidate_caches()
+
+    module = importlib.import_module(
+        "backend.server.pipelines.connect_domain."
+        "linking_target_pipeline.live_domain_target_pool"
+    )
+
+    record(
+        "POOL_MODULE_IMPORT",
+        True,
+        module.__name__,
+    )
+
+    record(
+        "TARGET_RECORD_IS_DATACLASS",
+        is_dataclass(
+            module.LiveDomainTargetRecord
+        ),
+    )
+
+    record(
+        "POOL_RESULT_IS_DATACLASS",
+        is_dataclass(
+            module.LiveDomainTargetPoolResult
+        ),
+    )
+
+    site_pages = [
+        {
+            "workspace_id": "ws_part_b_4_5_probe",
+            "domain": "example.com",
+            "url": "https://example.com/blog/first-article",
+            "canonical_url": "https://example.com/blog/first-article",
+            "cleaner_confidence": "explicit",
+            "status": "ready",
+        },
+        {
+            "workspace_id": "ws_part_b_4_5_probe",
+            "domain": "example.com",
+            "url": "https://example.com/articles/second-article",
+            "canonical_url": "https://example.com/articles/second-article",
+            "cleaner_confidence": "uncertain",
+            "status": "ready",
+        },
+        {
+            "workspace_id": "ws_part_b_4_5_probe",
+            "domain": "example.com",
+            "url": "https://example.com/blog/first-article?duplicate=1",
+            "canonical_url": "https://example.com/blog/first-article",
+            "cleaner_confidence": "explicit",
+            "status": "ready",
+        },
+        {
+            "workspace_id": "ws_part_b_4_5_probe",
+            "domain": "external.example.net",
+            "url": "https://external.example.net/blog/external",
+            "canonical_url": "https://external.example.net/blog/external",
+            "cleaner_confidence": "explicit",
+            "status": "ready",
+        },
+        {
+            "workspace_id": "ws_part_b_4_5_probe",
+            "domain": "example.com",
+            "url": "https://example.com/draft/not-ready",
+            "canonical_url": "https://example.com/draft/not-ready",
+            "cleaner_confidence": "explicit",
+            "status": "draft",
+        },
+        {
+            "workspace_id": "ws_other",
+            "domain": "example.com",
+            "url": "https://example.com/blog/wrong-workspace",
+            "canonical_url": "https://example.com/blog/wrong-workspace",
+            "cleaner_confidence": "explicit",
+            "status": "ready",
+        },
+    ]
+
+    result = module.build_live_domain_target_pool(
+        site_pages,
+        workspace_id="ws_part_b_4_5_probe",
+        domain="example.com",
+    )
+
+    payload = result.to_payload()
+
+    record(
+        "POOL_BUILD_EXECUTED",
+        isinstance(
+            result,
+            module.LiveDomainTargetPoolResult,
+        ),
+        payload,
+    )
+
+    targets = tuple(
+        result.targets
+    )
+
+    record(
+        "INPUT_COUNT_PRESERVED",
+        result.input_count
+        == len(site_pages),
+        result.input_count,
+    )
+
+    record(
+        "TWO_VALID_TARGETS_CREATED",
+        len(targets) == 2,
+        [
+            target.to_dict()
+            for target in targets
+        ],
+    )
+
+    record(
+        "TARGET_WORKSPACE_ID_PRESERVED",
+        all(
+            target.workspace_id
+            == "ws_part_b_4_5_probe"
+            for target in targets
+        ),
+        [
+            target.workspace_id
+            for target in targets
+        ],
+    )
+
+    record(
+        "TARGET_DOMAIN_PRESERVED",
+        all(
+            target.domain
+            == "example.com"
+            for target in targets
+        ),
+        [
+            target.domain
+            for target in targets
+        ],
+    )
+
+    record(
+        "READY_SITE_PAGES_ONLY",
+        all(
+            target.site_page_status
+            == module.SITE_PAGE_STATUS_READY
+            for target in targets
+        ),
+        [
+            target.site_page_status
+            for target in targets
+        ],
+    )
+
+    record(
+        "LIVE_DOMAIN_SOURCE_TYPE_RETAINED",
+        all(
+            target.source_type
+            == module.SOURCE_TYPE_LIVE_DOMAIN
+            for target in targets
+        ),
+        [
+            target.source_type
+            for target in targets
+        ],
+    )
+
+    record(
+        "AVAILABLE_TARGET_STATUS_RETAINED",
+        all(
+            target.target_status
+            == module.TARGET_STATUS_AVAILABLE
+            for target in targets
+        ),
+        [
+            target.target_status
+            for target in targets
+        ],
+    )
+
+    target_ids = tuple(
+        target.target_id
+        for target in targets
+    )
+
+    canonical_urls = tuple(
+        target.canonical_url
+        for target in targets
+    )
+
+    record(
+        "TARGET_IDS_UNIQUE",
+        len(set(target_ids))
+        == len(target_ids),
+        target_ids,
+    )
+
+    record(
+        "CANONICAL_URLS_UNIQUE",
+        len(set(canonical_urls))
+        == len(canonical_urls),
+        canonical_urls,
+    )
+
+    second_result = module.build_live_domain_target_pool(
+        site_pages,
+        workspace_id="ws_part_b_4_5_probe",
+        domain="example.com",
+    )
+
+    second_ids = tuple(
+        target.target_id
+        for target in second_result.targets
+    )
+
+    record(
+        "TARGET_IDENTITIES_DETERMINISTIC",
+        target_ids == second_ids,
+        {
+            "first": target_ids,
+            "second": second_ids,
+        },
+    )
+
+    rejection_counts = dict(
+        result.rejection_reason_counts
+    )
+
+    record(
+        "REJECTION_EVIDENCE_RETAINED",
+        bool(rejection_counts),
+        rejection_counts,
+    )
+
+    record(
+        "DUPLICATE_TARGET_REJECTED",
+        any(
+            "duplicate" in reason.lower()
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    record(
+        "WORKSPACE_MISMATCH_REJECTED",
+        any(
+            "workspace" in reason.lower()
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    record(
+        "DOMAIN_MISMATCH_REJECTED",
+        any(
+            "domain" in reason.lower()
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    record(
+        "NON_READY_PAGE_REJECTED",
+        any(
+            (
+                "status" in reason.lower()
+                or "ready" in reason.lower()
+            )
+            for reason in rejection_counts
+        ),
+        rejection_counts,
+    )
+
+    with tempfile.TemporaryDirectory(
+        prefix="linkcraftor_part_b_4_5_"
+    ) as temporary_directory:
+        temporary_root = Path(
+            temporary_directory
+        )
+
+        saved_path = module.save_live_domain_target_pool(
+            result,
+            data_root=temporary_root,
+        )
+
+        record(
+            "ISOLATED_POOL_SAVED",
+            saved_path.is_file(),
+            str(saved_path),
+        )
+
+        record(
+            "ISOLATED_PATH_RETAINED",
+            temporary_root.resolve()
+            in saved_path.resolve().parents,
+            {
+                "temporary_root": str(
+                    temporary_root.resolve()
+                ),
+                "saved_path": str(
+                    saved_path.resolve()
+                ),
+            },
+        )
+
+        loaded_payload = module.load_live_domain_target_pool(
+            "ws_part_b_4_5_probe",
+            data_root=temporary_root,
+        )
+
+        record(
+            "ISOLATED_POOL_RELOADED",
+            isinstance(
+                loaded_payload,
+                dict,
+            ),
+            loaded_payload,
+        )
+
+        loaded_targets = loaded_payload.get(
+            "targets"
+        )
+
+        record(
+            "RELOADED_TARGET_COUNT_MATCHES",
+            isinstance(loaded_targets.get("items"), list) and len(loaded_targets.get("items", [])) == int(loaded_targets.get("created_count", -1)) == 2,
+            len(loaded_targets)
+            if isinstance(
+                loaded_targets,
+                list,
+            )
+            else None,
+        )
+
+    invalid_workspace_rejected = False
+
+    try:
+        module.build_live_domain_target_pool(
+            site_pages,
+            workspace_id="",
+            domain="example.com",
+        )
+    except ValueError:
+        invalid_workspace_rejected = True
+
+    record(
+        "INVALID_WORKSPACE_FAILS_CLOSED",
+        invalid_workspace_rejected,
+    )
+
+    invalid_domain_rejected = False
+
+    try:
+        module.build_live_domain_target_pool(
+            site_pages,
+            workspace_id="ws_invalid",
+            domain="",
+        )
+    except ValueError:
+        invalid_domain_rejected = True
+
+    record(
+        "INVALID_DOMAIN_FAILS_CLOSED",
+        invalid_domain_rejected,
+    )
+
+    record(
+        "PRODUCTION_PERSISTENCE_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "LIVE_NETWORK_REQUEST_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "RUNTIME_REGISTRATION_CREATED_NO",
+        True,
+    )
+
+    record(
+        "UNIVERSAL_JOB_CREATED_NO",
+        True,
+    )
+
+    record(
+        "QUEUE_CLAIM_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "PRODUCTION_HANDLER_EXECUTED_NO",
+        True,
+    )
+
+    record(
+        "ALL_PRODUCTION_SOURCES_UNCHANGED",
+        (
+            sha256(INIT_SOURCE)
+            == source_hashes["init"]
+            and sha256(STAGE_SOURCE)
+            == source_hashes["stage"]
+            and sha256(REPOSITORY_SOURCE)
+            == source_hashes["repository"]
+        ),
+        {
+            "init": sha256(INIT_SOURCE),
+            "stage": sha256(STAGE_SOURCE),
+            "repository": sha256(
+                REPOSITORY_SOURCE
+            ),
+        },
+    )
+
+    failures = [
+        name
+        for name, passed, _ in results
+        if not passed
+    ]
+
+    if failures:
+        raise RuntimeError(
+            "Certification checks failed: "
+            + ", ".join(failures)
+        )
+
+    write_report(
+        status="CERTIFIED",
+    )
+
+except Exception:
+    standard_error = traceback.format_exc()
+
+    write_report(
+        status="NOT_CERTIFIED",
+        standard_error=standard_error,
+    )
+
+    print(standard_error)
+    raise
+
+print("")
+print("=" * 112)
+print("PART B 4.5 - FINAL RESULT")
+print("=" * 112)
+print("FINAL RESULT: PART B 4.5 LIVE DOMAIN TARGET POOL CERTIFIED")

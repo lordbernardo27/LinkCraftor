@@ -27,7 +27,6 @@ from fastapi import HTTPException
 from backend.server.pipelines.connect_domain.linking_target_pipeline.url_cleaner import clean_urls
 from backend.server.pipelines.connect_domain.linking_target_pipeline.active_target_set import (
     build_active_target_set,
-    load_optional_source_payload,
     save_active_target_set,
 )
 
@@ -291,36 +290,12 @@ def run_linking_target_pipeline(payload):
         }
 
     try:
-        document_payload = load_optional_source_payload(
-            Path(
-                "backend/server/data/target_pools/document_registry"
-            )
-            / f"document_registry_{workspace_id}.json"
-        )
-
-        imported_payload = load_optional_source_payload(
-            Path(
-                "backend/server/data/target_pools/imported"
-            )
-            / f"imported_target_pool_{workspace_id}.json"
-        )
-
-        draft_payload = load_optional_source_payload(
-            Path(
-                "backend/server/data/target_pools/draft"
-            )
-            / f"draft_target_pool_{workspace_id}.json"
-        )
-
         active_result = build_active_target_set(
             workspace_id=workspace_id,
             live_domain_payload={
                 "workspace_id": workspace_id,
                 "items": live_result.target_dicts(),
             },
-            document_payload=document_payload,
-            imported_payload=imported_payload,
-            draft_payload=draft_payload,
         )
 
         active_target_set_path = save_active_target_set(

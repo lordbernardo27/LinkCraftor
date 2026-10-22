@@ -457,6 +457,12 @@ def _requeue_same_runtime_job_v1(
     return requeued
 
 
+from backend.server.runtime.runtime_registration_admission import (
+    RuntimeRegistrationAdmissionError,
+    require_runtime_registration_admission,
+)
+
+
 def run_one_universal_runtime_job_v1(
     *,
     worker_id: str = "universal_runtime_worker_v1",
@@ -578,6 +584,25 @@ def run_one_universal_runtime_job_v1(
         if not isinstance(registration, Mapping):
             raise UniversalRuntimeWorkerContractError(
                 "Runtime Registration did not return a mapping."
+            )
+
+        try:
+            registration_admission = (
+                require_runtime_registration_admission(
+                    registration=registration,
+                    runtime_job=runtime_job,
+                    worker_id=canonical_worker_id,
+                )
+            )
+        except RuntimeRegistrationAdmissionError as exc:
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime registration admission failed: "
+                + str(exc)
+            ) from exc
+
+        if not registration_admission.admitted:
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime registration admission was not granted."
             )
 
         registration_metadata = registration.get("metadata", {})

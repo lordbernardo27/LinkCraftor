@@ -1,0 +1,3533 @@
+LINKCRAFTER UNIVERSAL RUNTIME REGISTRATION
+PART A 3-E CANONICAL CONCURRENCY AND IDEMPOTENCY CONTRACT INSPECTION
+
+Generated: 2026-10-20T14:40:06.3396151+00:00
+Mode: READ-ONLY CANONICAL-AUTHORITY INSPECTION
+Production source changes: NONE
+Jobs created or claimed: NO
+Handlers executed: NO
+Project root: C:\Users\HP\Documents\LinkCraftor
+INSPECTION STATUS: COMPLETE
+
+==============================================================================================================
+DECISION
+==============================================================================================================
+The broad 3-E inspection found existing certified authorities for:
+
+- execution concurrency safety;
+- execution idempotency identity;
+- duplicate invocation handling;
+- universal-job duplicate detection;
+- universal-job duplicate handling;
+- canonical job-store persistence;
+- queue leasing.
+
+This inspection freezes their exact public contracts before production
+integration. No replacement concurrency or idempotency engine is created.
+
+==============================================================================================================
+RUNTIME INSPECTION
+==============================================================================================================
+
+====================================================================================================================
+PART A 3-E - CANONICAL MODULE IMPORTS
+====================================================================================================================
+MODULE_IMPORT_EXECUTION_SAFETY: PASS
+  backend.server.runtime.execution_engine.execution_safety_concurrency
+MODULE_SOURCE_EXECUTION_SAFETY: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\execution_engine\execution_safety_concurrency.py
+MODULE_SYNTAX_EXECUTION_SAFETY: PASS
+  11792c36d2b7ffc1b1f2197d27608048a859ca71264badf8ec088554088fb15c
+MODULE_IMPORT_IDEMPOTENCY_CONTROL: PASS
+  backend.server.runtime.execution_engine.idempotency_duplicate_control
+MODULE_SOURCE_IDEMPOTENCY_CONTROL: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\execution_engine\idempotency_duplicate_control.py
+MODULE_SYNTAX_IDEMPOTENCY_CONTROL: PASS
+  d79074dfd1040532d06b85820f04b80f30a7bd9fab30838eb72db7a99cb245d7
+MODULE_IMPORT_DUPLICATE_DETECTION: PASS
+  backend.server.runtime.universal_jobs.duplicate_detection
+MODULE_SOURCE_DUPLICATE_DETECTION: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_jobs\duplicate_detection.py
+MODULE_SYNTAX_DUPLICATE_DETECTION: PASS
+  3b46eab6276e2108f8bc796e087eb70c19c4eacba5d34a948c69f73b7bd2446e
+MODULE_IMPORT_DUPLICATE_HANDLING: PASS
+  backend.server.runtime.universal_jobs.duplicate_handling
+MODULE_SOURCE_DUPLICATE_HANDLING: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_jobs\duplicate_handling.py
+MODULE_SYNTAX_DUPLICATE_HANDLING: PASS
+  ad856d8ef5bd6ea5c1a996d44df174a3f54431a13abe054173086e5b472cadad
+MODULE_IMPORT_CREATION_ENGINE: PASS
+  backend.server.runtime.universal_jobs.creation_engine
+MODULE_SOURCE_CREATION_ENGINE: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_jobs\creation_engine.py
+MODULE_SYNTAX_CREATION_ENGINE: PASS
+  232f6cb3d4eb678d9d47deacc82f03df7bdc6178962fae782018f746a94da4ad
+MODULE_IMPORT_JOB_STORE: PASS
+  backend.server.orchestration.job_store
+MODULE_SOURCE_JOB_STORE: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\job_store.py
+MODULE_SYNTAX_JOB_STORE: PASS
+  ae88c201c1a1a4740a50f607da067212eeac2aba4de5416e75dd38043b8d487e
+MODULE_IMPORT_QUEUE: PASS
+  backend.server.orchestration.queue
+MODULE_SOURCE_QUEUE: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\orchestration\queue.py
+MODULE_SYNTAX_QUEUE: PASS
+  846db4dd2c23fd193e14599550f9298cd5746d80b87f6b24220fdfd225b0771f
+MODULE_IMPORT_WORKER: PASS
+  backend.server.runtime.universal_runtime_worker_v1
+MODULE_SOURCE_WORKER: PASS
+  C:\Users\HP\Documents\LinkCraftor\backend\server\runtime\universal_runtime_worker_v1.py
+MODULE_SYNTAX_WORKER: PASS
+  b4df8c694d5d09dc5c412593d4c097d6697c2cb5a656c9521ac58a46fe8c4a4f
+
+====================================================================================================================
+PART A 3-E - EXACT PUBLIC CONTRACTS
+====================================================================================================================
+
+EXECUTION_SAFETY_CONTRACTS:
+SYMBOL_EXECUTION_SAFETY_PROTECT_CONCURRENT_EXECUTION: PASS
+  (*, duplicate_decision: 'DuplicateInvocationDecision') -> 'None'
+
+SOURCE_EXECUTION_SAFETY_protect_concurrent_execution:
+def protect_concurrent_execution(
+    *,
+    duplicate_decision: DuplicateInvocationDecision,
+) -> None:
+    """
+    Block active duplicate execution and allow only canonical execution.
+    """
+
+    if not isinstance(
+        duplicate_decision,
+        DuplicateInvocationDecision,
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "duplicate_decision must be DuplicateInvocationDecision.",
+            code="invalid_duplicate_decision",
+            value=duplicate_decision,
+        )
+
+    if (
+        duplicate_decision.disposition
+        is DuplicateInvocationDisposition.REJECT_DUPLICATE
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Concurrent duplicate execution rejected.",
+            code="concurrent_execution_rejected",
+        )
+
+SYMBOL_EXECUTION_SAFETY_VALIDATE_LEASE_SAFETY: PASS
+  (*, fence: 'ExecutionFenceIdentity', evidence: 'LeaseSafetyEvidence') -> 'None'
+
+SOURCE_EXECUTION_SAFETY_validate_lease_safety:
+def validate_lease_safety(
+    *,
+    fence: ExecutionFenceIdentity,
+    evidence: LeaseSafetyEvidence,
+) -> None:
+    """
+    Reject execution after lease loss, mismatch, or ownership change.
+    """
+
+    if not evidence.lease_active:
+        raise ExecutionSafetyConcurrencyError(
+            "Execution lease is no longer active.",
+            code="lost_lease",
+        )
+
+    if (
+        evidence.expected_lease_id is not None
+        and evidence.current_lease_id
+        != evidence.expected_lease_id
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Execution lease id changed.",
+            code="lease_id_changed",
+        )
+
+    if (
+        evidence.expected_lease_owner is not None
+        and evidence.current_lease_owner
+        != evidence.expected_lease_owner
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Execution lease owner changed.",
+            code="lease_owner_changed",
+        )
+
+    if (
+        fence.lease_id is not None
+        and evidence.current_lease_id
+        != fence.lease_id
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Current lease no longer matches execution fence.",
+            code="fenced_lease_mismatch",
+        )
+
+    if (
+        fence.lease_owner is not None
+        and evidence.current_lease_owner
+        != fence.lease_owner
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Current lease owner no longer matches execution fence.",
+            code="fenced_lease_owner_mismatch",
+        )
+
+SYMBOL_EXECUTION_SAFETY_VALIDATE_WORKER_SAFETY: PASS
+  (*, fence: 'ExecutionFenceIdentity', evidence: 'WorkerSafetyEvidence') -> 'None'
+
+SOURCE_EXECUTION_SAFETY_validate_worker_safety:
+def validate_worker_safety(
+    *,
+    fence: ExecutionFenceIdentity,
+    evidence: WorkerSafetyEvidence,
+) -> None:
+    """
+    Reject stale worker or worker-instance results.
+    """
+
+    if not evidence.worker_active:
+        raise ExecutionSafetyConcurrencyError(
+            "Worker is stale or inactive.",
+            code="stale_worker",
+        )
+
+    if not evidence.worker_instance_active:
+        raise ExecutionSafetyConcurrencyError(
+            "Worker instance is stale or inactive.",
+            code="stale_worker_instance",
+        )
+
+    if (
+        evidence.expected_worker_id is not None
+        and evidence.current_worker_id
+        != evidence.expected_worker_id
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Worker ownership changed.",
+            code="worker_id_changed",
+        )
+
+    if (
+        fence.worker_id is not None
+        and evidence.current_worker_id
+        != fence.worker_id
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Worker no longer matches execution fence.",
+            code="fenced_worker_mismatch",
+        )
+
+    if (
+        evidence.expected_worker_instance_id is not None
+        and evidence.current_worker_instance_id
+        != evidence.expected_worker_instance_id
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Worker instance ownership changed.",
+            code="worker_instance_changed",
+        )
+
+SYMBOL_EXECUTION_SAFETY_PROTECT_TERMINAL_STATE_REENTRY: PASS
+  (*, lifecycle: 'ExecutionLifecycleRecord') -> 'None'
+
+SOURCE_EXECUTION_SAFETY_protect_terminal_state_reentry:
+def protect_terminal_state_reentry(
+    *,
+    lifecycle: ExecutionLifecycleRecord,
+) -> None:
+    """
+    Prevent terminal execution from returning to executable state.
+    """
+
+    if lifecycle.state in {
+        ExecutionLifecycleState.SUCCEEDED,
+        ExecutionLifecycleState.FAILED,
+        ExecutionLifecycleState.CANCELLED,
+    }:
+        raise ExecutionSafetyConcurrencyError(
+            "Terminal execution cannot re-enter execution.",
+            code="terminal_state_reentry_rejected",
+            value=lifecycle.state.value,
+        )
+
+SYMBOL_EXECUTION_SAFETY_RESOLVE_EXECUTION_RACE: PASS
+  (*, evidence: 'ExecutionRaceEvidence') -> 'ExecutionRaceResolution'
+
+SOURCE_EXECUTION_SAFETY_resolve_execution_race:
+def resolve_execution_race(
+    *,
+    evidence: ExecutionRaceEvidence,
+) -> ExecutionRaceResolution:
+    """
+    Deterministically resolve execution races.
+
+    Priority:
+    1. Existing terminal state wins.
+    2. Existing active execution wins against duplicate concurrent execution.
+    3. Replay of an already-completed duplicate does not create new execution.
+    4. Otherwise current execution may proceed.
+    """
+
+    if evidence.existing_terminal_state:
+        return ExecutionRaceResolution(
+            disposition=SafetyDisposition.REJECT,
+            winner=RaceWinner.EXISTING_TERMINAL_STATE,
+            reason_code="terminal_state_wins_race",
+        )
+
+    if (
+        evidence.current_execution_active
+        and evidence.duplicate_invocation_active
+    ):
+        return ExecutionRaceResolution(
+            disposition=SafetyDisposition.REJECT,
+            winner=RaceWinner.EXISTING_ACTIVE_EXECUTION,
+            reason_code="active_execution_wins_race",
+        )
+
+    if evidence.duplicate_invocation_replay:
+        return ExecutionRaceResolution(
+            disposition=SafetyDisposition.REJECT,
+            winner=RaceWinner.EXISTING_TERMINAL_STATE,
+            reason_code="existing_result_replay_wins",
+        )
+
+    if (
+        not evidence.same_execution_id
+        or not evidence.same_attempt_number
+    ):
+        return ExecutionRaceResolution(
+            disposition=SafetyDisposition.REJECT,
+            winner=RaceWinner.NONE,
+            reason_code="execution_identity_race_mismatch",
+        )
+
+    return ExecutionRaceResolution(
+        disposition=SafetyDisposition.ALLOW,
+        winner=RaceWinner.CURRENT_EXECUTION,
+        reason_code="current_execution_may_proceed",
+    )
+
+SYMBOL_EXECUTION_SAFETY_VALIDATE_RESULT_SAFETY: PASS
+  (*, lifecycle: 'ExecutionLifecycleRecord', fence: 'ExecutionFenceIdentity', result: 'ExecutionResult', lease_evidence: 'LeaseSafetyEvidence', worker_evidence: 'WorkerSafetyEvidence', timing_evidence: 'ResultTimingEvidence') -> 'ExecutionSafetyDecision'
+
+SOURCE_EXECUTION_SAFETY_validate_result_safety:
+def validate_result_safety(
+    *,
+    lifecycle: ExecutionLifecycleRecord,
+    fence: ExecutionFenceIdentity,
+    result: ExecutionResult,
+    lease_evidence: LeaseSafetyEvidence,
+    worker_evidence: WorkerSafetyEvidence,
+    timing_evidence: ResultTimingEvidence,
+) -> ExecutionSafetyDecision:
+    """
+    Full stale/late/lost-lease result acceptance gate.
+    """
+
+    if result.identity.execution_id != lifecycle.execution_id:
+        raise ExecutionSafetyConcurrencyError(
+            "Result execution does not match lifecycle.",
+            code="result_lifecycle_execution_mismatch",
+        )
+
+    if result.identity.job_id != lifecycle.job_id:
+        raise ExecutionSafetyConcurrencyError(
+            "Result job does not match lifecycle.",
+            code="result_lifecycle_job_mismatch",
+        )
+
+    if (
+        result.identity.attempt_number
+        != lifecycle.attempt_number
+    ):
+        raise ExecutionSafetyConcurrencyError(
+            "Result attempt does not match lifecycle.",
+            code="result_lifecycle_attempt_mismatch",
+        )
+
+    if lifecycle.fence_id != fence.fence_id:
+        raise ExecutionSafetyConcurrencyError(
+            "Lifecycle fence changed.",
+            code="lifecycle_fence_changed",
+        )
+
+    validate_lease_safety(
+        fence=fence,
+        evidence=lease_evidence,
+    )
+
+    validate_worker_safety(
+        fence=fence,
+        evidence=worker_evidence,
+    )
+
+    reject_late_result(
+        timing=timing_evidence,
+    )
+
+    return ExecutionSafetyDecision(
+        disposition=SafetyDisposition.ALLOW,
+        execution_id=lifecycle.execution_id,
+        job_id=lifecycle.job_id,
+        attempt_number=lifecycle.attempt_number,
+        fence_id=fence.fence_id,
+        reason_code="result_safety_validated",
+    )
+
+
+IDEMPOTENCY_CONTROL_CONTRACTS:
+SYMBOL_IDEMPOTENCY_CONTROL_CREATE_EXECUTION_IDEMPOTENCY_IDENTITY: PASS
+  (*, request: 'ExecutionRequest') -> 'ExecutionIdempotencyIdentity'
+
+SOURCE_IDEMPOTENCY_CONTROL_create_execution_idempotency_identity:
+def create_execution_idempotency_identity(
+    *,
+    request: ExecutionRequest,
+) -> ExecutionIdempotencyIdentity:
+    """
+    Create deterministic Phase-6 execution idempotency identity.
+
+    Preference:
+    1. explicit request idempotency key
+    2. deterministic request identity material
+    """
+
+    if not isinstance(request, ExecutionRequest):
+        raise IdempotencyDuplicateControlError(
+            "request must be ExecutionRequest.",
+            code="invalid_execution_request",
+            value=request,
+        )
+
+    source_key = request.identity.idempotency_key
+
+    canonical_material = "|".join(
+        (
+            source_key or "",
+            request.identity.job_id,
+            str(request.identity.attempt_number),
+            request.context.handler_key,
+        )
+    )
+
+    digest = sha256(
+        canonical_material.encode("utf-8")
+    ).hexdigest()
+
+    return ExecutionIdempotencyIdentity(
+        identity_key=f"execidem:{digest}",
+        job_id=request.identity.job_id,
+        attempt_number=request.identity.attempt_number,
+        execution_id=request.identity.execution_id,
+        source_idempotency_key=source_key,
+        handler_key=request.context.handler_key,
+    )
+
+SYMBOL_IDEMPOTENCY_CONTROL_EVALUATE_DUPLICATE_INVOCATION: PASS
+  (*, request: 'ExecutionRequest', fence: 'ExecutionFenceIdentity', evidence: 'DuplicateInvocationEvidence') -> 'DuplicateInvocationDecision'
+
+SOURCE_IDEMPOTENCY_CONTROL_evaluate_duplicate_invocation:
+def evaluate_duplicate_invocation(
+    *,
+    request: ExecutionRequest,
+    fence: ExecutionFenceIdentity,
+    evidence: DuplicateInvocationEvidence,
+) -> DuplicateInvocationDecision:
+    """
+    Evaluate invocation duplication before handler execution.
+
+    Rules:
+    - no match -> ALLOW
+    - active matching execution -> REJECT_DUPLICATE
+    - terminal matching execution -> REPLAY_EXISTING
+    """
+
+    if not isinstance(request, ExecutionRequest):
+        raise IdempotencyDuplicateControlError(
+            "request must be ExecutionRequest.",
+            code="invalid_execution_request",
+            value=request,
+        )
+
+    if not isinstance(fence, ExecutionFenceIdentity):
+        raise IdempotencyDuplicateControlError(
+            "fence must be ExecutionFenceIdentity.",
+            code="invalid_execution_fence",
+            value=fence,
+        )
+
+    if not isinstance(
+        evidence,
+        DuplicateInvocationEvidence,
+    ):
+        raise IdempotencyDuplicateControlError(
+            "evidence must be DuplicateInvocationEvidence.",
+            code="invalid_duplicate_invocation_evidence",
+            value=evidence,
+        )
+
+    identity = create_execution_idempotency_identity(
+        request=request,
+    )
+
+    if not evidence.matching_execution_exists:
+        return DuplicateInvocationDecision(
+            disposition=DuplicateInvocationDisposition.ALLOW,
+            identity=identity,
+            existing_execution_id=None,
+            existing_fence_id=None,
+            replay_safe=True,
+            concurrent_duplicate=False,
+        )
+
+    if evidence.matching_execution_active:
+        return DuplicateInvocationDecision(
+            disposition=(
+                DuplicateInvocationDisposition.REJECT_DUPLICATE
+            ),
+            identity=identity,
+            existing_execution_id=(
+                evidence.matching_execution_id
+            ),
+            existing_fence_id=(
+                evidence.matching_fence_id
+            ),
+            replay_safe=False,
+            concurrent_duplicate=True,
+        )
+
+    if evidence.matching_execution_terminal:
+        return DuplicateInvocationDecision(
+            disposition=(
+                DuplicateInvocationDisposition.REPLAY_EXISTING
+            ),
+            identity=identity,
+            existing_execution_id=(
+                evidence.matching_execution_id
+            ),
+            existing_fence_id=(
+                evidence.matching_fence_id
+            ),
+            replay_safe=True,
+            concurrent_duplicate=False,
+        )
+
+    return DuplicateInvocationDecision(
+        disposition=(
+            DuplicateInvocationDisposition.REJECT_DUPLICATE
+        ),
+        identity=identity,
+        existing_execution_id=(
+            evidence.matching_execution_id
+        ),
+        existing_fence_id=(
+            evidence.matching_fence_id
+        ),
+        replay_safe=False,
+        concurrent_duplicate=True,
+    )
+
+SYMBOL_IDEMPOTENCY_CONTROL_VALIDATE_REPLAY_SAFETY: PASS
+  (*, decision: 'DuplicateInvocationDecision', request: 'ExecutionRequest') -> 'bool'
+
+SOURCE_IDEMPOTENCY_CONTROL_validate_replay_safety:
+def validate_replay_safety(
+    *,
+    decision: DuplicateInvocationDecision,
+    request: ExecutionRequest,
+) -> bool:
+    """
+    Replay is safe only when a completed matching invocation exists and
+    Phase 6.7 explicitly selected REPLAY_EXISTING.
+    """
+
+    if not isinstance(
+        decision,
+        DuplicateInvocationDecision,
+    ):
+        raise IdempotencyDuplicateControlError(
+            "decision must be DuplicateInvocationDecision.",
+            code="invalid_duplicate_invocation_decision",
+            value=decision,
+        )
+
+    expected = create_execution_idempotency_identity(
+        request=request,
+    )
+
+    if (
+        decision.identity.identity_key
+        != expected.identity_key
+    ):
+        return False
+
+    return (
+        decision.disposition
+        is DuplicateInvocationDisposition.REPLAY_EXISTING
+        and decision.replay_safe
+        and decision.existing_execution_id is not None
+    )
+
+SYMBOL_IDEMPOTENCY_CONTROL_EVALUATE_DUPLICATE_RESULT: PASS
+  (*, normalized: 'NormalizedExecutionResult', execution_evidence: 'ExecutionEvidence', existing: 'DuplicateResultEvidence') -> 'DuplicateResultDecision'
+
+SOURCE_IDEMPOTENCY_CONTROL_evaluate_duplicate_result:
+def evaluate_duplicate_result(
+    *,
+    normalized: NormalizedExecutionResult,
+    execution_evidence: ExecutionEvidence,
+    existing: DuplicateResultEvidence,
+) -> DuplicateResultDecision:
+    """
+    Decide whether a processed result should be accepted, reused,
+    or rejected as a conflicting duplicate.
+
+    Does not persist or mutate the existing result.
+    """
+
+    if not isinstance(
+        normalized,
+        NormalizedExecutionResult,
+    ):
+        raise IdempotencyDuplicateControlError(
+            "normalized must be NormalizedExecutionResult.",
+            code="invalid_normalized_execution_result",
+            value=normalized,
+        )
+
+    if not isinstance(
+        execution_evidence,
+        ExecutionEvidence,
+    ):
+        raise IdempotencyDuplicateControlError(
+            "execution_evidence must be ExecutionEvidence.",
+            code="invalid_execution_evidence",
+            value=execution_evidence,
+        )
+
+    if not isinstance(
+        existing,
+        DuplicateResultEvidence,
+    ):
+        raise IdempotencyDuplicateControlError(
+            "existing must be DuplicateResultEvidence.",
+            code="invalid_duplicate_result_evidence",
+            value=existing,
+        )
+
+    if not execution_evidence.integrity_valid:
+        return DuplicateResultDecision(
+            disposition=(
+                DuplicateResultDisposition.REJECT_CONFLICT
+            ),
+            execution_id=normalized.execution_id,
+            fence_id=normalized.fence_id,
+            existing_result_reference=(
+                existing.existing_result_reference
+            ),
+            replay_safe=False,
+        )
+
+    if not existing.existing_result_present:
+        return DuplicateResultDecision(
+            disposition=DuplicateResultDisposition.ACCEPT,
+            execution_id=normalized.execution_id,
+            fence_id=normalized.fence_id,
+            existing_result_reference=None,
+            replay_safe=True,
+        )
+
+    same_execution = (
+        existing.existing_execution_id
+        == normalized.execution_id
+    )
+
+    same_fence = (
+        existing.existing_fence_id
+        == normalized.fence_id
+    )
+
+    same_outcome = (
+        existing.existing_outcome
+        == normalized.outcome.value
+    )
+
+    if same_execution and same_fence and same_outcome:
+        return DuplicateResultDecision(
+            disposition=(
+                DuplicateResultDisposition.REUSE_EXISTING
+            ),
+            execution_id=normalized.execution_id,
+            fence_id=normalized.fence_id,
+            existing_result_reference=(
+                existing.existing_result_reference
+            ),
+            replay_safe=True,
+        )
+
+    return DuplicateResultDecision(
+        disposition=(
+            DuplicateResultDisposition.REJECT_CONFLICT
+        ),
+        execution_id=normalized.execution_id,
+        fence_id=normalized.fence_id,
+        existing_result_reference=(
+            existing.existing_result_reference
+        ),
+        replay_safe=False,
+    )
+
+SYMBOL_IDEMPOTENCY_CONTROL_CONCURRENT_DUPLICATE_ALLOWED: PASS
+  (decision: 'DuplicateInvocationDecision') -> 'bool'
+
+SOURCE_IDEMPOTENCY_CONTROL_concurrent_duplicate_allowed:
+def concurrent_duplicate_allowed(
+    decision: DuplicateInvocationDecision,
+) -> bool:
+    """
+    Canonical concurrent duplicate gate.
+    """
+
+    if not isinstance(
+        decision,
+        DuplicateInvocationDecision,
+    ):
+        raise IdempotencyDuplicateControlError(
+            "decision must be DuplicateInvocationDecision.",
+            code="invalid_duplicate_invocation_decision",
+            value=decision,
+        )
+
+    return (
+        decision.allowed
+        and not decision.concurrent_duplicate
+    )
+
+
+DUPLICATE_DETECTION_CONTRACTS:
+SYMBOL_DUPLICATE_DETECTION_BUILD_UNIVERSAL_JOB_DUPLICATE_SIGNATURE: PASS
+  (candidate: 'UniversalJobDuplicateCandidate', *, idempotency_fields: 'Optional[Iterable[Any]]' = None) -> 'Optional[UniversalJobDuplicateSignature]'
+
+SOURCE_DUPLICATE_DETECTION_build_universal_job_duplicate_signature:
+def build_universal_job_duplicate_signature(
+    candidate: UniversalJobDuplicateCandidate,
+    *,
+    idempotency_fields: Optional[
+        Iterable[Any]
+    ] = None,
+) -> Optional[
+    UniversalJobDuplicateSignature
+]:
+    """
+    Build a dedicated logical-duplicate signature from registered
+    idempotency_fields.
+
+    The signature is intentionally separate from Universal Job identity,
+    contract, and content fingerprints.
+    """
+
+    if not isinstance(
+        candidate,
+        UniversalJobDuplicateCandidate,
+    ):
+        raise UniversalJobDuplicateDetectionError(
+            (
+                "candidate must be "
+                "UniversalJobDuplicateCandidate."
+            ),
+            code="invalid_duplicate_candidate",
+        )
+
+    fields = (
+        _normalize_idempotency_fields(
+            idempotency_fields
+        )
+    )
+
+    if not fields:
+        return None
+
+    values = []
+
+    for field_name in fields:
+
+        found, value = _resolve_field(
+            candidate,
+            field_name,
+        )
+
+        if not found:
+            return None
+
+        values.append(
+            _freeze_json_value(
+                value
+            )
+        )
+
+    material = {
+        "schema_version": (
+            UNIVERSAL_JOB_DUPLICATE_DETECTION_SCHEMA_VERSION
+        ),
+        "workspace_id":
+            candidate.workspace_id,
+        "job_type":
+            candidate.job_type,
+        "fields":
+            list(
+                fields
+            ),
+        "values":
+            values,
+    }
+
+    compact = json.dumps(
+        material,
+        sort_keys=True,
+        separators=(
+            ",",
+            ":",
+        ),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+
+    signature = (
+        "sha256:"
+        + hashlib.sha256(
+            compact.encode(
+                "utf-8"
+            )
+        ).hexdigest()
+    )
+
+    return UniversalJobDuplicateSignature(
+        workspace_id=(
+            candidate.workspace_id
+        ),
+        job_type=(
+            candidate.job_type
+        ),
+        fields=fields,
+        values=tuple(
+            values
+        ),
+        signature=signature,
+    )
+
+SYMBOL_DUPLICATE_DETECTION_DETECT_UNIVERSAL_JOB_DUPLICATE: PASS
+  (candidate_a: 'UniversalJobDuplicateCandidate', candidate_b: 'UniversalJobDuplicateCandidate', *, idempotency_fields: 'Optional[Iterable[Any]]' = None) -> 'UniversalJobDuplicateDetectionResult'
+
+SOURCE_DUPLICATE_DETECTION_detect_universal_job_duplicate:
+def detect_universal_job_duplicate(
+    candidate_a: UniversalJobDuplicateCandidate,
+    candidate_b: UniversalJobDuplicateCandidate,
+    *,
+    idempotency_fields: Optional[
+        Iterable[Any]
+    ] = None,
+) -> UniversalJobDuplicateDetectionResult:
+    """
+    Compare two logical Universal Job candidates.
+
+    This function only reports duplicate-detection facts.
+    It never performs persistence, queue access, job lookup,
+    suppression, reuse, rejection, cancellation, or mutation.
+    """
+
+    if not isinstance(
+        candidate_a,
+        UniversalJobDuplicateCandidate,
+    ):
+        raise UniversalJobDuplicateDetectionError(
+            (
+                "candidate_a must be "
+                "UniversalJobDuplicateCandidate."
+            ),
+            code="invalid_duplicate_candidate",
+        )
+
+    if not isinstance(
+        candidate_b,
+        UniversalJobDuplicateCandidate,
+    ):
+        raise UniversalJobDuplicateDetectionError(
+            (
+                "candidate_b must be "
+                "UniversalJobDuplicateCandidate."
+            ),
+            code="invalid_duplicate_candidate",
+        )
+
+    # Duplicate identity is never global.
+    if (
+        candidate_a.workspace_id
+        != candidate_b.workspace_id
+        or
+        candidate_a.job_type
+        != candidate_b.job_type
+    ):
+        return UniversalJobDuplicateDetectionResult(
+            status=(
+                UniversalJobDuplicateDetectionStatus.NOT_DUPLICATE
+            ),
+            method=(
+                UniversalJobDuplicateDetectionMethod.SCOPE_MISMATCH
+            ),
+            comparable=True,
+            is_duplicate=False,
+            reason=(
+                "workspace_id and job_type "
+                "duplicate scope does not match."
+            ),
+        )
+
+    key_a = (
+        candidate_a.idempotency_key
+    )
+
+    key_b = (
+        candidate_b.idempotency_key
+    )
+
+    # Explicit caller identity always wins over derived fields.
+    if (
+        key_a is not None
+        or key_b is not None
+    ):
+
+        if (
+            key_a is not None
+            and key_b is not None
+            and key_a == key_b
+        ):
+            return UniversalJobDuplicateDetectionResult(
+                status=(
+                    UniversalJobDuplicateDetectionStatus.DUPLICATE
+                ),
+                method=(
+                    UniversalJobDuplicateDetectionMethod
+                    .EXPLICIT_IDEMPOTENCY_KEY
+                ),
+                comparable=True,
+                is_duplicate=True,
+                reason=(
+                    "same duplicate scope and same "
+                    "explicit idempotency_key."
+                ),
+            )
+
+        return UniversalJobDuplicateDetectionResult(
+            status=(
+                UniversalJobDuplicateDetectionStatus.NOT_DUPLICATE
+            ),
+            method=(
+                UniversalJobDuplicateDetectionMethod
+                .EXPLICIT_IDEMPOTENCY_KEY
+            ),
+            comparable=True,
+            is_duplicate=False,
+            reason=(
+                "same duplicate scope but explicit "
+                "idempotency keys do not match."
+            ),
+        )
+
+    fields = (
+        _normalize_idempotency_fields(
+            idempotency_fields
+        )
+    )
+
+    if not fields:
+        return UniversalJobDuplicateDetectionResult(
+            status=(
+                UniversalJobDuplicateDetectionStatus.NOT_DETECTABLE
+            ),
+            method=(
+                UniversalJobDuplicateDetectionMethod
+                .NO_COMPARISON_SIGNAL
+            ),
+            comparable=False,
+            is_duplicate=False,
+            reason=(
+                "neither candidate has an explicit "
+                "idempotency_key and no idempotency_fields "
+                "were supplied."
+            ),
+        )
+
+    signature_a = (
+        build_universal_job_duplicate_signature(
+            candidate_a,
+            idempotency_fields=fields,
+        )
+    )
+
+    signature_b = (
+        build_universal_job_duplicate_signature(
+            candidate_b,
+            idempotency_fields=fields,
+        )
+    )
+
+    if (
+        signature_a is None
+        or signature_b is None
+    ):
+        return UniversalJobDuplicateDetectionResult(
+            status=(
+                UniversalJobDuplicateDetectionStatus.NOT_DETECTABLE
+            ),
+            method=(
+                UniversalJobDuplicateDetectionMethod
+                .IDEMPOTENCY_FIELDS
+            ),
+            comparable=False,
+            is_duplicate=False,
+            reason=(
+                "one or more registered idempotency_fields "
+                "could not be resolved for both candidates."
+            ),
+            signature_a=(
+                signature_a.signature
+                if signature_a is not None
+                else None
+            ),
+            signature_b=(
+                signature_b.signature
+                if signature_b is not None
+                else None
+            ),
+        )
+
+    duplicate = (
+        signature_a.signature
+        == signature_b.signature
+    )
+
+    return UniversalJobDuplicateDetectionResult(
+        status=(
+            UniversalJobDuplicateDetectionStatus.DUPLICATE
+            if duplicate
+            else UniversalJobDuplicateDetectionStatus.NOT_DUPLICATE
+        ),
+        method=(
+            UniversalJobDuplicateDetectionMethod.IDEMPOTENCY_FIELDS
+        ),
+        comparable=True,
+        is_duplicate=duplicate,
+        reason=(
+            (
+                "derived idempotency-field signatures match."
+            )
+            if duplicate
+            else (
+                "derived idempotency-field signatures differ."
+            )
+        ),
+        signature_a=(
+            signature_a.signature
+        ),
+        signature_b=(
+            signature_b.signature
+        ),
+    )
+
+
+DUPLICATE_HANDLING_CONTRACTS:
+SYMBOL_DUPLICATE_HANDLING_DECIDE_UNIVERSAL_JOB_DUPLICATE_HANDLING: PASS
+  (detection: 'UniversalJobDuplicateDetectionResult', *, existing_job_id: 'Any' = None) -> 'UniversalJobDuplicateHandlingDecision'
+
+SOURCE_DUPLICATE_HANDLING_decide_universal_job_duplicate_handling:
+def decide_universal_job_duplicate_handling(
+    detection: UniversalJobDuplicateDetectionResult,
+    *,
+    existing_job_id: Any = None,
+) -> UniversalJobDuplicateHandlingDecision:
+    """
+    Convert a frozen Phase 2.1.11 duplicate-detection fact into
+    a pure Phase 2.1.12 handling decision.
+
+    This function does not look up, create, persist, enqueue,
+    suppress, reject, merge, cancel, delete, or mutate jobs.
+    """
+
+    if not isinstance(
+        detection,
+        UniversalJobDuplicateDetectionResult,
+    ):
+        raise UniversalJobDuplicateHandlingError(
+            (
+                "detection must be "
+                "UniversalJobDuplicateDetectionResult."
+            ),
+            code="invalid_duplicate_detection_result",
+        )
+
+    canonical_existing_job_id = (
+        _normalize_existing_job_id(
+            existing_job_id
+        )
+    )
+
+    if (
+        detection.status
+        is UniversalJobDuplicateDetectionStatus.DUPLICATE
+    ):
+
+        if not detection.comparable:
+            raise UniversalJobDuplicateHandlingError(
+                (
+                    "A DUPLICATE detection result "
+                    "must be comparable."
+                ),
+                code="inconsistent_duplicate_detection_result",
+            )
+
+        if not detection.is_duplicate:
+            raise UniversalJobDuplicateHandlingError(
+                (
+                    "A DUPLICATE detection result "
+                    "must have is_duplicate=True."
+                ),
+                code="inconsistent_duplicate_detection_result",
+            )
+
+        if canonical_existing_job_id is None:
+            raise UniversalJobDuplicateHandlingError(
+                (
+                    "existing_job_id is required "
+                    "when a logical duplicate is detected."
+                ),
+                code="missing_existing_job_id",
+            )
+
+        return UniversalJobDuplicateHandlingDecision(
+            action=(
+                UniversalJobDuplicateHandlingAction.REUSE_EXISTING
+            ),
+            detection_status=(
+                detection.status
+            ),
+            detection_method=(
+                detection.method
+            ),
+            existing_job_id=(
+                canonical_existing_job_id
+            ),
+            create_new=False,
+            reuse_existing=True,
+            reason=(
+                "A logical duplicate was detected; "
+                "reuse the existing canonical job."
+            ),
+        )
+
+    if (
+        detection.status
+        is UniversalJobDuplicateDetectionStatus.NOT_DUPLICATE
+    ):
+
+        if detection.is_duplicate:
+            raise UniversalJobDuplicateHandlingError(
+                (
+                    "A NOT_DUPLICATE detection result "
+                    "must have is_duplicate=False."
+                ),
+                code="inconsistent_duplicate_detection_result",
+            )
+
+        return UniversalJobDuplicateHandlingDecision(
+            action=(
+                UniversalJobDuplicateHandlingAction.ALLOW_NEW
+            ),
+            detection_status=(
+                detection.status
+            ),
+            detection_method=(
+                detection.method
+            ),
+            existing_job_id=None,
+            create_new=True,
+            reuse_existing=False,
+            reason=(
+                "The candidate is not a logical duplicate; "
+                "normal job creation may proceed."
+            ),
+        )
+
+    if (
+        detection.status
+        is UniversalJobDuplicateDetectionStatus.NOT_DETECTABLE
+    ):
+
+        if detection.comparable:
+            raise UniversalJobDuplicateHandlingError(
+                (
+                    "A NOT_DETECTABLE detection result "
+                    "must have comparable=False."
+                ),
+                code="inconsistent_duplicate_detection_result",
+            )
+
+        if detection.is_duplicate:
+            raise UniversalJobDuplicateHandlingError(
+                (
+                    "A NOT_DETECTABLE detection result "
+                    "must have is_duplicate=False."
+                ),
+                code="inconsistent_duplicate_detection_result",
+            )
+
+        return UniversalJobDuplicateHandlingDecision(
+            action=(
+                UniversalJobDuplicateHandlingAction.ALLOW_NEW
+            ),
+            detection_status=(
+                detection.status
+            ),
+            detection_method=(
+                detection.method
+            ),
+            existing_job_id=None,
+            create_new=True,
+            reuse_existing=False,
+            reason=(
+                "Duplicate status is not detectable from the "
+                "available signals; normal job creation may proceed."
+            ),
+        )
+
+    raise UniversalJobDuplicateHandlingError(
+        (
+            "Unsupported duplicate detection status: "
+            + str(
+                detection.status
+            )
+        ),
+        code="unsupported_duplicate_detection_status",
+    )
+
+
+JOB_STORE_CONTRACTS:
+SYMBOL_JOB_STORE_GET_JOB: PASS
+  (job_id: 'str') -> 'Optional[OrchestrationJob]'
+
+SOURCE_JOB_STORE_get_job:
+def get_job(job_id: str) -> Optional[OrchestrationJob]:
+    return load_jobs().get(job_id)
+
+SYMBOL_JOB_STORE_UPDATE_JOB_STATUS: PASS
+  (job_id: 'str', new_status: 'str', metadata: 'Optional[Dict[str, Any]]' = None, error_message: 'Optional[str]' = None) -> 'OrchestrationJob'
+
+SOURCE_JOB_STORE_update_job_status:
+def update_job_status(
+    job_id: str,
+    new_status: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    error_message: Optional[str] = None,
+) -> OrchestrationJob:
+    if new_status not in VALID_JOB_STATUSES:
+        raise ValueError(f"Invalid job status: {new_status}")
+
+    jobs = load_jobs()
+    if job_id not in jobs:
+        raise KeyError(f"Job not found: {job_id}")
+
+    job = jobs[job_id]
+    old_status = job.status
+    job.status = new_status
+    job.updated_at = utc_now()
+
+    normalized_metadata = (
+        dict(metadata)
+        if isinstance(
+            metadata,
+            dict,
+        )
+        else {}
+    )
+
+    if normalized_metadata:
+
+        existing_metadata = (
+            job.metadata
+            if isinstance(
+                job.metadata,
+                dict,
+            )
+            else {}
+        )
+
+        job.metadata = {
+            **existing_metadata,
+            **normalized_metadata,
+        }
+
+    if error_message:
+        job.error_message = error_message
+
+        if new_status == JOB_STATUS_FAILED:
+            job.progress_percent = min(
+                job.progress_percent,
+                99.0,
+            )
+
+    jobs[job_id] = job
+
+    save_jobs(
+        jobs
+    )
+
+    append_job_event(
+        job_id,
+        old_status,
+        new_status,
+        normalized_metadata,
+    )
+
+    return job
+
+
+QUEUE_CONTRACTS:
+SYMBOL_QUEUE_DEQUEUE_JOB: PASS
+  (worker_id: 'str | None' = None, *, worker_registration: 'Mapping[str, Any] | None' = None, lease_seconds: 'int' = 1800) -> 'Optional[OrchestrationJob]'
+
+SOURCE_QUEUE_dequeue_job:
+def dequeue_job(
+    worker_id: str | None = None,
+    *,
+    worker_registration: Mapping[str, Any] | None = None,
+    lease_seconds: int = 1800,
+) -> Optional[OrchestrationJob]:
+    """Atomically claim and return the highest-priority queued job.
+
+    The returned job has ALREADY been transitioned to JOB_STATUS_RUNNING
+    (with claim metadata) under a cross-process lock, so no other worker
+    can receive the same job. Returns None when nothing is queued.
+
+    Workers may still call mark_job_running() afterwards; with the
+    corrected service.py that call is idempotent.
+    """
+    with _dequeue_lock():
+        recover_interrupted_runtime_jobs()
+        from backend.server.runtime.runtime_feature_flag_gateway import (
+            runtime_queue_claims_enabled,
+        )
+        if not runtime_queue_claims_enabled(worker_id=worker_id):
+            return None
+
+        for candidate in _queued_jobs():
+            metadata: Dict[str, object] = {
+                "claimed_by_dequeue": True,
+            }
+
+            if worker_id:
+                metadata["worker_id"] = worker_id
+
+            if worker_registration is not None:
+                lease_fields = (
+                    "lease_owner",
+                    "lease_id",
+                    "lease_started_at",
+                    "lease_expires_at",
+                )
+
+                existing_lease = {
+                    field:
+                        candidate.metadata.get(field)
+                    for field in lease_fields
+                    if (
+                        isinstance(
+                            candidate.metadata,
+                            Mapping,
+                        )
+                        and candidate.metadata.get(field)
+                    )
+                }
+
+                if existing_lease:
+                    raise RuntimeError(
+                        "Queued job already contains lease "
+                        "ownership evidence."
+                    )
+
+                lease_metadata = (
+                    prepare_universal_runtime_job_lease(
+                        job_id=candidate.job_id,
+                        registration=worker_registration,
+                        lease_seconds=lease_seconds,
+                    )
+                )
+
+                if (
+                    worker_id
+                    and lease_metadata.get(
+                        "assigned_worker_id"
+                    )
+                    != worker_id
+                ):
+                    raise RuntimeError(
+                        "Assigned worker does not match "
+                        "the claiming worker."
+                    )
+
+                metadata.update(
+                    dict(lease_metadata)
+                )
+
+            try:
+                claimed = update_job_status(
+                    candidate.job_id,
+                    JOB_STATUS_RUNNING,
+                    metadata=metadata,
+                )
+            except Exception:
+                # Job vanished or store hiccuped between read and write ù
+                # skip it and try the next candidate rather than failing
+                # the whole dequeue.
+                continue
+            return claimed
+        return None
+
+SYMBOL_QUEUE_PREPARE_UNIVERSAL_RUNTIME_JOB_LEASE: PASS
+  (*, job_id: 'str', registration: 'Mapping[str, Any]', lease_seconds: 'int' = 1800) -> 'Mapping[str, Any]'
+
+SOURCE_QUEUE_prepare_universal_runtime_job_lease:
+def prepare_universal_runtime_job_lease(
+    *,
+    job_id: str,
+    registration: Mapping[str, Any],
+    lease_seconds: int = 1800,
+) -> Mapping[str, Any]:
+    from datetime import timedelta
+    from uuid import uuid4
+
+    canonical_job_id = str(job_id or "").strip()
+
+    if not canonical_job_id:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "job_id must not be empty."
+        )
+
+    if (
+        isinstance(lease_seconds, bool)
+        or not isinstance(lease_seconds, int)
+        or lease_seconds < 1
+    ):
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "lease_seconds must be a positive integer."
+        )
+
+    worker = _worker_registration_from_mapping(
+        registration
+    )
+
+    pool = create_universal_worker_pool_from_registrations(
+        pool_id=(
+            "universal_runtime_pool_"
+            + worker.worker_type
+        ),
+        worker_type=worker.worker_type,
+        registrations=(worker,),
+    )
+
+    if len(pool.members) != 1:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Eligible worker pool is invalid."
+        )
+
+    assignment = assign_universal_worker(
+        job_id=canonical_job_id,
+        eligible_workers=(worker,),
+    )
+
+    if (
+        assignment.status
+        is not UniversalWorkerAssignmentStatus.ASSIGNED
+        or assignment.worker is None
+    ):
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "No eligible worker was assigned."
+        )
+
+    now = datetime.now(timezone.utc)
+
+    started = (
+        now.isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    expires = (
+        (
+            now
+            + timedelta(seconds=lease_seconds)
+        )
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
+
+    lease = acquire_universal_worker_lease(
+        assignment=assignment,
+        lease_id="lease_" + uuid4().hex,
+        lease_started_at=started,
+        lease_expires_at=expires,
+        existing_lease=None,
+    )
+
+    if lease.job_id != canonical_job_id:
+        raise UniversalRuntimeJobLeaseGatewayError(
+            "Lease changed canonical job identity."
+        )
+
+    return {
+        "job_id":
+            canonical_job_id,
+
+        "worker_assignment_status":
+            str(
+                getattr(
+                    assignment.status,
+                    "value",
+                    assignment.status,
+                )
+            ),
+
+        "worker_assignment_candidate_count":
+            assignment.candidate_count,
+
+        "assigned_worker_id":
+            assignment.worker.worker_id,
+
+        "assigned_worker_instance_id":
+            assignment.worker.worker_instance_id,
+
+        "worker_pool_id":
+            pool.pool_id,
+
+        "lease_owner":
+            lease.lease_owner,
+
+        "lease_id":
+            lease.lease_id,
+
+        "lease_started_at":
+            lease.lease_started_at,
+
+        "lease_expires_at":
+            lease.lease_expires_at,
+
+        "lease_active":
+            True,
+
+        "lease_released":
+            False,
+
+        "lease_gateway_version":
+            UNIVERSAL_RUNTIME_JOB_LEASE_GATEWAY_VERSION,
+    }
+
+
+WORKER_CONTRACTS:
+SYMBOL_WORKER_RUN_ONE_UNIVERSAL_RUNTIME_JOB_V1: PASS
+  (*, worker_id: 'str' = 'universal_runtime_worker_v1', worker_capabilities: 'Iterable[Any]' = ('universal_runtime',), dispatcher: 'Callable[[Mapping[str, Any]], dict[str, Any]]' = <function dispatch_registered_runtime_handler at 0x0000027D96F47600>) -> 'dict[str, Any]'
+
+SOURCE_WORKER_run_one_universal_runtime_job_v1:
+def run_one_universal_runtime_job_v1(
+    *,
+    worker_id: str = "universal_runtime_worker_v1",
+    worker_capabilities: Iterable[Any] = (
+        "universal_runtime",
+    ),
+    dispatcher: Callable[
+        [Mapping[str, Any]],
+        dict[str, Any],
+    ] = dispatch_registered_runtime_handler,
+) -> dict[str, Any]:
+    """
+    Claim and execute at most one canonical orchestration job.
+
+    Returns IDLE when no queued work exists.
+
+    The dequeue operation itself owns QUEUED -> RUNNING.
+    """
+
+    canonical_worker_id = str(
+        worker_id
+        or ""
+    ).strip()
+
+    if not canonical_worker_id:
+        raise UniversalRuntimeWorkerContractError(
+            "worker_id must not be empty."
+        )
+
+    if not callable(
+        dispatcher
+    ):
+        raise UniversalRuntimeWorkerContractError(
+            "dispatcher must be callable."
+        )
+
+    lifecycle_admission = admit_universal_runtime_worker(
+        worker_id=canonical_worker_id,
+        runtime_version=UNIVERSAL_RUNTIME_WORKER_VERSION,
+        capabilities=worker_capabilities,
+        capacity_limit=1,
+        active_work_count=0,
+        heartbeat_sequence=1,
+    )
+
+    if not lifecycle_admission.get("admitted"):
+        raise UniversalRuntimeWorkerContractError(
+            "Worker lifecycle admission failed."
+        )
+
+    claimed_job = dequeue_job(
+        worker_id=canonical_worker_id,
+        worker_registration=lifecycle_admission[
+            "registration"
+        ],
+        lease_seconds=1800,
+    )
+
+    if claimed_job is None:
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "IDLE",
+
+            "job_claimed":
+                False,
+
+            "job_id":
+                None,
+
+            "dispatch_performed":
+                False,
+
+            "terminal_status":
+                None,
+        }
+
+    job_id = str(
+        claimed_job.job_id
+        or ""
+    ).strip()
+
+    if not job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a claimed job without job_id."
+        )
+
+    if claimed_job.status != JOB_STATUS_RUNNING:
+        raise UniversalRuntimeWorkerContractError(
+            "dequeue_job returned a job that is not RUNNING."
+        )
+
+    runtime_job = (
+        orchestration_job_to_runtime_mapping_v1(
+            claimed_job
+        )
+    )
+
+    if runtime_job[
+        "job_id"
+    ] != job_id:
+        raise UniversalRuntimeWorkerContractError(
+            "Runtime mapping changed canonical job identity."
+        )
+
+    try:
+        registration = get_runtime_registration(
+            claimed_job.job_type
+        )
+
+        if not isinstance(registration, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration did not return a mapping."
+            )
+
+        try:
+            registration_admission = (
+                require_runtime_registration_admission(
+                    registration=registration,
+                    runtime_job=runtime_job,
+                    worker_id=canonical_worker_id,
+                )
+            )
+        except RuntimeRegistrationAdmissionError as exc:
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime registration admission failed: "
+                + str(exc)
+            ) from exc
+
+        if not registration_admission.admitted:
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime registration admission was not granted."
+            )
+
+        registration_metadata = registration.get("metadata", {})
+
+        if not isinstance(registration_metadata, Mapping):
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime Registration metadata must be a mapping."
+            )
+
+        required_worker_capabilities = registration_metadata.get(
+            "required_worker_capabilities",
+            (),
+        )
+
+        if required_worker_capabilities is None:
+            required_worker_capabilities = ()
+
+        if isinstance(required_worker_capabilities, str):
+            raise UniversalRuntimeWorkerContractError(
+                "required_worker_capabilities must be a collection, "
+                "not a string."
+            )
+
+        worker_capability_snapshot = UniversalWorkerCapabilitySnapshot(
+            worker_id=canonical_worker_id,
+            worker_instance_id=canonical_worker_id,
+            worker_type="universal_runtime_worker",
+            capabilities=tuple(worker_capabilities),
+        )
+
+        capability_match = match_universal_worker_capabilities(
+            snapshot=worker_capability_snapshot,
+            required_capabilities=required_worker_capabilities,
+        )
+
+        if not capability_match.compatible:
+            raise UniversalRuntimeWorkerContractError(
+                "Worker lacks required runtime capabilities: "
+                + ", ".join(capability_match.missing_capabilities)
+            )
+
+        dispatch_result = dispatcher(
+            runtime_job
+        )
+
+        if dispatch_result is None:
+            dispatch_result = {}
+
+        if not isinstance(
+            dispatch_result,
+            Mapping,
+        ):
+            dispatch_result = {
+                "value":
+                    dispatch_result,
+            }
+
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
+        completed_job = mark_job_completed(
+            job_id,
+            metadata={
+                **dict(lease_release_metadata),
+                "worker_id":
+                    canonical_worker_id,
+
+                "runtime_worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "runtime_dispatch_completed":
+                    True,
+
+                "worker_capability_admitted":
+                    True,
+
+                "worker_capabilities":
+                    list(worker_capability_snapshot.capabilities),
+
+                "required_worker_capabilities":
+                    list(capability_match.required_capabilities),
+
+                "runtime_dispatch_result":
+                    deepcopy(
+                        dict(
+                            dispatch_result
+                        )
+                    ),
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            },
+        )
+
+        if (
+            completed_job.job_id
+            != job_id
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion changed canonical job identity."
+            )
+
+        if (
+            completed_job.status
+            != JOB_STATUS_COMPLETED
+        ):
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Completion did not persist COMPLETED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "COMPLETED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "worker_capability_admitted":
+                True,
+
+            "worker_capabilities":
+                list(worker_capability_snapshot.capabilities),
+
+            "required_worker_capabilities":
+                list(capability_match.required_capabilities),
+
+            "dispatch_result":
+                deepcopy(
+                    dict(
+                        dispatch_result
+                    )
+                ),
+
+            "terminal_status":
+                completed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+    except UniversalRuntimeWorkerFinalizationError:
+        raise
+
+    except Exception as exc:
+
+        error_message = (
+            f"{type(exc).__name__}: {exc}"
+        )
+
+        lease_release_metadata = (
+            release_universal_runtime_job_lease(
+                job_id=job_id,
+                metadata=claimed_job.metadata,
+            )
+        )
+
+        claimed_metadata = (
+            claimed_job.metadata
+            if isinstance(
+                claimed_job.metadata,
+                Mapping,
+            )
+            else {}
+        )
+
+        attempt_number = (
+            _runtime_failure_attempt_number_v1(
+                claimed_metadata
+            )
+        )
+
+        retry_policy = (
+            _runtime_retry_policy_v1(
+                job_type=
+                    claimed_job.job_type
+            )
+        )
+
+        maximum_attempts = int(
+            retry_policy[
+                "maximum_attempts"
+            ]
+        )
+
+        contract_error = (
+            _runtime_failure_is_contract_error_v1(
+                exc
+            )
+        )
+
+        if contract_error:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_contract_error"
+                ]
+            )
+        else:
+            retry_type_allowed = bool(
+                retry_policy[
+                    "retry_on_handler_error"
+                ]
+            )
+
+        retry_ceiling_allows = (
+            attempt_number
+            < maximum_attempts
+        )
+
+        retry_allowed = (
+            retry_type_allowed
+            and retry_ceiling_allows
+        )
+
+        # ====================================================
+        # RETRY PATH
+        # SAME canonical job_id -> QUEUED
+        # ====================================================
+
+        if retry_allowed:
+
+            try:
+                requeued_job = (
+                    _requeue_same_runtime_job_v1(
+                        job_id=
+                            job_id,
+
+                        worker_id=
+                            canonical_worker_id,
+
+                        error=
+                            exc,
+
+                        attempt_number=
+                            attempt_number,
+
+                        maximum_attempts=
+                            maximum_attempts,
+
+                        finalization_metadata=
+                            lease_release_metadata,
+                    )
+                )
+
+            except Exception as finalization_exc:
+                raise UniversalRuntimeWorkerFinalizationError(
+                    "Runtime dispatch failed and same-job retry "
+                    "could not be persisted."
+                ) from finalization_exc
+
+            return {
+                "schema_version":
+                    UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+                "worker_version":
+                    UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                "worker_id":
+                    canonical_worker_id,
+
+                "worker_status":
+                    "RETRY_QUEUED",
+
+                "job_claimed":
+                    True,
+
+                "job_id":
+                    job_id,
+
+                "job_type":
+                    claimed_job.job_type,
+
+                "claimed_status":
+                    JOB_STATUS_RUNNING,
+
+                "dispatch_performed":
+                    True,
+
+                "dispatch_succeeded":
+                    False,
+
+                "dispatch_error_type":
+                    type(
+                        exc
+                    ).__name__,
+
+                "dispatch_error":
+                    str(
+                        exc
+                    ),
+
+                "contract_error":
+                    contract_error,
+
+                "retry_type_allowed":
+                    retry_type_allowed,
+
+                "retry_ceiling_allows":
+                    retry_ceiling_allows,
+
+                "retry_allowed":
+                    True,
+
+                "retry_scheduled":
+                    True,
+
+                "attempt_number":
+                    attempt_number,
+
+                "maximum_attempts":
+                    maximum_attempts,
+
+                "queue_status":
+                    requeued_job.status,
+
+                "terminal_status":
+                    None,
+
+                "canonical_job_id_preserved":
+                    True,
+
+                "retry_created_new_job":
+                    False,
+
+                "old_universal_knowledge_jsonl_used":
+                    False,
+            }
+
+        # ====================================================
+        # TERMINAL FAILURE PATH
+        # SAME canonical job_id -> FAILED
+        # ====================================================
+
+        try:
+            failed_job = mark_job_failed(
+                job_id,
+                error_message,
+                metadata={
+                    **dict(lease_release_metadata),
+                    "worker_id":
+                        canonical_worker_id,
+
+                    "runtime_worker_version":
+                        UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+                    "runtime_dispatch_completed":
+                        False,
+
+                    "runtime_dispatch_failed":
+                        True,
+
+                    "runtime_retry_scheduled":
+                        False,
+
+                    "runtime_failure_attempt_count":
+                        attempt_number,
+
+                    "runtime_maximum_attempts":
+                        maximum_attempts,
+
+                    "runtime_retry_type_allowed":
+                        retry_type_allowed,
+
+                    "runtime_retry_exhausted":
+                        (
+                            retry_type_allowed
+                            and not retry_ceiling_allows
+                        ),
+
+                    "runtime_contract_error":
+                        contract_error,
+
+                    "runtime_dispatch_error_type":
+                        type(
+                            exc
+                        ).__name__,
+
+                    "canonical_job_id_preserved":
+                        True,
+
+                    "retry_created_new_job":
+                        False,
+
+                    "old_universal_knowledge_jsonl_used":
+                        False,
+                },
+            )
+
+        except Exception as finalization_exc:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Runtime dispatch failed and FAILED status "
+                "could not be persisted."
+            ) from finalization_exc
+
+        if failed_job.job_id != job_id:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization changed canonical job identity."
+            )
+
+        if failed_job.status != JOB_STATUS_FAILED:
+            raise UniversalRuntimeWorkerFinalizationError(
+                "Failure finalization did not persist FAILED status."
+            )
+
+        return {
+            "schema_version":
+                UNIVERSAL_RUNTIME_WORKER_RESULT_SCHEMA_VERSION,
+
+            "worker_version":
+                UNIVERSAL_RUNTIME_WORKER_VERSION,
+
+            "worker_id":
+                canonical_worker_id,
+
+            "worker_status":
+                "FAILED",
+
+            "job_claimed":
+                True,
+
+            "job_id":
+                job_id,
+
+            "job_type":
+                claimed_job.job_type,
+
+            "claimed_status":
+                JOB_STATUS_RUNNING,
+
+            "dispatch_performed":
+                True,
+
+            "dispatch_succeeded":
+                False,
+
+            "dispatch_error_type":
+                type(
+                    exc
+                ).__name__,
+
+            "dispatch_error":
+                str(
+                    exc
+                ),
+
+            "contract_error":
+                contract_error,
+
+            "retry_type_allowed":
+                retry_type_allowed,
+
+            "retry_ceiling_allows":
+                retry_ceiling_allows,
+
+            "retry_allowed":
+                False,
+
+            "retry_scheduled":
+                False,
+
+            "attempt_number":
+                attempt_number,
+
+            "maximum_attempts":
+                maximum_attempts,
+
+            "retry_exhausted":
+                (
+                    retry_type_allowed
+                    and not retry_ceiling_allows
+                ),
+
+            "terminal_status":
+                failed_job.status,
+
+            "canonical_job_id_preserved":
+                True,
+
+            "retry_created_new_job":
+                False,
+
+            "old_universal_knowledge_jsonl_used":
+                False,
+        }
+
+
+====================================================================================================================
+PART A 3-E - SUPPORTING MODELS AND ENUMS
+====================================================================================================================
+
+EXECUTION_SAFETY_SUPPORTING_MODELS:
+DuplicateInvocationDecision: (disposition: 'DuplicateInvocationDisposition', identity: 'ExecutionIdempotencyIdentity', existing_execution_id: 'Optional[str]', existing_fence_id: 'Optional[str]', replay_safe: 'bool', concurrent_duplicate: 'bool') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class DuplicateInvocationDecision:
+    disposition: DuplicateInvocationDisposition
+
+    identity: ExecutionIdempotencyIdentity
+
+    existing_execution_id: Optional[str]
+    existing_fence_id: Optional[str]
+
+    replay_safe: bool
+    concurrent_duplicate: bool
+
+    schema_version: str = field(
+        default=IDEMPOTENCY_DUPLICATE_CONTROL_SCHEMA_VERSION,
+        init=False,
+    )
+
+    @property
+    def allowed(self) -> bool:
+        return (
+            self.disposition
+            is DuplicateInvocationDisposition.ALLOW
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "disposition": self.disposition.value,
+            "identity": self.identity.to_dict(),
+            "existing_execution_id":
+                self.existing_execution_id,
+            "existing_fence_id":
+                self.existing_fence_id,
+            "replay_safe":
+                self.replay_safe,
+            "concurrent_duplicate":
+                self.concurrent_duplicate,
+            "allowed":
+                self.allowed,
+        }
+
+DuplicateInvocationDisposition: (*values)
+class DuplicateInvocationDisposition(str, Enum):
+    ALLOW = "ALLOW"
+    REJECT_DUPLICATE = "REJECT_DUPLICATE"
+    REPLAY_EXISTING = "REPLAY_EXISTING"
+
+ExecutionFenceIdentity: (fence_id: 'str', execution_id: 'str', job_id: 'str', attempt_number: 'int', worker_id: 'Optional[str]', lease_id: 'Optional[str]', lease_owner: 'Optional[str]') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionFenceIdentity:
+    """
+    Immutable identity binding execution to its current ownership facts.
+
+    A fence binds:
+    - execution identity
+    - Universal Job identity
+    - attempt number
+    - worker identity
+    - lease identity
+    - lease owner
+
+    Later Phase-6 components can require the same fence before accepting
+    lifecycle transitions or execution results.
+    """
+
+    fence_id: str
+
+    execution_id: str
+    job_id: str
+    attempt_number: int
+
+    worker_id: Optional[str]
+    lease_id: Optional[str]
+    lease_owner: Optional[str]
+
+    schema_version: str = field(
+        default=EXECUTION_PERMISSION_FENCING_SCHEMA_VERSION,
+        init=False,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "fence_id": self.fence_id,
+            "execution_id": self.execution_id,
+            "job_id": self.job_id,
+            "attempt_number": self.attempt_number,
+            "worker_id": self.worker_id,
+            "lease_id": self.lease_id,
+            "lease_owner": self.lease_owner,
+        }
+
+ExecutionRaceEvidence: (current_execution_active: 'bool', existing_terminal_state: 'bool', duplicate_invocation_active: 'bool', duplicate_invocation_replay: 'bool', same_execution_id: 'bool', same_attempt_number: 'bool') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionRaceEvidence:
+    current_execution_active: bool
+    existing_terminal_state: bool
+    duplicate_invocation_active: bool
+    duplicate_invocation_replay: bool
+
+    same_execution_id: bool
+    same_attempt_number: bool
+
+    schema_version: str = field(
+        default=EXECUTION_SAFETY_CONCURRENCY_SCHEMA_VERSION,
+        init=False,
+    )
+
+ExecutionRaceResolution: (disposition: 'SafetyDisposition', winner: 'RaceWinner', reason_code: 'str') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionRaceResolution:
+    disposition: SafetyDisposition
+    winner: RaceWinner
+
+    reason_code: str
+
+    schema_version: str = field(
+        default=EXECUTION_SAFETY_CONCURRENCY_SCHEMA_VERSION,
+        init=False,
+    )
+
+ExecutionSafetyConcurrencyError: (message: 'str', *, code: 'str', value: 'Any' = None) -> 'None'
+class ExecutionSafetyConcurrencyError(RuntimeError):
+    """Raised when an unsafe or stale execution event is rejected."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        value: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.value = value
+
+ExecutionSafetyDecision: (disposition: 'SafetyDisposition', execution_id: 'str', job_id: 'str', attempt_number: 'int', fence_id: 'str', reason_code: 'str') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionSafetyDecision:
+    disposition: SafetyDisposition
+
+    execution_id: str
+    job_id: str
+    attempt_number: int
+    fence_id: str
+
+    reason_code: str
+
+    schema_version: str = field(
+        default=EXECUTION_SAFETY_CONCURRENCY_SCHEMA_VERSION,
+        init=False,
+    )
+
+LeaseSafetyEvidence: (lease_active: 'bool', current_lease_id: 'Optional[str]', current_lease_owner: 'Optional[str]', expected_lease_id: 'Optional[str]', expected_lease_owner: 'Optional[str]') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class LeaseSafetyEvidence:
+    lease_active: bool
+
+    current_lease_id: Optional[str]
+    current_lease_owner: Optional[str]
+
+    expected_lease_id: Optional[str]
+    expected_lease_owner: Optional[str]
+
+    schema_version: str = field(
+        default=EXECUTION_SAFETY_CONCURRENCY_SCHEMA_VERSION,
+        init=False,
+    )
+
+ResultTimingEvidence: (lifecycle_terminal: 'bool', accepting_results: 'bool', current_execution_id: 'str', result_execution_id: 'str', current_attempt_number: 'int', result_attempt_number: 'int') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ResultTimingEvidence:
+    lifecycle_terminal: bool
+    accepting_results: bool
+
+    current_execution_id: str
+    result_execution_id: str
+
+    current_attempt_number: int
+    result_attempt_number: int
+
+    schema_version: str = field(
+        default=EXECUTION_SAFETY_CONCURRENCY_SCHEMA_VERSION,
+        init=False,
+    )
+
+SafetyDisposition: (*values)
+class SafetyDisposition(str, Enum):
+    ALLOW = "ALLOW"
+    REJECT = "REJECT"
+
+WorkerSafetyEvidence: (worker_active: 'bool', current_worker_id: 'Optional[str]', expected_worker_id: 'Optional[str]', worker_instance_active: 'bool' = True, current_worker_instance_id: 'Optional[str]' = None, expected_worker_instance_id: 'Optional[str]' = None) -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class WorkerSafetyEvidence:
+    worker_active: bool
+
+    current_worker_id: Optional[str]
+    expected_worker_id: Optional[str]
+
+    worker_instance_active: bool = True
+
+    current_worker_instance_id: Optional[str] = None
+    expected_worker_instance_id: Optional[str] = None
+
+    schema_version: str = field(
+        default=EXECUTION_SAFETY_CONCURRENCY_SCHEMA_VERSION,
+        init=False,
+    )
+
+SUPPORTING_MODELS_EXECUTION_SAFETY: PASS
+  ['DuplicateInvocationDecision', 'DuplicateInvocationDisposition', 'ExecutionFenceIdentity', 'ExecutionRaceEvidence', 'ExecutionRaceResolution', 'ExecutionSafetyConcurrencyError', 'ExecutionSafetyDecision', 'LeaseSafetyEvidence', 'ResultTimingEvidence', 'SafetyDisposition', 'WorkerSafetyEvidence']
+
+IDEMPOTENCY_CONTROL_SUPPORTING_MODELS:
+DuplicateInvocationDecision: (disposition: 'DuplicateInvocationDisposition', identity: 'ExecutionIdempotencyIdentity', existing_execution_id: 'Optional[str]', existing_fence_id: 'Optional[str]', replay_safe: 'bool', concurrent_duplicate: 'bool') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class DuplicateInvocationDecision:
+    disposition: DuplicateInvocationDisposition
+
+    identity: ExecutionIdempotencyIdentity
+
+    existing_execution_id: Optional[str]
+    existing_fence_id: Optional[str]
+
+    replay_safe: bool
+    concurrent_duplicate: bool
+
+    schema_version: str = field(
+        default=IDEMPOTENCY_DUPLICATE_CONTROL_SCHEMA_VERSION,
+        init=False,
+    )
+
+    @property
+    def allowed(self) -> bool:
+        return (
+            self.disposition
+            is DuplicateInvocationDisposition.ALLOW
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "disposition": self.disposition.value,
+            "identity": self.identity.to_dict(),
+            "existing_execution_id":
+                self.existing_execution_id,
+            "existing_fence_id":
+                self.existing_fence_id,
+            "replay_safe":
+                self.replay_safe,
+            "concurrent_duplicate":
+                self.concurrent_duplicate,
+            "allowed":
+                self.allowed,
+        }
+
+DuplicateInvocationDisposition: (*values)
+class DuplicateInvocationDisposition(str, Enum):
+    ALLOW = "ALLOW"
+    REJECT_DUPLICATE = "REJECT_DUPLICATE"
+    REPLAY_EXISTING = "REPLAY_EXISTING"
+
+DuplicateInvocationEvidence: (matching_execution_exists: 'bool' = False, matching_execution_active: 'bool' = False, matching_execution_terminal: 'bool' = False, matching_execution_id: 'Optional[str]' = None, matching_fence_id: 'Optional[str]' = None) -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class DuplicateInvocationEvidence:
+    """
+    Caller-supplied duplicate evidence.
+
+    Existing duplicate-detection/persistence authorities may later
+    provide this evidence during Phase 6.15 integration.
+    """
+
+    matching_execution_exists: bool = False
+    matching_execution_active: bool = False
+    matching_execution_terminal: bool = False
+
+    matching_execution_id: Optional[str] = None
+    matching_fence_id: Optional[str] = None
+
+    schema_version: str = field(
+        default=IDEMPOTENCY_DUPLICATE_CONTROL_SCHEMA_VERSION,
+        init=False,
+    )
+
+DuplicateResultDecision: (disposition: 'DuplicateResultDisposition', execution_id: 'str', fence_id: 'str', existing_result_reference: 'Optional[str]', replay_safe: 'bool') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class DuplicateResultDecision:
+    disposition: DuplicateResultDisposition
+
+    execution_id: str
+    fence_id: str
+
+    existing_result_reference: Optional[str]
+    replay_safe: bool
+
+    schema_version: str = field(
+        default=IDEMPOTENCY_DUPLICATE_CONTROL_SCHEMA_VERSION,
+        init=False,
+    )
+
+    @property
+    def accepted(self) -> bool:
+        return (
+            self.disposition
+            in {
+                DuplicateResultDisposition.ACCEPT,
+                DuplicateResultDisposition.REUSE_EXISTING,
+            }
+        )
+
+DuplicateResultDisposition: (*values)
+class DuplicateResultDisposition(str, Enum):
+    ACCEPT = "ACCEPT"
+    REUSE_EXISTING = "REUSE_EXISTING"
+    REJECT_CONFLICT = "REJECT_CONFLICT"
+
+DuplicateResultEvidence: (existing_result_present: 'bool' = False, existing_execution_id: 'Optional[str]' = None, existing_fence_id: 'Optional[str]' = None, existing_result_reference: 'Optional[str]' = None, existing_outcome: 'Optional[str]' = None) -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class DuplicateResultEvidence:
+    """
+    Existing accepted result evidence, when any.
+    """
+
+    existing_result_present: bool = False
+
+    existing_execution_id: Optional[str] = None
+    existing_fence_id: Optional[str] = None
+
+    existing_result_reference: Optional[str] = None
+    existing_outcome: Optional[str] = None
+
+    schema_version: str = field(
+        default=IDEMPOTENCY_DUPLICATE_CONTROL_SCHEMA_VERSION,
+        init=False,
+    )
+
+ExecutionEvidence: (execution_id: 'str', job_id: 'str', attempt_number: 'int', fence_id: 'str', outcome: 'ExecutionOutcome', resolved_job_state: 'ResolvedJobState', result_reference: 'Optional[str]', failure_code: 'Optional[str]', integrity_valid: 'bool', evidence_type: 'str' = 'EXECUTION_RESULT') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionEvidence:
+    """
+    Canonical execution evidence produced after result processing.
+    """
+
+    execution_id: str
+    job_id: str
+    attempt_number: int
+    fence_id: str
+
+    outcome: ExecutionOutcome
+    resolved_job_state: ResolvedJobState
+
+    result_reference: Optional[str]
+    failure_code: Optional[str]
+    integrity_valid: bool
+
+    evidence_type: str = "EXECUTION_RESULT"
+
+    schema_version: str = field(
+        default=EXECUTION_RESULT_PROCESSING_SCHEMA_VERSION,
+        init=False,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "evidence_type": self.evidence_type,
+            "execution_id": self.execution_id,
+            "job_id": self.job_id,
+            "attempt_number": self.attempt_number,
+            "fence_id": self.fence_id,
+            "outcome": self.outcome.value,
+            "resolved_job_state":
+                self.resolved_job_state.value,
+            "result_reference":
+                self.result_reference,
+            "failure_code":
+                self.failure_code,
+            "integrity_valid":
+                self.integrity_valid,
+        }
+
+ExecutionFenceIdentity: (fence_id: 'str', execution_id: 'str', job_id: 'str', attempt_number: 'int', worker_id: 'Optional[str]', lease_id: 'Optional[str]', lease_owner: 'Optional[str]') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionFenceIdentity:
+    """
+    Immutable identity binding execution to its current ownership facts.
+
+    A fence binds:
+    - execution identity
+    - Universal Job identity
+    - attempt number
+    - worker identity
+    - lease identity
+    - lease owner
+
+    Later Phase-6 components can require the same fence before accepting
+    lifecycle transitions or execution results.
+    """
+
+    fence_id: str
+
+    execution_id: str
+    job_id: str
+    attempt_number: int
+
+    worker_id: Optional[str]
+    lease_id: Optional[str]
+    lease_owner: Optional[str]
+
+    schema_version: str = field(
+        default=EXECUTION_PERMISSION_FENCING_SCHEMA_VERSION,
+        init=False,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "fence_id": self.fence_id,
+            "execution_id": self.execution_id,
+            "job_id": self.job_id,
+            "attempt_number": self.attempt_number,
+            "worker_id": self.worker_id,
+            "lease_id": self.lease_id,
+            "lease_owner": self.lease_owner,
+        }
+
+ExecutionIdempotencyIdentity: (identity_key: 'str', job_id: 'str', attempt_number: 'int', execution_id: 'str', source_idempotency_key: 'Optional[str]', handler_key: 'str') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ExecutionIdempotencyIdentity:
+    """
+    Canonical Phase-6 idempotency identity.
+
+    This binds execution semantics without replacing the existing
+    Universal Job idempotency-key model.
+    """
+
+    identity_key: str
+
+    job_id: str
+    attempt_number: int
+    execution_id: str
+
+    source_idempotency_key: Optional[str]
+    handler_key: str
+
+    schema_version: str = field(
+        default=IDEMPOTENCY_DUPLICATE_CONTROL_SCHEMA_VERSION,
+        init=False,
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "identity_key": self.identity_key,
+            "job_id": self.job_id,
+            "attempt_number": self.attempt_number,
+            "execution_id": self.execution_id,
+            "source_idempotency_key":
+                self.source_idempotency_key,
+            "handler_key":
+                self.handler_key,
+        }
+
+IdempotencyDuplicateControlError: (message: 'str', *, code: 'str', value: 'Any' = None) -> 'None'
+class IdempotencyDuplicateControlError(ValueError):
+    """Raised when Phase-6.7 duplicate control is invalid."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str,
+        value: Any = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.value = value
+
+SUPPORTING_MODELS_IDEMPOTENCY_CONTROL: PASS
+  ['DuplicateInvocationDecision', 'DuplicateInvocationDisposition', 'DuplicateInvocationEvidence', 'DuplicateResultDecision', 'DuplicateResultDisposition', 'DuplicateResultEvidence', 'ExecutionEvidence', 'ExecutionFenceIdentity', 'ExecutionIdempotencyIdentity', 'IdempotencyDuplicateControlError']
+
+DUPLICATE_DETECTION_SUPPORTING_MODELS:
+UniversalJobDuplicateCandidate: (workspace_id: 'str', job_type: 'str', idempotency_key: 'Optional[str]', job: 'Mapping[str, Any]', payload: 'Mapping[str, Any]') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalJobDuplicateCandidate:
+    """
+    Pure duplicate-comparison view.
+
+    `job` represents canonical Universal Job fields.
+    `payload` represents creation/runtime payload fields.
+    """
+
+    workspace_id: str
+    job_type: str
+    idempotency_key: Optional[str]
+    job: Mapping[str, Any]
+    payload: Mapping[str, Any]
+
+    @classmethod
+    def from_values(
+        cls,
+        *,
+        workspace_id: Any,
+        job_type: Any,
+        idempotency_key: Any = None,
+        job: Any = None,
+        payload: Any = None,
+    ) -> "UniversalJobDuplicateCandidate":
+
+        return cls(
+            workspace_id=(
+                _clean_required_text(
+                    workspace_id,
+                    field_name="workspace_id",
+                )
+            ),
+            job_type=(
+                _clean_required_text(
+                    job_type,
+                    field_name="job_type",
+                )
+            ),
+            idempotency_key=(
+                _clean_optional_text(
+                    idempotency_key,
+                    field_name="idempotency_key",
+                )
+            ),
+            job=_normalize_mapping(
+                job,
+                field_name="job",
+            ),
+            payload=_normalize_mapping(
+                payload,
+                field_name="payload",
+            ),
+        )
+
+UniversalJobDuplicateDetectionError: (message: 'str', *, code: 'str' = 'invalid_duplicate_detection_input') -> 'None'
+class UniversalJobDuplicateDetectionError(
+    ValueError
+):
+    """Raised for structurally invalid duplicate-comparison input."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "invalid_duplicate_detection_input",
+    ) -> None:
+
+        super().__init__(
+            message
+        )
+
+        self.code = str(
+            code
+        )
+
+UniversalJobDuplicateDetectionMethod: (*values)
+class UniversalJobDuplicateDetectionMethod(
+    str,
+    Enum,
+):
+    SCOPE_MISMATCH = "scope_mismatch"
+    EXPLICIT_IDEMPOTENCY_KEY = (
+        "explicit_idempotency_key"
+    )
+    IDEMPOTENCY_FIELDS = "idempotency_fields"
+    NO_COMPARISON_SIGNAL = "no_comparison_signal"
+
+UniversalJobDuplicateDetectionResult: (status: 'UniversalJobDuplicateDetectionStatus', method: 'UniversalJobDuplicateDetectionMethod', comparable: 'bool', is_duplicate: 'bool', reason: 'str', signature_a: 'Optional[str]' = None, signature_b: 'Optional[str]' = None) -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalJobDuplicateDetectionResult:
+    status: UniversalJobDuplicateDetectionStatus
+    method: UniversalJobDuplicateDetectionMethod
+    comparable: bool
+    is_duplicate: bool
+    reason: str
+    signature_a: Optional[str] = None
+    signature_b: Optional[str] = None
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version": (
+                UNIVERSAL_JOB_DUPLICATE_DETECTION_SCHEMA_VERSION
+            ),
+            "status":
+                self.status.value,
+            "method":
+                self.method.value,
+            "comparable":
+                self.comparable,
+            "is_duplicate":
+                self.is_duplicate,
+            "reason":
+                self.reason,
+            "signature_a":
+                self.signature_a,
+            "signature_b":
+                self.signature_b,
+        }
+
+UniversalJobDuplicateDetectionStatus: (*values)
+class UniversalJobDuplicateDetectionStatus(
+    str,
+    Enum,
+):
+    DUPLICATE = "duplicate"
+    NOT_DUPLICATE = "not_duplicate"
+    NOT_DETECTABLE = "not_detectable"
+
+UniversalJobDuplicateSignature: (workspace_id: 'str', job_type: 'str', fields: 'tuple[str, ...]', values: 'tuple[Any, ...]', signature: 'str') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalJobDuplicateSignature:
+    workspace_id: str
+    job_type: str
+    fields: tuple[str, ...]
+    values: tuple[Any, ...]
+    signature: str
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version": (
+                UNIVERSAL_JOB_DUPLICATE_DETECTION_SCHEMA_VERSION
+            ),
+            "workspace_id":
+                self.workspace_id,
+            "job_type":
+                self.job_type,
+            "fields":
+                list(
+                    self.fields
+                ),
+            "values":
+                list(
+                    self.values
+                ),
+            "signature":
+                self.signature,
+        }
+
+SUPPORTING_MODELS_DUPLICATE_DETECTION: PASS
+  ['UniversalJobDuplicateCandidate', 'UniversalJobDuplicateDetectionError', 'UniversalJobDuplicateDetectionMethod', 'UniversalJobDuplicateDetectionResult', 'UniversalJobDuplicateDetectionStatus', 'UniversalJobDuplicateSignature']
+
+DUPLICATE_HANDLING_SUPPORTING_MODELS:
+UniversalJobDuplicateDetectionMethod: (*values)
+class UniversalJobDuplicateDetectionMethod(
+    str,
+    Enum,
+):
+    SCOPE_MISMATCH = "scope_mismatch"
+    EXPLICIT_IDEMPOTENCY_KEY = (
+        "explicit_idempotency_key"
+    )
+    IDEMPOTENCY_FIELDS = "idempotency_fields"
+    NO_COMPARISON_SIGNAL = "no_comparison_signal"
+
+UniversalJobDuplicateDetectionResult: (status: 'UniversalJobDuplicateDetectionStatus', method: 'UniversalJobDuplicateDetectionMethod', comparable: 'bool', is_duplicate: 'bool', reason: 'str', signature_a: 'Optional[str]' = None, signature_b: 'Optional[str]' = None) -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalJobDuplicateDetectionResult:
+    status: UniversalJobDuplicateDetectionStatus
+    method: UniversalJobDuplicateDetectionMethod
+    comparable: bool
+    is_duplicate: bool
+    reason: str
+    signature_a: Optional[str] = None
+    signature_b: Optional[str] = None
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version": (
+                UNIVERSAL_JOB_DUPLICATE_DETECTION_SCHEMA_VERSION
+            ),
+            "status":
+                self.status.value,
+            "method":
+                self.method.value,
+            "comparable":
+                self.comparable,
+            "is_duplicate":
+                self.is_duplicate,
+            "reason":
+                self.reason,
+            "signature_a":
+                self.signature_a,
+            "signature_b":
+                self.signature_b,
+        }
+
+UniversalJobDuplicateDetectionStatus: (*values)
+class UniversalJobDuplicateDetectionStatus(
+    str,
+    Enum,
+):
+    DUPLICATE = "duplicate"
+    NOT_DUPLICATE = "not_duplicate"
+    NOT_DETECTABLE = "not_detectable"
+
+UniversalJobDuplicateHandlingAction: (*values)
+class UniversalJobDuplicateHandlingAction(
+    str,
+    Enum,
+):
+    ALLOW_NEW = "allow_new"
+    REUSE_EXISTING = "reuse_existing"
+
+UniversalJobDuplicateHandlingDecision: (action: 'UniversalJobDuplicateHandlingAction', detection_status: 'UniversalJobDuplicateDetectionStatus', detection_method: 'UniversalJobDuplicateDetectionMethod', existing_job_id: 'Optional[str]', create_new: 'bool', reuse_existing: 'bool', reason: 'str') -> None
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class UniversalJobDuplicateHandlingDecision:
+    action: UniversalJobDuplicateHandlingAction
+    detection_status: UniversalJobDuplicateDetectionStatus
+    detection_method: UniversalJobDuplicateDetectionMethod
+    existing_job_id: Optional[str]
+    create_new: bool
+    reuse_existing: bool
+    reason: str
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "schema_version": (
+                UNIVERSAL_JOB_DUPLICATE_HANDLING_SCHEMA_VERSION
+            ),
+            "action":
+                self.action.value,
+            "detection_status":
+                self.detection_status.value,
+            "detection_method":
+                self.detection_method.value,
+            "existing_job_id":
+                self.existing_job_id,
+            "create_new":
+                self.create_new,
+            "reuse_existing":
+                self.reuse_existing,
+            "reason":
+                self.reason,
+        }
+
+UniversalJobDuplicateHandlingError: (message: 'str', *, code: 'str' = 'invalid_duplicate_handling_input') -> 'None'
+class UniversalJobDuplicateHandlingError(
+    ValueError
+):
+    """Raised when a duplicate-handling decision cannot be formed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "invalid_duplicate_handling_input",
+    ) -> None:
+
+        super().__init__(
+            message
+        )
+
+        self.code = str(
+            code
+        )
+
+SUPPORTING_MODELS_DUPLICATE_HANDLING: PASS
+  ['UniversalJobDuplicateDetectionMethod', 'UniversalJobDuplicateDetectionResult', 'UniversalJobDuplicateDetectionStatus', 'UniversalJobDuplicateHandlingAction', 'UniversalJobDuplicateHandlingDecision', 'UniversalJobDuplicateHandlingError']
+
+====================================================================================================================
+PART A 3-E - CREATION ENGINE INTEGRATION
+====================================================================================================================
+CREATION_SYMBOL_UNIVERSALJOBCREATIONREQUEST: PASS
+  (workspace_id: 'str', job_type: 'str', payload: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Tuple[str, ...]' = (), batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None, scheduled_at: 'Optional[str]' = None) -> None
+
+CREATION_SOURCE_UniversalJobCreationRequest:
+@dataclass(frozen=True)
+class UniversalJobCreationRequest:
+    workspace_id: str
+    job_type: str
+    payload: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+    user_id: str = "system"
+    product_id: str = "linkcraftor"
+    pipeline: str = ""
+    stage: str = ""
+    payload_reference: Optional[str] = None
+    priority: Any = UniversalJobPriority.NORMAL
+    parent_job_id: Optional[str] = None
+    dependency_job_ids: Tuple[str, ...] = ()
+    batch_id: Optional[str] = None
+    pipeline_run_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
+    maximum_attempts: Optional[int] = None
+    enqueue: bool = True
+    job_id: Optional[str] = None
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX
+    created_at: Optional[str] = None
+    scheduled_at: Optional[str] = None
+
+CREATION_SYMBOL_UNIVERSALJOBCREATIONRESULT: PASS
+  (job: 'UniversalJob', payload: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', registration: 'Optional[Mapping[str, Any]]', enqueue_requested: 'bool', job_type_source: 'str', creation_engine_version: 'str' = 'universal_job_creation_engine_v2.1.2') -> None
+
+CREATION_SOURCE_UniversalJobCreationResult:
+@dataclass(frozen=True)
+class UniversalJobCreationResult:
+    job: UniversalJob
+    payload: Mapping[str, Any]
+    metadata: Mapping[str, Any]
+    registration: Optional[Mapping[str, Any]]
+    enqueue_requested: bool
+    job_type_source: str
+    creation_engine_version: str = UNIVERSAL_JOB_CREATION_ENGINE_VERSION
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": UNIVERSAL_JOB_CREATION_RESULT_VERSION,
+            "ok": True,
+            "creation_engine_version": self.creation_engine_version,
+            "contract_version": UNIVERSAL_JOB_CONTRACT_VERSION,
+            "enqueue_requested": self.enqueue_requested,
+            "job_type_source": self.job_type_source,
+            "job": self.job.to_canonical_dict(),
+            "payload": _thaw_json(self.payload),
+            "metadata": thaw_universal_job_metadata(self.metadata),
+            "registration": (
+                _thaw_json(self.registration)
+                if self.registration is not None
+                else None
+            ),
+            "identity_fingerprint": self.job.identity_fingerprint(),
+            "contract_fingerprint": self.job.contract_fingerprint(),
+            "content_fingerprint": self.job.content_fingerprint(),
+        }
+
+CREATION_SYMBOL_NORMALIZE_UNIVERSAL_JOB_CREATION_REQUEST: PASS
+  (request: 'UniversalJobCreationRequest', *, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'tuple[UniversalJobCreationRequest, str, Optional[Mapping[str, Any]]]'
+
+CREATION_SOURCE_normalize_universal_job_creation_request:
+def normalize_universal_job_creation_request(
+    request: UniversalJobCreationRequest,
+    *,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> tuple[
+    UniversalJobCreationRequest,
+    str,
+    Optional[Mapping[str, Any]],
+]:
+    if not isinstance(request, UniversalJobCreationRequest):
+        raise UniversalJobCreationError(
+            "request must be UniversalJobCreationRequest.",
+            code="invalid_creation_request",
+            violations=("request must be UniversalJobCreationRequest",),
+        )
+
+    workspace_id = _clean_text(request.workspace_id)
+
+    if not workspace_id:
+        raise UniversalJobCreationError(
+            "workspace_id is required.",
+            code="missing_workspace_id",
+            violations=("workspace_id is required",),
+        )
+
+    try:
+        job_type = validate_universal_job_type(
+            request.job_type
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    payload = _normalize_mapping(
+        request.payload,
+        field_name="payload",
+    )
+    try:
+        metadata = normalize_universal_job_metadata(
+            request.metadata
+        )
+    except UniversalJobMetadataError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+    try:
+        parent_job_id = normalize_parent_job_id(
+            request.parent_job_id
+        )
+        dependencies = normalize_dependency_job_ids(
+            request.dependency_job_ids
+        )
+        batch_id = normalize_batch_id(
+            request.batch_id
+        )
+        pipeline_run_id = normalize_pipeline_run_id(
+            request.pipeline_run_id
+        )
+
+    except UniversalJobLineageError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+    static_job_types = _normalize_supported_job_types(
+        supported_job_types,
+    )
+    source, registration = _resolve_registration(
+        job_type=job_type,
+        supported_job_types=static_job_types,
+        runtime_registration=runtime_registration,
+    )
+    _validate_registered_payload(
+        registration=registration,
+        payload=payload,
+    )
+
+    registration_pipeline = (
+        registration.get("pipeline")
+        if registration is not None
+        else ""
+    )
+    registration_stage = (
+        registration.get("stage")
+        if registration is not None
+        else ""
+    )
+
+    pipeline = _first_text(
+        request.pipeline,
+        payload.get("pipeline"),
+        payload.get("pipeline_name"),
+        registration_pipeline,
+        fallback="universal_knowledge",
+    )
+    stage = _first_text(
+        request.stage,
+        payload.get("stage"),
+        payload.get("stage_name"),
+        registration_stage,
+        fallback=job_type,
+    )
+    user_id = _first_text(
+        request.user_id,
+        payload.get("user_id"),
+        fallback="system",
+    )
+    product_id = _first_text(
+        request.product_id,
+        payload.get("product_id"),
+        fallback="linkcraftor",
+    )
+    payload_reference = normalize_universal_job_payload_reference(
+        request.payload_reference
+    )
+    priority = _resolve_priority(request.priority)
+    maximum_attempts = _resolve_maximum_attempts(
+        request.maximum_attempts,
+        payload,
+        registration,
+    )
+
+    if not isinstance(request.enqueue, bool):
+        raise UniversalJobCreationError(
+            "enqueue must be a boolean.",
+            code="invalid_enqueue",
+            violations=(
+                "enqueue must be either True or False",
+            ),
+        )
+
+    if (
+        not isinstance(request.job_id_prefix, str)
+        or request.job_id_prefix != UNIVERSAL_JOB_ID_PREFIX
+    ):
+        raise UniversalJobCreationError(
+            "job_id_prefix is fixed by the Universal Job identity namespace.",
+            code="invalid_job_id_prefix",
+            violations=(
+                f"job_id_prefix must be exactly {UNIVERSAL_JOB_ID_PREFIX!r}",
+            ),
+        )
+
+    created_at = _clean_text(request.created_at) or _utc_now()
+    scheduled_at = (
+        _clean_text(request.scheduled_at)
+        or None
+    )
+
+    try:
+        job_id = resolve_universal_job_id(
+            request.job_id
+        )
+    except UniversalJobIdentityError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    try:
+        lineage = validate_universal_job_lineage(
+            job_id=job_id,
+            parent_job_id=parent_job_id,
+            dependency_job_ids=dependencies,
+            batch_id=batch_id,
+            pipeline_run_id=pipeline_run_id,
+        )
+
+    except UniversalJobLineageError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+
+    try:
+        idempotency_key = (
+            normalize_universal_job_idempotency_key(
+                request.idempotency_key
+            )
+        )
+
+    except UniversalJobIdempotencyKeyError as exc:
+        raise UniversalJobCreationError(
+            str(exc),
+            code=exc.code,
+            violations=(str(exc),),
+        ) from exc
+
+    normalized = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload=payload,
+        metadata=metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=lineage.parent_job_id,
+        dependency_job_ids=lineage.dependency_job_ids,
+        batch_id=lineage.batch_id,
+        pipeline_run_id=lineage.pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=request.enqueue,
+        job_id=job_id,
+        job_id_prefix=UNIVERSAL_JOB_ID_PREFIX,
+        created_at=created_at,
+        scheduled_at=scheduled_at,
+    )
+
+    return normalized, source, registration
+
+CREATION_SYMBOL_CREATE_UNIVERSAL_JOB: PASS
+  (*, workspace_id: 'str', job_type: 'str', payload: 'Optional[Mapping[str, Any]]' = None, metadata: 'Optional[Mapping[str, Any]]' = None, user_id: 'str' = 'system', product_id: 'str' = 'linkcraftor', pipeline: 'str' = '', stage: 'str' = '', payload_reference: 'Optional[str]' = None, priority: 'Any' = <UniversalJobPriority.NORMAL: 30>, parent_job_id: 'Optional[str]' = None, dependency_job_ids: 'Optional[Iterable[Any]]' = None, batch_id: 'Optional[str]' = None, pipeline_run_id: 'Optional[str]' = None, idempotency_key: 'Optional[str]' = None, maximum_attempts: 'Optional[int]' = None, enqueue: 'bool' = True, job_id: 'Optional[str]' = None, job_id_prefix: 'str' = 'uj', created_at: 'Optional[str]' = None, scheduled_at: 'Optional[str]' = None, supported_job_types: 'Optional[Iterable[Any]]' = None, runtime_registration: 'Optional[Mapping[str, Any]]' = None) -> 'UniversalJobCreationResult'
+
+CREATION_SOURCE_create_universal_job:
+def create_universal_job(
+    *,
+    workspace_id: str,
+    job_type: str,
+    payload: Optional[Mapping[str, Any]] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    user_id: str = "system",
+    product_id: str = "linkcraftor",
+    pipeline: str = "",
+    stage: str = "",
+    payload_reference: Optional[str] = None,
+    priority: Any = UniversalJobPriority.NORMAL,
+    parent_job_id: Optional[str] = None,
+    dependency_job_ids: Optional[Iterable[Any]] = None,
+    batch_id: Optional[str] = None,
+    pipeline_run_id: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    maximum_attempts: Optional[int] = None,
+    enqueue: bool = True,
+    job_id: Optional[str] = None,
+    job_id_prefix: str = UNIVERSAL_JOB_ID_PREFIX,
+    created_at: Optional[str] = None,
+    scheduled_at: Optional[str] = None,
+    supported_job_types: Optional[Iterable[Any]] = None,
+    runtime_registration: Optional[Mapping[str, Any]] = None,
+) -> UniversalJobCreationResult:
+    """Validate and construct one canonical Universal Job without I/O."""
+
+    request = UniversalJobCreationRequest(
+        workspace_id=workspace_id,
+        job_type=job_type,
+        payload={} if payload is None else payload,
+        metadata={} if metadata is None else metadata,
+        user_id=user_id,
+        product_id=product_id,
+        pipeline=pipeline,
+        stage=stage,
+        payload_reference=payload_reference,
+        priority=priority,
+        parent_job_id=parent_job_id,
+        dependency_job_ids=(
+            ()
+            if dependency_job_ids is None
+            else dependency_job_ids
+        ),
+        batch_id=batch_id,
+        pipeline_run_id=pipeline_run_id,
+        idempotency_key=idempotency_key,
+        maximum_attempts=maximum_attempts,
+        enqueue=enqueue,
+        job_id=job_id,
+        job_id_prefix=job_id_prefix,
+        created_at=created_at,
+        scheduled_at=scheduled_at,
+    )
+
+    normalized, source, registration = (
+        normalize_universal_job_creation_request(
+            request,
+            supported_job_types=supported_job_types,
+            runtime_registration=runtime_registration,
+        )
+    )
+
+    status = initial_universal_job_status(
+        enqueue=normalized.enqueue,
+    )
+    message = (
+        "Job queued."
+        if normalized.enqueue
+        else "Job created without queue dispatch."
+    )
+
+    try:
+        job = UniversalJob(
+            job_id=normalized.job_id or "",
+            workspace_id=normalized.workspace_id,
+            user_id=normalized.user_id,
+            product_id=normalized.product_id,
+            pipeline=normalized.pipeline,
+            stage=normalized.stage,
+            job_type=normalized.job_type,
+            payload_reference=normalized.payload_reference,
+            priority=normalized.priority,
+            status=status,
+            attempts=initial_universal_job_attempts(),
+            maximum_attempts=normalized.maximum_attempts,
+            lease_owner=None,
+            lease_id=None,
+            lease_started_at=None,
+            lease_expires_at=None,
+            parent_job_id=normalized.parent_job_id,
+            dependency_job_ids=normalized.dependency_job_ids,
+            batch_id=normalized.batch_id,
+            pipeline_run_id=normalized.pipeline_run_id,
+            progress=UniversalJobProgress(
+                percent=0,
+                step=normalized.stage,
+                message=message,
+                updated_at=normalized.created_at,
+            ),
+            checkpoint_reference=None,
+            result_reference=None,
+            artifact_references=(),
+            idempotency_key=normalized.idempotency_key,
+            AU_reserved=0,
+            AU_consumed=0,
+            cost_record=UniversalJobCostRecord(),
+            created_at=normalized.created_at,
+            scheduled_at=normalized.scheduled_at,
+            started_at=None,
+            completed_at=None,
+            failed_at=None,
+            cancelled_at=None,
+            error_code=None,
+            error_message=None,
+            error_details={},
+        )
+    except UniversalJobContractError as exc:
+        raise UniversalJobCreationError(
+            "Universal Job Contract rejected the creation request.",
+            code="contract_validation_failed",
+            violations=exc.violations or (str(exc),),
+        ) from exc
+
+    validation = validate_universal_job(job)
+    if not validation.is_valid:
+        raise UniversalJobCreationError(
+            "Created Universal Job failed final validation.",
+            code="final_validation_failed",
+            violations=validation.violations,
+        )
+
+    return UniversalJobCreationResult(
+        job=job,
+        payload=normalized.payload,
+        metadata=normalized.metadata,
+        registration=registration,
+        enqueue_requested=normalized.enqueue,
+        job_type_source=source,
+    )
+
+
+====================================================================================================================
+PART A 3-E - WORKER INSERTION ORDER
+====================================================================================================================
+WORKER_CALL_ORDER=[('strip', 20), ('str', 20), ('UniversalRuntimeWorkerContractError', 26), ('callable', 30), ('UniversalRuntimeWorkerContractError', 33), ('admit_universal_runtime_worker', 37), ('get', 46), ('UniversalRuntimeWorkerContractError', 47), ('dequeue_job', 51), ('strip', 86), ('str', 86), ('UniversalRuntimeWorkerContractError', 92), ('UniversalRuntimeWorkerContractError', 97), ('orchestration_job_to_runtime_mapping_v1', 102), ('UniversalRuntimeWorkerContractError', 110), ('get_runtime_registration', 115), ('isinstance', 119), ('UniversalRuntimeWorkerContractError', 120), ('require_runtime_registration_admission', 126), ('UniversalRuntimeWorkerContractError', 133), ('str', 135), ('UniversalRuntimeWorkerContractError', 139), ('get', 143), ('isinstance', 145), ('UniversalRuntimeWorkerContractError', 146), ('get', 150), ('isinstance', 158), ('UniversalRuntimeWorkerContractError', 159), ('UniversalWorkerCapabilitySnapshot', 164), ('tuple', 168), ('match_universal_worker_capabilities', 171), ('UniversalRuntimeWorkerContractError', 177), ('join', 179), ('dispatcher', 182), ('isinstance', 189), ('release_universal_runtime_job_lease', 199), ('mark_job_completed', 205), ('dict', 208), ('list', 222), ('list', 225), ('deepcopy', 228), ('dict', 229), ('UniversalRuntimeWorkerFinalizationError', 246), ('UniversalRuntimeWorkerFinalizationError', 254), ('list', 290), ('list', 293), ('deepcopy', 296), ('dict', 297), ('type', 318), ('release_universal_runtime_job_lease', 322), ('isinstance', 330), ('_runtime_failure_attempt_number_v1', 338), ('_runtime_retry_policy_v1', 344), ('int', 350), ('_runtime_failure_is_contract_error_v1', 357), ('bool', 363), ('bool', 369), ('_requeue_same_runtime_job_v1', 394), ('UniversalRuntimeWorkerFinalizationError', 416), ('type', 453), ('str', 458), ('mark_job_failed', 505), ('dict', 509), ('type', 544), ('UniversalRuntimeWorkerFinalizationError', 560), ('UniversalRuntimeWorkerFinalizationError', 566), ('UniversalRuntimeWorkerFinalizationError', 571), ('type', 607), ('str', 612)]
+WORKER_BOUNDARY_LINES={'registration_lookup': [115], 'policy_admission': [126], 'capability': [171], 'dispatch': [182], 'completion': [205], 'failure': [505]}
+WORKER_PRE_DISPATCH_BOUNDARY_AVAILABLE: PASS
+WORKER_COMPLETION_BOUNDARY_AVAILABLE: PASS
+WORKER_FAILURE_BOUNDARY_AVAILABLE: PASS
+
+====================================================================================================================
+PART A 3-E - SOURCE STABILITY
+====================================================================================================================
+SOURCE_UNCHANGED_EXECUTION_SAFETY_CONCURRENCY: PASS
+  11792c36d2b7ffc1b1f2197d27608048a859ca71264badf8ec088554088fb15c
+SOURCE_UNCHANGED_IDEMPOTENCY_DUPLICATE_CONTROL: PASS
+  d79074dfd1040532d06b85820f04b80f30a7bd9fab30838eb72db7a99cb245d7
+SOURCE_UNCHANGED_DUPLICATE_DETECTION: PASS
+  3b46eab6276e2108f8bc796e087eb70c19c4eacba5d34a948c69f73b7bd2446e
+SOURCE_UNCHANGED_DUPLICATE_HANDLING: PASS
+  ad856d8ef5bd6ea5c1a996d44df174a3f54431a13abe054173086e5b472cadad
+SOURCE_UNCHANGED_CREATION_ENGINE: PASS
+  232f6cb3d4eb678d9d47deacc82f03df7bdc6178962fae782018f746a94da4ad
+SOURCE_UNCHANGED_JOB_STORE: PASS
+  ae88c201c1a1a4740a50f607da067212eeac2aba4de5416e75dd38043b8d487e
+SOURCE_UNCHANGED_QUEUE: PASS
+  846db4dd2c23fd193e14599550f9298cd5746d80b87f6b24220fdfd225b0771f
+SOURCE_UNCHANGED_UNIVERSAL_RUNTIME_WORKER_V1: PASS
+  b4df8c694d5d09dc5c412593d4c097d6697c2cb5a656c9521ac58a46fe8c4a4f
+PRODUCTION_FILES_MODIFIED_NO: PASS
+REGISTRATION_CREATED_NO: PASS
+REGISTRY_PERSISTENCE_EXECUTED_NO: PASS
+JOB_CREATED_NO: PASS
+JOB_CLAIMED_NO: PASS
+HANDLER_EXECUTED_NO: PASS
+
+====================================================================================================================
+PART A 3-E - FINAL RESULT
+====================================================================================================================
+INSPECTION_CHECKS_PASSED=68
+INSPECTION_CHECKS_FAILED=0
+PART_A_3_E_CANONICAL_CONTRACT_INSPECTION=COMPLETE
+PRODUCTION FILES MODIFIED: NO
+
+
+==============================================================================================================
+STANDARD ERROR
+==============================================================================================================
+
+
+Inspector exit code: 0
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+PART A 3-E CANONICAL CONTRACT INSPECTION COMPLETE
+PRODUCTION FILES MODIFIED: NO

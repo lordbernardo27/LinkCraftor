@@ -1,0 +1,378 @@
+"""
+LinkCraftor Semantic Intelligence Enricher.
+
+Canonical Phase 3 JSON contract foundation.
+No intelligence source is represented as executed until
+its actual integration is implemented and verified.
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from typing import Any
+
+from backend.server.engine.semantic_memory_enricher_adapter import (
+    retrieve_phrase_memory_evidence,
+)
+
+from backend.server.engine.intelligence_graph_enricher_adapter import (
+    retrieve_workspace_concept_evidence,
+)
+
+
+SOURCE_NAMES = (
+    "semantic_memory",
+    "intelligence_graph",
+    "reasoning_intelligence",
+    "explainability_intelligence",
+    "evidence_certification",
+)
+
+
+def _pending_source() -> dict[str, Any]:
+    return {
+        "status": "not_executed",
+        "available": None,
+        "evidence_ids": [],
+    }
+
+
+def enrich_selected_phrase_candidates(
+    *,
+    selected_candidates: list[dict[str, Any]],
+    workspace_id: str | None = None,
+) -> dict[str, Any]:
+    """Package canonical candidates without fabricating enrichment."""
+
+    if not isinstance(selected_candidates, list):
+        raise TypeError("selected_candidates must be a list.")
+
+    if any(not isinstance(item, dict) for item in selected_candidates):
+        raise TypeError("All selected candidates must be dictionaries.")
+
+    candidates = deepcopy(selected_candidates)
+
+    enriched_candidates = []
+
+    for index, candidate in enumerate(candidates):
+        enriched_candidates.append({
+            "candidate_id": candidate.get("upstream_candidate_id"),
+            "candidate_index": index,
+            "original_candidate": deepcopy(candidate),
+            "semantic_context": {
+                "status": "not_executed",
+                "detected_topic": None,
+                "detected_intent": None,
+                "meaning": None,
+                "contextual_relevance": None,
+                "ambiguity_status": "not_evaluated",
+                "related_concepts": [],
+            },
+            "semantic_memory": _pending_source(),
+            "intelligence_graph": _pending_source(),
+            "reasoning_intelligence": _pending_source(),
+            "explainability": _pending_source(),
+            "evidence_certification": {
+                "status": "not_executed",
+                "usable_evidence_ids": [],
+                "rejected_evidence_ids": [],
+                "warnings": [],
+            },
+            "enrichment_status": "pending",
+            "scorer_readiness": {
+                "ready": False,
+                "reason": "Semantic enrichment has not executed",
+            },
+        })
+
+    package = {
+        "ok": True,
+        "schema_version": "1.0.0",
+        "component": "semantic_intelligence_enricher",
+        "status": "ENRICHMENT_PENDING",
+        "enrichment_executed": False,
+        "context": {
+            "workspace_id": None,
+            "document_id": None,
+            "vertical": None,
+            "language": None,
+            "article_topic": None,
+        },
+        "pipeline": {
+            "input_stage": "highlight_selection_engine",
+            "output_stage": "semantic_intelligence_enricher",
+            "next_stage": "original_scorer",
+            "input_candidate_count": len(candidates),
+            "output_candidate_count": len(candidates),
+            "candidate_order_preserved": True,
+            "candidate_identity_preserved": True,
+        },
+        "intelligence_sources": {
+            name: _pending_source()
+            for name in SOURCE_NAMES
+        },
+        "evidence_registry": {},
+        "candidate_count": len(candidates),
+        "candidates": candidates,
+        "enriched_candidates": enriched_candidates,
+        "summary": {
+            "candidates_received": len(candidates),
+            "candidates_returned": len(candidates),
+            "fully_enriched": 0,
+            "partially_enriched": 0,
+            "without_usable_evidence": len(candidates),
+            "candidates_removed": 0,
+            "candidates_pending_enrichment": len(candidates),
+        },
+        "downstream_contract": {
+            "consumer": "original_scorer",
+            "enrichment_is_advisory": True,
+            "final_link_allocation_performed": False,
+            "route_dispatch_performed": False,
+            "target_resolution_performed": False,
+            "final_highlight_validation_performed": False,
+        },
+    }
+
+
+    # An omitted workspace ID preserves the original foundation behavior.
+    if workspace_id is None:
+        return package
+
+    # Validate before attempting any workspace-scoped retrieval.
+    import re
+    if not isinstance(workspace_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9_-]+", workspace_id
+    ):
+        raise ValueError("A valid workspace_id is required.")
+
+    package["context"]["workspace_id"] = workspace_id
+
+    failures = 0
+
+    for entry in package["enriched_candidates"]:
+        original_candidate = entry["original_candidate"]
+        phrase = original_candidate.get("phrase")
+        index = entry["candidate_index"]
+
+        if not isinstance(phrase, str) or not phrase.strip():
+            entry["semantic_memory"] = {
+                "status": "not_queried",
+                "memory_matches": [],
+                "evidence_ids": [],
+                "reason": "missing_candidate_phrase",
+            }
+            continue
+
+        try:
+            memory = retrieve_phrase_memory_evidence(
+                workspace_id=workspace_id,
+                phrase=phrase,
+            )
+            if (
+                not isinstance(memory, dict)
+                or memory.get("status") not in (
+                    "evidence_found", "no_evidence"
+                )
+                or not isinstance(
+                    memory.get("retrieved_memory"), list
+                )
+                or memory.get("workspace_id") != workspace_id
+                or memory.get("certified") is not False
+            ):
+                raise RuntimeError("Invalid memory adapter response")
+
+            matches = memory["retrieved_memory"]
+            evidence_ids = []
+
+            for position, match in enumerate(matches):
+                if not isinstance(match, dict):
+                    raise RuntimeError("Invalid memory match")
+
+                evidence_id = f"memory_candidate_{index}_{position}"
+                evidence_ids.append(evidence_id)
+
+                package["evidence_registry"][evidence_id] = {
+                    "source": "semantic_memory",
+                    "workspace_id": workspace_id,
+                    "candidate_index": index,
+                    "memory_id": match.get("memory_id"),
+                    "text": match.get("text"),
+                    "retrieval_score": match.get("recall_score"),
+                    "retrieval_method": memory.get("retrieval_method"),
+                    "certified": False,
+                    "validity_status": "not_evaluated",
+                }
+
+            entry["semantic_memory"] = {
+                "status": memory["status"],
+                "memory_matches": deepcopy(matches),
+                "evidence_ids": evidence_ids,
+                "retrieval_method": memory.get("retrieval_method"),
+                "certified": False,
+            }
+            entry["enrichment_status"] = "partial"
+
+        except Exception as exc:
+            failures += 1
+            entry["semantic_memory"] = {
+                "status": "error",
+                "memory_matches": [],
+                "evidence_ids": [],
+                "error_type": type(exc).__name__,
+            }
+
+    package["intelligence_sources"]["semantic_memory"] = {
+        "status": (
+            "completed_with_errors" if failures else "completed"
+        ),
+        "available": failures == 0,
+        "evidence_ids": list(package["evidence_registry"]),
+        "error_count": failures,
+    }
+
+    package["enrichment_executed"] = bool(
+        package["enriched_candidates"]
+    )
+    package["status"] = (
+        "ENRICHMENT_COMPLETED_WITH_GAPS"
+        if package["enriched_candidates"]
+        else "ENRICHMENT_PENDING"
+    )
+    package["summary"]["partially_enriched"] = sum(
+        item["enrichment_status"] == "partial"
+        for item in package["enriched_candidates"]
+    )
+    package["summary"]["candidates_pending_enrichment"] = sum(
+        item["enrichment_status"] == "pending"
+        for item in package["enriched_candidates"]
+    )
+
+    # No source evidence is certified here. Other intelligence
+    # sources and Phase 3.6 certification remain pending.
+
+    # Phase 3.3: read existing workspace concept evidence only.
+    # Concept aliases are not certified semantic graph edges.
+    graph_errors = 0
+    graph_executed = 0
+    graph_evidence_ids = []
+
+    for entry in package["enriched_candidates"]:
+        candidate = entry["original_candidate"]
+        phrase = candidate.get("phrase")
+        index = entry["candidate_index"]
+
+        if not isinstance(phrase, str) or not phrase.strip():
+            entry["intelligence_graph"] = {
+                "status": "not_queried",
+                "concept_matches": [],
+                "relationship_edges": [],
+                "relationship_retrieval_status": "not_implemented",
+                "evidence_ids": [],
+                "reason": "missing_candidate_phrase",
+                "certified": False,
+            }
+            continue
+
+        try:
+            graph = retrieve_workspace_concept_evidence(
+                workspace_id=workspace_id,
+                phrase=phrase,
+            )
+
+            if (
+                not isinstance(graph, dict)
+                or graph.get("workspace_id") != workspace_id
+                or graph.get("status") not in (
+                    "concept_evidence_found", "no_evidence"
+                )
+                or not isinstance(graph.get("concept_matches"), list)
+                or graph.get("relationship_edges") != []
+                or graph.get("certified") is not False
+            ):
+                raise RuntimeError("Invalid concept evidence contract")
+
+            matches = graph["concept_matches"]
+            evidence_ids = []
+            graph_executed += 1
+
+            for position, match in enumerate(matches):
+                if not isinstance(match, dict):
+                    raise RuntimeError("Invalid concept evidence record")
+
+                evidence_id = f"graph_concept_{index}_{position}"
+                evidence_ids.append(evidence_id)
+
+                package["evidence_registry"][evidence_id] = {
+                    "source": "workspace_concept_store",
+                    "evidence_type": "concept_or_alias_match",
+                    "workspace_id": workspace_id,
+                    "candidate_index": index,
+                    "concept_key": match.get("concept_key"),
+                    "concept": match.get("concept"),
+                    "match_type": match.get("match_type"),
+                    "source_record": deepcopy(
+                        match.get("original_record")
+                    ),
+                    "relationship_asserted": False,
+                    "certified": False,
+                    "validity_status": "not_evaluated",
+                }
+
+            graph_evidence_ids.extend(evidence_ids)
+
+            entry["intelligence_graph"] = {
+                "status": graph["status"],
+                "source": "workspace_concept_store",
+                "concept_matches": deepcopy(matches),
+                "relationship_edges": [],
+                "relationship_retrieval_status": (
+                    "not_implemented"
+                ),
+                "evidence_ids": evidence_ids,
+                "certified": False,
+            }
+
+            if matches:
+                entry["enrichment_status"] = "partial"
+
+        except Exception as exc:
+            graph_errors += 1
+            entry["intelligence_graph"] = {
+                "status": "error",
+                "concept_matches": [],
+                "relationship_edges": [],
+                "evidence_ids": [],
+                "relationship_retrieval_status": "not_implemented",
+                "error_type": type(exc).__name__,
+                "certified": False,
+            }
+
+    package["intelligence_sources"]["intelligence_graph"] = {
+        "status": (
+            "completed_with_errors" if graph_errors
+            else "concept_retrieval_completed"
+            if graph_executed
+            else "not_executed"
+        ),
+        "available": graph_executed > 0,
+        "evidence_ids": graph_evidence_ids,
+        "error_count": graph_errors,
+        "relationship_retrieval_status": "not_implemented",
+    }
+
+    # Some candidates may have been enriched solely through
+    # graph concepts; recalculate the existing summary.
+    package["summary"]["partially_enriched"] = sum(
+        item["enrichment_status"] == "partial"
+        for item in package["enriched_candidates"]
+    )
+    package["summary"]["candidates_pending_enrichment"] = sum(
+        item["enrichment_status"] == "pending"
+        for item in package["enriched_candidates"]
+    )
+
+    return package
+
+
+__all__ = ["enrich_selected_phrase_candidates"]
