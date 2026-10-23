@@ -1,0 +1,3521 @@
+LINKCRAFTER UNIVERSAL COORDINATION
+PART C 9-D2 EXACT LIFECYCLE CONTRACT EXTRACTION
+
+Mode: READ-ONLY SOURCE EXTRACTION
+Production source changes: NONE
+Workflow mutation executed: NO
+Workflow persistence executed: NO
+Universal Jobs created: NO
+Queue claims executed: NO
+Handlers executed: NO
+Live network requests executed: NO
+EXTRACTION STATUS: COMPLETE
+
+==============================================================================================================
+MODULE EVIDENCE
+==============================================================================================================
+{
+  "import_failures": {},
+  "missing_requested_authorities": [],
+  "source_files": {
+    "coordination_gateway": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\runtime\\runtime_coordination_gateway.py",
+      "sha256": "21259e187ab1b7bd2e480aa728c6a70b5521293ea18cf10fb3f2af7934c1e937"
+    },
+    "execution_gateway": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\runtime_integration\\runtime_execution_gateway.py",
+      "sha256": "2d7b34f5e1b2b95c1efa5698522fa600d3fb4f597e22aa28745cc61fce81c5d5"
+    },
+    "lifecycle_history": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\workflow_lifecycle\\lifecycle_history.py",
+      "sha256": "d89f1d4fbc54307c7b8155e670cdd3c6c8771185dc8afbe382a87bb34eda8464"
+    },
+    "stage_result_processor": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\stage_handoff\\stage_result_processor.py",
+      "sha256": "8106d844b0b4d1c4d4e3a07a6232f4796010c604f538ed0f8e45f823d2c64456"
+    },
+    "state_machine": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\workflow_lifecycle\\state_machine.py",
+      "sha256": "144327a4e9c8989fcf0f4dbd10bcf6d7203f503930d81cb8e24644d86d2bb662"
+    },
+    "terminal_protection": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\workflow_lifecycle\\terminal_state_protection.py",
+      "sha256": "7632a838d9cead7ed95db0099d08fb20d01b4e2bd25bff48d68cbeb89065a7b7"
+    },
+    "transition_validation": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\workflow_lifecycle\\transition_validation.py",
+      "sha256": "69a952141e920e63b32b12af1e9fb79d6296961fed40bcb94f007123bf9bd746"
+    },
+    "workflow_contract": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\universal_workflows\\contract.py",
+      "sha256": "9094a98d2b9dbd9cced73514648bf5d4115c5092e547d19446ab0fe18fbe7089"
+    },
+    "workflow_repository": {
+      "path": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\workflow_persistence\\repository.py",
+      "sha256": "75a50ab18baec03cecd6bbc932c5a7896bfad646d2a78158f5f0d7137d9bb558"
+    }
+  }
+}
+
+==============================================================================================================
+CURRENT RUNTIME COORDINATION GATEWAY MODULE
+==============================================================================================================
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from types import MappingProxyType
+from typing import Any, Mapping
+
+from backend.server.coordination.coordinator_registry.registry import (
+    coordinator_registry_snapshot,
+)
+from backend.server.coordination.runtime_integration.coordination_runtime_bridge import (
+    bridge_execution_plan_to_runtime as _bridge_execution_plan_to_runtime,
+)
+from backend.server.coordination.runtime_integration.runtime_job_mapping import (
+    map_runtime_handoffs_to_job_requests as _map_runtime_handoffs_to_job_requests,
+)
+from backend.server.coordination.runtime_integration.runtime_execution_gateway import (
+    intake_runtime_terminal_stage_result as _intake_runtime_terminal_stage_result,
+    submit_runtime_execution_wave as _submit_runtime_execution_wave,
+    submit_runtime_job_mapping as _submit_runtime_job_mapping,
+)
+from backend.server.coordination.workflow_persistence.repository import WorkflowRepository
+from backend.server.coordination.workflow_registry.registry import workflow_registry_snapshot
+from backend.server.runtime.universal_runtime_kernel import UniversalRuntimeKernel
+
+
+RUNTIME_COORDINATION_GATEWAY_KEY = "runtime_coordination"
+RUNTIME_COORDINATION_GATEWAY_VERSION = "runtime_coordination_gateway_v1.1.0"
+
+
+class RuntimeCoordinationGatewayError(RuntimeError):
+    pass
+
+
+class RuntimeCoordinationGatewayBindingError(RuntimeCoordinationGatewayError):
+    pass
+
+
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted((_freeze(item) for item in value), key=repr))
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeWorkflowSubmissionResult:
+    workflow_id: str
+    correlation_id: str
+    stage_ids: tuple[str, ...]
+    job_ids: tuple[str, ...]
+    bridge_result: Any
+    mapping_result: Any
+    submission_result: Any
+    evidence: Mapping[str, Any]
+    connection_version: str = "runtime_workflow_submission_connection_v1"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "stage_ids", tuple(self.stage_ids))
+        object.__setattr__(self, "job_ids", tuple(self.job_ids))
+        object.__setattr__(self, "evidence", _freeze(self.evidence))
+        if not self.workflow_id or not self.correlation_id:
+            raise RuntimeCoordinationGatewayError(
+                "Workflow submission identity is incomplete."
+            )
+        if self.bridge_result.workflow_id != self.workflow_id:
+            raise RuntimeCoordinationGatewayError(
+                "Bridge workflow identity does not match submission identity."
+            )
+        if self.mapping_result.workflow_id != self.workflow_id:
+            raise RuntimeCoordinationGatewayError(
+                "Mapping workflow identity does not match submission identity."
+            )
+        if self.submission_result.workflow_id != self.workflow_id:
+            raise RuntimeCoordinationGatewayError(
+                "Runtime submission workflow identity does not match."
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "connection_version": self.connection_version,
+            "workflow_id": self.workflow_id,
+            "correlation_id": self.correlation_id,
+            "stage_ids": list(self.stage_ids),
+            "job_ids": list(self.job_ids),
+            "bridge": dict(self.bridge_result.to_dict()),
+            "mapping": {
+                "workflow_id": self.mapping_result.workflow_id,
+                "mapping_count": self.mapping_result.mapping_count,
+                "stage_ids": list(self.mapping_result.stage_ids),
+            },
+            "submission": self.submission_result.to_dict(),
+            "evidence": dict(self.evidence),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeCoordinationGateway:
+    project_root: Path
+    workflow_root: Path
+    workflow_repository: WorkflowRepository
+    gateway_version: str = RUNTIME_COORDINATION_GATEWAY_VERSION
+
+    def bridge_execution_plan_to_runtime(self, **kwargs: Any) -> Any:
+        return _bridge_execution_plan_to_runtime(**kwargs)
+
+    def submit_runtime_job_mapping(self, **kwargs: Any) -> Any:
+        return _submit_runtime_job_mapping(**kwargs)
+
+    def submit_runtime_execution_wave(self, **kwargs: Any) -> Any:
+        return _submit_runtime_execution_wave(**kwargs)
+
+    def submit_workflow_execution(
+        self,
+        *,
+        execution_plan: Any,
+        stage_references: Mapping[str, Any],
+        context: Any,
+        dependency_job_ids_by_stage: Mapping[str, Any] | None = None,
+        execution_semantics: str = "parallel_eligible",
+        submitter: Any = None,
+        correlation_registry: Any = None,
+        jobs_reader: Any = None,
+    ) -> RuntimeWorkflowSubmissionResult:
+        bridge_result = _bridge_execution_plan_to_runtime(
+            execution_plan=execution_plan,
+            stage_references=stage_references,
+            context=context,
+        )
+        mapping_result = _map_runtime_handoffs_to_job_requests(
+            bridge_result=bridge_result,
+        )
+        submission_arguments: dict[str, Any] = {
+            "mapping_result": mapping_result,
+            "dependency_job_ids_by_stage": dependency_job_ids_by_stage,
+            "execution_semantics": execution_semantics,
+        }
+        if submitter is not None:
+            submission_arguments["submitter"] = submitter
+        if correlation_registry is not None:
+            submission_arguments["correlation_registry"] = correlation_registry
+        if jobs_reader is not None:
+            submission_arguments["jobs_reader"] = jobs_reader
+        submission_result = _submit_runtime_execution_wave(
+            **submission_arguments,
+        )
+        correlation_id = str(getattr(context, "correlation_id", "") or "").strip()
+        evidence = {
+            "connection": "runtime_workflow_submission_connection_v1",
+            "canonical_bridge": "bridge_execution_plan_to_runtime",
+            "canonical_mapper": "map_runtime_handoffs_to_job_requests",
+            "canonical_submitter": "submit_runtime_execution_wave",
+            "canonical_correlation": "WorkflowJobCorrelationRegistry",
+            "workflow_repository": type(self.workflow_repository).__name__,
+            "direct_handler_dispatch": False,
+            "second_queue_created": False,
+            "second_registry_created": False,
+            "second_submitter_created": False,
+        }
+        return RuntimeWorkflowSubmissionResult(
+            workflow_id=bridge_result.workflow_id,
+            correlation_id=correlation_id,
+            stage_ids=tuple(mapping_result.stage_ids),
+            job_ids=tuple(submission_result.job_ids),
+            bridge_result=bridge_result,
+            mapping_result=mapping_result,
+            submission_result=submission_result,
+            evidence=evidence,
+        )
+
+    def intake_runtime_terminal_stage_result(self, *, job_id: str, **kwargs: Any) -> Any:
+        if "workflow_repository" in kwargs:
+            raise RuntimeCoordinationGatewayError(
+                "workflow_repository is owned by RuntimeCoordinationGateway."
+            )
+        return _intake_runtime_terminal_stage_result(
+            job_id=job_id,
+            workflow_repository=self.workflow_repository,
+            **kwargs,
+        )
+
+    def snapshot(self) -> Mapping[str, Any]:
+        return _freeze(
+            {
+                "schema_version": "runtime_coordination_gateway_snapshot_v1",
+                "gateway_version": self.gateway_version,
+                "component_key": RUNTIME_COORDINATION_GATEWAY_KEY,
+                "project_root": str(self.project_root),
+                "workflow_root": str(self.workflow_root),
+                "workflow_registry": workflow_registry_snapshot(),
+                "coordinator_registry": coordinator_registry_snapshot(),
+                "authorities": (
+                    "coordination_runtime_bridge",
+                    "runtime_execution_gateway",
+                    "workflow_repository",
+                    "workflow_registry",
+                    "coordinator_registry",
+                ),
+            }
+        )
+
+    def evidence(self) -> Mapping[str, Any]:
+        snapshot = self.snapshot()
+        return _freeze(
+            {
+                "schema_version": "runtime_coordination_gateway_evidence_v1",
+                "gateway_version": self.gateway_version,
+                "component_key": RUNTIME_COORDINATION_GATEWAY_KEY,
+                "workflow_root": str(self.workflow_root),
+                "workflow_registry_count": snapshot["workflow_registry"].get("count", 0),
+                "coordinator_registry_count": snapshot["coordinator_registry"].get("count", 0),
+                "boot_bound": True,
+                "second_runtime_created": False,
+                "second_registry_created": False,
+                "second_queue_created": False,
+            }
+        )
+
+
+def register_runtime_coordination_gateway(
+    kernel: UniversalRuntimeKernel,
+    project_root: Path | str | None = None,
+    **_: Any,
+) -> RuntimeCoordinationGateway:
+    if kernel.has_component(RUNTIME_COORDINATION_GATEWAY_KEY):
+        raise RuntimeCoordinationGatewayBindingError(
+            "Runtime coordination gateway is already bound to the kernel."
+        )
+    resolved_root = Path(project_root or Path.cwd()).resolve()
+    workflow_root = (
+        resolved_root / "backend" / "server" / "data" / "coordination" / "workflows"
+    )
+    gateway = RuntimeCoordinationGateway(
+        project_root=resolved_root,
+        workflow_root=workflow_root,
+        workflow_repository=WorkflowRepository(root=workflow_root),
+    )
+    kernel.bind_component(RUNTIME_COORDINATION_GATEWAY_KEY, gateway)
+    return gateway
+
+==============================================================================================================
+PUBLIC INVENTORY: coordination_gateway
+==============================================================================================================
+{
+  "RuntimeCoordinationGateway": {
+    "kind": "class",
+    "signature": "(project_root: 'Path', workflow_root: 'Path', workflow_repository: 'WorkflowRepository', gateway_version: 'str' = 'runtime_coordination_gateway_v1.1.0') -> None"
+  },
+  "RuntimeCoordinationGatewayBindingError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.runtime.runtime_coordination_gateway.RuntimeCoordinationGatewayBindingError'>>"
+  },
+  "RuntimeCoordinationGatewayError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.runtime.runtime_coordination_gateway.RuntimeCoordinationGatewayError'>>"
+  },
+  "RuntimeWorkflowSubmissionResult": {
+    "kind": "class",
+    "signature": "(workflow_id: 'str', correlation_id: 'str', stage_ids: 'tuple[str, ...]', job_ids: 'tuple[str, ...]', bridge_result: 'Any', mapping_result: 'Any', submission_result: 'Any', evidence: 'Mapping[str, Any]', connection_version: 'str' = 'runtime_workflow_submission_connection_v1') -> None"
+  },
+  "register_runtime_coordination_gateway": {
+    "kind": "function",
+    "signature": "(kernel: 'UniversalRuntimeKernel', project_root: 'Path | str | None' = None, **_: 'Any') -> 'RuntimeCoordinationGateway'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: coordination_gateway.RuntimeCoordinationGateway
+SIGNATURE: (project_root: 'Path', workflow_root: 'Path', workflow_repository: 'WorkflowRepository', gateway_version: 'str' = 'runtime_coordination_gateway_v1.1.0') -> None
+==============================================================================================================
+@dataclass(frozen=True, slots=True)
+class RuntimeCoordinationGateway:
+    project_root: Path
+    workflow_root: Path
+    workflow_repository: WorkflowRepository
+    gateway_version: str = RUNTIME_COORDINATION_GATEWAY_VERSION
+
+    def bridge_execution_plan_to_runtime(self, **kwargs: Any) -> Any:
+        return _bridge_execution_plan_to_runtime(**kwargs)
+
+    def submit_runtime_job_mapping(self, **kwargs: Any) -> Any:
+        return _submit_runtime_job_mapping(**kwargs)
+
+    def submit_runtime_execution_wave(self, **kwargs: Any) -> Any:
+        return _submit_runtime_execution_wave(**kwargs)
+
+    def submit_workflow_execution(
+        self,
+        *,
+        execution_plan: Any,
+        stage_references: Mapping[str, Any],
+        context: Any,
+        dependency_job_ids_by_stage: Mapping[str, Any] | None = None,
+        execution_semantics: str = "parallel_eligible",
+        submitter: Any = None,
+        correlation_registry: Any = None,
+        jobs_reader: Any = None,
+    ) -> RuntimeWorkflowSubmissionResult:
+        bridge_result = _bridge_execution_plan_to_runtime(
+            execution_plan=execution_plan,
+            stage_references=stage_references,
+            context=context,
+        )
+        mapping_result = _map_runtime_handoffs_to_job_requests(
+            bridge_result=bridge_result,
+        )
+        submission_arguments: dict[str, Any] = {
+            "mapping_result": mapping_result,
+            "dependency_job_ids_by_stage": dependency_job_ids_by_stage,
+            "execution_semantics": execution_semantics,
+        }
+        if submitter is not None:
+            submission_arguments["submitter"] = submitter
+        if correlation_registry is not None:
+            submission_arguments["correlation_registry"] = correlation_registry
+        if jobs_reader is not None:
+            submission_arguments["jobs_reader"] = jobs_reader
+        submission_result = _submit_runtime_execution_wave(
+            **submission_arguments,
+        )
+        correlation_id = str(getattr(context, "correlation_id", "") or "").strip()
+        evidence = {
+            "connection": "runtime_workflow_submission_connection_v1",
+            "canonical_bridge": "bridge_execution_plan_to_runtime",
+            "canonical_mapper": "map_runtime_handoffs_to_job_requests",
+            "canonical_submitter": "submit_runtime_execution_wave",
+            "canonical_correlation": "WorkflowJobCorrelationRegistry",
+            "workflow_repository": type(self.workflow_repository).__name__,
+            "direct_handler_dispatch": False,
+            "second_queue_created": False,
+            "second_registry_created": False,
+            "second_submitter_created": False,
+        }
+        return RuntimeWorkflowSubmissionResult(
+            workflow_id=bridge_result.workflow_id,
+            correlation_id=correlation_id,
+            stage_ids=tuple(mapping_result.stage_ids),
+            job_ids=tuple(submission_result.job_ids),
+            bridge_result=bridge_result,
+            mapping_result=mapping_result,
+            submission_result=submission_result,
+            evidence=evidence,
+        )
+
+    def intake_runtime_terminal_stage_result(self, *, job_id: str, **kwargs: Any) -> Any:
+        if "workflow_repository" in kwargs:
+            raise RuntimeCoordinationGatewayError(
+                "workflow_repository is owned by RuntimeCoordinationGateway."
+            )
+        return _intake_runtime_terminal_stage_result(
+            job_id=job_id,
+            workflow_repository=self.workflow_repository,
+            **kwargs,
+        )
+
+    def snapshot(self) -> Mapping[str, Any]:
+        return _freeze(
+            {
+                "schema_version": "runtime_coordination_gateway_snapshot_v1",
+                "gateway_version": self.gateway_version,
+                "component_key": RUNTIME_COORDINATION_GATEWAY_KEY,
+                "project_root": str(self.project_root),
+                "workflow_root": str(self.workflow_root),
+                "workflow_registry": workflow_registry_snapshot(),
+                "coordinator_registry": coordinator_registry_snapshot(),
+                "authorities": (
+                    "coordination_runtime_bridge",
+                    "runtime_execution_gateway",
+                    "workflow_repository",
+                    "workflow_registry",
+                    "coordinator_registry",
+                ),
+            }
+        )
+
+    def evidence(self) -> Mapping[str, Any]:
+        snapshot = self.snapshot()
+        return _freeze(
+            {
+                "schema_version": "runtime_coordination_gateway_evidence_v1",
+                "gateway_version": self.gateway_version,
+                "component_key": RUNTIME_COORDINATION_GATEWAY_KEY,
+                "workflow_root": str(self.workflow_root),
+                "workflow_registry_count": snapshot["workflow_registry"].get("count", 0),
+                "coordinator_registry_count": snapshot["coordinator_registry"].get("count", 0),
+                "boot_bound": True,
+                "second_runtime_created": False,
+                "second_registry_created": False,
+                "second_queue_created": False,
+            }
+        )
+
+
+==============================================================================================================
+PUBLIC INVENTORY: execution_gateway
+==============================================================================================================
+{
+  "RuntimeExecutionGatewayError": {
+    "kind": "class",
+    "signature": "(message: 'str', *, code: 'str', violations: 'tuple[str, ...]' = ()) -> 'None'"
+  },
+  "RuntimeExecutionGatewayResult": {
+    "kind": "class",
+    "signature": "(contract_version: 'str', submission_outcome: 'str', created: 'bool', reused_existing_job: 'bool', queued: 'bool', job_id: 'str', job_type: 'str', workflow_id: 'str', workspace_id: 'str', correlation_id: 'str', stage_id: 'str', runtime_stage: 'str', dependency_job_ids: 'tuple[str, ...]', idempotency_key: 'str | None', mapping: 'RuntimeJobMapping', submitted_job: 'Mapping[str, Any]', correlation: 'WorkflowJobCorrelation', evidence: 'Mapping[str, Any]') -> None"
+  },
+  "RuntimeExecutionWaveGatewayError": {
+    "kind": "class",
+    "signature": "(message: 'str', *, code: 'str', violations: 'tuple[str, ...]' = (), workflow_id: 'str' = '', wave_index: 'int | None' = None, failed_stage_id: 'str | None' = None, submitted_results: 'tuple[RuntimeExecutionGatewayResult, ...]' = ()) -> 'None'"
+  },
+  "RuntimeExecutionWaveGatewayResult": {
+    "kind": "class",
+    "signature": "(contract_version: 'str', gateway_version: 'str', workflow_id: 'str', wave_index: 'int', execution_semantics: 'str', stage_ids: 'tuple[str, ...]', submission_count: 'int', created_count: 'int', reused_existing_count: 'int', queued_count: 'int', job_ids: 'tuple[str, ...]', dependency_job_ids_by_stage: 'Mapping[str, tuple[str, ...]]', mappings: 'tuple[RuntimeJobMapping, ...]', submissions: 'tuple[RuntimeExecutionGatewayResult, ...]', evidence: 'Mapping[str, Any]') -> None"
+  },
+  "RuntimeTerminalIntakeGatewayError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.runtime_integration.runtime_execution_gateway.RuntimeTerminalIntakeGatewayError'>>"
+  },
+  "RuntimeTerminalIntakeGatewayResult": {
+    "kind": "class",
+    "signature": "(job_id: 'str', workflow_id: 'str', correlation_id: 'str', stage_id: 'str', runtime_status: 'str', disposition: 'str', stage_result: '_8f_Mapping[str, _8f_Any]', processed_result: '_8f_Mapping[str, _8f_Any]', evidence: '_8f_Mapping[str, _8f_Any]', gateway_version: 'str' = 'runtime_execution_gateway_v8.f.0', schema_version: 'str' = 'runtime_terminal_intake_gateway_v1') -> None"
+  },
+  "build_coordination_execution_idempotency_key": {
+    "kind": "function",
+    "signature": "(*, mapping: 'RuntimeJobMapping') -> 'str'"
+  },
+  "explain_runtime_execution_gateway_v1": {
+    "kind": "function",
+    "signature": "() -> 'dict[str, Any]'"
+  },
+  "explain_runtime_execution_reconciliation_v1": {
+    "kind": "function",
+    "signature": "() -> 'dict[str, Any]'"
+  },
+  "explain_runtime_execution_wave_gateway_v1": {
+    "kind": "function",
+    "signature": "() -> 'dict[str, Any]'"
+  },
+  "intake_runtime_terminal_stage_result": {
+    "kind": "function",
+    "signature": "(*, job_id: 'str', workflow_repository: '_8f_Any', correlation_registry: '_8f_Any' = None, job_reader: '_8f_Callable[[str], _8f_Any]' = <function get_orchestration_job at 0x0000021DFFFDFD80>, events_reader: '_8f_Callable[[str], _8f_Any]' = <function list_job_events at 0x0000021DFFFDFCE0>, completion_intake: '_8f_Callable[..., _8f_Any]' = <function intake_runtime_completion at 0x0000021D815E8C20>, failure_intake: '_8f_Callable[..., _8f_Any]' = <function intake_runtime_failure at 0x0000021D815E9800>, correlation_resolver: '_8f_Callable[..., _8f_Any]' = <function resolve_workflow_job_correlation at 0x0000021DFFFA3240>, result_processor: '_8f_Callable[[_8f_Any], _8f_Any]' = <function process_stage_result at 0x0000021D815EA660>) -> 'RuntimeTerminalIntakeGatewayResult'"
+  },
+  "submit_runtime_execution_wave": {
+    "kind": "function",
+    "signature": "(*, mapping_result: 'RuntimeJobMappingResult', dependency_job_ids_by_stage: 'Mapping[str, Any] | None' = None, execution_semantics: 'str' = 'parallel_eligible', submitter: 'Callable[..., Mapping[str, Any]]' = <function submit_universal_job at 0x0000021D815D8220>, correlation_registry: 'WorkflowJobCorrelationRegistry | None' = None, jobs_reader: 'Callable[[], Mapping[str, Any]]' = <function load_jobs at 0x0000021DFFFDF880>) -> 'RuntimeExecutionWaveGatewayResult'"
+  },
+  "submit_runtime_job_mapping": {
+    "kind": "function",
+    "signature": "(*, mapping: 'RuntimeJobMapping', submitter: 'Callable[..., Mapping[str, Any]]' = <function submit_universal_job at 0x0000021D815D8220>, correlation_registry: 'WorkflowJobCorrelationRegistry | None' = None) -> 'RuntimeExecutionGatewayResult'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: execution_gateway.RuntimeTerminalIntakeGatewayResult
+SIGNATURE: (job_id: 'str', workflow_id: 'str', correlation_id: 'str', stage_id: 'str', runtime_status: 'str', disposition: 'str', stage_result: '_8f_Mapping[str, _8f_Any]', processed_result: '_8f_Mapping[str, _8f_Any]', evidence: '_8f_Mapping[str, _8f_Any]', gateway_version: 'str' = 'runtime_execution_gateway_v8.f.0', schema_version: 'str' = 'runtime_terminal_intake_gateway_v1') -> None
+==============================================================================================================
+@_8f_dataclass(frozen=True, slots=True)
+class RuntimeTerminalIntakeGatewayResult:
+    job_id: str
+    workflow_id: str
+    correlation_id: str
+    stage_id: str
+    runtime_status: str
+    disposition: str
+    stage_result: _8f_Mapping[str, _8f_Any]
+    processed_result: _8f_Mapping[str, _8f_Any]
+    evidence: _8f_Mapping[str, _8f_Any]
+    gateway_version: str = "runtime_execution_gateway_v8.f.0"
+    schema_version: str = "runtime_terminal_intake_gateway_v1"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "job_id",
+            "workflow_id",
+            "correlation_id",
+            "stage_id",
+            "runtime_status",
+            "disposition",
+        ):
+            if not str(getattr(self, field_name, "") or "").strip():
+                raise RuntimeTerminalIntakeGatewayError(
+                    f"{field_name} is required."
+                )
+        object.__setattr__(self, "stage_result", _8f_freeze(self.stage_result))
+        object.__setattr__(self, "processed_result", _8f_freeze(self.processed_result))
+        object.__setattr__(self, "evidence", _8f_freeze(self.evidence))
+
+    def to_dict(self) -> dict[str, _8f_Any]:
+        return {
+            "job_id": self.job_id,
+            "workflow_id": self.workflow_id,
+            "correlation_id": self.correlation_id,
+            "stage_id": self.stage_id,
+            "runtime_status": self.runtime_status,
+            "disposition": self.disposition,
+            "stage_result": _8f_plain(self.stage_result),
+            "processed_result": _8f_plain(self.processed_result),
+            "evidence": _8f_plain(self.evidence),
+            "gateway_version": self.gateway_version,
+            "schema_version": self.schema_version,
+        }
+
+
+==============================================================================================================
+AUTHORITY: execution_gateway.intake_runtime_terminal_stage_result
+SIGNATURE: (*, job_id: 'str', workflow_repository: '_8f_Any', correlation_registry: '_8f_Any' = None, job_reader: '_8f_Callable[[str], _8f_Any]' = <function get_orchestration_job at 0x0000021DFFFDFD80>, events_reader: '_8f_Callable[[str], _8f_Any]' = <function list_job_events at 0x0000021DFFFDFCE0>, completion_intake: '_8f_Callable[..., _8f_Any]' = <function intake_runtime_completion at 0x0000021D815E8C20>, failure_intake: '_8f_Callable[..., _8f_Any]' = <function intake_runtime_failure at 0x0000021D815E9800>, correlation_resolver: '_8f_Callable[..., _8f_Any]' = <function resolve_workflow_job_correlation at 0x0000021DFFFA3240>, result_processor: '_8f_Callable[[_8f_Any], _8f_Any]' = <function process_stage_result at 0x0000021D815EA660>) -> 'RuntimeTerminalIntakeGatewayResult'
+==============================================================================================================
+def intake_runtime_terminal_stage_result(
+    *,
+    job_id: str,
+    workflow_repository: _8f_Any,
+    correlation_registry: _8f_Any = None,
+    job_reader: _8f_Callable[[str], _8f_Any] = _8f_get_orchestration_job,
+    events_reader: _8f_Callable[[str], _8f_Any] = _8f_list_job_events,
+    completion_intake: _8f_Callable[..., _8f_Any] = _8f_intake_runtime_completion,
+    failure_intake: _8f_Callable[..., _8f_Any] = _8f_intake_runtime_failure,
+    correlation_resolver: _8f_Callable[..., _8f_Any] = _8f_resolve_workflow_job_correlation,
+    result_processor: _8f_Callable[[_8f_Any], _8f_Any] = _8f_process_stage_result,
+) -> RuntimeTerminalIntakeGatewayResult:
+    """Intake one completed or failed Runtime job without executing it."""
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        raise RuntimeTerminalIntakeGatewayError("job_id is required.")
+
+    load_workflow = getattr(workflow_repository, "load_workflow", None)
+    if not callable(load_workflow):
+        raise RuntimeTerminalIntakeGatewayError(
+            "workflow_repository must expose load_workflow()."
+        )
+    if not callable(job_reader) or not callable(events_reader):
+        raise RuntimeTerminalIntakeGatewayError(
+            "Canonical job and event readers must be callable."
+        )
+
+    terminal_job = job_reader(normalized_job_id)
+    if terminal_job is None:
+        raise RuntimeTerminalIntakeGatewayError(
+            f"Runtime job was not found: {normalized_job_id}"
+        )
+    observed_job_id = (
+        _8f_text(terminal_job, "job_id")
+        or _8f_text(terminal_job, "id")
+    )
+    if observed_job_id != normalized_job_id:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Runtime job reader returned a conflicting job identity."
+        )
+
+    runtime_status = _8f_text(terminal_job, "status").lower()
+    if runtime_status not in {"completed", "failed"}:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Runtime job is not ready for completion/failure intake: "
+            f"{runtime_status or '<missing>'}"
+        )
+
+    correlation = correlation_resolver(
+        job_id=normalized_job_id,
+        registry=correlation_registry,
+    )
+    workflow_id = _8f_text(correlation, "workflow_id")
+    workflow = load_workflow(workflow_id)
+    if workflow is None:
+        raise RuntimeTerminalIntakeGatewayError(
+            f"Persisted workflow was not found: {workflow_id}"
+        )
+
+    identity_pairs = (
+        ("workflow_id", workflow_id),
+        ("workspace_id", _8f_text(correlation, "workspace_id")),
+        ("correlation_id", _8f_text(correlation, "correlation_id")),
+    )
+    for field_name, expected in identity_pairs:
+        actual = _8f_text(workflow, field_name)
+        if not expected or actual != expected:
+            raise RuntimeTerminalIntakeGatewayError(
+                "Persisted workflow identity conflicts with Runtime "
+                f"correlation: {field_name}"
+            )
+
+    fixed_job_reader = lambda requested_id: (
+        terminal_job if requested_id == normalized_job_id else None
+    )
+    if runtime_status == "completed":
+        stage_result = completion_intake(
+            job_id=normalized_job_id,
+            registry=correlation_registry,
+            completion_reader=fixed_job_reader,
+            events_reader=events_reader,
+        )
+        intake_authority = "intake_runtime_completion"
+    else:
+        stage_result = failure_intake(
+            job_id=normalized_job_id,
+            registry=correlation_registry,
+            failure_reader=fixed_job_reader,
+            events_reader=events_reader,
+        )
+        intake_authority = "intake_runtime_failure"
+
+    for field_name, expected in (
+        ("job_id", normalized_job_id),
+        ("workflow_id", workflow_id),
+        ("workspace_id", _8f_text(correlation, "workspace_id")),
+        ("correlation_id", _8f_text(correlation, "correlation_id")),
+        ("stage_id", _8f_text(correlation, "stage_id")),
+    ):
+        if _8f_text(stage_result, field_name) != expected:
+            raise RuntimeTerminalIntakeGatewayError(
+                "Stage Result identity conflicts with Runtime "
+                f"correlation: {field_name}"
+            )
+
+    result_status = _8f_text(stage_result, "status").lower()
+    if result_status != runtime_status:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Stage Result terminal status conflicts with Runtime job."
+        )
+
+    processed_result = result_processor(stage_result)
+    disposition = _8f_text(processed_result, "disposition").lower()
+    if disposition != runtime_status:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Processed Stage Result disposition conflicts with Runtime job."
+        )
+
+    return RuntimeTerminalIntakeGatewayResult(
+        job_id=normalized_job_id,
+        workflow_id=workflow_id,
+        correlation_id=_8f_text(correlation, "correlation_id"),
+        stage_id=_8f_text(correlation, "stage_id"),
+        runtime_status=runtime_status,
+        disposition=disposition,
+        stage_result=_8f_snapshot(stage_result),
+        processed_result=_8f_snapshot(processed_result),
+        evidence={
+            "intake_authority": intake_authority,
+            "correlation_authority": (
+                "resolve_workflow_job_correlation"
+            ),
+            "workflow_authority": (
+                type(workflow_repository).__name__
+            ),
+            "processor_authority": "process_stage_result",
+            "handler_executed": False,
+            "job_created": False,
+            "queue_claimed": False,
+            "workflow_mutated": False,
+        },
+    )
+
+
+==============================================================================================================
+PUBLIC INVENTORY: workflow_contract
+==============================================================================================================
+{
+  "UniversalWorkflow": {
+    "kind": "class",
+    "signature": "(workflow_id: 'str', workflow_type: 'str', workflow_version: 'str', workspace_id: 'str', coordinator_id: 'str', coordinator_version: 'str', correlation_id: 'str', parent_workflow_id: 'Optional[str]', root_workflow_id: 'str', status: 'UniversalWorkflowStatus', input_reference: 'Optional[str]', context: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, current_stage: 'Optional[str]' = None, completed_stages: 'Tuple[str, ...]' = (), pending_stages: 'Tuple[str, ...]' = (), failed_stages: 'Tuple[str, ...]' = (), skipped_stages: 'Tuple[str, ...]' = (), result_reference: 'Optional[str]' = None, artifact_references: 'Tuple[str, ...]' = (), idempotency_key: 'Optional[str]' = None, created_at: 'str' = '', started_at: 'Optional[str]' = None, updated_at: 'str' = '', completed_at: 'Optional[str]' = None, failed_at: 'Optional[str]' = None, cancelled_at: 'Optional[str]' = None, failure_code: 'Optional[str]' = None, failure_message: 'Optional[str]' = None, failure_details: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_workflow_contract_v1.1.0') -> None"
+  },
+  "UniversalWorkflowContractError": {
+    "kind": "class",
+    "signature": "(message: 'str', *, violations: 'Tuple[str, ...]' = ()) -> 'None'"
+  },
+  "UniversalWorkflowStatus": {
+    "kind": "class",
+    "signature": "(*values)"
+  },
+  "UniversalWorkflowValidationReport": {
+    "kind": "class",
+    "signature": "(is_valid: 'bool', violations: 'Tuple[str, ...]' = (), contract_version: 'str' = 'universal_workflow_contract_v1.1.0', checked_field_count: 'int' = 0) -> None"
+  },
+  "validate_universal_workflow": {
+    "kind": "function",
+    "signature": "(candidate: 'Any') -> 'UniversalWorkflowValidationReport'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: workflow_contract.UniversalWorkflow
+SIGNATURE: (workflow_id: 'str', workflow_type: 'str', workflow_version: 'str', workspace_id: 'str', coordinator_id: 'str', coordinator_version: 'str', correlation_id: 'str', parent_workflow_id: 'Optional[str]', root_workflow_id: 'str', status: 'UniversalWorkflowStatus', input_reference: 'Optional[str]', context: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, current_stage: 'Optional[str]' = None, completed_stages: 'Tuple[str, ...]' = (), pending_stages: 'Tuple[str, ...]' = (), failed_stages: 'Tuple[str, ...]' = (), skipped_stages: 'Tuple[str, ...]' = (), result_reference: 'Optional[str]' = None, artifact_references: 'Tuple[str, ...]' = (), idempotency_key: 'Optional[str]' = None, created_at: 'str' = '', started_at: 'Optional[str]' = None, updated_at: 'str' = '', completed_at: 'Optional[str]' = None, failed_at: 'Optional[str]' = None, cancelled_at: 'Optional[str]' = None, failure_code: 'Optional[str]' = None, failure_message: 'Optional[str]' = None, failure_details: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_workflow_contract_v1.1.0') -> None
+==============================================================================================================
+@dataclass(frozen=True, slots=True)
+class UniversalWorkflow:
+    """
+    Canonical immutable representation of one coordinated workflow execution.
+
+    This object describes workflow identity and coordination state. It does not
+    execute stages or runtime jobs.
+    """
+
+    # Identity
+    workflow_id: str
+    workflow_type: str
+    workflow_version: str
+    workspace_id: str
+
+    # Coordinator identity
+    coordinator_id: str
+    coordinator_version: str
+
+    # Correlation
+    correlation_id: str
+    parent_workflow_id: Optional[str]
+    root_workflow_id: str
+
+    # Lifecycle
+    status: UniversalWorkflowStatus
+
+    # Workflow input/context
+    input_reference: Optional[str]
+    context: Mapping[str, Any] = field(default_factory=dict)
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    # Stage summaries
+    current_stage: Optional[str] = None
+    completed_stages: Tuple[str, ...] = ()
+    pending_stages: Tuple[str, ...] = ()
+    failed_stages: Tuple[str, ...] = ()
+    skipped_stages: Tuple[str, ...] = ()
+
+    # Result/evidence
+    result_reference: Optional[str] = None
+    artifact_references: Tuple[str, ...] = ()
+
+    # Duplicate protection
+    idempotency_key: Optional[str] = None
+
+    # Timestamps
+    created_at: str = ""
+    started_at: Optional[str] = None
+    updated_at: str = ""
+    completed_at: Optional[str] = None
+    failed_at: Optional[str] = None
+    cancelled_at: Optional[str] = None
+
+    # Failure
+    failure_code: Optional[str] = None
+    failure_message: Optional[str] = None
+    failure_details: Mapping[str, Any] = field(default_factory=dict)
+
+    # Contract
+    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+
+    def __post_init__(self) -> None:
+        violations: list[str] = []
+
+        workflow_id = _require_nonempty_string(
+            self.workflow_id,
+            name="workflow_id",
+            violations=violations,
+        )
+
+        workflow_type = _require_nonempty_string(
+            self.workflow_type,
+            name="workflow_type",
+            violations=violations,
+        )
+
+        workflow_version = _require_nonempty_string(
+            self.workflow_version,
+            name="workflow_version",
+            violations=violations,
+        )
+
+        workspace_id = _require_nonempty_string(
+            self.workspace_id,
+            name="workspace_id",
+            violations=violations,
+        )
+
+        coordinator_id = _require_nonempty_string(
+            self.coordinator_id,
+            name="coordinator_id",
+            violations=violations,
+        )
+
+        coordinator_version = _require_nonempty_string(
+            self.coordinator_version,
+            name="coordinator_version",
+            violations=violations,
+        )
+
+        correlation_id = _require_nonempty_string(
+            self.correlation_id,
+            name="correlation_id",
+            violations=violations,
+        )
+
+        parent_workflow_id = _optional_string(
+            self.parent_workflow_id,
+            name="parent_workflow_id",
+            violations=violations,
+        )
+
+        root_workflow_id = _require_nonempty_string(
+            self.root_workflow_id,
+            name="root_workflow_id",
+            violations=violations,
+        )
+
+        try:
+            status = UniversalWorkflowStatus.coerce(
+                self.status
+            )
+        except UniversalWorkflowContractError as exc:
+            violations.extend(
+                exc.violations or (str(exc),)
+            )
+            status = UniversalWorkflowStatus.CREATED
+
+        input_reference = _optional_string(
+            self.input_reference,
+            name="input_reference",
+            violations=violations,
+        )
+
+        current_stage = _optional_string(
+            self.current_stage,
+            name="current_stage",
+            violations=violations,
+        )
+
+        result_reference = _optional_string(
+            self.result_reference,
+            name="result_reference",
+            violations=violations,
+        )
+
+        idempotency_key = _optional_string(
+            self.idempotency_key,
+            name="idempotency_key",
+            violations=violations,
+        )
+
+        failure_code = _optional_string(
+            self.failure_code,
+            name="failure_code",
+            violations=violations,
+        )
+
+        failure_message = _optional_string(
+            self.failure_message,
+            name="failure_message",
+            violations=violations,
+        )
+
+        context = _normalize_mapping(
+            self.context,
+            name="context",
+            violations=violations,
+        )
+
+        metadata = _normalize_mapping(
+            self.metadata,
+            name="metadata",
+            violations=violations,
+        )
+
+        failure_details = _normalize_mapping(
+            self.failure_details,
+            name="failure_details",
+            violations=violations,
+        )
+
+        completed_stages = _normalize_string_tuple(
+            self.completed_stages,
+            name="completed_stages",
+            violations=violations,
+        )
+
+        pending_stages = _normalize_string_tuple(
+            self.pending_stages,
+            name="pending_stages",
+            violations=violations,
+        )
+
+        failed_stages = _normalize_string_tuple(
+            self.failed_stages,
+            name="failed_stages",
+            violations=violations,
+        )
+
+        skipped_stages = _normalize_string_tuple(
+            self.skipped_stages,
+            name="skipped_stages",
+            violations=violations,
+        )
+
+        artifact_references = _normalize_string_tuple(
+            self.artifact_references,
+            name="artifact_references",
+            violations=violations,
+        )
+
+        created_at = _normalize_timestamp(
+            self.created_at,
+            name="created_at",
+            required=True,
+            violations=violations,
+        )
+
+        updated_at = _normalize_timestamp(
+            self.updated_at,
+            name="updated_at",
+            required=True,
+            violations=violations,
+        )
+
+        started_at = _normalize_timestamp(
+            self.started_at,
+            name="started_at",
+            required=False,
+            violations=violations,
+        )
+
+        completed_at = _normalize_timestamp(
+            self.completed_at,
+            name="completed_at",
+            required=False,
+            violations=violations,
+        )
+
+        failed_at = _normalize_timestamp(
+            self.failed_at,
+            name="failed_at",
+            required=False,
+            violations=violations,
+        )
+
+        cancelled_at = _normalize_timestamp(
+            self.cancelled_at,
+            name="cancelled_at",
+            required=False,
+            violations=violations,
+        )
+
+        contract_version = _require_nonempty_string(
+            self.contract_version,
+            name="contract_version",
+            violations=violations,
+        )
+
+        if contract_version != UNIVERSAL_WORKFLOW_CONTRACT_VERSION:
+            violations.append(
+                "contract_version must be "
+                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION
+            )
+
+        # ------------------------------------------------------------------
+        # Cross-field invariants
+        # ------------------------------------------------------------------
+
+        if parent_workflow_id is None:
+            if root_workflow_id != workflow_id:
+                violations.append(
+                    "a root workflow must have root_workflow_id equal to workflow_id"
+                )
+        else:
+            if parent_workflow_id == workflow_id:
+                violations.append(
+                    "parent_workflow_id cannot equal workflow_id"
+                )
+
+        stage_sets = {
+            "completed": set(completed_stages),
+            "pending": set(pending_stages),
+            "failed": set(failed_stages),
+            "skipped": set(skipped_stages),
+        }
+
+        names = tuple(stage_sets)
+
+        for index, left_name in enumerate(names):
+            for right_name in names[index + 1:]:
+                overlap = (
+                    stage_sets[left_name]
+                    & stage_sets[right_name]
+                )
+
+                if overlap:
+                    violations.append(
+                        f"stages cannot be both {left_name} and "
+                        f"{right_name}: {', '.join(sorted(overlap))}"
+                    )
+
+        if (
+            current_stage is not None
+            and current_stage in set(completed_stages)
+        ):
+            violations.append(
+                "current_stage cannot already be completed"
+            )
+
+        if (
+            current_stage is not None
+            and current_stage in set(failed_stages)
+        ):
+            violations.append(
+                "current_stage cannot already be failed"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.COMPLETED
+            and completed_at is None
+        ):
+            violations.append(
+                "completed_at is required when status is COMPLETED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.FAILED
+            and failed_at is None
+        ):
+            violations.append(
+                "failed_at is required when status is FAILED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.CANCELLED
+            and cancelled_at is None
+        ):
+            violations.append(
+                "cancelled_at is required when status is CANCELLED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.FAILED
+            and failure_code is None
+        ):
+            violations.append(
+                "failure_code is required when status is FAILED"
+            )
+
+        if (
+            status == UniversalWorkflowStatus.COMPLETED
+            and failed_stages
+        ):
+            violations.append(
+                "COMPLETED workflow cannot contain failed_stages"
+            )
+
+        if (
+            created_at is not None
+            and updated_at is not None
+        ):
+            created_dt = datetime.fromisoformat(
+                created_at.replace("Z", "+00:00")
+            )
+            updated_dt = datetime.fromisoformat(
+                updated_at.replace("Z", "+00:00")
+            )
+
+            if updated_dt < created_dt:
+                violations.append(
+                    "updated_at cannot be earlier than created_at"
+                )
+
+        if violations:
+            raise UniversalWorkflowContractError(
+                "Universal Workflow Contract validation failed",
+                violations=tuple(violations),
+            )
+
+        object.__setattr__(self, "workflow_id", workflow_id)
+        object.__setattr__(self, "workflow_type", workflow_type)
+        object.__setattr__(self, "workflow_version", workflow_version)
+        object.__setattr__(self, "workspace_id", workspace_id)
+        object.__setattr__(self, "coordinator_id", coordinator_id)
+        object.__setattr__(self, "coordinator_version", coordinator_version)
+        object.__setattr__(self, "correlation_id", correlation_id)
+        object.__setattr__(self, "parent_workflow_id", parent_workflow_id)
+        object.__setattr__(self, "root_workflow_id", root_workflow_id)
+        object.__setattr__(self, "status", status)
+        object.__setattr__(self, "input_reference", input_reference)
+        object.__setattr__(self, "context", context)
+        object.__setattr__(self, "metadata", metadata)
+        object.__setattr__(self, "current_stage", current_stage)
+        object.__setattr__(self, "completed_stages", completed_stages)
+        object.__setattr__(self, "pending_stages", pending_stages)
+        object.__setattr__(self, "failed_stages", failed_stages)
+        object.__setattr__(self, "skipped_stages", skipped_stages)
+        object.__setattr__(self, "result_reference", result_reference)
+        object.__setattr__(self, "artifact_references", artifact_references)
+        object.__setattr__(self, "idempotency_key", idempotency_key)
+        object.__setattr__(self, "created_at", created_at)
+        object.__setattr__(self, "started_at", started_at)
+        object.__setattr__(self, "updated_at", updated_at)
+        object.__setattr__(self, "completed_at", completed_at)
+        object.__setattr__(self, "failed_at", failed_at)
+        object.__setattr__(self, "cancelled_at", cancelled_at)
+        object.__setattr__(self, "failure_code", failure_code)
+        object.__setattr__(self, "failure_message", failure_message)
+        object.__setattr__(self, "failure_details", failure_details)
+        object.__setattr__(self, "contract_version", contract_version)
+
+    # ======================================================================
+    # Serialization
+    # ======================================================================
+
+    def to_canonical_dict(self) -> dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "workflow_type": self.workflow_type,
+            "workflow_version": self.workflow_version,
+            "workspace_id": self.workspace_id,
+            "coordinator_id": self.coordinator_id,
+            "coordinator_version": self.coordinator_version,
+            "correlation_id": self.correlation_id,
+            "parent_workflow_id": self.parent_workflow_id,
+            "root_workflow_id": self.root_workflow_id,
+            "status": self.status.value,
+            "input_reference": self.input_reference,
+            "context": _thaw(self.context),
+            "metadata": _thaw(self.metadata),
+            "current_stage": self.current_stage,
+            "completed_stages": list(self.completed_stages),
+            "pending_stages": list(self.pending_stages),
+            "failed_stages": list(self.failed_stages),
+            "skipped_stages": list(self.skipped_stages),
+            "result_reference": self.result_reference,
+            "artifact_references": list(self.artifact_references),
+            "idempotency_key": self.idempotency_key,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "completed_at": self.completed_at,
+            "failed_at": self.failed_at,
+            "cancelled_at": self.cancelled_at,
+            "failure_code": self.failure_code,
+            "failure_message": self.failure_message,
+            "failure_details": _thaw(self.failure_details),
+            "contract_version": self.contract_version,
+        }
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.to_canonical_dict()
+
+    def to_canonical_json(self) -> str:
+        return _canonical_json(
+            self.to_canonical_dict()
+        )
+
+    # ======================================================================
+    # Schema
+    # ======================================================================
+
+    @classmethod
+    def required_fields(cls) -> Tuple[str, ...]:
+        return REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+
+    @classmethod
+    def schema(cls) -> Mapping[str, Any]:
+        return MappingProxyType(
+            {
+                "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+                "contract_version": UNIVERSAL_WORKFLOW_CONTRACT_VERSION,
+                "schema_version": UNIVERSAL_WORKFLOW_SCHEMA_VERSION,
+                "required_fields": REQUIRED_UNIVERSAL_WORKFLOW_FIELDS,
+            }
+        )
+
+    # ======================================================================
+    # Reconstruction
+    # ======================================================================
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalWorkflow":
+        if not isinstance(data, Mapping):
+            raise UniversalWorkflowContractError(
+                "workflow data must be a mapping"
+            )
+
+        unknown_fields = sorted(
+            set(data) - _CONTRACT_CONSTRUCTOR_FIELDS
+        )
+
+        if unknown_fields:
+            raise UniversalWorkflowContractError(
+                "unknown universal workflow fields: "
+                + ", ".join(unknown_fields),
+                violations=tuple(
+                    "unknown field: " + name
+                    for name in unknown_fields
+                ),
+            )
+
+        missing_fields = tuple(
+            name
+            for name in REQUIRED_UNIVERSAL_WORKFLOW_FIELDS
+            if name not in data
+        )
+
+        if missing_fields:
+            raise UniversalWorkflowContractError(
+                "missing required universal workflow fields: "
+                + ", ".join(missing_fields),
+                violations=tuple(
+                    "missing required field: " + name
+                    for name in missing_fields
+                ),
+            )
+
+        kwargs = dict(data)
+
+        kwargs["status"] = UniversalWorkflowStatus.coerce(
+            kwargs["status"]
+        )
+
+        return cls(**kwargs)
+
+    @classmethod
+    def from_json(
+        cls,
+        text: str,
+    ) -> "UniversalWorkflow":
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise UniversalWorkflowContractError(
+                "workflow json is not decodable: "
+                + str(exc)
+            ) from exc
+
+        return cls.from_dict(data)
+
+    @classmethod
+    def reconstruct(
+        cls,
+        data: Mapping[str, Any],
+    ) -> "UniversalWorkflow":
+        return cls.from_dict(data)
+
+    # ======================================================================
+    # Identity / evidence
+    # ======================================================================
+
+    def identity_fingerprint(self) -> str:
+        material = {
+            "contract_id": UNIVERSAL_WORKFLOW_CONTRACT_ID,
+            "contract_version": self.contract_version,
+            "workflow_id": self.workflow_id,
+            "workflow_type": self.workflow_type,
+            "workflow_version": self.workflow_version,
+            "workspace_id": self.workspace_id,
+            "root_workflow_id": self.root_workflow_id,
+            "correlation_id": self.correlation_id,
+        }
+
+        return _fingerprint(
+            _canonical_json(material)
+        )
+
+    def content_fingerprint(self) -> str:
+        return _fingerprint(
+            self.to_canonical_json()
+        )
+
+    def validate(self) -> UniversalWorkflowValidationReport:
+        return validate_universal_workflow(self)
+
+
+==============================================================================================================
+AUTHORITY: workflow_contract.UniversalWorkflowStatus
+SIGNATURE: (*values)
+==============================================================================================================
+class UniversalWorkflowStatus(str, enum.Enum):
+    CREATED = "CREATED"
+    READY = "READY"
+    RUNNING = "RUNNING"
+    WAITING = "WAITING"
+    PAUSED = "PAUSED"
+    RECOVERING = "RECOVERING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+    ABORTED = "ABORTED"
+
+    @classmethod
+    def coerce(cls, value: Any) -> "UniversalWorkflowStatus":
+        if isinstance(value, cls):
+            return value
+
+        if not isinstance(value, str):
+            raise UniversalWorkflowContractError(
+                "workflow status must be a string or UniversalWorkflowStatus"
+            )
+
+        normalized = value.strip().upper()
+
+        try:
+            return cls(normalized)
+        except ValueError as exc:
+            raise UniversalWorkflowContractError(
+                f"unknown workflow status: {value!r}"
+            ) from exc
+
+
+==============================================================================================================
+PUBLIC INVENTORY: stage_result_processor
+==============================================================================================================
+{
+  "ProcessedStageResult": {
+    "kind": "class",
+    "signature": "(result_id: 'str', workflow_id: 'str', correlation_id: 'str', stage_id: 'str', stage_version: 'str', pipeline_id: 'str', workflow_type: 'str', workspace_id: 'str', job_id: 'str', job_type: 'str', disposition: 'StageResultDisposition', normal_handoff_allowed: 'bool', prerequisite_satisfied: 'bool', output: 'Mapping[str, Any]', result_reference: 'str', artifact_references: 'Tuple[str, ...]', failure_code: 'str', failure_message: 'str', failure_details: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', source_result_contract_version: 'str', processor_version: 'str' = 'stage_result_processor_v6.1.0', schema_version: 'str' = 'stage_result_processor_schema_v1') -> None"
+  },
+  "StageResultDisposition": {
+    "kind": "class",
+    "signature": "(*values)"
+  },
+  "StageResultProcessorError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.stage_handoff.stage_result_processor.StageResultProcessorError'>>"
+  },
+  "process_stage_result": {
+    "kind": "function",
+    "signature": "(result: 'UniversalStageResult') -> 'ProcessedStageResult'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: stage_result_processor.ProcessedStageResult
+SIGNATURE: (result_id: 'str', workflow_id: 'str', correlation_id: 'str', stage_id: 'str', stage_version: 'str', pipeline_id: 'str', workflow_type: 'str', workspace_id: 'str', job_id: 'str', job_type: 'str', disposition: 'StageResultDisposition', normal_handoff_allowed: 'bool', prerequisite_satisfied: 'bool', output: 'Mapping[str, Any]', result_reference: 'str', artifact_references: 'Tuple[str, ...]', failure_code: 'str', failure_message: 'str', failure_details: 'Mapping[str, Any]', metadata: 'Mapping[str, Any]', source_result_contract_version: 'str', processor_version: 'str' = 'stage_result_processor_v6.1.0', schema_version: 'str' = 'stage_result_processor_schema_v1') -> None
+==============================================================================================================
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class ProcessedStageResult:
+    """
+    Immutable coordination-facing representation of one validated
+    terminal UniversalStageResult.
+    """
+
+    result_id: str
+    workflow_id: str
+    correlation_id: str
+
+    stage_id: str
+    stage_version: str
+    pipeline_id: str
+    workflow_type: str
+    workspace_id: str
+
+    job_id: str
+    job_type: str
+
+    disposition: StageResultDisposition
+
+    normal_handoff_allowed: bool
+    prerequisite_satisfied: bool
+
+    output: Mapping[str, Any]
+    result_reference: str
+    artifact_references: Tuple[str, ...]
+
+    failure_code: str
+    failure_message: str
+    failure_details: Mapping[str, Any]
+
+    metadata: Mapping[str, Any]
+
+    source_result_contract_version: str
+    processor_version: str = (
+        STAGE_RESULT_PROCESSOR_VERSION
+    )
+    schema_version: str = (
+        STAGE_RESULT_PROCESSOR_SCHEMA_VERSION
+    )
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        object.__setattr__(
+            self,
+            "output",
+            _freeze(
+                self.output
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "failure_details",
+            _freeze(
+                self.failure_details
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "metadata",
+            _freeze(
+                self.metadata
+            ),
+        )
+
+        object.__setattr__(
+            self,
+            "artifact_references",
+            tuple(
+                self.artifact_references
+            ),
+        )
+
+    @property
+    def completed(
+        self,
+    ) -> bool:
+
+        return (
+            self.disposition
+            == StageResultDisposition.COMPLETED
+        )
+
+    @property
+    def failed(
+        self,
+    ) -> bool:
+
+        return (
+            self.disposition
+            == StageResultDisposition.FAILED
+        )
+
+    @property
+    def skipped(
+        self,
+    ) -> bool:
+
+        return (
+            self.disposition
+            == StageResultDisposition.SKIPPED
+        )
+
+    @property
+    def cancelled(
+        self,
+    ) -> bool:
+
+        return (
+            self.disposition
+            == StageResultDisposition.CANCELLED
+        )
+
+    @property
+    def terminal(
+        self,
+    ) -> bool:
+
+        return True
+
+    def to_dict(
+        self,
+    ) -> dict[str, Any]:
+
+        return {
+            "result_id":
+                self.result_id,
+
+            "workflow_id":
+                self.workflow_id,
+
+            "correlation_id":
+                self.correlation_id,
+
+            "stage_id":
+                self.stage_id,
+
+            "stage_version":
+                self.stage_version,
+
+            "pipeline_id":
+                self.pipeline_id,
+
+            "workflow_type":
+                self.workflow_type,
+
+            "workspace_id":
+                self.workspace_id,
+
+            "job_id":
+                self.job_id,
+
+            "job_type":
+                self.job_type,
+
+            "disposition":
+                self.disposition.value,
+
+            "normal_handoff_allowed":
+                self.normal_handoff_allowed,
+
+            "prerequisite_satisfied":
+                self.prerequisite_satisfied,
+
+            "output":
+                _thaw(
+                    self.output
+                ),
+
+            "result_reference":
+                self.result_reference,
+
+            "artifact_references":
+                list(
+                    self.artifact_references
+                ),
+
+            "failure_code":
+                self.failure_code,
+
+            "failure_message":
+                self.failure_message,
+
+            "failure_details":
+                _thaw(
+                    self.failure_details
+                ),
+
+            "metadata":
+                _thaw(
+                    self.metadata
+                ),
+
+            "source_result_contract_version":
+                self.source_result_contract_version,
+
+            "processor_version":
+                self.processor_version,
+
+            "schema_version":
+                self.schema_version,
+        }
+
+
+==============================================================================================================
+AUTHORITY: stage_result_processor.process_stage_result
+SIGNATURE: (result: 'UniversalStageResult') -> 'ProcessedStageResult'
+==============================================================================================================
+def process_stage_result(
+    result: UniversalStageResult,
+) -> ProcessedStageResult:
+    """
+    Validate and normalize one terminal UniversalStageResult.
+
+    No orchestration mutation, Runtime mutation, coordinator invocation,
+    downstream payload mapping or lifecycle transition occurs here.
+    """
+
+    _validate_source_result(
+        result
+    )
+
+    (
+        disposition,
+        normal_handoff_allowed,
+        prerequisite_satisfied,
+    ) = _classify(
+        result
+    )
+
+    return ProcessedStageResult(
+        result_id=
+            result.result_id,
+
+        workflow_id=
+            result.workflow_id,
+
+        correlation_id=
+            result.correlation_id,
+
+        stage_id=
+            result.stage_id,
+
+        stage_version=
+            result.stage_version,
+
+        pipeline_id=
+            result.pipeline_id,
+
+        workflow_type=
+            result.workflow_type,
+
+        workspace_id=
+            result.workspace_id,
+
+        job_id=
+            result.job_id,
+
+        job_type=
+            result.job_type,
+
+        disposition=
+            disposition,
+
+        normal_handoff_allowed=
+            normal_handoff_allowed,
+
+        prerequisite_satisfied=
+            prerequisite_satisfied,
+
+        output=
+            result.output,
+
+        result_reference=
+            result.result_reference,
+
+        artifact_references=
+            tuple(
+                result.artifact_references
+            ),
+
+        failure_code=
+            result.failure_code,
+
+        failure_message=
+            result.failure_message,
+
+        failure_details=
+            result.failure_details,
+
+        metadata=
+            result.metadata,
+
+        source_result_contract_version=
+            result.contract_version,
+    )
+
+
+==============================================================================================================
+PUBLIC INVENTORY: workflow_repository
+==============================================================================================================
+{
+  "WorkflowPersistenceConflictError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_persistence.repository.WorkflowPersistenceConflictError'>>"
+  },
+  "WorkflowPersistenceError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_persistence.repository.WorkflowPersistenceError'>>"
+  },
+  "WorkflowPersistenceEvidence": {
+    "kind": "class",
+    "signature": "(workflow_id: 'str', path: 'str', workflow_content_fingerprint: 'str', workflow_identity_fingerprint: 'str', document_fingerprint: 'str', persisted_at: 'str', persistence_version: 'str' = 'workflow_persistence_v1.0.0', schema_version: 'str' = 'workflow_persistence_document_v1') -> None"
+  },
+  "WorkflowPersistenceIntegrityError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_persistence.repository.WorkflowPersistenceIntegrityError'>>"
+  },
+  "WorkflowPersistenceNotFoundError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_persistence.repository.WorkflowPersistenceNotFoundError'>>"
+  },
+  "WorkflowPersistenceRecord": {
+    "kind": "class",
+    "signature": "(workflow: 'UniversalWorkflow', evidence: 'WorkflowPersistenceEvidence') -> None"
+  },
+  "WorkflowRepository": {
+    "kind": "class",
+    "signature": "(*, root: 'Path | str') -> 'None'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: workflow_repository.WorkflowRepository
+SIGNATURE: (*, root: 'Path | str') -> 'None'
+==============================================================================================================
+class WorkflowRepository:
+    """One atomic repository for Universal Workflow instances."""
+
+    def __init__(
+        self,
+        *,
+        root: Path | str,
+    ) -> None:
+        repository_root = Path(
+            root
+        ).resolve()
+
+        repository_root.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        if not repository_root.is_dir():
+            raise WorkflowPersistenceError(
+                "Workflow repository root is not a directory."
+            )
+
+        self._root = repository_root
+        self._lock = threading.RLock()
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    def workflow_path(
+        self,
+        workflow_id: Any,
+    ) -> Path:
+        normalized = _required_text(
+            workflow_id,
+            field_name="workflow_id",
+        )
+
+        identity_hash = hashlib.sha256(
+            normalized.encode("utf-8")
+        ).hexdigest()
+
+        return (
+            self._root
+            / f"workflow_{identity_hash}.json"
+        )
+
+    def exists(
+        self,
+        workflow_id: Any,
+    ) -> bool:
+        return self.workflow_path(
+            workflow_id
+        ).is_file()
+
+    def save_workflow(
+        self,
+        workflow: UniversalWorkflow,
+        *,
+        expected_current_fingerprint: Optional[str] = None,
+    ) -> WorkflowPersistenceEvidence:
+        if not isinstance(
+            workflow,
+            UniversalWorkflow,
+        ):
+            raise TypeError(
+                "workflow must be a UniversalWorkflow."
+            )
+
+        validation = workflow.validate()
+
+        if not validation.is_valid:
+            raise WorkflowPersistenceIntegrityError(
+                "Workflow contract validation failed: "
+                + "; ".join(validation.violations)
+            )
+
+        workflow_id = _required_text(
+            workflow.workflow_id,
+            field_name="workflow_id",
+        )
+
+        target = self.workflow_path(
+            workflow_id
+        )
+
+        with self._lock:
+            if expected_current_fingerprint is not None:
+                expected = _required_text(
+                    expected_current_fingerprint,
+                    field_name=(
+                        "expected_current_fingerprint"
+                    ),
+                )
+
+                if not target.is_file():
+                    raise WorkflowPersistenceConflictError(
+                        "Expected an existing workflow, "
+                        "but no persisted workflow exists."
+                    )
+
+                current = self.load_workflow_record(
+                    workflow_id
+                )
+
+                if (
+                    current.evidence
+                    .workflow_content_fingerprint
+                    != expected
+                ):
+                    raise WorkflowPersistenceConflictError(
+                        "Persisted workflow fingerprint "
+                        "does not match the expected value."
+                    )
+
+            workflow_payload = (
+                workflow.to_canonical_dict()
+            )
+
+            content_fingerprint = (
+                workflow.content_fingerprint()
+            )
+
+            identity_fingerprint = (
+                workflow.identity_fingerprint()
+            )
+
+            persisted_at = _utc_now()
+
+            document_without_fingerprint = {
+                "schema_version": (
+                    WORKFLOW_PERSISTENCE_DOCUMENT_SCHEMA_VERSION
+                ),
+                "persistence_version": (
+                    WORKFLOW_PERSISTENCE_VERSION
+                ),
+                "workflow_id": workflow_id,
+                "workflow_contract_version": (
+                    workflow.contract_version
+                ),
+                "workflow_content_fingerprint": (
+                    content_fingerprint
+                ),
+                "workflow_identity_fingerprint": (
+                    identity_fingerprint
+                ),
+                "persisted_at": persisted_at,
+                "workflow": workflow_payload,
+            }
+
+            document_fingerprint = _sha256_payload(
+                document_without_fingerprint
+            )
+
+            document = dict(
+                document_without_fingerprint
+            )
+
+            document["document_fingerprint"] = (
+                document_fingerprint
+            )
+
+            payload = (
+                json.dumps(
+                    document,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n"
+            )
+
+            descriptor, temporary_name = (
+                tempfile.mkstemp(
+                    dir=str(self._root),
+                    prefix=".workflow_",
+                    suffix=".tmp",
+                )
+            )
+
+            temporary = Path(
+                temporary_name
+            )
+
+            try:
+                with os.fdopen(
+                    descriptor,
+                    "w",
+                    encoding="utf-8",
+                    newline="\n",
+                ) as stream:
+                    stream.write(payload)
+                    stream.flush()
+                    os.fsync(
+                        stream.fileno()
+                    )
+
+                os.replace(
+                    temporary,
+                    target,
+                )
+
+                try:
+                    directory_descriptor = os.open(
+                        str(self._root),
+                        os.O_RDONLY,
+                    )
+                except OSError:
+                    directory_descriptor = None
+
+                if directory_descriptor is not None:
+                    try:
+                        os.fsync(
+                            directory_descriptor
+                        )
+                    except OSError:
+                        pass
+                    finally:
+                        os.close(
+                            directory_descriptor
+                        )
+
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+
+            return WorkflowPersistenceEvidence(
+                workflow_id=workflow_id,
+                path=str(target),
+                workflow_content_fingerprint=(
+                    content_fingerprint
+                ),
+                workflow_identity_fingerprint=(
+                    identity_fingerprint
+                ),
+                document_fingerprint=(
+                    document_fingerprint
+                ),
+                persisted_at=persisted_at,
+            )
+
+    def load_workflow_record(
+        self,
+        workflow_id: Any,
+    ) -> WorkflowPersistenceRecord:
+        normalized_id = _required_text(
+            workflow_id,
+            field_name="workflow_id",
+        )
+
+        target = self.workflow_path(
+            normalized_id
+        )
+
+        with self._lock:
+            if not target.is_file():
+                raise WorkflowPersistenceNotFoundError(
+                    "Persisted workflow does not exist: "
+                    + normalized_id
+                )
+
+            try:
+                document = json.loads(
+                    target.read_text(
+                        encoding="utf-8"
+                    )
+                )
+            except (
+                OSError,
+                json.JSONDecodeError,
+            ) as error:
+                raise WorkflowPersistenceIntegrityError(
+                    "Persisted workflow document "
+                    "cannot be decoded."
+                ) from error
+
+            if not isinstance(
+                document,
+                Mapping,
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Persisted workflow document "
+                    "must be a mapping."
+                )
+
+            if (
+                document.get("schema_version")
+                != WORKFLOW_PERSISTENCE_DOCUMENT_SCHEMA_VERSION
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Unsupported workflow persistence schema."
+                )
+
+            if (
+                document.get("persistence_version")
+                != WORKFLOW_PERSISTENCE_VERSION
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Unsupported workflow persistence version."
+                )
+
+            stored_document_fingerprint = (
+                _required_text(
+                    document.get(
+                        "document_fingerprint"
+                    ),
+                    field_name=(
+                        "document_fingerprint"
+                    ),
+                )
+            )
+
+            document_without_fingerprint = dict(
+                document
+            )
+
+            document_without_fingerprint.pop(
+                "document_fingerprint",
+                None,
+            )
+
+            actual_document_fingerprint = (
+                _sha256_payload(
+                    document_without_fingerprint
+                )
+            )
+
+            if (
+                stored_document_fingerprint
+                != actual_document_fingerprint
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Persisted workflow document "
+                    "fingerprint does not match."
+                )
+
+            stored_workflow_id = _required_text(
+                document.get(
+                    "workflow_id"
+                ),
+                field_name="workflow_id",
+            )
+
+            if stored_workflow_id != normalized_id:
+                raise WorkflowPersistenceIntegrityError(
+                    "Persisted workflow identity mismatch."
+                )
+
+            workflow_payload = document.get(
+                "workflow"
+            )
+
+            if not isinstance(
+                workflow_payload,
+                Mapping,
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Persisted workflow payload "
+                    "must be a mapping."
+                )
+
+            try:
+                workflow = UniversalWorkflow.from_dict(
+                    workflow_payload
+                )
+            except (
+                UniversalWorkflowContractError,
+                TypeError,
+                ValueError,
+                KeyError,
+            ) as error:
+                raise WorkflowPersistenceIntegrityError(
+                    "Persisted workflow reconstruction failed."
+                ) from error
+
+            if workflow.workflow_id != normalized_id:
+                raise WorkflowPersistenceIntegrityError(
+                    "Reconstructed workflow identity mismatch."
+                )
+
+            content_fingerprint = (
+                workflow.content_fingerprint()
+            )
+
+            identity_fingerprint = (
+                workflow.identity_fingerprint()
+            )
+
+            if (
+                document.get(
+                    "workflow_content_fingerprint"
+                )
+                != content_fingerprint
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Workflow content fingerprint "
+                    "does not match."
+                )
+
+            if (
+                document.get(
+                    "workflow_identity_fingerprint"
+                )
+                != identity_fingerprint
+            ):
+                raise WorkflowPersistenceIntegrityError(
+                    "Workflow identity fingerprint "
+                    "does not match."
+                )
+
+            evidence = WorkflowPersistenceEvidence(
+                workflow_id=normalized_id,
+                path=str(target),
+                workflow_content_fingerprint=(
+                    content_fingerprint
+                ),
+                workflow_identity_fingerprint=(
+                    identity_fingerprint
+                ),
+                document_fingerprint=(
+                    stored_document_fingerprint
+                ),
+                persisted_at=_required_text(
+                    document.get(
+                        "persisted_at"
+                    ),
+                    field_name="persisted_at",
+                ),
+            )
+
+            return WorkflowPersistenceRecord(
+                workflow=workflow,
+                evidence=evidence,
+            )
+
+    def load_workflow(
+        self,
+        workflow_id: Any,
+    ) -> UniversalWorkflow:
+        return self.load_workflow_record(
+            workflow_id
+        ).workflow
+
+    def list_workflow_ids(
+        self,
+    ) -> Tuple[str, ...]:
+        workflow_ids: list[str] = []
+
+        with self._lock:
+            for path in sorted(
+                self._root.glob(
+                    "workflow_*.json"
+                )
+            ):
+                try:
+                    document = json.loads(
+                        path.read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                except (
+                    OSError,
+                    json.JSONDecodeError,
+                ) as error:
+                    raise WorkflowPersistenceIntegrityError(
+                        "Repository contains an unreadable "
+                        "workflow document."
+                    ) from error
+
+                if not isinstance(
+                    document,
+                    Mapping,
+                ):
+                    raise WorkflowPersistenceIntegrityError(
+                        "Repository contains a malformed "
+                        "workflow document."
+                    )
+
+                workflow_id = _required_text(
+                    document.get(
+                        "workflow_id"
+                    ),
+                    field_name="workflow_id",
+                )
+
+                self.load_workflow_record(
+                    workflow_id
+                )
+
+                workflow_ids.append(
+                    workflow_id
+                )
+
+        return tuple(
+            sorted(workflow_ids)
+        )
+
+
+==============================================================================================================
+AUTHORITY: workflow_repository.WorkflowPersistenceEvidence
+SIGNATURE: (workflow_id: 'str', path: 'str', workflow_content_fingerprint: 'str', workflow_identity_fingerprint: 'str', document_fingerprint: 'str', persisted_at: 'str', persistence_version: 'str' = 'workflow_persistence_v1.0.0', schema_version: 'str' = 'workflow_persistence_document_v1') -> None
+==============================================================================================================
+@dataclass(frozen=True, slots=True)
+class WorkflowPersistenceEvidence:
+    workflow_id: str
+    path: str
+    workflow_content_fingerprint: str
+    workflow_identity_fingerprint: str
+    document_fingerprint: str
+    persisted_at: str
+    persistence_version: str = (
+        WORKFLOW_PERSISTENCE_VERSION
+    )
+    schema_version: str = (
+        WORKFLOW_PERSISTENCE_DOCUMENT_SCHEMA_VERSION
+    )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "path": self.path,
+            "workflow_content_fingerprint": (
+                self.workflow_content_fingerprint
+            ),
+            "workflow_identity_fingerprint": (
+                self.workflow_identity_fingerprint
+            ),
+            "document_fingerprint": (
+                self.document_fingerprint
+            ),
+            "persisted_at": self.persisted_at,
+            "persistence_version": (
+                self.persistence_version
+            ),
+            "schema_version": self.schema_version,
+        }
+
+
+==============================================================================================================
+AUTHORITY: workflow_repository.WorkflowPersistenceRecord
+SIGNATURE: (workflow: 'UniversalWorkflow', evidence: 'WorkflowPersistenceEvidence') -> None
+==============================================================================================================
+@dataclass(frozen=True, slots=True)
+class WorkflowPersistenceRecord:
+    workflow: UniversalWorkflow
+    evidence: WorkflowPersistenceEvidence
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "workflow": (
+                self.workflow.to_canonical_dict()
+            ),
+            "evidence": self.evidence.to_dict(),
+        }
+
+
+==============================================================================================================
+PUBLIC INVENTORY: state_machine
+==============================================================================================================
+{
+  "allowed_next_states": {
+    "kind": "function",
+    "signature": "(state: 'Any') -> 'Tuple[UniversalWorkflowStatus, ...]'"
+  },
+  "coerce_workflow_state": {
+    "kind": "function",
+    "signature": "(state: 'Any') -> 'UniversalWorkflowStatus'"
+  },
+  "explain_workflow_state_machine_v3_1": {
+    "kind": "function",
+    "signature": "() -> 'Mapping[str, Any]'"
+  },
+  "has_transition_edge": {
+    "kind": "function",
+    "signature": "(from_state: 'Any', to_state: 'Any') -> 'bool'"
+  },
+  "is_non_terminal_workflow_state": {
+    "kind": "function",
+    "signature": "(state: 'Any') -> 'bool'"
+  },
+  "is_terminal_workflow_state": {
+    "kind": "function",
+    "signature": "(state: 'Any') -> 'bool'"
+  },
+  "non_terminal_workflow_states": {
+    "kind": "function",
+    "signature": "() -> 'Tuple[UniversalWorkflowStatus, ...]'"
+  },
+  "terminal_workflow_states": {
+    "kind": "function",
+    "signature": "() -> 'Tuple[UniversalWorkflowStatus, ...]'"
+  },
+  "transition_edges": {
+    "kind": "function",
+    "signature": "() -> 'Tuple[Tuple[UniversalWorkflowStatus, UniversalWorkflowStatus], ...]'"
+  },
+  "workflow_state_machine_snapshot": {
+    "kind": "function",
+    "signature": "() -> 'Mapping[str, Any]'"
+  },
+  "workflow_state_semantics": {
+    "kind": "function",
+    "signature": "(state: 'Any') -> 'str'"
+  },
+  "workflow_states": {
+    "kind": "function",
+    "signature": "() -> 'Tuple[UniversalWorkflowStatus, ...]'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: state_machine.allowed_next_states
+SIGNATURE: (state: 'Any') -> 'Tuple[UniversalWorkflowStatus, ...]'
+==============================================================================================================
+def allowed_next_states(
+    state: Any,
+) -> Tuple[
+    UniversalWorkflowStatus,
+    ...,
+]:
+    """
+    Return lifecycle edges declared by the canonical state-machine model.
+
+    MODEL INSPECTION ONLY.
+
+    This function is not Phase 3.2 Transition Validation.
+    """
+
+    normalized = coerce_workflow_state(
+        state
+    )
+
+    return _WORKFLOW_TRANSITION_GRAPH[
+        normalized
+    ]
+
+
+==============================================================================================================
+AUTHORITY: state_machine.is_terminal_workflow_state
+SIGNATURE: (state: 'Any') -> 'bool'
+==============================================================================================================
+def is_terminal_workflow_state(
+    state: Any,
+) -> bool:
+    """
+    Return whether a state is terminal according to the frozen contract.
+
+    Classification only; this does not enforce terminal-state protection.
+    """
+
+    normalized = coerce_workflow_state(
+        state
+    )
+
+    return (
+        normalized
+        in TERMINAL_WORKFLOW_STATUSES
+    )
+
+
+==============================================================================================================
+AUTHORITY: state_machine.is_non_terminal_workflow_state
+SIGNATURE: (state: 'Any') -> 'bool'
+==============================================================================================================
+def is_non_terminal_workflow_state(
+    state: Any,
+) -> bool:
+
+    return not is_terminal_workflow_state(
+        state
+    )
+
+
+==============================================================================================================
+PUBLIC INVENTORY: transition_validation
+==============================================================================================================
+{
+  "InvalidWorkflowTransitionError": {
+    "kind": "class",
+    "signature": "(result: \"'TransitionValidationResult'\") -> 'None'"
+  },
+  "TransitionValidationError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_lifecycle.transition_validation.TransitionValidationError'>>"
+  },
+  "TransitionValidationResult": {
+    "kind": "class",
+    "signature": "(current_state: 'Optional[UniversalWorkflowStatus]', requested_state: 'Optional[UniversalWorkflowStatus]', is_valid: 'bool', violations: 'Tuple[Mapping[str, Any], ...]', checked_rule_count: 'int', validation_version: 'str' = 'transition_validation_v3.2.0') -> None"
+  },
+  "explain_transition_validation_v3_2": {
+    "kind": "function",
+    "signature": "() -> 'Mapping[str, Any]'"
+  },
+  "require_valid_workflow_transition": {
+    "kind": "function",
+    "signature": "(current_state: 'Any', requested_state: 'Any') -> 'TransitionValidationResult'"
+  },
+  "validate_workflow_transition": {
+    "kind": "function",
+    "signature": "(current_state: 'Any', requested_state: 'Any') -> 'TransitionValidationResult'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: transition_validation.require_valid_workflow_transition
+SIGNATURE: (current_state: 'Any', requested_state: 'Any') -> 'TransitionValidationResult'
+==============================================================================================================
+def require_valid_workflow_transition(
+    current_state: Any,
+    requested_state: Any,
+) -> TransitionValidationResult:
+    """
+    Require a valid workflow lifecycle transition.
+
+    Returns the immutable validation result when valid.
+
+    Raises InvalidWorkflowTransitionError when invalid.
+    """
+
+    result = (
+        validate_workflow_transition(
+            current_state,
+            requested_state,
+        )
+    )
+
+    if not result.is_valid:
+
+        raise InvalidWorkflowTransitionError(
+            result
+        )
+
+    return result
+
+
+==============================================================================================================
+AUTHORITY: transition_validation.validate_workflow_transition
+SIGNATURE: (current_state: 'Any', requested_state: 'Any') -> 'TransitionValidationResult'
+==============================================================================================================
+def validate_workflow_transition(
+    current_state: Any,
+    requested_state: Any,
+) -> TransitionValidationResult:
+    """
+    Validate one requested lifecycle transition.
+
+    Rules:
+
+    1. current_state must resolve to UniversalWorkflowStatus.
+    2. requested_state must resolve to UniversalWorkflowStatus.
+    3. current_state -> requested_state must exist in frozen Phase 3.1.
+
+    This function does not mutate workflow state.
+    """
+
+    violations = []
+
+    normalized_current: Optional[
+        UniversalWorkflowStatus
+    ] = None
+
+    normalized_requested: Optional[
+        UniversalWorkflowStatus
+    ] = None
+
+    checked_rule_count = 0
+
+
+    # ------------------------------------------------------------------------
+    # Rule 1 - current state
+    # ------------------------------------------------------------------------
+
+    checked_rule_count += 1
+
+    try:
+
+        normalized_current = (
+            coerce_workflow_state(
+                current_state
+            )
+        )
+
+    except (
+        UniversalWorkflowContractError,
+        ValueError,
+        TypeError,
+    ):
+
+        violations.append(
+            _violation(
+                code=(
+                    VIOLATION_CURRENT_STATE_INVALID
+                ),
+                message=(
+                    "current_state does not resolve "
+                    "to UniversalWorkflowStatus"
+                ),
+                field="current_state",
+                current_state=current_state,
+                requested_state=requested_state,
+            )
+        )
+
+        return TransitionValidationResult(
+            current_state=None,
+            requested_state=None,
+            is_valid=False,
+            violations=tuple(
+                violations
+            ),
+            checked_rule_count=(
+                checked_rule_count
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 2 - requested state
+    # ------------------------------------------------------------------------
+
+    checked_rule_count += 1
+
+    try:
+
+        normalized_requested = (
+            coerce_workflow_state(
+                requested_state
+            )
+        )
+
+    except (
+        UniversalWorkflowContractError,
+        ValueError,
+        TypeError,
+    ):
+
+        violations.append(
+            _violation(
+                code=(
+                    VIOLATION_REQUESTED_STATE_INVALID
+                ),
+                message=(
+                    "requested_state does not resolve "
+                    "to UniversalWorkflowStatus"
+                ),
+                field="requested_state",
+                current_state=(
+                    normalized_current
+                ),
+                requested_state=(
+                    requested_state
+                ),
+            )
+        )
+
+        return TransitionValidationResult(
+            current_state=(
+                normalized_current
+            ),
+            requested_state=None,
+            is_valid=False,
+            violations=tuple(
+                violations
+            ),
+            checked_rule_count=(
+                checked_rule_count
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 3 - canonical edge
+    # ------------------------------------------------------------------------
+
+    checked_rule_count += 1
+
+    if not has_transition_edge(
+        normalized_current,
+        normalized_requested,
+    ):
+
+        violations.append(
+            _violation(
+                code=(
+                    VIOLATION_TRANSITION_NOT_DECLARED
+                ),
+                message=(
+                    "requested lifecycle transition "
+                    "is not declared by the frozen "
+                    "Phase 3.1 Workflow State Machine"
+                ),
+                field="transition",
+                current_state=(
+                    normalized_current
+                ),
+                requested_state=(
+                    normalized_requested
+                ),
+            )
+        )
+
+
+    return TransitionValidationResult(
+        current_state=(
+            normalized_current
+        ),
+        requested_state=(
+            normalized_requested
+        ),
+        is_valid=(
+            not violations
+        ),
+        violations=tuple(
+            violations
+        ),
+        checked_rule_count=(
+            checked_rule_count
+        ),
+    )
+
+
+==============================================================================================================
+PUBLIC INVENTORY: terminal_protection
+==============================================================================================================
+{
+  "InvalidTerminalStateProtectionRequestError": {
+    "kind": "class",
+    "signature": "(result: \"'TerminalStateProtectionResult'\") -> 'None'"
+  },
+  "TerminalStateMutationProhibitedError": {
+    "kind": "class",
+    "signature": "(result: \"'TerminalStateProtectionResult'\") -> 'None'"
+  },
+  "TerminalStateProtectionError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_lifecycle.terminal_state_protection.TerminalStateProtectionError'>>"
+  },
+  "TerminalStateProtectionResult": {
+    "kind": "class",
+    "signature": "(current_state: 'Optional[UniversalWorkflowStatus]', requested_state: 'Optional[UniversalWorkflowStatus]', current_state_is_terminal: 'bool', mutation_allowed: 'bool', protection_triggered: 'bool', code: 'Optional[str]', reason: 'Optional[str]', transition_validation_version: 'str', state_machine_version: 'str', protection_version: 'str') -> None"
+  },
+  "explain_terminal_state_protection_v3_4": {
+    "kind": "function",
+    "signature": "() -> 'Mapping[str, Any]'"
+  },
+  "inspect_terminal_state_protection": {
+    "kind": "function",
+    "signature": "(current_state: 'Any') -> 'TerminalStateProtectionResult'"
+  },
+  "require_terminal_state_mutation_allowed": {
+    "kind": "function",
+    "signature": "(current_state: 'Any', requested_state: 'Any') -> 'TerminalStateProtectionResult'"
+  },
+  "terminal_state_protection_snapshot": {
+    "kind": "function",
+    "signature": "() -> 'Mapping[str, Any]'"
+  },
+  "validate_terminal_state_mutation": {
+    "kind": "function",
+    "signature": "(current_state: 'Any', requested_state: 'Any') -> 'TerminalStateProtectionResult'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: terminal_protection.require_terminal_state_mutation_allowed
+SIGNATURE: (current_state: 'Any', requested_state: 'Any') -> 'TerminalStateProtectionResult'
+==============================================================================================================
+def require_terminal_state_mutation_allowed(
+    current_state: Any,
+    requested_state: Any,
+) -> TerminalStateProtectionResult:
+    """
+    Require a lifecycle mutation request to pass Terminal-State Protection.
+
+    Returns the immutable result when allowed.
+
+    Raises:
+    - TerminalStateMutationProhibitedError for a terminal-state mutation.
+    - InvalidTerminalStateProtectionRequestError for invalid input or
+      ordinary Phase-3.2 transition rejection.
+    """
+
+    result = (
+        validate_terminal_state_mutation(
+            current_state,
+            requested_state,
+        )
+    )
+
+    if result.mutation_allowed:
+
+        return result
+
+    if (
+        result.protection_triggered
+        and result.code
+        == TERMINAL_STATE_MUTATION_PROHIBITED
+    ):
+
+        raise TerminalStateMutationProhibitedError(
+            result
+        )
+
+    raise InvalidTerminalStateProtectionRequestError(
+        result
+    )
+
+
+==============================================================================================================
+AUTHORITY: terminal_protection.validate_terminal_state_mutation
+SIGNATURE: (current_state: 'Any', requested_state: 'Any') -> 'TerminalStateProtectionResult'
+==============================================================================================================
+def validate_terminal_state_mutation(
+    current_state: Any,
+    requested_state: Any,
+) -> TerminalStateProtectionResult:
+    """
+    Validate a requested lifecycle mutation through the terminal guard.
+
+    Processing order:
+
+    1. Normalize current state.
+    2. Normalize requested state.
+    3. If current state is terminal, prohibit mutation immediately.
+    4. Otherwise delegate edge legality to frozen Phase 3.2.
+
+    No workflow mutation occurs here.
+    """
+
+    # ------------------------------------------------------------------------
+    # Rule 1 - current-state normalization
+    # ------------------------------------------------------------------------
+
+    try:
+
+        normalized_current = (
+            coerce_workflow_state(
+                current_state
+            )
+        )
+
+    except (
+        UniversalWorkflowContractError,
+        ValueError,
+        TypeError,
+    ):
+
+        return _result(
+            current_state=None,
+            requested_state=None,
+            current_state_is_terminal=False,
+            mutation_allowed=False,
+            protection_triggered=False,
+            code=(
+                VIOLATION_CURRENT_STATE_INVALID
+            ),
+            reason=(
+                "current_state does not resolve "
+                "to UniversalWorkflowStatus"
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 2 - explicit terminal-state protection
+    # ------------------------------------------------------------------------
+
+    if is_terminal_workflow_state(
+        normalized_current
+    ):
+
+        normalized_requested = None
+
+        try:
+
+            normalized_requested = (
+                coerce_workflow_state(
+                    requested_state
+                )
+            )
+
+        except (
+            UniversalWorkflowContractError,
+            ValueError,
+            TypeError,
+        ):
+
+            pass
+
+        return _result(
+            current_state=(
+                normalized_current
+            ),
+            requested_state=(
+                normalized_requested
+            ),
+            current_state_is_terminal=True,
+            mutation_allowed=False,
+            protection_triggered=True,
+            code=(
+                TERMINAL_STATE_MUTATION_PROHIBITED
+            ),
+            reason=(
+                "workflow has reached a canonical "
+                "terminal state; lifecycle mutation "
+                "is prohibited"
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 3 - requested-state normalization
+    # ------------------------------------------------------------------------
+
+    try:
+
+        normalized_requested = (
+            coerce_workflow_state(
+                requested_state
+            )
+        )
+
+    except (
+        UniversalWorkflowContractError,
+        ValueError,
+        TypeError,
+    ):
+
+        return _result(
+            current_state=(
+                normalized_current
+            ),
+            requested_state=None,
+            current_state_is_terminal=False,
+            mutation_allowed=False,
+            protection_triggered=False,
+            code=(
+                VIOLATION_REQUESTED_STATE_INVALID
+            ),
+            reason=(
+                "requested_state does not resolve "
+                "to UniversalWorkflowStatus"
+            ),
+        )
+
+
+    # ------------------------------------------------------------------------
+    # Rule 4 - delegate edge legality to frozen Phase 3.2
+    # ------------------------------------------------------------------------
+
+    validation = (
+        validate_workflow_transition(
+            normalized_current,
+            normalized_requested,
+        )
+    )
+
+    if not validation.is_valid:
+
+        violation = (
+            validation.violations[
+                0
+            ]
+            if validation.violations
+            else None
+        )
+
+        code = (
+            violation[
+                "code"
+            ]
+            if violation
+            is not None
+            else VIOLATION_TRANSITION_NOT_DECLARED
+        )
+
+        reason = (
+            violation[
+                "message"
+            ]
+            if violation
+            is not None
+            else (
+                "requested lifecycle transition "
+                "is invalid under frozen Phase 3.2"
+            )
+        )
+
+        return _result(
+            current_state=(
+                normalized_current
+            ),
+            requested_state=(
+                normalized_requested
+            ),
+            current_state_is_terminal=False,
+            mutation_allowed=False,
+            protection_triggered=False,
+            code=code,
+            reason=reason,
+        )
+
+    return _result(
+        current_state=(
+            normalized_current
+        ),
+        requested_state=(
+            normalized_requested
+        ),
+        current_state_is_terminal=False,
+        mutation_allowed=True,
+        protection_triggered=False,
+        code=None,
+        reason=(
+            "current state is non-terminal and "
+            "requested transition is valid under "
+            "frozen Phase 3.2"
+        ),
+    )
+
+
+==============================================================================================================
+PUBLIC INVENTORY: lifecycle_history
+==============================================================================================================
+{
+  "DuplicateLifecycleHistoryEventError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_lifecycle.lifecycle_history.DuplicateLifecycleHistoryEventError'>>"
+  },
+  "InvalidLifecycleHistoryEntryError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_lifecycle.lifecycle_history.InvalidLifecycleHistoryEntryError'>>"
+  },
+  "LifecycleHistoryEntry": {
+    "kind": "class",
+    "signature": "(event_id: 'str', workflow_id: 'str', correlation_id: 'str', from_state: 'UniversalWorkflowStatus', to_state: 'UniversalWorkflowStatus', occurred_at: 'str', reason: 'Optional[str]', source: 'Optional[str]', actor_id: 'Optional[str]', metadata: 'Mapping[str, Any]', transition_validation_version: 'str', state_machine_version: 'str', history_version: 'str') -> None"
+  },
+  "LifecycleHistoryError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_lifecycle.lifecycle_history.LifecycleHistoryError'>>"
+  },
+  "LifecycleHistorySequenceError": {
+    "kind": "class",
+    "signature": "<signature unavailable: ValueError: no signature found for builtin type <class 'backend.server.coordination.workflow_lifecycle.lifecycle_history.LifecycleHistorySequenceError'>>"
+  },
+  "LifecycleHistoryValidationResult": {
+    "kind": "class",
+    "signature": "(is_valid: 'bool', violations: 'Tuple[str, ...]', checked_rule_count: 'int', entry_count: 'int', history_version: 'str' = 'lifecycle_history_v3.3.0') -> None"
+  },
+  "append_lifecycle_history": {
+    "kind": "function",
+    "signature": "(history: 'Iterable[LifecycleHistoryEntry]', entry: 'LifecycleHistoryEntry') -> 'Tuple[LifecycleHistoryEntry, ...]'"
+  },
+  "create_lifecycle_history_entry": {
+    "kind": "function",
+    "signature": "(*, event_id: 'Any', workflow_id: 'Any', correlation_id: 'Any', from_state: 'Any', to_state: 'Any', occurred_at: 'Any', reason: 'Any' = None, source: 'Any' = None, actor_id: 'Any' = None, metadata: 'Optional[Mapping[str, Any]]' = None) -> 'LifecycleHistoryEntry'"
+  },
+  "explain_lifecycle_history_v3_3": {
+    "kind": "function",
+    "signature": "() -> 'Mapping[str, Any]'"
+  },
+  "lifecycle_history_snapshot": {
+    "kind": "function",
+    "signature": "(history: 'Iterable[LifecycleHistoryEntry]') -> 'Mapping[str, Any]'"
+  },
+  "sort_lifecycle_history": {
+    "kind": "function",
+    "signature": "(history: 'Iterable[LifecycleHistoryEntry]') -> 'Tuple[LifecycleHistoryEntry, ...]'"
+  },
+  "validate_lifecycle_history": {
+    "kind": "function",
+    "signature": "(history: 'Iterable[LifecycleHistoryEntry]') -> 'LifecycleHistoryValidationResult'"
+  }
+}
+
+==============================================================================================================
+AUTHORITY: lifecycle_history.LifecycleHistoryEntry
+SIGNATURE: (event_id: 'str', workflow_id: 'str', correlation_id: 'str', from_state: 'UniversalWorkflowStatus', to_state: 'UniversalWorkflowStatus', occurred_at: 'str', reason: 'Optional[str]', source: 'Optional[str]', actor_id: 'Optional[str]', metadata: 'Mapping[str, Any]', transition_validation_version: 'str', state_machine_version: 'str', history_version: 'str') -> None
+==============================================================================================================
+@dataclass(
+    frozen=True,
+    slots=True,
+)
+class LifecycleHistoryEntry:
+
+    event_id: str
+    workflow_id: str
+    correlation_id: str
+
+    from_state: UniversalWorkflowStatus
+    to_state: UniversalWorkflowStatus
+
+    occurred_at: str
+
+    reason: Optional[str]
+    source: Optional[str]
+    actor_id: Optional[str]
+
+    metadata: Mapping[
+        str,
+        Any,
+    ]
+
+    transition_validation_version: str
+    state_machine_version: str
+    history_version: str
+
+    def __post_init__(
+        self,
+    ) -> None:
+
+        event_id = _require_nonempty_string(
+            self.event_id,
+            field_name="event_id",
+        )
+
+        workflow_id = _require_nonempty_string(
+            self.workflow_id,
+            field_name="workflow_id",
+        )
+
+        correlation_id = _require_nonempty_string(
+            self.correlation_id,
+            field_name="correlation_id",
+        )
+
+        if not isinstance(
+            self.from_state,
+            UniversalWorkflowStatus,
+        ):
+
+            raise InvalidLifecycleHistoryEntryError(
+                (
+                    "from_state must be "
+                    "UniversalWorkflowStatus"
+                )
+            )
+
+        if not isinstance(
+            self.to_state,
+            UniversalWorkflowStatus,
+        ):
+
+            raise InvalidLifecycleHistoryEntryError(
+                (
+                    "to_state must be "
+                    "UniversalWorkflowStatus"
+                )
+            )
+
+        occurred_at = _normalize_occurred_at(
+            self.occurred_at
+        )
+
+        reason = _optional_string(
+            self.reason,
+            field_name="reason",
+        )
+
+        source = _optional_string(
+            self.source,
+            field_name="source",
+        )
+
+        actor_id = _optional_string(
+            self.actor_id,
+            field_name="actor_id",
+        )
+
+        if not isinstance(
+            self.metadata,
+            Mapping,
+        ):
+
+            raise InvalidLifecycleHistoryEntryError(
+                "metadata must be a mapping"
+            )
+
+        if (
+            self.transition_validation_version
+            != TRANSITION_VALIDATION_VERSION
+        ):
+
+            raise InvalidLifecycleHistoryEntryError(
+                (
+                    "transition_validation_version "
+                    "must match frozen Phase 3.2"
+                )
+            )
+
+        if (
+            self.state_machine_version
+            != WORKFLOW_STATE_MACHINE_VERSION
+        ):
+
+            raise InvalidLifecycleHistoryEntryError(
+                (
+                    "state_machine_version must "
+                    "match frozen Phase 3.1"
+                )
+            )
+
+        if (
+            self.history_version
+            != LIFECYCLE_HISTORY_VERSION
+        ):
+
+            raise InvalidLifecycleHistoryEntryError(
+                (
+                    "history_version must match "
+                    "canonical Phase 3.3"
+                )
+            )
+
+        validation = (
+            validate_workflow_transition(
+                self.from_state,
+                self.to_state,
+            )
+        )
+
+        if not validation.is_valid:
+
+            raise InvalidLifecycleHistoryEntryError(
+                (
+                    "history entry transition is "
+                    "not valid under frozen "
+                    "Phase 3.2 Transition Validation"
+                )
+            )
+
+        object.__setattr__(
+            self,
+            "event_id",
+            event_id,
+        )
+
+        object.__setattr__(
+            self,
+            "workflow_id",
+            workflow_id,
+        )
+
+        object.__setattr__(
+            self,
+            "correlation_id",
+            correlation_id,
+        )
+
+        object.__setattr__(
+            self,
+            "occurred_at",
+            occurred_at,
+        )
+
+        object.__setattr__(
+            self,
+            "reason",
+            reason,
+        )
+
+        object.__setattr__(
+            self,
+            "source",
+            source,
+        )
+
+        object.__setattr__(
+            self,
+            "actor_id",
+            actor_id,
+        )
+
+        object.__setattr__(
+            self,
+            "metadata",
+            _freeze(
+                self.metadata
+            ),
+        )
+
+    def to_dict(
+        self,
+    ) -> Mapping[
+        str,
+        Any,
+    ]:
+
+        return MappingProxyType(
+            {
+                "event_id":
+                    self.event_id,
+
+                "workflow_id":
+                    self.workflow_id,
+
+                "correlation_id":
+                    self.correlation_id,
+
+                "from_state":
+                    self.from_state.value,
+
+                "to_state":
+                    self.to_state.value,
+
+                "occurred_at":
+                    self.occurred_at,
+
+                "reason":
+                    self.reason,
+
+                "source":
+                    self.source,
+
+                "actor_id":
+                    self.actor_id,
+
+                "metadata":
+                    self.metadata,
+
+                "transition_validation_version":
+                    self.transition_validation_version,
+
+                "state_machine_version":
+                    self.state_machine_version,
+
+                "history_version":
+                    self.history_version,
+            }
+        )
+
+
+==============================================================================================================
+AUTHORITY: lifecycle_history.create_lifecycle_history_entry
+SIGNATURE: (*, event_id: 'Any', workflow_id: 'Any', correlation_id: 'Any', from_state: 'Any', to_state: 'Any', occurred_at: 'Any', reason: 'Any' = None, source: 'Any' = None, actor_id: 'Any' = None, metadata: 'Optional[Mapping[str, Any]]' = None) -> 'LifecycleHistoryEntry'
+==============================================================================================================
+def create_lifecycle_history_entry(
+    *,
+    event_id: Any,
+    workflow_id: Any,
+    correlation_id: Any,
+    from_state: Any,
+    to_state: Any,
+    occurred_at: Any,
+    reason: Any = None,
+    source: Any = None,
+    actor_id: Any = None,
+    metadata: Optional[
+        Mapping[
+            str,
+            Any,
+        ]
+    ] = None,
+) -> LifecycleHistoryEntry:
+    """
+    Create one immutable valid lifecycle-history entry.
+
+    Transition legality is delegated to frozen Phase 3.2.
+    """
+
+    validation = (
+        validate_workflow_transition(
+            from_state,
+            to_state,
+        )
+    )
+
+    if not validation.is_valid:
+
+        codes = tuple(
+            violation[
+                "code"
+            ]
+            for violation
+            in validation.violations
+        )
+
+        raise InvalidLifecycleHistoryEntryError(
+            (
+                "cannot record invalid workflow "
+                "transition; violations="
+                f"{codes!r}"
+            )
+        )
+
+    assert (
+        validation.current_state
+        is not None
+    )
+
+    assert (
+        validation.requested_state
+        is not None
+    )
+
+    return LifecycleHistoryEntry(
+        event_id=event_id,
+        workflow_id=workflow_id,
+        correlation_id=correlation_id,
+        from_state=(
+            validation.current_state
+        ),
+        to_state=(
+            validation.requested_state
+        ),
+        occurred_at=occurred_at,
+        reason=reason,
+        source=source,
+        actor_id=actor_id,
+        metadata=(
+            {}
+            if metadata is None
+            else metadata
+        ),
+        transition_validation_version=(
+            TRANSITION_VALIDATION_VERSION
+        ),
+        state_machine_version=(
+            WORKFLOW_STATE_MACHINE_VERSION
+        ),
+        history_version=(
+            LIFECYCLE_HISTORY_VERSION
+        ),
+    )
+
+
+==============================================================================================================
+AUTHORITY: lifecycle_history.append_lifecycle_history
+SIGNATURE: (history: 'Iterable[LifecycleHistoryEntry]', entry: 'LifecycleHistoryEntry') -> 'Tuple[LifecycleHistoryEntry, ...]'
+==============================================================================================================
+def append_lifecycle_history(
+    history: Iterable[
+        LifecycleHistoryEntry
+    ],
+    entry: LifecycleHistoryEntry,
+) -> Tuple[
+    LifecycleHistoryEntry,
+    ...,
+]:
+    """
+    Append one entry by returning a new immutable tuple.
+
+    The input history is never mutated.
+    """
+
+    if not isinstance(
+        entry,
+        LifecycleHistoryEntry,
+    ):
+
+        raise InvalidLifecycleHistoryEntryError(
+            (
+                "entry must be "
+                "LifecycleHistoryEntry"
+            )
+        )
+
+    entries = tuple(
+        history
+    )
+
+    existing = (
+        validate_lifecycle_history(
+            entries
+        )
+    )
+
+    if not existing.is_valid:
+
+        raise LifecycleHistorySequenceError(
+            (
+                "existing lifecycle history "
+                f"is invalid: "
+                f"{existing.violations!r}"
+            )
+        )
+
+    if any(
+        existing_entry.event_id
+        == entry.event_id
+        for existing_entry
+        in entries
+    ):
+
+        raise DuplicateLifecycleHistoryEventError(
+            (
+                "duplicate lifecycle-history "
+                f"event_id: {entry.event_id!r}"
+            )
+        )
+
+    if entries:
+
+        last = entries[-1]
+
+        if (
+            last.workflow_id
+            != entry.workflow_id
+        ):
+
+            raise LifecycleHistorySequenceError(
+                (
+                    "workflow_id mismatch between "
+                    "history and appended entry"
+                )
+            )
+
+        if (
+            last.correlation_id
+            != entry.correlation_id
+        ):
+
+            raise LifecycleHistorySequenceError(
+                (
+                    "correlation_id mismatch between "
+                    "history and appended entry"
+                )
+            )
+
+        if (
+            _occurred_at_datetime(
+                entry.occurred_at
+            )
+            <
+            _occurred_at_datetime(
+                last.occurred_at
+            )
+        ):
+
+            raise LifecycleHistorySequenceError(
+                (
+                    "appended occurred_at cannot "
+                    "precede the last history event"
+                )
+            )
+
+        if (
+            last.to_state
+            != entry.from_state
+        ):
+
+            raise LifecycleHistorySequenceError(
+                (
+                    "appended lifecycle transition "
+                    "does not continue from the "
+                    "last recorded state"
+                )
+            )
+
+    candidate = (
+        entries
+        + (
+            entry,
+        )
+    )
+
+    result = (
+        validate_lifecycle_history(
+            candidate
+        )
+    )
+
+    if not result.is_valid:
+
+        raise LifecycleHistorySequenceError(
+            (
+                "appended lifecycle history "
+                f"is invalid: "
+                f"{result.violations!r}"
+            )
+        )
+
+    return candidate
+
+==============================================================================================================
+EXTRACTION BOUNDARY
+==============================================================================================================
+- Current constructors, signatures and source implementations were extracted.
+- No workflow was loaded, changed or persisted.
+- No runtime job, queue claim or handler execution occurred.
+- This evidence will be used to build the strict 9-D2 lifecycle connection.
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+PART C 9-D2 CONTRACT EXTRACTION COMPLETE

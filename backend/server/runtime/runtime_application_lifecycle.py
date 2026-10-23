@@ -104,6 +104,12 @@ from backend.server.runtime.runtime_registration_gateway import (
     register_runtime_registration_gateway,
 )
 
+from backend.server.runtime.runtime_coordination_gateway import (
+    RUNTIME_COORDINATION_GATEWAY_KEY,
+    RuntimeCoordinationGateway,
+    register_runtime_coordination_gateway,
+)
+
 @asynccontextmanager
 async def linkcraftor_runtime_lifespan(
     application: Any,
@@ -114,7 +120,7 @@ async def linkcraftor_runtime_lifespan(
     application.state.runtime_lifecycle_status = "BOOTING"
 
     try:
-        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway,register_runtime_registration_gateway, ))
+        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway, register_runtime_registration_gateway, register_runtime_coordination_gateway,))
 
     except Exception as exc:
         application.state.runtime_lifecycle_status = (
@@ -194,6 +200,21 @@ async def linkcraftor_runtime_lifespan(
     )
     application.state.runtime_registration_snapshot = _record_mapping(
         registration_gateway.snapshot()
+    )
+
+    coordination_gateway = boot_context.kernel.get_component(
+        RUNTIME_COORDINATION_GATEWAY_KEY,
+        RuntimeCoordinationGateway,
+    )
+    application.state.runtime_coordination_gateway = coordination_gateway
+    application.state.runtime_coordination_evidence = _record_mapping(
+        coordination_gateway.evidence()
+    )
+    application.state.runtime_coordination_snapshot = _record_mapping(
+        coordination_gateway.snapshot()
+    )
+    application.state.runtime_coordination_workflow_repository = (
+        coordination_gateway.workflow_repository
     )
 
     application.state.runtime_boot_process = boot_process

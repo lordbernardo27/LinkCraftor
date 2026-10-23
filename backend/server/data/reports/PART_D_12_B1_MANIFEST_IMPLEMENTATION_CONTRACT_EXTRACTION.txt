@@ -1,0 +1,1643 @@
+LINKCRAFTOR PIPELINE COORDINATION
+PART D 12-B1 CONNECTED DOMAIN MANIFEST IMPLEMENTATION CONTRACT EXTRACTION
+
+Mode: READ-ONLY TARGETED CONTRACT EXTRACTION
+Production source changes: NONE
+Production registry persistence executed: NO
+Production workflow persistence executed: NO
+Production Universal Jobs created: NO
+Production queue claims executed: NO
+Production handlers executed: NO
+Live network requests executed: NO
+EXTRACTION STATUS: COMPLETE
+
+==============================================================================================================
+IMPLEMENTATION DECISION
+==============================================================================================================
+ADD_ONE_CANONICAL_CONNECTED_DOMAIN_MANIFEST
+
+==============================================================================================================
+CHECKS
+==============================================================================================================
+{
+  "all_required_modules_imported": true,
+  "dependency_graph_contract_extracted": true,
+  "dependency_validation_contract_extracted": true,
+  "execution_planning_contract_extracted": true,
+  "handlers_executed_no": true,
+  "live_network_requests_executed_no": true,
+  "part_d_12_a_complete": true,
+  "part_d_12_a_report_exists": true,
+  "planning_certification_contract_extracted": true,
+  "production_jobs_created_no": true,
+  "production_registry_persistence_executed_no": true,
+  "production_sources_unchanged": true,
+  "production_workflow_persistence_executed_no": true,
+  "queue_claims_executed_no": true,
+  "required_contract_symbols_available": true,
+  "six_job_types_available": true,
+  "six_stage_order_available": true,
+  "stage_reference_contract_extracted": true,
+  "workflow_contract_extracted": true
+}
+
+FAILED_CHECKS:
+[]
+
+==============================================================================================================
+IMPLEMENTATION CONTRACT EVIDENCE
+==============================================================================================================
+{
+  "changed_sources": [],
+  "coordinator_constants": {
+    "pipeline_id": "connect_domain",
+    "stage_ids": [
+      "connect_domain",
+      "site_sources",
+      "url_cleaner",
+      "site_pages",
+      "live_domain_target_pool",
+      "active_target_set"
+    ],
+    "stage_job_types": [
+      "connect_domain_stage",
+      "site_sources_stage",
+      "url_cleaner_stage",
+      "site_pages_stage",
+      "live_domain_target_pool_stage",
+      "active_target_set_stage"
+    ],
+    "workflow_contract_version": "universal_workflow_contract_v1.1.0",
+    "workflow_type": "connect_domain",
+    "workflow_version": "1.0.0"
+  },
+  "essential_contract_sources": {
+    "DependencyEdge": {
+      "fields": [
+        {
+          "default": "<required>",
+          "name": "prerequisite_stage_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "dependent_stage_id",
+          "type": "str"
+        }
+      ],
+      "signature": "(prerequisite_stage_id: 'str', dependent_stage_id: 'str') -> None",
+      "source": "@dataclass(\n    frozen=True,\n    slots=True,\n    order=True,\n)\nclass DependencyEdge:\n    \"\"\"\n    One directed dependency relation.\n\n    Direction:\n        prerequisite_stage_id -> dependent_stage_id\n\n    Phase 4.1 deliberately allows a self-edge structurally.\n    Whether that edge is valid belongs to Phase 4.2.\n    \"\"\"\n\n    prerequisite_stage_id: str\n    dependent_stage_id: str\n\n    def __post_init__(\n        self,\n    ) -> None:\n        prerequisite = _require_non_empty_string(\n            self.prerequisite_stage_id,\n            field_name=\"prerequisite_stage_id\",\n            error_type=InvalidDependencyStageIdError,\n        )\n\n        dependent = _require_non_empty_string(\n            self.dependent_stage_id,\n            field_name=\"dependent_stage_id\",\n            error_type=InvalidDependencyStageIdError,\n        )\n\n        object.__setattr__(\n            self,\n            \"prerequisite_stage_id\",\n            prerequisite,\n        )\n\n        object.__setattr__(\n            self,\n            \"dependent_stage_id\",\n            dependent,\n        )\n\n    def to_tuple(\n        self,\n    ) -> tuple[str, str]:\n        return (\n            self.prerequisite_stage_id,\n            self.dependent_stage_id,\n        )\n\n    def to_dict(\n        self,\n    ) -> Mapping[str, str]:\n        return MappingProxyType(\n            {\n                \"prerequisite_stage_id\":\n                    self.prerequisite_stage_id,\n                \"dependent_stage_id\":\n                    self.dependent_stage_id,\n            }\n        )\n"
+    },
+    "DependencyGraph": {
+      "fields": [
+        {
+          "default": "<required>",
+          "name": "workflow_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "node_ids",
+          "type": "tuple[str, ...]"
+        },
+        {
+          "default": "<required>",
+          "name": "edges",
+          "type": "tuple[DependencyEdge, ...]"
+        },
+        {
+          "default": "'dependency_graph_v4.1.0'",
+          "name": "graph_version",
+          "type": "str"
+        }
+      ],
+      "signature": "(workflow_id: 'str', node_ids: 'tuple[str, ...]', edges: 'tuple[DependencyEdge, ...]', graph_version: 'str' = 'dependency_graph_v4.1.0') -> None",
+      "source": "@dataclass(\n    frozen=True,\n    slots=True,\n)\nclass DependencyGraph:\n    \"\"\"\n    Immutable workflow-scoped dependency topology.\n\n    node_ids:\n        Canonical lexical tuple of unique stage_id values.\n\n    edges:\n        Canonical lexical tuple of unique directed DependencyEdge objects.\n\n    Edge endpoints are always present in node_ids.\n\n    Structural self-edges and cycles are representable here intentionally.\n    Their semantic treatment belongs to later Phase-4 components.\n    \"\"\"\n\n    workflow_id: str\n    node_ids: tuple[str, ...]\n    edges: tuple[DependencyEdge, ...]\n    graph_version: str = (\n        DEPENDENCY_GRAPH_VERSION\n    )\n\n    def __post_init__(\n        self,\n    ) -> None:\n        workflow_id = _require_non_empty_string(\n            self.workflow_id,\n            field_name=\"workflow_id\",\n            error_type=InvalidWorkflowIdError,\n        )\n\n        canonical_edges = _canonicalize_edges(\n            self.edges\n        )\n\n        canonical_nodes = _canonicalize_node_ids(\n            self.node_ids,\n            canonical_edges,\n        )\n\n        if (\n            self.graph_version\n            != DEPENDENCY_GRAPH_VERSION\n        ):\n            raise DependencyGraphError(\n                \"graph_version must equal \"\n                f\"{DEPENDENCY_GRAPH_VERSION!r}.\"\n            )\n\n        object.__setattr__(\n            self,\n            \"workflow_id\",\n            workflow_id,\n        )\n\n        object.__setattr__(\n            self,\n            \"node_ids\",\n            canonical_nodes,\n        )\n\n        object.__setattr__(\n            self,\n            \"edges\",\n            canonical_edges,\n        )\n"
+    },
+    "ExecutionPlan": {
+      "fields": [
+        {
+          "default": "<required>",
+          "name": "workflow_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "wave_count",
+          "type": "int"
+        },
+        {
+          "default": "<required>",
+          "name": "waves",
+          "type": "tuple[ExecutionWave, ...]"
+        },
+        {
+          "default": "<required>",
+          "name": "planned_stage_ids",
+          "type": "tuple[str, ...]"
+        },
+        {
+          "default": "<required>",
+          "name": "graph_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "cycle_detection_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "runnable_stage_resolver_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "planner_version",
+          "type": "str"
+        }
+      ],
+      "signature": "(workflow_id: 'str', wave_count: 'int', waves: 'tuple[ExecutionWave, ...]', planned_stage_ids: 'tuple[str, ...]', graph_version: 'str', cycle_detection_version: 'str', runnable_stage_resolver_version: 'str', planner_version: 'str') -> None",
+      "source": "@dataclass(\n    frozen=True,\n    slots=True,\n)\nclass ExecutionPlan:\n    workflow_id: str\n    wave_count: int\n    waves: tuple[\n        ExecutionWave,\n        ...,\n    ]\n    planned_stage_ids: tuple[str, ...]\n    graph_version: str\n    cycle_detection_version: str\n    runnable_stage_resolver_version: str\n    planner_version: str\n\n    def to_dict(\n        self,\n    ) -> Mapping[str, Any]:\n        return _freeze(\n            {\n                \"workflow_id\":\n                    self.workflow_id,\n\n                \"wave_count\":\n                    self.wave_count,\n\n                \"waves\":\n                    tuple(\n                        wave.to_dict()\n                        for wave\n                        in self.waves\n                    ),\n\n                \"planned_stage_ids\":\n                    self.planned_stage_ids,\n\n                \"graph_version\":\n                    self.graph_version,\n\n                \"cycle_detection_version\":\n                    self.cycle_detection_version,\n\n                \"runnable_stage_resolver_version\":\n                    self.runnable_stage_resolver_version,\n\n                \"planner_version\":\n                    self.planner_version,\n            }\n        )\n"
+    },
+    "ExecutionWave": {
+      "fields": [
+        {
+          "default": "<required>",
+          "name": "wave_index",
+          "type": "int"
+        },
+        {
+          "default": "<required>",
+          "name": "stage_ids",
+          "type": "tuple[str, ...]"
+        },
+        {
+          "default": "<required>",
+          "name": "execution_semantics",
+          "type": "str"
+        }
+      ],
+      "signature": "(wave_index: 'int', stage_ids: 'tuple[str, ...]', execution_semantics: 'str') -> None",
+      "source": "@dataclass(\n    frozen=True,\n    slots=True,\n)\nclass ExecutionWave:\n    wave_index: int\n    stage_ids: tuple[str, ...]\n    execution_semantics: str\n\n    def to_dict(\n        self,\n    ) -> Mapping[str, Any]:\n        return MappingProxyType(\n            {\n                \"wave_index\":\n                    self.wave_index,\n\n                \"stage_ids\":\n                    self.stage_ids,\n\n                \"execution_semantics\":\n                    self.execution_semantics,\n            }\n        )\n"
+    },
+    "UniversalStageReference": {
+      "fields": [
+        {
+          "default": "<required>",
+          "name": "stage_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "stage_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "pipeline_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "workflow_type",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "workflow_contract_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "execution_target",
+          "type": "StageExecutionTarget"
+        },
+        {
+          "default": "<required>",
+          "name": "job_type",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "runtime_stage",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "required_payload_fields",
+          "type": "Tuple[str, ...]"
+        },
+        {
+          "default": "<default_factory>",
+          "name": "metadata",
+          "type": "Mapping[str, Any]"
+        },
+        {
+          "default": "'universal_stage_reference_contract_v1.3.0'",
+          "name": "contract_version",
+          "type": "str"
+        }
+      ],
+      "signature": "(stage_id: 'str', stage_version: 'str', pipeline_id: 'str', workflow_type: 'str', workflow_contract_version: 'str', execution_target: 'StageExecutionTarget', job_type: 'str', runtime_stage: 'str', required_payload_fields: 'Tuple[str, ...]', metadata: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_stage_reference_contract_v1.3.0') -> None",
+      "source": "@dataclass(frozen=True, slots=True)\nclass UniversalStageReference:\n    \"\"\"\n    Immutable coordination reference for one workflow stage.\n\n    ``stage_id`` is the coordination identity.\n\n    ``runtime_stage`` is the stage identity expected in the\n    corresponding Runtime Registration.\n\n    ``job_type`` is the Universal Runtime Registration lookup /\n    dispatch key for UNIVERSAL_RUNTIME stages.\n    \"\"\"\n\n    stage_id: str\n    stage_version: str\n\n    pipeline_id: str\n    workflow_type: str\n    workflow_contract_version: str\n\n    execution_target: StageExecutionTarget\n\n    job_type: str\n    runtime_stage: str\n\n    required_payload_fields: Tuple[str, ...]\n\n    metadata: Mapping[str, Any] = field(\n        default_factory=dict\n    )\n\n    contract_version: str = (\n        UNIVERSAL_STAGE_REFERENCE_CONTRACT_VERSION\n    )\n\n    def __post_init__(\n        self,\n    ) -> None:\n\n        violations: list[str] = []\n\n        stage_id = _require_name(\n            self.stage_id,\n            name=\"stage_id\",\n            violations=violations,\n        )\n\n        stage_version = _require_name(\n            self.stage_version,\n            name=\"stage_version\",\n            violations=violations,\n        )\n\n        pipeline_id = _require_name(\n            self.pipeline_id,\n            name=\"pipeline_id\",\n            violations=violations,\n        )\n\n        workflow_type = _require_name(\n            self.workflow_type,\n            name=\"workflow_type\",\n            violations=violations,\n        )\n\n        workflow_contract_version = (\n            _require_name(\n                self.workflow_contract_version,\n                name=\"workflow_contract_version\",\n                violations=violations,\n            )\n        )\n\n        try:\n            execution_target = (\n                StageExecutionTarget.coerce(\n                    self.execution_target\n                )\n            )\n        except UniversalStageReferenceContractError as exc:\n\n            violations.extend(\n                exc.violations\n                or (str(exc),)\n            )\n\n            execution_target = (\n                StageExecutionTarget.UNIVERSAL_RUNTIME\n            )\n\n        job_type = _require_name(\n            self.job_type,\n            name=\"job_type\",\n            violations=violations,\n            allow_empty=True,\n        )\n\n        runtime_stage = _require_name(\n            self.runtime_stage,\n            name=\"runtime_stage\",\n            violations=violations,\n            allow_empty=True,\n        )\n\n        required_payload_fields = (\n            _normalize_string_tuple(\n                self.required_payload_fields,\n                name=\"required_payload_fields\",\n                violations=violations,\n            )\n        )\n\n        metadata = _normalize_mapping(\n            self.metadata,\n            name=\"metadata\",\n            violations=violations,\n        )\n\n        contract_version = _require_name(\n            self.contract_version,\n            name=\"contract_version\",\n            violations=violations,\n        )\n\n        # ------------------------------------------------------------------\n        # Contract compatibility\n        # ------------------------------------------------------------------\n\n        if (\n            workflow_contract_version\n            != UNIVERSAL_WORKFLOW_CONTRACT_VERSION\n        ):\n            violations.append(\n                \"workflow_contract_version must be \"\n                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION\n            )\n\n        if (\n            contract_version\n            != UNIVERSAL_STAGE_REFERENCE_CONTRACT_VERSION\n        ):\n            violations.append(\n                \"contract_version must be \"\n                + UNIVERSAL_STAGE_REFERENCE_CONTRACT_VERSION\n            )\n\n        # ------------------------------------------------------------------\n        # Execution-target invariants\n        # ------------------------------------------------------------------\n\n        if (\n            execution_target\n            == StageExecutionTarget.UNIVERSAL_RUNTIME\n        ):\n\n            if not job_type:\n                violations.append(\n                    \"job_type is required when \"\n                    \"execution_target is universal_runtime\"\n                )\n\n            if not runtime_stage:\n                violations.append(\n                    \"runtime_stage is required when \"\n                    \"execution_target is universal_runtime\"\n                )\n\n        if (\n            execution_target\n            == StageExecutionTarget.COORDINATION_ONLY\n        ):\n\n            if job_type:\n                violations.append(\n                    \"job_type must be empty when \"\n                    \"execution_target is coordination_only\"\n                )\n\n            if runtime_stage:\n                violations.append(\n                    \"runtime_stage must be empty when \"\n                    \"execution_target is coordination_only\"\n                )\n\n            if required_payload_fields:\n                violations.append(\n                    \"required_payload_fields must be empty when \"\n                    \"execution_target is coordination_only\"\n                )\n\n        if violations:\n            raise UniversalStageReferenceContractError(\n                \"Universal Stage Reference validation failed\",\n                violations=tuple(\n                    violations\n                ),\n            )\n\n        object.__setattr__(\n            self,\n            \"stage_id\",\n            stage_id,\n        )\n\n        object.__setattr__(\n            self,\n            \"stage_version\",\n            stage_version,\n        )\n\n        object.__setattr__(\n            self,\n            \"pipeline_id\",\n            pipeline_id,\n        )\n\n        object.__setattr__(\n            self,\n            \"workflow_type\",\n            workflow_type,\n        )\n\n        object.__setattr__(\n            self,\n            \"workflow_contract_version\",\n            workflow_contract_version,\n        )\n\n        object.__setattr__(\n            self,\n            \"execution_target\",\n            execution_target,\n        )\n\n        object.__setattr__(\n            self,\n            \"job_type\",\n            job_type,\n        )\n\n        object.__setattr__(\n            self,\n            \"runtime_stage\",\n            runtime_stage,\n        )\n\n        object.__setattr__(\n            self,\n            \"required_payload_fields\",\n            required_payload_fields,\n        )\n\n        object.__setattr__(\n            self,\n            \"metadata\",\n            metadata,\n        )\n\n        object.__setattr__(\n            self,\n            \"contract_version\",\n            contract_version,\n        )\n\n    # ======================================================================\n    # Runtime properties\n    # ======================================================================\n\n    @property\n    def uses_universal_runtime(\n        self,\n    ) -> bool:\n\n        return (\n            self.execution_target\n            == StageExecutionTarget.UNIVERSAL_RUNTIME\n        )\n\n    @property\n    def is_coordination_only(\n        self,\n    ) -> bool:\n\n        return (\n            self.execution_target\n            == StageExecutionTarget.COORDINATION_ONLY\n        )\n\n    @property\n    def runtime_lookup_key(\n        self,\n    ) -> str | None:\n        \"\"\"\n        Return the Universal Runtime Registration lookup key.\n\n        Runtime Registration is keyed by job_type.\n        \"\"\"\n\n        if not self.uses_universal_runtime:\n            return None\n\n        return self.job_type\n\n    # ======================================================================\n    # Serialization\n    # ======================================================================\n\n    def to_canonical_dict(\n        self,\n    ) -> dict[str, Any]:\n\n        return {\n            \"stage_id\": self.stage_id,\n            \"stage_version\": self.stage_version,\n            \"pipeline_id\": self.pipeline_id,\n            \"workflow_type\": self.workflow_type,\n            \"workflow_contract_version\": (\n                self.workflow_contract_version\n            ),\n            \"execution_target\": (\n                self.execution_target.value\n            ),\n            \"job_type\": self.job_type,\n            \"runtime_stage\": self.runtime_stage,\n            \"required_payload_fields\": list(\n                self.required_payload_fields\n            ),\n            \"metadata\": _thaw(\n                self.metadata\n            ),\n            \"contract_version\": (\n                self.contract_version\n            ),\n        }\n\n    def to_dict(\n        self,\n    ) -> dict[str, Any]:\n\n        return self.to_canonical_dict()\n\n    def to_canonical_json(\n        self,\n    ) -> str:\n\n        return _canonical_json(\n            self.to_canonical_dict()\n        )\n\n    # ======================================================================\n    # Schema\n    # ======================================================================\n\n    @classmethod\n    def required_fields(\n        cls,\n    ) -> Tuple[str, ...]:\n\n        return (\n            REQUIRED_UNIVERSAL_STAGE_REFERENCE_FIELDS\n        )\n\n    @classmethod\n    def schema(\n        cls,\n    ) -> Mapping[str, Any]:\n\n        return MappingProxyType(\n            {\n                \"contract_id\": (\n                    UNIVERSAL_STAGE_REFERENCE_CONTRACT_ID\n                ),\n                \"contract_version\": (\n                    UNIVERSAL_STAGE_REFERENCE_CONTRACT_VERSION\n                ),\n                \"schema_version\": (\n                    UNIVERSAL_STAGE_REFERENCE_SCHEMA_VERSION\n                ),\n                \"workflow_contract_version\": (\n                    UNIVERSAL_WORKFLOW_CONTRACT_VERSION\n                ),\n                \"required_fields\": (\n                    REQUIRED_UNIVERSAL_STAGE_REFERENCE_FIELDS\n                ),\n                \"execution_targets\": tuple(\n                    target.value\n                    for target\n                    in StageExecutionTarget\n                ),\n                \"runtime_lookup_authority\": (\n                    \"job_type\"\n                ),\n            }\n        )\n\n    # ======================================================================\n    # Reconstruction\n    # ======================================================================\n\n    @classmethod\n    def from_dict(\n        cls,\n        data: Mapping[str, Any],\n    ) -> \"UniversalStageReference\":\n\n        if not isinstance(\n            data,\n            Mapping,\n        ):\n            raise UniversalStageReferenceContractError(\n                \"stage reference data must be a mapping\"\n            )\n\n        unknown_fields = sorted(\n            set(data)\n            - _CONTRACT_CONSTRUCTOR_FIELDS\n        )\n\n        if unknown_fields:\n            raise UniversalStageReferenceContractError(\n                \"unknown Universal Stage Reference fields: \"\n                + \", \".join(\n                    unknown_fields\n                ),\n                violations=tuple(\n                    \"unknown field: \" + name\n                    for name in unknown_fields\n                ),\n            )\n\n        missing_fields = tuple(\n            name\n            for name\n            in REQUIRED_UNIVERSAL_STAGE_REFERENCE_FIELDS\n            if name not in data\n        )\n\n        if missing_fields:\n            raise UniversalStageReferenceContractError(\n                \"missing required Universal Stage Reference fields: \"\n                + \", \".join(\n                    missing_fields\n                ),\n                violations=tuple(\n                    \"missing required field: \" + name\n                    for name in missing_fields\n                ),\n            )\n\n        kwargs = dict(\n            data\n        )\n\n        kwargs[\"execution_target\"] = (\n            StageExecutionTarget.coerce(\n                kwargs[\n                    \"execution_target\"\n                ]\n            )\n        )\n\n        return cls(\n            **kwargs\n        )\n\n    @classmethod\n    def from_json(\n        cls,\n        text: str,\n    ) -> \"UniversalStageReference\":\n\n        try:\n            data = json.loads(\n                text\n            )\n\n        except json.JSONDecodeError as exc:\n            raise UniversalStageReferenceContractError(\n                \"stage reference json is not decodable: \"\n                + str(exc)\n            ) from exc\n\n        return cls.from_dict(\n            data\n        )\n\n    @classmethod\n    def reconstruct(\n        cls,\n        data: Mapping[str, Any],\n    ) -> \"UniversalStageReference\":\n\n        return cls.from_dict(\n            data\n        )\n\n    # ======================================================================\n    # Fingerprints\n    # ======================================================================\n\n    def identity_fingerprint(\n        self,\n    ) -> str:\n\n        material = {\n            \"contract_id\": (\n                UNIVERSAL_STAGE_REFERENCE_CONTRACT_ID\n            ),\n            \"contract_version\": (\n                self.contract_version\n            ),\n            \"stage_id\": self.stage_id,\n            \"stage_version\": (\n                self.stage_version\n            ),\n            \"pipeline_id\": (\n                self.pipeline_id\n            ),\n            \"workflow_type\": (\n                self.workflow_type\n            ),\n            \"execution_target\": (\n                self.execution_target.value\n            ),\n            \"job_type\": (\n                self.job_type\n            ),\n            \"runtime_stage\": (\n                self.runtime_stage\n            ),\n        }\n\n        return _fingerprint(\n            _canonical_json(\n                material\n            )\n        )\n\n    def content_fingerprint(\n        self,\n    ) -> str:\n\n        return _fingerprint(\n            self.to_canonical_json()\n        )\n\n    def validate(\n        self,\n    ) -> \"UniversalStageReferenceValidationReport\":\n\n        return validate_universal_stage_reference(\n            self\n        )\n"
+    },
+    "UniversalWorkflow": {
+      "fields": [
+        {
+          "default": "<required>",
+          "name": "workflow_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "workflow_type",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "workflow_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "workspace_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "coordinator_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "coordinator_version",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "correlation_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "parent_workflow_id",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "<required>",
+          "name": "root_workflow_id",
+          "type": "str"
+        },
+        {
+          "default": "<required>",
+          "name": "status",
+          "type": "UniversalWorkflowStatus"
+        },
+        {
+          "default": "<required>",
+          "name": "input_reference",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "<default_factory>",
+          "name": "context",
+          "type": "Mapping[str, Any]"
+        },
+        {
+          "default": "<default_factory>",
+          "name": "metadata",
+          "type": "Mapping[str, Any]"
+        },
+        {
+          "default": "None",
+          "name": "current_stage",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "()",
+          "name": "completed_stages",
+          "type": "Tuple[str, ...]"
+        },
+        {
+          "default": "()",
+          "name": "pending_stages",
+          "type": "Tuple[str, ...]"
+        },
+        {
+          "default": "()",
+          "name": "failed_stages",
+          "type": "Tuple[str, ...]"
+        },
+        {
+          "default": "()",
+          "name": "skipped_stages",
+          "type": "Tuple[str, ...]"
+        },
+        {
+          "default": "None",
+          "name": "result_reference",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "()",
+          "name": "artifact_references",
+          "type": "Tuple[str, ...]"
+        },
+        {
+          "default": "None",
+          "name": "idempotency_key",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "''",
+          "name": "created_at",
+          "type": "str"
+        },
+        {
+          "default": "None",
+          "name": "started_at",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "''",
+          "name": "updated_at",
+          "type": "str"
+        },
+        {
+          "default": "None",
+          "name": "completed_at",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "None",
+          "name": "failed_at",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "None",
+          "name": "cancelled_at",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "None",
+          "name": "failure_code",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "None",
+          "name": "failure_message",
+          "type": "Optional[str]"
+        },
+        {
+          "default": "<default_factory>",
+          "name": "failure_details",
+          "type": "Mapping[str, Any]"
+        },
+        {
+          "default": "'universal_workflow_contract_v1.1.0'",
+          "name": "contract_version",
+          "type": "str"
+        }
+      ],
+      "signature": "(workflow_id: 'str', workflow_type: 'str', workflow_version: 'str', workspace_id: 'str', coordinator_id: 'str', coordinator_version: 'str', correlation_id: 'str', parent_workflow_id: 'Optional[str]', root_workflow_id: 'str', status: 'UniversalWorkflowStatus', input_reference: 'Optional[str]', context: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, current_stage: 'Optional[str]' = None, completed_stages: 'Tuple[str, ...]' = (), pending_stages: 'Tuple[str, ...]' = (), failed_stages: 'Tuple[str, ...]' = (), skipped_stages: 'Tuple[str, ...]' = (), result_reference: 'Optional[str]' = None, artifact_references: 'Tuple[str, ...]' = (), idempotency_key: 'Optional[str]' = None, created_at: 'str' = '', started_at: 'Optional[str]' = None, updated_at: 'str' = '', completed_at: 'Optional[str]' = None, failed_at: 'Optional[str]' = None, cancelled_at: 'Optional[str]' = None, failure_code: 'Optional[str]' = None, failure_message: 'Optional[str]' = None, failure_details: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_workflow_contract_v1.1.0') -> None",
+      "source": "@dataclass(frozen=True, slots=True)\nclass UniversalWorkflow:\n    \"\"\"\n    Canonical immutable representation of one coordinated workflow execution.\n\n    This object describes workflow identity and coordination state. It does not\n    execute stages or runtime jobs.\n    \"\"\"\n\n    # Identity\n    workflow_id: str\n    workflow_type: str\n    workflow_version: str\n    workspace_id: str\n\n    # Coordinator identity\n    coordinator_id: str\n    coordinator_version: str\n\n    # Correlation\n    correlation_id: str\n    parent_workflow_id: Optional[str]\n    root_workflow_id: str\n\n    # Lifecycle\n    status: UniversalWorkflowStatus\n\n    # Workflow input/context\n    input_reference: Optional[str]\n    context: Mapping[str, Any] = field(default_factory=dict)\n    metadata: Mapping[str, Any] = field(default_factory=dict)\n\n    # Stage summaries\n    current_stage: Optional[str] = None\n    completed_stages: Tuple[str, ...] = ()\n    pending_stages: Tuple[str, ...] = ()\n    failed_stages: Tuple[str, ...] = ()\n    skipped_stages: Tuple[str, ...] = ()\n\n    # Result/evidence\n    result_reference: Optional[str] = None\n    artifact_references: Tuple[str, ...] = ()\n\n    # Duplicate protection\n    idempotency_key: Optional[str] = None\n\n    # Timestamps\n    created_at: str = \"\"\n    started_at: Optional[str] = None\n    updated_at: str = \"\"\n    completed_at: Optional[str] = None\n    failed_at: Optional[str] = None\n    cancelled_at: Optional[str] = None\n\n    # Failure\n    failure_code: Optional[str] = None\n    failure_message: Optional[str] = None\n    failure_details: Mapping[str, Any] = field(default_factory=dict)\n\n    # Contract\n    contract_version: str = UNIVERSAL_WORKFLOW_CONTRACT_VERSION\n\n    def __post_init__(self) -> None:\n        violations: list[str] = []\n\n        workflow_id = _require_nonempty_string(\n            self.workflow_id,\n            name=\"workflow_id\",\n            violations=violations,\n        )\n\n        workflow_type = _require_nonempty_string(\n            self.workflow_type,\n            name=\"workflow_type\",\n            violations=violations,\n        )\n\n        workflow_version = _require_nonempty_string(\n            self.workflow_version,\n            name=\"workflow_version\",\n            violations=violations,\n        )\n\n        workspace_id = _require_nonempty_string(\n            self.workspace_id,\n            name=\"workspace_id\",\n            violations=violations,\n        )\n\n        coordinator_id = _require_nonempty_string(\n            self.coordinator_id,\n            name=\"coordinator_id\",\n            violations=violations,\n        )\n\n        coordinator_version = _require_nonempty_string(\n            self.coordinator_version,\n            name=\"coordinator_version\",\n            violations=violations,\n        )\n\n        correlation_id = _require_nonempty_string(\n            self.correlation_id,\n            name=\"correlation_id\",\n            violations=violations,\n        )\n\n        parent_workflow_id = _optional_string(\n            self.parent_workflow_id,\n            name=\"parent_workflow_id\",\n            violations=violations,\n        )\n\n        root_workflow_id = _require_nonempty_string(\n            self.root_workflow_id,\n            name=\"root_workflow_id\",\n            violations=violations,\n        )\n\n        try:\n            status = UniversalWorkflowStatus.coerce(\n                self.status\n            )\n        except UniversalWorkflowContractError as exc:\n            violations.extend(\n                exc.violations or (str(exc),)\n            )\n            status = UniversalWorkflowStatus.CREATED\n\n        input_reference = _optional_string(\n            self.input_reference,\n            name=\"input_reference\",\n            violations=violations,\n        )\n\n        current_stage = _optional_string(\n            self.current_stage,\n            name=\"current_stage\",\n            violations=violations,\n        )\n\n        result_reference = _optional_string(\n            self.result_reference,\n            name=\"result_reference\",\n            violations=violations,\n        )\n\n        idempotency_key = _optional_string(\n            self.idempotency_key,\n            name=\"idempotency_key\",\n            violations=violations,\n        )\n\n        failure_code = _optional_string(\n            self.failure_code,\n            name=\"failure_code\",\n            violations=violations,\n        )\n\n        failure_message = _optional_string(\n            self.failure_message,\n            name=\"failure_message\",\n            violations=violations,\n        )\n\n        context = _normalize_mapping(\n            self.context,\n            name=\"context\",\n            violations=violations,\n        )\n\n        metadata = _normalize_mapping(\n            self.metadata,\n            name=\"metadata\",\n            violations=violations,\n        )\n\n        failure_details = _normalize_mapping(\n            self.failure_details,\n            name=\"failure_details\",\n            violations=violations,\n        )\n\n        completed_stages = _normalize_string_tuple(\n            self.completed_stages,\n            name=\"completed_stages\",\n            violations=violations,\n        )\n\n        pending_stages = _normalize_string_tuple(\n            self.pending_stages,\n            name=\"pending_stages\",\n            violations=violations,\n        )\n\n        failed_stages = _normalize_string_tuple(\n            self.failed_stages,\n            name=\"failed_stages\",\n            violations=violations,\n        )\n\n        skipped_stages = _normalize_string_tuple(\n            self.skipped_stages,\n            name=\"skipped_stages\",\n            violations=violations,\n        )\n\n        artifact_references = _normalize_string_tuple(\n            self.artifact_references,\n            name=\"artifact_references\",\n            violations=violations,\n        )\n\n        created_at = _normalize_timestamp(\n            self.created_at,\n            name=\"created_at\",\n            required=True,\n            violations=violations,\n        )\n\n        updated_at = _normalize_timestamp(\n            self.updated_at,\n            name=\"updated_at\",\n            required=True,\n            violations=violations,\n        )\n\n        started_at = _normalize_timestamp(\n            self.started_at,\n            name=\"started_at\",\n            required=False,\n            violations=violations,\n        )\n\n        completed_at = _normalize_timestamp(\n            self.completed_at,\n            name=\"completed_at\",\n            required=False,\n            violations=violations,\n        )\n\n        failed_at = _normalize_timestamp(\n            self.failed_at,\n            name=\"failed_at\",\n            required=False,\n            violations=violations,\n        )\n\n        cancelled_at = _normalize_timestamp(\n            self.cancelled_at,\n            name=\"cancelled_at\",\n            required=False,\n            violations=violations,\n        )\n\n        contract_version = _require_nonempty_string(\n            self.contract_version,\n            name=\"contract_version\",\n            violations=violations,\n        )\n\n        if contract_version != UNIVERSAL_WORKFLOW_CONTRACT_VERSION:\n            violations.append(\n                \"contract_version must be \"\n                + UNIVERSAL_WORKFLOW_CONTRACT_VERSION\n            )\n\n        # ------------------------------------------------------------------\n        # Cross-field invariants\n        # ------------------------------------------------------------------\n\n        if parent_workflow_id is None:\n            if root_workflow_id != workflow_id:\n                violations.append(\n                    \"a root workflow must have root_workflow_id equal to workflow_id\"\n                )\n        else:\n            if parent_workflow_id == workflow_id:\n                violations.append(\n                    \"parent_workflow_id cannot equal workflow_id\"\n                )\n\n        stage_sets = {\n            \"completed\": set(completed_stages),\n            \"pending\": set(pending_stages),\n            \"failed\": set(failed_stages),\n            \"skipped\": set(skipped_stages),\n        }\n\n        names = tuple(stage_sets)\n\n        for index, left_name in enumerate(names):\n            for right_name in names[index + 1:]:\n                overlap = (\n                    stage_sets[left_name]\n                    & stage_sets[right_name]\n                )\n\n                if overlap:\n                    violations.append(\n                        f\"stages cannot be both {left_name} and \"\n                        f\"{right_name}: {', '.join(sorted(overlap))}\"\n                    )\n\n        if (\n            current_stage is not None\n            and current_stage in set(completed_stages)\n        ):\n            violations.append(\n                \"current_stage cannot already be completed\"\n            )\n\n        if (\n            current_stage is not None\n            and current_stage in set(failed_stages)\n        ):\n            violations.append(\n                \"current_stage cannot already be failed\"\n            )\n\n        if (\n            status == UniversalWorkflowStatus.COMPLETED\n            and completed_at is None\n        ):\n            violations.append(\n                \"completed_at is required when status is COMPLETED\"\n            )\n\n        if (\n            status == UniversalWorkflowStatus.FAILED\n            and failed_at is None\n        ):\n            violations.append(\n                \"failed_at is required when status is FAILED\"\n            )\n\n        if (\n            status == UniversalWorkflowStatus.CANCELLED\n            and cancelled_at is None\n        ):\n            violations.append(\n                \"cancelled_at is required when status is CANCELLED\"\n            )\n\n        if (\n            status == UniversalWorkflowStatus.FAILED\n            and failure_code is None\n        ):\n            violations.append(\n                \"failure_code is required when status is FAILED\"\n            )\n\n        if (\n            status == UniversalWorkflowStatus.COMPLETED\n            and failed_stages\n        ):\n            violations.append(\n                \"COMPLETED workflow cannot contain failed_stages\"\n            )\n\n        if (\n            created_at is not None\n            and updated_at is not None\n        ):\n            created_dt = datetime.fromisoformat(\n                created_at.replace(\"Z\", \"+00:00\")\n            )\n            updated_dt = datetime.fromisoformat(\n                updated_at.replace(\"Z\", \"+00:00\")\n            )\n\n            if updated_dt < created_dt:\n                violations.append(\n                    \"updated_at cannot be earlier than created_at\"\n                )\n\n        if violations:\n            raise UniversalWorkflowContractError(\n                \"Universal Workflow Contract validation failed\",\n                violations=tuple(violations),\n            )\n\n        object.__setattr__(self, \"workflow_id\", workflow_id)\n        object.__setattr__(self, \"workflow_type\", workflow_type)\n        object.__setattr__(self, \"workflow_version\", workflow_version)\n        object.__setattr__(self, \"workspace_id\", workspace_id)\n        object.__setattr__(self, \"coordinator_id\", coordinator_id)\n        object.__setattr__(self, \"coordinator_version\", coordinator_version)\n        object.__setattr__(self, \"correlation_id\", correlation_id)\n        object.__setattr__(self, \"parent_workflow_id\", parent_workflow_id)\n        object.__setattr__(self, \"root_workflow_id\", root_workflow_id)\n        object.__setattr__(self, \"status\", status)\n        object.__setattr__(self, \"input_reference\", input_reference)\n        object.__setattr__(self, \"context\", context)\n        object.__setattr__(self, \"metadata\", metadata)\n        object.__setattr__(self, \"current_stage\", current_stage)\n        object.__setattr__(self, \"completed_stages\", completed_stages)\n        object.__setattr__(self, \"pending_stages\", pending_stages)\n        object.__setattr__(self, \"failed_stages\", failed_stages)\n        object.__setattr__(self, \"skipped_stages\", skipped_stages)\n        object.__setattr__(self, \"result_reference\", result_reference)\n        object.__setattr__(self, \"artifact_references\", artifact_references)\n        object.__setattr__(self, \"idempotency_key\", idempotency_key)\n        object.__setattr__(self, \"created_at\", created_at)\n        object.__setattr__(self, \"started_at\", started_at)\n        object.__setattr__(self, \"updated_at\", updated_at)\n        object.__setattr__(self, \"completed_at\", completed_at)\n        object.__setattr__(self, \"failed_at\", failed_at)\n        object.__setattr__(self, \"cancelled_at\", cancelled_at)\n        object.__setattr__(self, \"failure_code\", failure_code)\n        object.__setattr__(self, \"failure_message\", failure_message)\n        object.__setattr__(self, \"failure_details\", failure_details)\n        object.__setattr__(self, \"contract_version\", contract_version)\n\n    # ======================================================================\n    # Serialization\n    # ======================================================================\n\n    def to_canonical_dict(self) -> dict[str, Any]:\n        return {\n            \"workflow_id\": self.workflow_id,\n            \"workflow_type\": self.workflow_type,\n            \"workflow_version\": self.workflow_version,\n            \"workspace_id\": self.workspace_id,\n            \"coordinator_id\": self.coordinator_id,\n            \"coordinator_version\": self.coordinator_version,\n            \"correlation_id\": self.correlation_id,\n            \"parent_workflow_id\": self.parent_workflow_id,\n            \"root_workflow_id\": self.root_workflow_id,\n            \"status\": self.status.value,\n            \"input_reference\": self.input_reference,\n            \"context\": _thaw(self.context),\n            \"metadata\": _thaw(self.metadata),\n            \"current_stage\": self.current_stage,\n            \"completed_stages\": list(self.completed_stages),\n            \"pending_stages\": list(self.pending_stages),\n            \"failed_stages\": list(self.failed_stages),\n            \"skipped_stages\": list(self.skipped_stages),\n            \"result_reference\": self.result_reference,\n            \"artifact_references\": list(self.artifact_references),\n            \"idempotency_key\": self.idempotency_key,\n            \"created_at\": self.created_at,\n            \"started_at\": self.started_at,\n            \"updated_at\": self.updated_at,\n            \"completed_at\": self.completed_at,\n            \"failed_at\": self.failed_at,\n            \"cancelled_at\": self.cancelled_at,\n            \"failure_code\": self.failure_code,\n            \"failure_message\": self.failure_message,\n            \"failure_details\": _thaw(self.failure_details),\n            \"contract_version\": self.contract_version,\n        }\n\n    def to_dict(self) -> dict[str, Any]:\n        return self.to_canonical_dict()\n\n    def to_canonical_json(self) -> str:\n        return _canonical_json(\n            self.to_canonical_dict()\n        )\n\n    # ======================================================================\n    # Schema\n    # ======================================================================\n\n    @classmethod\n    def required_fields(cls) -> Tuple[str, ...]:\n        return REQUIRED_UNIVERSAL_WORKFLOW_FIELDS\n\n    @classmethod\n    def schema(cls) -> Mapping[str, Any]:\n        return MappingProxyType(\n            {\n                \"contract_id\": UNIVERSAL_WORKFLOW_CONTRACT_ID,\n                \"contract_version\": UNIVERSAL_WORKFLOW_CONTRACT_VERSION,\n                \"schema_version\": UNIVERSAL_WORKFLOW_SCHEMA_VERSION,\n                \"required_fields\": REQUIRED_UNIVERSAL_WORKFLOW_FIELDS,\n            }\n        )\n\n    # ======================================================================\n    # Reconstruction\n    # ======================================================================\n\n    @classmethod\n    def from_dict(\n        cls,\n        data: Mapping[str, Any],\n    ) -> \"UniversalWorkflow\":\n        if not isinstance(data, Mapping):\n            raise UniversalWorkflowContractError(\n                \"workflow data must be a mapping\"\n            )\n\n        unknown_fields = sorted(\n            set(data) - _CONTRACT_CONSTRUCTOR_FIELDS\n        )\n\n        if unknown_fields:\n            raise UniversalWorkflowContractError(\n                \"unknown universal workflow fields: \"\n                + \", \".join(unknown_fields),\n                violations=tuple(\n                    \"unknown field: \" + name\n                    for name in unknown_fields\n                ),\n            )\n\n        missing_fields = tuple(\n            name\n            for name in REQUIRED_UNIVERSAL_WORKFLOW_FIELDS\n            if name not in data\n        )\n\n        if missing_fields:\n            raise UniversalWorkflowContractError(\n                \"missing required universal workflow fields: \"\n                + \", \".join(missing_fields),\n                violations=tuple(\n                    \"missing required field: \" + name\n                    for name in missing_fields\n                ),\n            )\n\n        kwargs = dict(data)\n\n        kwargs[\"status\"] = UniversalWorkflowStatus.coerce(\n            kwargs[\"status\"]\n        )\n\n        return cls(**kwargs)\n\n    @classmethod\n    def from_json(\n        cls,\n        text: str,\n    ) -> \"UniversalWorkflow\":\n        try:\n            data = json.loads(text)\n        except json.JSONDecodeError as exc:\n            raise UniversalWorkflowContractError(\n                \"workflow json is not decodable: \"\n                + str(exc)\n            ) from exc\n\n        return cls.from_dict(data)\n\n    @classmethod\n    def reconstruct(\n        cls,\n        data: Mapping[str, Any],\n    ) -> \"UniversalWorkflow\":\n        return cls.from_dict(data)\n\n    # ======================================================================\n    # Identity / evidence\n    # ======================================================================\n\n    def identity_fingerprint(self) -> str:\n        material = {\n            \"contract_id\": UNIVERSAL_WORKFLOW_CONTRACT_ID,\n            \"contract_version\": self.contract_version,\n            \"workflow_id\": self.workflow_id,\n            \"workflow_type\": self.workflow_type,\n            \"workflow_version\": self.workflow_version,\n            \"workspace_id\": self.workspace_id,\n            \"root_workflow_id\": self.root_workflow_id,\n            \"correlation_id\": self.correlation_id,\n        }\n\n        return _fingerprint(\n            _canonical_json(material)\n        )\n\n    def content_fingerprint(self) -> str:\n        return _fingerprint(\n            self.to_canonical_json()\n        )\n\n    def validate(self) -> UniversalWorkflowValidationReport:\n        return validate_universal_workflow(self)\n"
+    },
+    "certify_dependency_planning": {
+      "fields": [],
+      "signature": "() -> 'PlanningCertificationResult'",
+      "source": "def certify_dependency_planning(\n) -> PlanningCertificationResult:\n    \"\"\"\n    Certify the complete frozen Phase 4.1?4.5 dependency/planning chain.\n\n    Certification is fail closed. A failed check raises\n    PlanningCertificationFailedError containing the complete immutable\n    certification result.\n    \"\"\"\n\n    result = (\n        _evaluate_planning_certification()\n    )\n\n    if not result.is_certified:\n        raise PlanningCertificationFailedError(\n            result\n        )\n\n    return result\n"
+    },
+    "create_dependency_graph": {
+      "fields": [],
+      "signature": "(*, workflow_id: 'str', node_ids: 'Iterable[str]' = (), edges: 'Iterable[DependencyEdgeInput]' = ()) -> 'DependencyGraph'",
+      "source": "def create_dependency_graph(\n    *,\n    workflow_id: str,\n    node_ids: Iterable[str] = (),\n    edges: Iterable[DependencyEdgeInput] = (),\n) -> DependencyGraph:\n    \"\"\"\n    Create one canonical workflow-scoped dependency graph.\n\n    Explicit node_ids may contain isolated nodes.\n\n    Any stage referenced by an edge is automatically included in the\n    canonical node set.\n\n    Exact duplicate edges are canonicalized to one edge.\n    \"\"\"\n\n    canonical_edges = _canonicalize_edges(\n        edges\n    )\n\n    canonical_nodes = _canonicalize_node_ids(\n        node_ids,\n        canonical_edges,\n    )\n\n    return DependencyGraph(\n        workflow_id=workflow_id,\n        node_ids=canonical_nodes,\n        edges=canonical_edges,\n        graph_version=DEPENDENCY_GRAPH_VERSION,\n    )\n"
+    },
+    "create_execution_plan": {
+      "fields": [],
+      "signature": "(graph: 'DependencyGraph', resolution: 'RunnableStageResolution') -> 'ExecutionPlan'",
+      "source": "def create_execution_plan(\n    graph: DependencyGraph,\n    resolution: RunnableStageResolution,\n) -> ExecutionPlan:\n    \"\"\"\n    Create one immediate execution wave from Phase 4.4 runnable stages.\n\n    All currently runnable stages remain in the same wave.\n\n    Lexical ordering inside the wave is deterministic representation only.\n    It does not impose serial execution.\n    \"\"\"\n\n    _validate_planning_inputs(\n        graph,\n        resolution,\n    )\n\n    planned_stage_ids = tuple(\n        sorted(\n            resolution.runnable_stage_ids\n        )\n    )\n\n    if planned_stage_ids:\n        waves = (\n            ExecutionWave(\n                wave_index=1,\n                stage_ids=planned_stage_ids,\n                execution_semantics=(\n                    \"parallel_eligible\"\n                ),\n            ),\n        )\n\n    else:\n        waves = ()\n\n    return ExecutionPlan(\n        workflow_id=resolution.workflow_id,\n        wave_count=len(\n            waves\n        ),\n        waves=waves,\n        planned_stage_ids=planned_stage_ids,\n        graph_version=graph.graph_version,\n        cycle_detection_version=(\n            CYCLE_DETECTION_VERSION\n        ),\n        runnable_stage_resolver_version=(\n            RUNNABLE_STAGE_RESOLVER_VERSION\n        ),\n        planner_version=(\n            EXECUTION_PLANNER_VERSION\n        ),\n    )\n"
+    },
+    "require_acyclic_dependency_graph": {
+      "fields": [],
+      "signature": "(graph: 'DependencyGraph') -> 'CycleDetectionResult'",
+      "source": "def require_acyclic_dependency_graph(\n    graph: DependencyGraph,\n) -> CycleDetectionResult:\n    result = detect_dependency_cycles(\n        graph\n    )\n\n    if result.has_cycle:\n        raise CyclicDependencyGraphError(\n            result\n        )\n\n    return result\n"
+    },
+    "require_valid_dependency_graph": {
+      "fields": [],
+      "signature": "(graph: 'DependencyGraph') -> 'DependencyValidationResult'",
+      "source": "def require_valid_dependency_graph(\n    graph: DependencyGraph,\n) -> DependencyValidationResult:\n    result = validate_dependency_graph(\n        graph\n    )\n\n    if not result.is_valid:\n        raise DependencyGraphValidationFailedError(\n            result\n        )\n\n    return result\n"
+    },
+    "validate_dependency_graph": {
+      "fields": [],
+      "signature": "(graph: 'DependencyGraph') -> 'DependencyValidationResult'",
+      "source": "def validate_dependency_graph(\n    graph: DependencyGraph,\n) -> DependencyValidationResult:\n    \"\"\"\n    Validate one frozen Phase 4.1 DependencyGraph.\n\n    This validator intentionally does not inspect graph cycles.\n    \"\"\"\n\n    if not isinstance(\n        graph,\n        DependencyGraph,\n    ):\n        raise InvalidDependencyValidationRequestError(\n            \"graph must be a Phase 4.1 DependencyGraph.\"\n        )\n\n    violations: list[\n        DependencyValidationViolation\n    ] = []\n\n    checks_run = 0\n    checks_passed = 0\n\n\n    def invariant(\n        condition: bool,\n        message: str,\n    ) -> None:\n        nonlocal checks_run\n        nonlocal checks_passed\n\n        checks_run += 1\n\n        if condition:\n            checks_passed += 1\n            return\n\n        violations.append(\n            DependencyValidationViolation(\n                code=GRAPH_INVARIANT_VIOLATION_CODE,\n                message=message,\n            )\n        )\n\n\n    # -------------------------------------------------------------------------\n    # Frozen 4.1 identity/invariants\n    # -------------------------------------------------------------------------\n\n    invariant(\n        graph.graph_version\n        == DEPENDENCY_GRAPH_VERSION,\n        (\n            \"graph_version does not match \"\n            \"the frozen Phase 4.1 version.\"\n        ),\n    )\n\n    invariant(\n        isinstance(\n            graph.workflow_id,\n            str,\n        )\n        and bool(\n            graph.workflow_id\n        )\n        and graph.workflow_id\n        == graph.workflow_id.strip(),\n        \"workflow_id is not canonical.\",\n    )\n\n    invariant(\n        isinstance(\n            graph.node_ids,\n            tuple,\n        ),\n        \"node_ids must be an immutable tuple.\",\n    )\n\n    invariant(\n        graph.node_ids\n        == tuple(\n            sorted(\n                set(\n                    graph.node_ids\n                )\n            )\n        ),\n        (\n            \"node_ids must be unique and \"\n            \"lexically canonical.\"\n        ),\n    )\n\n    node_identity_valid = all(\n        isinstance(\n            node_id,\n            str,\n        )\n        and bool(\n            node_id\n        )\n        and node_id\n        == node_id.strip()\n        for node_id\n        in graph.node_ids\n    )\n\n    invariant(\n        node_identity_valid,\n        \"Every dependency node must be a canonical stage_id.\",\n    )\n\n    invariant(\n        isinstance(\n            graph.edges,\n            tuple,\n        ),\n        \"edges must be an immutable tuple.\",\n    )\n\n    edge_identity_valid = all(\n        isinstance(\n            edge,\n            DependencyEdge,\n        )\n        for edge\n        in graph.edges\n    )\n\n    invariant(\n        edge_identity_valid,\n        \"Every dependency edge must be DependencyEdge.\",\n    )\n\n    canonical_edges = (\n        tuple(\n            sorted(\n                set(\n                    graph.edges\n                ),\n                key=lambda item: (\n                    item.prerequisite_stage_id,\n                    item.dependent_stage_id,\n                ),\n            )\n        )\n        if edge_identity_valid\n        else ()\n    )\n\n    invariant(\n        edge_identity_valid\n        and graph.edges\n        == canonical_edges,\n        (\n            \"Dependency edges must be unique \"\n            \"and lexically canonical.\"\n        ),\n    )\n\n    endpoint_membership_valid = (\n        edge_identity_valid\n        and all(\n            edge.prerequisite_stage_id\n            in graph.node_ids\n            and edge.dependent_stage_id\n            in graph.node_ids\n            for edge\n            in graph.edges\n        )\n    )\n\n    invariant(\n        endpoint_membership_valid,\n        (\n            \"Every dependency edge endpoint \"\n            \"must exist in graph.node_ids.\"\n        ),\n    )\n\n\n    # -------------------------------------------------------------------------\n    # Phase 4.2 semantic rule: self-dependency prohibited\n    # -------------------------------------------------------------------------\n\n    self_edges = (\n        tuple(\n            edge\n            for edge\n            in graph.edges\n            if isinstance(\n                edge,\n                DependencyEdge,\n            )\n            and edge.prerequisite_stage_id\n            == edge.dependent_stage_id\n        )\n    )\n\n    for edge in self_edges:\n        checks_run += 1\n\n        violations.append(\n            DependencyValidationViolation(\n                code=SELF_DEPENDENCY_VIOLATION_CODE,\n                message=(\n                    \"A stage must not depend on itself.\"\n                ),\n                prerequisite_stage_id=(\n                    edge.prerequisite_stage_id\n                ),\n                dependent_stage_id=(\n                    edge.dependent_stage_id\n                ),\n            )\n        )\n\n    # One explicit semantic self-dependency check exists even for a graph\n    # with zero self-edges so the result records that rule as evaluated.\n    if not self_edges:\n        checks_run += 1\n        checks_passed += 1\n\n\n    # -------------------------------------------------------------------------\n    # Deterministic result\n    # -------------------------------------------------------------------------\n\n    canonical_violations = tuple(\n        sorted(\n            violations\n        )\n    )\n\n    checks_failed = (\n        checks_run\n        - checks_passed\n    )\n\n    return DependencyValidationResult(\n        is_valid=(\n            checks_failed\n            == 0\n        ),\n        checks_run=checks_run,\n        checks_passed=checks_passed,\n        checks_failed=checks_failed,\n        node_count=len(\n            graph.node_ids\n        ),\n        edge_count=len(\n            graph.edges\n        ),\n        self_dependency_count=len(\n            self_edges\n        ),\n        violations=canonical_violations,\n        graph_version=graph.graph_version,\n        validation_version=(\n            DEPENDENCY_VALIDATION_VERSION\n        ),\n    )\n"
+    }
+  },
+  "implementation_decision": "ADD_ONE_CANONICAL_CONNECTED_DOMAIN_MANIFEST",
+  "import_failures": [],
+  "missing_symbols": {},
+  "module_inventories": {
+    "connected_domain_coordinator": {
+      "classes": {
+        "ConnectedDomainCoordinationIntent": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "workflow_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "correlation_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workspace_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workspace_name",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "domain",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "site_url",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "stage_ids",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "payload_by_stage",
+              "type": "_d10_Mapping[str, _d10_Any]"
+            },
+            {
+              "default": "<required>",
+              "name": "context",
+              "type": "_d10_Mapping[str, _d10_Any]"
+            },
+            {
+              "default": "<required>",
+              "name": "metadata",
+              "type": "_d10_Mapping[str, _d10_Any]"
+            },
+            {
+              "default": "'connected_domain_coordination_intent_v1'",
+              "name": "schema_version",
+              "type": "str"
+            },
+            {
+              "default": "'connected_domain_pipeline_coordinator_v1.0.0'",
+              "name": "coordinator_version",
+              "type": "str"
+            },
+            {
+              "default": "'connect_domain'",
+              "name": "pipeline_id",
+              "type": "str"
+            },
+            {
+              "default": "'connect_domain'",
+              "name": "workflow_type",
+              "type": "str"
+            },
+            {
+              "default": "False",
+              "name": "submission_requested",
+              "type": "bool"
+            }
+          ],
+          "frozen": true,
+          "signature": "(workflow_id: 'str', correlation_id: 'str', workspace_id: 'str', workspace_name: 'str', domain: 'str', site_url: 'str', stage_ids: 'tuple[str, ...]', payload_by_stage: '_d10_Mapping[str, _d10_Any]', context: '_d10_Mapping[str, _d10_Any]', metadata: '_d10_Mapping[str, _d10_Any]', schema_version: 'str' = 'connected_domain_coordination_intent_v1', coordinator_version: 'str' = 'connected_domain_pipeline_coordinator_v1.0.0', pipeline_id: 'str' = 'connect_domain', workflow_type: 'str' = 'connect_domain', submission_requested: 'bool' = False) -> None",
+          "slots": true
+        },
+        "ConnectedDomainPipelineCoordinatorError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "ConnectedDomainUniversalCoordinationError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "ConnectedDomainUniversalCoordinationResult": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "intent",
+              "type": "ConnectedDomainCoordinationIntent"
+            },
+            {
+              "default": "<required>",
+              "name": "coordinator_contract",
+              "type": "_d11_PipelineCoordinatorContract"
+            },
+            {
+              "default": "<required>",
+              "name": "execution_plan",
+              "type": "_d11_Any"
+            },
+            {
+              "default": "<required>",
+              "name": "stage_references",
+              "type": "_d11_Mapping[str, _d11_Any]"
+            },
+            {
+              "default": "<required>",
+              "name": "handoff_context",
+              "type": "_d11_Any"
+            },
+            {
+              "default": "<required>",
+              "name": "runtime_submission",
+              "type": "_d11_Any"
+            },
+            {
+              "default": "<required>",
+              "name": "evidence",
+              "type": "_d11_Mapping[str, _d11_Any]"
+            },
+            {
+              "default": "'connected_domain_universal_coordination_v1'",
+              "name": "schema_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(intent: 'ConnectedDomainCoordinationIntent', coordinator_contract: '_d11_PipelineCoordinatorContract', execution_plan: '_d11_Any', stage_references: '_d11_Mapping[str, _d11_Any]', handoff_context: '_d11_Any', runtime_submission: '_d11_Any', evidence: '_d11_Mapping[str, _d11_Any]', schema_version: 'str' = 'connected_domain_universal_coordination_v1') -> None",
+          "slots": true
+        }
+      },
+      "enums": {},
+      "functions": {
+        "build_connected_domain_coordinator_contract": {
+          "signature": "() -> '_d11_PipelineCoordinatorContract'"
+        },
+        "connect_connected_domain_to_universal_coordination": {
+          "signature": "(*, runtime_gateway: '_d11_Any', execution_plan: '_d11_Any', stage_references: '_d11_Mapping[str, _d11_Any]', workspace_id: 'str | None' = None, workspace_name: 'str | None' = None, domain: 'str | None' = None, site_url: 'str | None' = None, url: 'str | None' = None, workflow_id: 'str | None' = None, correlation_id: 'str | None' = None, payload_by_stage: '_d11_Mapping[str, _d11_Any] | None' = None, metadata: '_d11_Mapping[str, _d11_Any] | None' = None, dependency_job_ids_by_stage: '_d11_Mapping[str, _d11_Any] | None' = None, execution_semantics: 'str' = 'parallel_eligible', submitter: '_d11_Any' = None, correlation_registry: '_d11_Any' = None, jobs_reader: '_d11_Any' = None) -> 'ConnectedDomainUniversalCoordinationResult'"
+        },
+        "coordinate_connect_domain_pipeline": {
+          "signature": "(*, workspace_id: 'str | None' = None, workspace_name: 'str | None' = None, domain: 'str | None' = None, site_url: 'str | None' = None, url: 'str | None' = None, workflow_id: 'str | None' = None, correlation_id: 'str | None' = None, payload_by_stage: '_d10_Mapping[str, _d10_Any] | None' = None, metadata: '_d10_Mapping[str, _d10_Any] | None' = None) -> 'ConnectedDomainCoordinationIntent'"
+        },
+        "register_connected_domain_coordinator": {
+          "signature": "() -> '_d11_PipelineCoordinatorContract'"
+        },
+        "run_connect_domain": {
+          "signature": "(*, workspace_id: 'str | None' = None, workspace_name: 'str | None' = None, workspace_mode: 'str' = 'domain', domain: 'str | None' = None, site_url: 'str | None' = None, url: 'str | None' = None) -> 'Dict[str, Any]'"
+        }
+      },
+      "module": "backend.server.pipelines.connect_domain.coordinator",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\pipelines\\connect_domain\\coordinator.py"
+    },
+    "cycle_detection": {
+      "classes": {
+        "CycleDetectionError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "CycleDetectionResult": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "is_acyclic",
+              "type": "bool"
+            },
+            {
+              "default": "<required>",
+              "name": "has_cycle",
+              "type": "bool"
+            },
+            {
+              "default": "<required>",
+              "name": "node_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "edge_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "cycle_witness_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "cycle_witnesses",
+              "type": "tuple[CycleWitness, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "graph_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "detection_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(is_acyclic: 'bool', has_cycle: 'bool', node_count: 'int', edge_count: 'int', cycle_witness_count: 'int', cycle_witnesses: 'tuple[CycleWitness, ...]', graph_version: 'str', detection_version: 'str') -> None",
+          "slots": true
+        },
+        "CycleWitness": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "stage_ids",
+              "type": "tuple[str, ...]"
+            }
+          ],
+          "frozen": true,
+          "signature": "(stage_ids: 'tuple[str, ...]') -> None",
+          "slots": true
+        },
+        "CyclicDependencyGraphError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(result: \"'CycleDetectionResult'\") -> 'None'",
+          "slots": false
+        },
+        "InvalidCycleDetectionRequestError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        }
+      },
+      "enums": {},
+      "functions": {
+        "cycle_detection_snapshot": {
+          "signature": "(graph: 'DependencyGraph') -> 'Mapping[str, Any]'"
+        },
+        "detect_dependency_cycles": {
+          "signature": "(graph: 'DependencyGraph') -> 'CycleDetectionResult'"
+        },
+        "explain_cycle_detection_v4_3": {
+          "signature": "() -> 'Mapping[str, Any]'"
+        },
+        "require_acyclic_dependency_graph": {
+          "signature": "(graph: 'DependencyGraph') -> 'CycleDetectionResult'"
+        }
+      },
+      "module": "backend.server.coordination.dependency_planning.cycle_detection",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\dependency_planning\\cycle_detection.py"
+    },
+    "dependency_graph": {
+      "classes": {
+        "DependencyEdge": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "prerequisite_stage_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "dependent_stage_id",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(prerequisite_stage_id: 'str', dependent_stage_id: 'str') -> None",
+          "slots": true
+        },
+        "DependencyGraph": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "workflow_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "node_ids",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "edges",
+              "type": "tuple[DependencyEdge, ...]"
+            },
+            {
+              "default": "'dependency_graph_v4.1.0'",
+              "name": "graph_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(workflow_id: 'str', node_ids: 'tuple[str, ...]', edges: 'tuple[DependencyEdge, ...]', graph_version: 'str' = 'dependency_graph_v4.1.0') -> None",
+          "slots": true
+        },
+        "DependencyGraphError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "InvalidDependencyEdgeError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "InvalidDependencyStageIdError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "InvalidWorkflowIdError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        }
+      },
+      "enums": {},
+      "functions": {
+        "create_dependency_graph": {
+          "signature": "(*, workflow_id: 'str', node_ids: 'Iterable[str]' = (), edges: 'Iterable[DependencyEdgeInput]' = ()) -> 'DependencyGraph'"
+        },
+        "dependency_edges": {
+          "signature": "(graph: 'DependencyGraph') -> 'tuple[DependencyEdge, ...]'"
+        },
+        "dependency_graph_snapshot": {
+          "signature": "(graph: 'DependencyGraph') -> 'Mapping[str, Any]'"
+        },
+        "dependency_leaves": {
+          "signature": "(graph: 'DependencyGraph') -> 'tuple[str, ...]'"
+        },
+        "dependency_nodes": {
+          "signature": "(graph: 'DependencyGraph') -> 'tuple[str, ...]'"
+        },
+        "dependency_roots": {
+          "signature": "(graph: 'DependencyGraph') -> 'tuple[str, ...]'"
+        },
+        "explain_dependency_graph_v4_1": {
+          "signature": "() -> 'Mapping[str, Any]'"
+        },
+        "has_dependency_edge": {
+          "signature": "(graph: 'DependencyGraph', prerequisite_stage_id: 'str', dependent_stage_id: 'str') -> 'bool'"
+        },
+        "has_dependency_node": {
+          "signature": "(graph: 'DependencyGraph', stage_id: 'str') -> 'bool'"
+        },
+        "stage_dependents": {
+          "signature": "(graph: 'DependencyGraph', stage_id: 'str') -> 'tuple[str, ...]'"
+        },
+        "stage_prerequisites": {
+          "signature": "(graph: 'DependencyGraph', stage_id: 'str') -> 'tuple[str, ...]'"
+        }
+      },
+      "module": "backend.server.coordination.dependency_planning.dependency_graph",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\dependency_planning\\dependency_graph.py"
+    },
+    "dependency_validation": {
+      "classes": {
+        "DependencyGraphValidationFailedError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(result: \"'DependencyValidationResult'\") -> 'None'",
+          "slots": false
+        },
+        "DependencyValidationError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "DependencyValidationResult": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "is_valid",
+              "type": "bool"
+            },
+            {
+              "default": "<required>",
+              "name": "checks_run",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "checks_passed",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "checks_failed",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "node_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "edge_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "self_dependency_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "violations",
+              "type": "tuple[DependencyValidationViolation, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "graph_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "validation_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(is_valid: 'bool', checks_run: 'int', checks_passed: 'int', checks_failed: 'int', node_count: 'int', edge_count: 'int', self_dependency_count: 'int', violations: 'tuple[DependencyValidationViolation, ...]', graph_version: 'str', validation_version: 'str') -> None",
+          "slots": true
+        },
+        "DependencyValidationViolation": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "code",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "message",
+              "type": "str"
+            },
+            {
+              "default": "None",
+              "name": "prerequisite_stage_id",
+              "type": "str | None"
+            },
+            {
+              "default": "None",
+              "name": "dependent_stage_id",
+              "type": "str | None"
+            }
+          ],
+          "frozen": true,
+          "signature": "(code: 'str', message: 'str', prerequisite_stage_id: 'str | None' = None, dependent_stage_id: 'str | None' = None) -> None",
+          "slots": true
+        },
+        "InvalidDependencyValidationRequestError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        }
+      },
+      "enums": {},
+      "functions": {
+        "dependency_validation_snapshot": {
+          "signature": "(graph: 'DependencyGraph') -> 'Mapping[str, Any]'"
+        },
+        "explain_dependency_validation_v4_2": {
+          "signature": "() -> 'Mapping[str, Any]'"
+        },
+        "require_valid_dependency_graph": {
+          "signature": "(graph: 'DependencyGraph') -> 'DependencyValidationResult'"
+        },
+        "validate_dependency_graph": {
+          "signature": "(graph: 'DependencyGraph') -> 'DependencyValidationResult'"
+        }
+      },
+      "module": "backend.server.coordination.dependency_planning.dependency_validation",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\dependency_planning\\dependency_validation.py"
+    },
+    "execution_planner": {
+      "classes": {
+        "ExecutionPlan": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "workflow_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "wave_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "waves",
+              "type": "tuple[ExecutionWave, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "planned_stage_ids",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "graph_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "cycle_detection_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "runnable_stage_resolver_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "planner_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(workflow_id: 'str', wave_count: 'int', waves: 'tuple[ExecutionWave, ...]', planned_stage_ids: 'tuple[str, ...]', graph_version: 'str', cycle_detection_version: 'str', runnable_stage_resolver_version: 'str', planner_version: 'str') -> None",
+          "slots": true
+        },
+        "ExecutionPlanRunnabilityMismatchError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "ExecutionPlanWorkflowMismatchError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "ExecutionPlannerError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "ExecutionWave": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "wave_index",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "stage_ids",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "execution_semantics",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(wave_index: 'int', stage_ids: 'tuple[str, ...]', execution_semantics: 'str') -> None",
+          "slots": true
+        },
+        "InvalidExecutionPlanningRequestError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        }
+      },
+      "enums": {},
+      "functions": {
+        "create_execution_plan": {
+          "signature": "(graph: 'DependencyGraph', resolution: 'RunnableStageResolution') -> 'ExecutionPlan'"
+        },
+        "execution_plan_snapshot": {
+          "signature": "(graph: 'DependencyGraph', resolution: 'RunnableStageResolution') -> 'Mapping[str, Any]'"
+        },
+        "explain_execution_planner_v4_5": {
+          "signature": "() -> 'Mapping[str, Any]'"
+        }
+      },
+      "module": "backend.server.coordination.dependency_planning.execution_planner",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\dependency_planning\\execution_planner.py"
+    },
+    "planning_certification": {
+      "classes": {
+        "PlanningCertificationCheck": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "name",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "passed",
+              "type": "bool"
+            },
+            {
+              "default": "<required>",
+              "name": "detail",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(name: 'str', passed: 'bool', detail: 'str') -> None",
+          "slots": true
+        },
+        "PlanningCertificationError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": null,
+          "slots": false
+        },
+        "PlanningCertificationFailedError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(result: \"'PlanningCertificationResult'\") -> 'None'",
+          "slots": false
+        },
+        "PlanningCertificationResult": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "is_certified",
+              "type": "bool"
+            },
+            {
+              "default": "<required>",
+              "name": "check_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "passed_check_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "failed_check_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "failed_checks",
+              "type": "tuple[str, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "checks",
+              "type": "tuple[PlanningCertificationCheck, ...]"
+            },
+            {
+              "default": "<required>",
+              "name": "component_shas",
+              "type": "Mapping[str, str]"
+            },
+            {
+              "default": "<required>",
+              "name": "composite_fingerprint",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "dependency_graph_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "dependency_validation_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "cycle_detection_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "runnable_stage_resolver_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "execution_planner_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "deep_chain_node_count",
+              "type": "int"
+            },
+            {
+              "default": "<required>",
+              "name": "certification_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "schema_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(is_certified: 'bool', check_count: 'int', passed_check_count: 'int', failed_check_count: 'int', failed_checks: 'tuple[str, ...]', checks: 'tuple[PlanningCertificationCheck, ...]', component_shas: 'Mapping[str, str]', composite_fingerprint: 'str', dependency_graph_version: 'str', dependency_validation_version: 'str', cycle_detection_version: 'str', runnable_stage_resolver_version: 'str', execution_planner_version: 'str', deep_chain_node_count: 'int', certification_version: 'str', schema_version: 'str') -> None",
+          "slots": true
+        }
+      },
+      "enums": {},
+      "functions": {
+        "certify_dependency_planning": {
+          "signature": "() -> 'PlanningCertificationResult'"
+        },
+        "explain_planning_certification_v4_6": {
+          "signature": "() -> 'Mapping[str, Any]'"
+        },
+        "planning_certification_snapshot": {
+          "signature": "() -> 'Mapping[str, Any]'"
+        }
+      },
+      "module": "backend.server.coordination.dependency_planning.planning_certification",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\dependency_planning\\planning_certification.py"
+    },
+    "stage_contract": {
+      "classes": {
+        "StageExecutionTarget": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(*values)",
+          "slots": false
+        },
+        "UniversalStageReference": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "stage_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "stage_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "pipeline_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workflow_type",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workflow_contract_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "execution_target",
+              "type": "StageExecutionTarget"
+            },
+            {
+              "default": "<required>",
+              "name": "job_type",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "runtime_stage",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "required_payload_fields",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "<default_factory>",
+              "name": "metadata",
+              "type": "Mapping[str, Any]"
+            },
+            {
+              "default": "'universal_stage_reference_contract_v1.3.0'",
+              "name": "contract_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(stage_id: 'str', stage_version: 'str', pipeline_id: 'str', workflow_type: 'str', workflow_contract_version: 'str', execution_target: 'StageExecutionTarget', job_type: 'str', runtime_stage: 'str', required_payload_fields: 'Tuple[str, ...]', metadata: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_stage_reference_contract_v1.3.0') -> None",
+          "slots": true
+        },
+        "UniversalStageReferenceContractError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(message: 'str', *, violations: 'Tuple[str, ...]' = ()) -> 'None'",
+          "slots": false
+        },
+        "UniversalStageReferenceValidationReport": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "is_valid",
+              "type": "bool"
+            },
+            {
+              "default": "()",
+              "name": "violations",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "'universal_stage_reference_contract_v1.3.0'",
+              "name": "contract_version",
+              "type": "str"
+            },
+            {
+              "default": "0",
+              "name": "checked_field_count",
+              "type": "int"
+            }
+          ],
+          "frozen": true,
+          "signature": "(is_valid: 'bool', violations: 'Tuple[str, ...]' = (), contract_version: 'str' = 'universal_stage_reference_contract_v1.3.0', checked_field_count: 'int' = 0) -> None",
+          "slots": true
+        }
+      },
+      "enums": {
+        "StageExecutionTarget": [
+          {
+            "name": "UNIVERSAL_RUNTIME",
+            "value": "universal_runtime"
+          },
+          {
+            "name": "COORDINATION_ONLY",
+            "value": "coordination_only"
+          }
+        ]
+      },
+      "functions": {
+        "validate_universal_stage_reference": {
+          "signature": "(candidate: 'Any') -> 'UniversalStageReferenceValidationReport'"
+        }
+      },
+      "module": "backend.server.coordination.universal_stages.contract",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\universal_stages\\contract.py"
+    },
+    "workflow_contract": {
+      "classes": {
+        "UniversalWorkflow": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "workflow_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workflow_type",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workflow_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "workspace_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "coordinator_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "coordinator_version",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "correlation_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "parent_workflow_id",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "<required>",
+              "name": "root_workflow_id",
+              "type": "str"
+            },
+            {
+              "default": "<required>",
+              "name": "status",
+              "type": "UniversalWorkflowStatus"
+            },
+            {
+              "default": "<required>",
+              "name": "input_reference",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "<default_factory>",
+              "name": "context",
+              "type": "Mapping[str, Any]"
+            },
+            {
+              "default": "<default_factory>",
+              "name": "metadata",
+              "type": "Mapping[str, Any]"
+            },
+            {
+              "default": "None",
+              "name": "current_stage",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "()",
+              "name": "completed_stages",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "()",
+              "name": "pending_stages",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "()",
+              "name": "failed_stages",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "()",
+              "name": "skipped_stages",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "None",
+              "name": "result_reference",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "()",
+              "name": "artifact_references",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "None",
+              "name": "idempotency_key",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "''",
+              "name": "created_at",
+              "type": "str"
+            },
+            {
+              "default": "None",
+              "name": "started_at",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "''",
+              "name": "updated_at",
+              "type": "str"
+            },
+            {
+              "default": "None",
+              "name": "completed_at",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "None",
+              "name": "failed_at",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "None",
+              "name": "cancelled_at",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "None",
+              "name": "failure_code",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "None",
+              "name": "failure_message",
+              "type": "Optional[str]"
+            },
+            {
+              "default": "<default_factory>",
+              "name": "failure_details",
+              "type": "Mapping[str, Any]"
+            },
+            {
+              "default": "'universal_workflow_contract_v1.1.0'",
+              "name": "contract_version",
+              "type": "str"
+            }
+          ],
+          "frozen": true,
+          "signature": "(workflow_id: 'str', workflow_type: 'str', workflow_version: 'str', workspace_id: 'str', coordinator_id: 'str', coordinator_version: 'str', correlation_id: 'str', parent_workflow_id: 'Optional[str]', root_workflow_id: 'str', status: 'UniversalWorkflowStatus', input_reference: 'Optional[str]', context: 'Mapping[str, Any]' = <factory>, metadata: 'Mapping[str, Any]' = <factory>, current_stage: 'Optional[str]' = None, completed_stages: 'Tuple[str, ...]' = (), pending_stages: 'Tuple[str, ...]' = (), failed_stages: 'Tuple[str, ...]' = (), skipped_stages: 'Tuple[str, ...]' = (), result_reference: 'Optional[str]' = None, artifact_references: 'Tuple[str, ...]' = (), idempotency_key: 'Optional[str]' = None, created_at: 'str' = '', started_at: 'Optional[str]' = None, updated_at: 'str' = '', completed_at: 'Optional[str]' = None, failed_at: 'Optional[str]' = None, cancelled_at: 'Optional[str]' = None, failure_code: 'Optional[str]' = None, failure_message: 'Optional[str]' = None, failure_details: 'Mapping[str, Any]' = <factory>, contract_version: 'str' = 'universal_workflow_contract_v1.1.0') -> None",
+          "slots": true
+        },
+        "UniversalWorkflowContractError": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(message: 'str', *, violations: 'Tuple[str, ...]' = ()) -> 'None'",
+          "slots": false
+        },
+        "UniversalWorkflowStatus": {
+          "dataclass": false,
+          "fields": [],
+          "frozen": false,
+          "signature": "(*values)",
+          "slots": false
+        },
+        "UniversalWorkflowValidationReport": {
+          "dataclass": true,
+          "fields": [
+            {
+              "default": "<required>",
+              "name": "is_valid",
+              "type": "bool"
+            },
+            {
+              "default": "()",
+              "name": "violations",
+              "type": "Tuple[str, ...]"
+            },
+            {
+              "default": "'universal_workflow_contract_v1.1.0'",
+              "name": "contract_version",
+              "type": "str"
+            },
+            {
+              "default": "0",
+              "name": "checked_field_count",
+              "type": "int"
+            }
+          ],
+          "frozen": true,
+          "signature": "(is_valid: 'bool', violations: 'Tuple[str, ...]' = (), contract_version: 'str' = 'universal_workflow_contract_v1.1.0', checked_field_count: 'int' = 0) -> None",
+          "slots": true
+        }
+      },
+      "enums": {
+        "UniversalWorkflowStatus": [
+          {
+            "name": "CREATED",
+            "value": "CREATED"
+          },
+          {
+            "name": "READY",
+            "value": "READY"
+          },
+          {
+            "name": "RUNNING",
+            "value": "RUNNING"
+          },
+          {
+            "name": "WAITING",
+            "value": "WAITING"
+          },
+          {
+            "name": "PAUSED",
+            "value": "PAUSED"
+          },
+          {
+            "name": "RECOVERING",
+            "value": "RECOVERING"
+          },
+          {
+            "name": "COMPLETED",
+            "value": "COMPLETED"
+          },
+          {
+            "name": "FAILED",
+            "value": "FAILED"
+          },
+          {
+            "name": "CANCELLED",
+            "value": "CANCELLED"
+          },
+          {
+            "name": "ABORTED",
+            "value": "ABORTED"
+          }
+        ]
+      },
+      "functions": {
+        "validate_universal_workflow": {
+          "signature": "(candidate: 'Any') -> 'UniversalWorkflowValidationReport'"
+        }
+      },
+      "module": "backend.server.coordination.universal_workflows.contract",
+      "source_file": "C:\\Users\\HP\\Documents\\LinkCraftor\\backend\\server\\coordination\\universal_workflows\\contract.py"
+    }
+  },
+  "required_boundary": {
+    "duplicate_planner_allowed": false,
+    "duplicate_queue_allowed": false,
+    "duplicate_registry_allowed": false,
+    "duplicate_runtime_allowed": false,
+    "pipeline_specific_authority": "Connected Domain manifest builder",
+    "production_submission_during_certification": false,
+    "reuse_cycle_detection": "require_acyclic_dependency_graph",
+    "reuse_dependency_graph": "DependencyGraph",
+    "reuse_dependency_validation": "require_valid_dependency_graph",
+    "reuse_execution_planner": "create_execution_plan",
+    "reuse_planning_certification": "certify_dependency_planning",
+    "reuse_stage_contract": "UniversalStageReference"
+  },
+  "source_hashes": {
+    "backend\\server\\coordination\\dependency_planning\\cycle_detection.py": "e77bf605724f991e85c7fe2e5329051e16ecb2f30acdaea8aa40a2fd47487cea",
+    "backend\\server\\coordination\\dependency_planning\\dependency_graph.py": "4f6ba62d011c31d9d851fbbabc37c12b7ddaa1fd9a91e34788ebce25741a1f70",
+    "backend\\server\\coordination\\dependency_planning\\dependency_validation.py": "1d053c0036ea9f7a8aedfafc36f6eb82a681edc7ef206409e9ffb8c7f212852d",
+    "backend\\server\\coordination\\dependency_planning\\execution_planner.py": "808743f566978530b2fc774dbd70a5ffa820f0efe431512e882e0cf0f7b81958",
+    "backend\\server\\coordination\\dependency_planning\\planning_certification.py": "8db96f931c4c3b4f35c308400d838d18ba67e22acac08d5597394d29b9fd5723",
+    "backend\\server\\coordination\\universal_stages\\contract.py": "eaecfc26666cde338ed2d3988a312b3812ab85b82f588eacd0d97633f656d00f",
+    "backend\\server\\coordination\\universal_workflows\\contract.py": "9094a98d2b9dbd9cced73514648bf5d4115c5092e547d19446ab0fe18fbe7089",
+    "backend\\server\\pipelines\\connect_domain\\coordinator.py": "a05bfc1d106306b7399f03bdef2f2d06a22a88fa9006aff680ac1796b1bb77fb"
+  }
+}
+
+EXECUTION_ERROR:
+{}
+
+==============================================================================================================
+NEXT STEP
+==============================================================================================================
+Part D 12-B2 ? implement and certify one canonical Connected Domain pipeline manifest.
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+PART D 12-B1 COMPLETE

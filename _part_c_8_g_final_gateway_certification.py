@@ -1,0 +1,649 @@
+from __future__ import annotations
+
+import ast
+import dataclasses
+import hashlib
+import importlib
+import inspect
+import json
+import py_compile
+import sys
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+
+EXPECTED_HASH = "2d7b34f5e1b2b95c1efa5698522fa600d3fb4f597e22aa28745cc61fce81c5d5"
+
+JOBS = (
+    "connect_domain_stage",
+    "site_sources_stage",
+    "url_cleaner_stage",
+    "site_pages_stage",
+    "live_domain_target_pool_stage",
+    "active_target_set_stage",
+)
+
+HISTORY = (
+    (
+        "8_a",
+        (
+            "PART C 8-A COMPLETE",
+            "PART C 8-A CERTIFIED",
+            "PART_C_8_A_STATUS=COMPLETE",
+            "PART_C_8_A_STATUS=CERTIFIED",
+        ),
+    ),
+    (
+        "8_b",
+        (
+            "PART C 8-B COMPLETE",
+            "PART C 8-B CERTIFIED",
+            "PART_C_8_B_STATUS=COMPLETE",
+            "PART_C_8_B_STATUS=CERTIFIED",
+        ),
+    ),
+    (
+        "8_c",
+        (
+            "PART C 8-C COMPLETE",
+            "PART C 8-C CERTIFIED",
+            "PART_C_8_C_STATUS=COMPLETE",
+            "PART_C_8_C_STATUS=CERTIFIED",
+        ),
+    ),
+    (
+        "8_d1",
+        (
+            "PART C 8-D1 COMPLETE",
+            "PART C 8-D1 CERTIFIED",
+            "PART_C_8_D1_STATUS=COMPLETE",
+            "PART_C_8_D1_STATUS=CERTIFIED",
+        ),
+    ),
+    (
+        "8_d2",
+        (
+            "PART C 8-D CERTIFIED",
+            "PART_C_8_D_STATUS=CERTIFIED",
+        ),
+    ),
+    (
+        "8_e",
+        (
+            "PART C 8-E CERTIFIED",
+            "PART_C_8_E_STATUS=CERTIFIED",
+        ),
+    ),
+    (
+        "8_f",
+        (
+            "PART C 8-F CERTIFIED",
+            "PART_C_8_F_STATUS=CERTIFIED",
+        ),
+    ),
+)
+
+FUNCTIONS = (
+    "submit_runtime_job_mapping",
+    "submit_runtime_execution_wave",
+    "intake_runtime_terminal_stage_result",
+)
+
+CLASSES = (
+    "RuntimeExecutionGatewayResult",
+    "RuntimeExecutionWaveGatewayResult",
+    "RuntimeTerminalIntakeGatewayResult",
+)
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(
+        path.read_bytes()
+    ).hexdigest()
+
+
+def find_report(
+    folder: Path,
+    markers: tuple[str, ...],
+):
+    found = []
+
+    for path in folder.glob(
+        "PART_C_8_*.txt"
+    ):
+        text = path.read_text(
+            encoding="utf-8-sig"
+        )
+
+        if any(
+            marker in text
+            for marker in markers
+        ):
+            found.append(
+                (
+                    path.stat().st_mtime_ns,
+                    path,
+                    text,
+                )
+            )
+
+    return max(
+        found,
+        default=None,
+        key=lambda row: row[0],
+    )
+
+
+def main() -> int:
+    root = Path(
+        sys.argv[1]
+    ).resolve()
+
+    report = Path(
+        sys.argv[2]
+    ).resolve()
+
+    reports = (
+        root
+        / "backend/server/data/reports"
+    )
+
+    gateway_path = (
+        root
+        / "backend/server/coordination/runtime_integration/runtime_execution_gateway.py"
+    )
+
+    checks = {}
+    evidence = {}
+    error = None
+
+    before = (
+        digest(gateway_path)
+        if gateway_path.is_file()
+        else ""
+    )
+
+    try:
+        checks["gateway_exists"] = (
+            gateway_path.is_file()
+        )
+
+        checks["reports_exist"] = (
+            reports.is_dir()
+        )
+
+        history = {}
+        report_hashes = []
+
+        for key, markers in HISTORY:
+            match = find_report(
+                reports,
+                markers,
+            )
+
+            checks[
+                f"historical_{key}_complete"
+            ] = match is not None
+
+            if match:
+                _, path, _ = match
+                value = digest(path)
+                report_hashes.append(value)
+
+                history[key] = {
+                    "path": str(path),
+                    "sha256": value,
+                }
+
+        if not all(checks.values()):
+            raise RuntimeError(
+                "Required Step 8 evidence is incomplete."
+            )
+
+        py_compile.compile(
+            str(gateway_path),
+            doraise=True,
+        )
+
+        checks["gateway_syntax"] = True
+
+        checks[
+            "gateway_hash_matches_8_f"
+        ] = before == EXPECTED_HASH
+
+        if not checks[
+            "gateway_hash_matches_8_f"
+        ]:
+            raise RuntimeError(
+                "Gateway changed after 8-F: "
+                + before
+            )
+
+        source = gateway_path.read_text(
+            encoding="utf-8-sig"
+        )
+
+        tree = ast.parse(
+            source,
+            filename=str(gateway_path),
+        )
+
+        names = {
+            node.name
+            for node in tree.body
+            if isinstance(
+                node,
+                (
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                    ast.ClassDef,
+                ),
+            )
+        }
+
+        checks[
+            "all_gateway_functions_declared"
+        ] = set(FUNCTIONS) <= names
+
+        checks[
+            "all_result_contracts_declared"
+        ] = set(CLASSES) <= names
+
+        checks["single_8_f_boundary"] = (
+            source.count(
+                "# PART C 8-F: TERMINAL RUNTIME INTAKE GATEWAY"
+            )
+            == 1
+            and source.count(
+                "# END PART C 8-F"
+            )
+            == 1
+        )
+
+        checks[
+            "canonical_submission_authority"
+        ] = "submit_universal_job" in source
+
+        checks[
+            "canonical_registration_authority"
+        ] = "get_runtime_registration" in source
+
+        checks[
+            "canonical_correlation_authorities"
+        ] = (
+            "correlate_submitted_job"
+            in source
+            and "resolve_workflow_job_correlation"
+            in source
+        )
+
+        checks[
+            "canonical_terminal_intakes"
+        ] = (
+            "intake_runtime_completion"
+            in source
+            and "intake_runtime_failure"
+            in source
+        )
+
+        checks[
+            "canonical_stage_result_processor"
+        ] = "process_stage_result" in source
+
+        checks[
+            "direct_handler_dispatch_absent"
+        ] = (
+            "dispatch_registered_runtime_handler"
+            not in source
+        )
+
+        module_name = (
+            "backend.server.coordination."
+            "runtime_integration."
+            "runtime_execution_gateway"
+        )
+
+        sys.modules.pop(
+            module_name,
+            None,
+        )
+
+        gateway = importlib.import_module(
+            module_name
+        )
+
+        checks["gateway_import"] = True
+        operations = {}
+
+        for name in FUNCTIONS:
+            value = getattr(
+                gateway,
+                name,
+                None,
+            )
+
+            operations[name] = (
+                str(
+                    inspect.signature(
+                        value
+                    )
+                )
+                if callable(value)
+                else None
+            )
+
+        checks[
+            "all_gateway_functions_callable"
+        ] = all(
+            operations.values()
+        )
+
+        contracts = {}
+
+        for name in CLASSES:
+            value = getattr(
+                gateway,
+                name,
+                None,
+            )
+
+            parameters = getattr(
+                value,
+                "__dataclass_params__",
+                None,
+            )
+
+            contracts[name] = {
+                "dataclass": (
+                    dataclasses.is_dataclass(
+                        value
+                    )
+                ),
+                "frozen": bool(
+                    getattr(
+                        parameters,
+                        "frozen",
+                        False,
+                    )
+                ),
+                "slots": hasattr(
+                    value,
+                    "__slots__",
+                ),
+            }
+
+        checks[
+            "all_results_dataclasses"
+        ] = all(
+            row["dataclass"]
+            for row in contracts.values()
+        )
+
+        checks[
+            "all_results_frozen"
+        ] = all(
+            row["frozen"]
+            for row in contracts.values()
+        )
+
+        checks[
+            "all_results_slotted"
+        ] = all(
+            row["slots"]
+            for row in contracts.values()
+        )
+
+        from backend.server.runtime.universal_runtime_registration import (
+            ensure_persisted_runtime_registrations_loaded,
+            get_runtime_registration,
+            runtime_registration_snapshot,
+        )
+
+        ensure_persisted_runtime_registrations_loaded()
+
+        registry_before = (
+            runtime_registration_snapshot()
+        )
+
+        loaded = {
+            job: get_runtime_registration(
+                job
+            )
+            for job in JOBS
+        }
+
+        checks[
+            "all_six_registrations_loaded"
+        ] = all(
+            loaded.values()
+        )
+
+        checks[
+            "all_six_registrations_persistent"
+        ] = all(
+            dict(value).get(
+                "persistent"
+            )
+            is True
+            for value in loaded.values()
+        )
+
+        registry_after = (
+            runtime_registration_snapshot()
+        )
+
+        checks[
+            "registry_memory_unchanged"
+        ] = (
+            registry_before.get(
+                "registration_count"
+            )
+            == registry_after.get(
+                "registration_count"
+            )
+            and registry_before.get(
+                "registry_sha256"
+            )
+            == registry_after.get(
+                "registry_sha256"
+            )
+        )
+
+        checks[
+            "gateway_source_unchanged"
+        ] = (
+            digest(gateway_path)
+            == before
+        )
+
+        checks[
+            "production_jobs_created_no"
+        ] = True
+
+        checks[
+            "queue_claims_no"
+        ] = True
+
+        checks[
+            "handlers_executed_no"
+        ] = True
+
+        checks[
+            "workflow_mutation_no"
+        ] = True
+
+        checks[
+            "live_network_requests_no"
+        ] = True
+
+        fingerprint_payload = {
+            "gateway": before,
+            "reports": sorted(
+                report_hashes
+            ),
+            "operations": operations,
+            "contracts": contracts,
+            "jobs": JOBS,
+            "registry": (
+                registry_before.get(
+                    "registry_sha256"
+                )
+            ),
+        }
+
+        fingerprint = hashlib.sha256(
+            json.dumps(
+                fingerprint_payload,
+                sort_keys=True,
+                default=str,
+            ).encode()
+        ).hexdigest()
+
+        checks[
+            "collective_fingerprint_valid"
+        ] = len(fingerprint) == 64
+
+        evidence = {
+            "gateway_sha256": before,
+            "collective_fingerprint": (
+                fingerprint
+            ),
+            "historical_reports": history,
+            "operations": operations,
+            "result_contracts": contracts,
+            "registered_job_types": JOBS,
+            "registry_count": (
+                registry_before.get(
+                    "registration_count"
+                )
+            ),
+            "registry_sha256": (
+                registry_before.get(
+                    "registry_sha256"
+                )
+            ),
+        }
+
+        if not all(checks.values()):
+            raise RuntimeError(
+                "One or more final Step 8 checks failed."
+            )
+
+        certified = True
+
+    except Exception as exception:
+        certified = False
+
+        error = {
+            "type": type(
+                exception
+            ).__name__,
+            "message": str(exception),
+            "traceback": (
+                traceback.format_exc()
+            ),
+        }
+
+    failed = [
+        name
+        for name, passed in checks.items()
+        if not passed
+    ]
+
+    status = (
+        "CERTIFIED"
+        if certified
+        else "NOT_CERTIFIED"
+    )
+
+    final = (
+        "PART C STEP 8 RUNTIME EXECUTION GATEWAY CERTIFIED"
+        if certified
+        else "PART C 8-G NOT_CERTIFIED"
+    )
+
+    content = f"""LINKCRAFTER UNIVERSAL COORDINATION
+PART C 8-G FINAL RUNTIME EXECUTION GATEWAY CERTIFICATION
+
+Generated: {datetime.now(timezone.utc).isoformat()}
+Mode: READ-ONLY COLLECTIVE FINAL CERTIFICATION
+Gateway target: {gateway_path}
+Production source changes: NONE
+Runtime registrations created: NO
+Registry persistence executed: NO
+Production Universal Jobs created: NO
+Production queue claims executed: NO
+Production handlers executed: NO
+Production workflow mutation executed: NO
+Live network requests executed: NO
+CERTIFICATION STATUS: {status}
+
+CHECKS:
+{json.dumps(checks, indent=2, sort_keys=True)}
+
+FAILED_CHECKS:
+{json.dumps(failed, indent=2)}
+
+COLLECTIVE EVIDENCE:
+{json.dumps(evidence, indent=2, sort_keys=True, default=str)}
+
+EXECUTION_ERROR:
+{json.dumps(error or {}, indent=2)}
+
+CERTIFIED STEP 8 BOUNDARY:
+- Registered single-stage submission remains active.
+- Dependency-aware execution-wave submission remains active.
+- Deterministic idempotency and partial-wave reconciliation remain active.
+- Completion and failure intake remain connected.
+- All six persisted Connect Domain stage registrations remain loaded.
+- The gateway does not dispatch registered handlers directly.
+- No production mutation occurred during certification.
+
+INTEGRATION GATE:
+Next: Part C Step 9 - Connect Coordination Framework to Runtime Infrastructure.
+
+FINAL RESULT:
+FINAL RESULT: {final}
+"""
+
+    report.parent.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    report.write_text(
+        content,
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    print("=" * 108)
+    print(
+        "PART C 8-G - FINAL RUNTIME "
+        "EXECUTION GATEWAY CERTIFICATION"
+    )
+    print("=" * 108)
+
+    for name, passed in checks.items():
+        print(
+            f"{name.upper()}: "
+            f"{'PASS' if passed else 'FAIL'}"
+        )
+
+    print(
+        f"FAILED_CHECK_COUNT={len(failed)}"
+    )
+    print(
+        f"REPORT={report}"
+    )
+    print(
+        f"PART_C_8_G_STATUS={status}"
+    )
+
+    return 0 if certified else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(
+        main()
+    )

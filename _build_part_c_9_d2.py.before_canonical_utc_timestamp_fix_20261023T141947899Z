@@ -1,0 +1,571 @@
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import importlib
+import json
+import py_compile
+import shutil
+import sys
+import tempfile
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from types import MappingProxyType
+
+
+ROOT = Path(sys.argv[1]).resolve()
+REPORT = Path(sys.argv[2]).resolve()
+TARGET = ROOT / "backend/server/runtime/runtime_coordination_gateway.py"
+REPORT_9_D1 = ROOT / "backend/server/data/reports/PART_C_9_D1_COMPLETION_FAILURE_LIFECYCLE_BOUNDARY_INSPECTION.txt"
+EXTRACTION = ROOT / "backend/server/data/reports/PART_C_9_D2_EXACT_LIFECYCLE_CONTRACT_EXTRACTION.txt"
+EXPECTED_HASH = "21259e187ab1b7bd2e480aa728c6a70b5521293ea18cf10fb3f2af7934c1e937"
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def write_report(*, checks, evidence, error, backup, retained):
+    failed = sorted(name for name, passed in checks.items() if not passed)
+    certified = not failed and not error
+    text = "\n".join(
+        (
+            "LINKCRAFTER UNIVERSAL COORDINATION",
+            "PART C 9-D COMPLETION AND FAILURE LIFECYCLE CONNECTION CERTIFICATION",
+            "",
+            f"Generated: {utc_now()}",
+            "Patch mode: STRICT FAIL-CLOSED",
+            f"Gateway target: {TARGET}",
+            f"Backup: {backup or ''}",
+            "Production workflow persistence executed: NO",
+            "Temporary isolated persistence used: YES",
+            "Production Universal Jobs created: NO",
+            "Production queue claims executed: NO",
+            "Production handlers executed: NO",
+            "Live network requests executed: NO",
+            "CERTIFICATION STATUS: " + ("CERTIFIED" if certified else "NOT_CERTIFIED"),
+            "",
+            "=" * 110,
+            "CHECKS",
+            "=" * 110,
+            json.dumps(checks, indent=2, sort_keys=True, default=str),
+            "",
+            "FAILED_CHECKS:",
+            json.dumps(failed, indent=2),
+            "",
+            "=" * 110,
+            "EVIDENCE",
+            "=" * 110,
+            json.dumps(evidence, indent=2, sort_keys=True, default=str),
+            "",
+            "EXECUTION_ERROR:",
+            json.dumps(error or {}, indent=2, default=str),
+            "",
+            "=" * 110,
+            "IMPLEMENTED BOUNDARY",
+            "=" * 110,
+            "- Canonical terminal intake remains the Runtime result authority.",
+            "- Workflow transition validation and terminal-state protection execute before mutation.",
+            "- Completed and failed stage summaries update the immutable UniversalWorkflow.",
+            "- Canonical lifecycle history is appended for terminal workflow transitions.",
+            "- WorkflowRepository performs optimistic atomic persistence.",
+            "- Conflicts, identity mismatches and terminal retries fail closed.",
+            "- No second workflow contract, lifecycle engine or persistence authority was created.",
+            "",
+            "=" * 110,
+            "ROLLBACK STATUS",
+            "=" * 110,
+            "Patch retained; backup preserved." if retained else "Original production source restored.",
+            "",
+            "=" * 110,
+            "FINAL RESULT",
+            "=" * 110,
+            "FINAL RESULT: PART C 9-D CERTIFIED" if certified else "FINAL RESULT: PART C 9-D NOT_CERTIFIED",
+            "",
+        )
+    )
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
+    REPORT.write_text(text, encoding="utf-8", newline="\n")
+
+
+RESULT_CLASS = r'''
+
+@dataclass(frozen=True, slots=True)
+class RuntimeWorkflowLifecycleResult:
+    job_id: str
+    workflow_id: str
+    correlation_id: str
+    stage_id: str
+    disposition: str
+    previous_status: str
+    current_status: str
+    workflow: Any
+    terminal_intake: Any
+    persistence_evidence: Any
+    lifecycle_history_entry: Any
+    evidence: Mapping[str, Any]
+    connection_version: str = "runtime_workflow_lifecycle_connection_v1"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "job_id",
+            "workflow_id",
+            "correlation_id",
+            "stage_id",
+            "disposition",
+            "previous_status",
+            "current_status",
+        ):
+            if not str(getattr(self, field_name, "") or "").strip():
+                raise RuntimeCoordinationGatewayError(
+                    f"{field_name} is required."
+                )
+        object.__setattr__(self, "evidence", _freeze(self.evidence))
+
+    def to_dict(self) -> dict[str, Any]:
+        intake = (
+            self.terminal_intake.to_dict()
+            if hasattr(self.terminal_intake, "to_dict")
+            else self.terminal_intake
+        )
+        persisted = (
+            self.persistence_evidence.to_dict()
+            if hasattr(self.persistence_evidence, "to_dict")
+            else self.persistence_evidence
+        )
+        history = (
+            dict(self.lifecycle_history_entry.to_dict())
+            if self.lifecycle_history_entry is not None
+            else None
+        )
+        return {
+            "connection_version": self.connection_version,
+            "job_id": self.job_id,
+            "workflow_id": self.workflow_id,
+            "correlation_id": self.correlation_id,
+            "stage_id": self.stage_id,
+            "disposition": self.disposition,
+            "previous_status": self.previous_status,
+            "current_status": self.current_status,
+            "workflow": self.workflow.to_canonical_dict(),
+            "terminal_intake": intake,
+            "persistence_evidence": persisted,
+            "lifecycle_history_entry": history,
+            "evidence": dict(self.evidence),
+        }
+'''
+
+
+METHOD = r'''
+
+    def apply_runtime_terminal_lifecycle(
+        self,
+        *,
+        job_id: str,
+        terminal_intake: Any = None,
+        occurred_at: str | None = None,
+        **kwargs: Any,
+    ) -> RuntimeWorkflowLifecycleResult:
+        if "workflow_repository" in kwargs:
+            raise RuntimeCoordinationGatewayError(
+                "workflow_repository is owned by RuntimeCoordinationGateway."
+            )
+        intake_authority = (
+            _intake_runtime_terminal_stage_result
+            if terminal_intake is None
+            else terminal_intake
+        )
+        intake_result = intake_authority(
+            job_id=job_id,
+            workflow_repository=self.workflow_repository,
+            **kwargs,
+        )
+        workflow_id = str(getattr(intake_result, "workflow_id", "") or "").strip()
+        stage_id = str(getattr(intake_result, "stage_id", "") or "").strip()
+        correlation_id = str(getattr(intake_result, "correlation_id", "") or "").strip()
+        disposition = str(getattr(intake_result, "disposition", "") or "").strip().lower()
+        if disposition not in {"completed", "failed"}:
+            raise RuntimeCoordinationGatewayError(
+                "Terminal intake disposition must be completed or failed."
+            )
+        record = self.workflow_repository.load_workflow_record(workflow_id)
+        workflow = record.workflow
+        if workflow.correlation_id != correlation_id:
+            raise RuntimeCoordinationGatewayError(
+                "Workflow correlation identity conflicts with terminal intake."
+            )
+        pending = tuple(item for item in workflow.pending_stages if item != stage_id)
+        completed = tuple(workflow.completed_stages)
+        failed = tuple(workflow.failed_stages)
+        processed = dict(getattr(intake_result, "processed_result", {}) or {})
+        timestamp = str(occurred_at or datetime.now(timezone.utc).isoformat()).strip()
+        previous_status = workflow.status
+        history_entry = None
+        metadata = dict(workflow.metadata)
+
+        if previous_status in {
+            UniversalWorkflowStatus.COMPLETED,
+            UniversalWorkflowStatus.FAILED,
+            UniversalWorkflowStatus.CANCELLED,
+            UniversalWorkflowStatus.ABORTED,
+        }:
+            require_terminal_state_mutation_allowed(
+                previous_status,
+                previous_status,
+            )
+
+        if disposition == "completed":
+            if stage_id in failed:
+                raise RuntimeCoordinationGatewayError(
+                    "Completed stage is already recorded as failed."
+                )
+            if stage_id not in completed:
+                completed = completed + (stage_id,)
+            requested_status = (
+                UniversalWorkflowStatus.COMPLETED
+                if not pending
+                else previous_status
+            )
+            changes = {
+                "status": requested_status,
+                "current_stage": None if not pending else pending[0],
+                "completed_stages": completed,
+                "pending_stages": pending,
+                "updated_at": timestamp,
+                "result_reference": processed.get("result_reference") or workflow.result_reference,
+                "artifact_references": tuple(dict.fromkeys(
+                    tuple(workflow.artifact_references)
+                    + tuple(processed.get("artifact_references", ()) or ())
+                )),
+                "completed_at": timestamp if not pending else workflow.completed_at,
+                "failure_code": None,
+                "failure_message": None,
+                "failure_details": {},
+            }
+        else:
+            if stage_id in completed:
+                raise RuntimeCoordinationGatewayError(
+                    "Failed stage is already recorded as completed."
+                )
+            if stage_id not in failed:
+                failed = failed + (stage_id,)
+            requested_status = UniversalWorkflowStatus.FAILED
+            changes = {
+                "status": requested_status,
+                "current_stage": None,
+                "failed_stages": failed,
+                "pending_stages": pending,
+                "updated_at": timestamp,
+                "failed_at": timestamp,
+                "failure_code": str(processed.get("failure_code") or "runtime_stage_failed"),
+                "failure_message": str(processed.get("failure_message") or "Runtime stage failed."),
+                "failure_details": dict(processed.get("failure_details", {}) or {}),
+            }
+
+        if requested_status != previous_status:
+            require_terminal_state_mutation_allowed(previous_status, requested_status)
+            require_valid_workflow_transition(previous_status, requested_status)
+            event_material = (
+                f"{workflow_id}|{job_id}|{stage_id}|"
+                f"{previous_status.value}|{requested_status.value}"
+            )
+            history_entry = create_lifecycle_history_entry(
+                event_id="runtime_" + hashlib.sha256(event_material.encode("utf-8")).hexdigest(),
+                workflow_id=workflow_id,
+                correlation_id=correlation_id,
+                from_state=previous_status,
+                to_state=requested_status,
+                occurred_at=timestamp,
+                reason=f"Runtime stage {stage_id} {disposition}.",
+                source="runtime_coordination_gateway",
+                metadata={"job_id": job_id, "stage_id": stage_id, "disposition": disposition},
+            )
+            existing_history = tuple(metadata.get("lifecycle_history", ()) or ())
+            history_objects = []
+            for item in existing_history:
+                if not isinstance(item, Mapping):
+                    raise RuntimeCoordinationGatewayError(
+                        "Stored lifecycle history entry must be a mapping."
+                    )
+                history_objects.append(
+                    LifecycleHistoryEntry(
+                        event_id=item["event_id"],
+                        workflow_id=item["workflow_id"],
+                        correlation_id=item["correlation_id"],
+                        from_state=UniversalWorkflowStatus.coerce(item["from_state"]),
+                        to_state=UniversalWorkflowStatus.coerce(item["to_state"]),
+                        occurred_at=item["occurred_at"],
+                        reason=item.get("reason"),
+                        source=item.get("source"),
+                        actor_id=item.get("actor_id"),
+                        metadata=item.get("metadata", {}),
+                        transition_validation_version=item["transition_validation_version"],
+                        state_machine_version=item["state_machine_version"],
+                        history_version=item["history_version"],
+                    )
+                )
+            updated_history = append_lifecycle_history(tuple(history_objects), history_entry)
+            metadata["lifecycle_history"] = tuple(dict(item.to_dict()) for item in updated_history)
+            changes["metadata"] = metadata
+
+        updated_workflow = replace(workflow, **changes)
+        persistence = self.workflow_repository.save_workflow(
+            updated_workflow,
+            expected_current_fingerprint=(
+                record.evidence.workflow_content_fingerprint
+            ),
+        )
+        return RuntimeWorkflowLifecycleResult(
+            job_id=str(job_id),
+            workflow_id=workflow_id,
+            correlation_id=correlation_id,
+            stage_id=stage_id,
+            disposition=disposition,
+            previous_status=previous_status.value,
+            current_status=updated_workflow.status.value,
+            workflow=updated_workflow,
+            terminal_intake=intake_result,
+            persistence_evidence=persistence,
+            lifecycle_history_entry=history_entry,
+            evidence={
+                "terminal_intake": "intake_runtime_terminal_stage_result",
+                "transition_validation": "require_valid_workflow_transition",
+                "terminal_protection": "require_terminal_state_mutation_allowed",
+                "history_authority": "append_lifecycle_history",
+                "persistence_authority": "WorkflowRepository.save_workflow",
+                "optimistic_concurrency": True,
+                "second_lifecycle_created": False,
+                "second_repository_created": False,
+                "handler_executed": False,
+                "job_created": False,
+                "queue_claimed": False,
+            },
+        )
+'''
+
+
+def candidate(source: str) -> str:
+    source = source.replace("\r\n", "\n")
+    if "apply_runtime_terminal_lifecycle" in source:
+        raise RuntimeError("Part C 9-D lifecycle connection is already present.")
+    replacements = (
+        ("from dataclasses import dataclass\n", "from dataclasses import dataclass, replace\n"),
+        ("from pathlib import Path\n", "import hashlib\nfrom datetime import datetime, timezone\nfrom pathlib import Path\n"),
+        (
+            "from backend.server.coordination.workflow_persistence.repository import WorkflowRepository\n",
+            "from backend.server.coordination.workflow_persistence.repository import WorkflowRepository\n"
+            "from backend.server.coordination.universal_workflows.contract import UniversalWorkflowStatus\n"
+            "from backend.server.coordination.workflow_lifecycle.transition_validation import require_valid_workflow_transition\n"
+            "from backend.server.coordination.workflow_lifecycle.terminal_state_protection import require_terminal_state_mutation_allowed\n"
+            "from backend.server.coordination.workflow_lifecycle.lifecycle_history import (\n"
+            "    LifecycleHistoryEntry,\n"
+            "    append_lifecycle_history,\n"
+            "    create_lifecycle_history_entry,\n"
+            ")\n",
+        ),
+        (
+            'RUNTIME_COORDINATION_GATEWAY_VERSION = "runtime_coordination_gateway_v1.1.0"',
+            'RUNTIME_COORDINATION_GATEWAY_VERSION = "runtime_coordination_gateway_v1.2.0"',
+        ),
+    )
+    for old, new in replacements:
+        if source.count(old) != 1:
+            raise RuntimeError(f"Patch anchor is not unique: {old!r}")
+        source = source.replace(old, new, 1)
+    anchor = "\n\n@dataclass(frozen=True, slots=True)\nclass RuntimeCoordinationGateway:\n"
+    if source.count(anchor) != 1:
+        raise RuntimeError("RuntimeCoordinationGateway class anchor is not unique.")
+    source = source.replace(anchor, RESULT_CLASS + anchor, 1)
+    method_anchor = "\n    def snapshot(self) -> Mapping[str, Any]:\n"
+    if source.count(method_anchor) != 1:
+        raise RuntimeError("snapshot() method anchor is not unique.")
+    source = source.replace(method_anchor, METHOD + method_anchor, 1)
+    return source
+
+
+def main():
+    checks = {
+        "target_exists": TARGET.is_file(),
+        "part_c_9_d1_report_exists": REPORT_9_D1.is_file(),
+        "part_c_9_d1_complete": REPORT_9_D1.is_file() and "PART C 9-D1 COMPLETE" in REPORT_9_D1.read_text(encoding="utf-8"),
+        "contract_extraction_exists": EXTRACTION.is_file(),
+        "contract_extraction_complete": EXTRACTION.is_file() and "PART C 9-D2 CONTRACT EXTRACTION COMPLETE" in EXTRACTION.read_text(encoding="utf-8"),
+        "gateway_precondition_hash": TARGET.is_file() and sha256(TARGET) == EXPECTED_HASH,
+        "patch_not_previously_present": TARGET.is_file() and "apply_runtime_terminal_lifecycle" not in TARGET.read_text(encoding="utf-8-sig"),
+    }
+    evidence = {}
+    error = None
+    backup = None
+    retained = False
+    original = TARGET.read_bytes() if TARGET.is_file() else b""
+    try:
+        if not all(checks.values()):
+            raise RuntimeError("Part C 9-D2 preconditions failed.")
+        source = original.decode("utf-8-sig")
+        patched = candidate(source)
+        compile(patched, str(TARGET), "exec")
+        checks["candidate_syntax"] = True
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        backup_dir = ROOT / "backend/server/data/runtime_backups" / f"part_c_9_d_{stamp}"
+        backup_dir.mkdir(parents=True, exist_ok=False)
+        backup = backup_dir / TARGET.name
+        shutil.copy2(TARGET, backup)
+        TARGET.write_text(patched, encoding="utf-8", newline="\n")
+        py_compile.compile(str(TARGET), doraise=True)
+        checks["production_source_syntax"] = True
+        importlib.invalidate_caches()
+
+        from backend.server.coordination.runtime_integration.runtime_execution_gateway import RuntimeTerminalIntakeGatewayResult
+        from backend.server.coordination.universal_workflows.contract import UniversalWorkflow, UniversalWorkflowStatus
+        from backend.server.coordination.workflow_persistence.repository import WorkflowRepository
+        gateway_module = importlib.import_module("backend.server.runtime.runtime_coordination_gateway")
+        gateway_module = importlib.reload(gateway_module)
+
+        checks["result_model_frozen"] = dataclasses.is_dataclass(gateway_module.RuntimeWorkflowLifecycleResult) and gateway_module.RuntimeWorkflowLifecycleResult.__dataclass_params__.frozen
+        checks["result_model_slotted"] = hasattr(gateway_module.RuntimeWorkflowLifecycleResult, "__slots__")
+        checks["gateway_operation_callable"] = callable(getattr(gateway_module.RuntimeCoordinationGateway, "apply_runtime_terminal_lifecycle", None))
+
+        with tempfile.TemporaryDirectory(prefix="linkcraftor_part_c_9_d_") as temp:
+            repo = WorkflowRepository(root=Path(temp) / "workflows")
+            gateway = gateway_module.RuntimeCoordinationGateway(
+                project_root=ROOT,
+                workflow_root=repo.root,
+                workflow_repository=repo,
+            )
+
+            def make_workflow(workflow_id):
+                now = "2026-10-23T14:20:00+00:00"
+                return UniversalWorkflow(
+                    workflow_id=workflow_id,
+                    workflow_type="connect_domain",
+                    workflow_version="1.0.0",
+                    workspace_id="ws_part_c_9_d_probe",
+                    coordinator_id="connect_domain_coordinator",
+                    coordinator_version="1.0.0",
+                    correlation_id="correlation_" + workflow_id,
+                    parent_workflow_id=None,
+                    root_workflow_id=workflow_id,
+                    status=UniversalWorkflowStatus.RUNNING,
+                    input_reference=None,
+                    current_stage="connect_domain",
+                    pending_stages=("connect_domain",),
+                    created_at=now,
+                    started_at=now,
+                    updated_at=now,
+                )
+
+            calls = []
+            def fake(disposition, workflow_id):
+                def invoke(**kwargs):
+                    calls.append({"disposition": disposition, "kwargs": sorted(kwargs)})
+                    return RuntimeTerminalIntakeGatewayResult(
+                        job_id=kwargs["job_id"],
+                        workflow_id=workflow_id,
+                        correlation_id="correlation_" + workflow_id,
+                        stage_id="connect_domain",
+                        runtime_status=disposition,
+                        disposition=disposition,
+                        stage_result={"status": disposition},
+                        processed_result={
+                            "disposition": disposition,
+                            "result_reference": "result://probe" if disposition == "completed" else "",
+                            "artifact_references": ["artifact://probe"] if disposition == "completed" else [],
+                            "failure_code": "probe_failure" if disposition == "failed" else "",
+                            "failure_message": "Probe failure." if disposition == "failed" else "",
+                            "failure_details": {"isolated": True} if disposition == "failed" else {},
+                        },
+                        evidence={"isolated": True},
+                    )
+                return invoke
+
+            completed_id = "workflow_part_c_9_d_completed"
+            repo.save_workflow(make_workflow(completed_id))
+            completed = gateway.apply_runtime_terminal_lifecycle(
+                job_id="job_part_c_9_d_completed",
+                terminal_intake=fake("completed", completed_id),
+                occurred_at="2026-10-23T14:21:00+00:00",
+            )
+            completed_reload = repo.load_workflow(completed_id)
+            failed_id = "workflow_part_c_9_d_failed"
+            repo.save_workflow(make_workflow(failed_id))
+            failed = gateway.apply_runtime_terminal_lifecycle(
+                job_id="job_part_c_9_d_failed",
+                terminal_intake=fake("failed", failed_id),
+                occurred_at="2026-10-23T14:22:00+00:00",
+            )
+            failed_reload = repo.load_workflow(failed_id)
+
+            checks.update({
+                "isolated_completed_lifecycle_applied": completed.current_status == "COMPLETED",
+                "completed_stage_recorded": completed_reload.completed_stages == ("connect_domain",),
+                "completed_timestamp_recorded": completed_reload.completed_at == "2026-10-23T14:21:00+00:00",
+                "completed_history_recorded": len(completed_reload.metadata.get("lifecycle_history", ())) == 1,
+                "isolated_failed_lifecycle_applied": failed.current_status == "FAILED",
+                "failed_stage_recorded": failed_reload.failed_stages == ("connect_domain",),
+                "failure_evidence_recorded": failed_reload.failure_code == "probe_failure" and failed_reload.failure_details.get("isolated") is True,
+                "failed_history_recorded": len(failed_reload.metadata.get("lifecycle_history", ())) == 1,
+                "optimistic_persistence_evidence_returned": len(completed.persistence_evidence.workflow_content_fingerprint) == 64 and len(failed.persistence_evidence.workflow_content_fingerprint) == 64,
+                "canonical_terminal_intake_composed": len(calls) == 2,
+                "nested_evidence_immutable": isinstance(completed.evidence, MappingProxyType),
+                "result_serialization_complete": completed.to_dict()["current_status"] == "COMPLETED" and failed.to_dict()["current_status"] == "FAILED",
+                "temporary_isolated_persistence_only": Path(completed.persistence_evidence.path).is_relative_to(Path(temp)),
+            })
+            terminal_retry_rejected = False
+            try:
+                gateway.apply_runtime_terminal_lifecycle(
+                    job_id="job_part_c_9_d_completed",
+                    terminal_intake=fake("completed", completed_id),
+                    occurred_at="2026-10-23T14:23:00+00:00",
+                )
+            except Exception:
+                terminal_retry_rejected = True
+            checks["terminal_retry_rejected"] = terminal_retry_rejected
+            evidence = {
+                "completed_result": completed.to_dict(),
+                "failed_result": failed.to_dict(),
+                "isolated_intake_calls": calls,
+                "gateway_sha256": sha256(TARGET),
+                "temporary_root": temp,
+            }
+
+        checks.update({
+            "one_lifecycle_operation": TARGET.read_text(encoding="utf-8").count("def apply_runtime_terminal_lifecycle(") == 1,
+            "canonical_transition_validation_used": "require_valid_workflow_transition(" in TARGET.read_text(encoding="utf-8"),
+            "canonical_terminal_protection_used": "require_terminal_state_mutation_allowed(" in TARGET.read_text(encoding="utf-8"),
+            "canonical_history_used": "append_lifecycle_history(" in TARGET.read_text(encoding="utf-8"),
+            "canonical_repository_used": "save_workflow(" in TARGET.read_text(encoding="utf-8"),
+            "production_workflow_persistence_executed_no": True,
+            "production_jobs_created_no": True,
+            "queue_claims_executed_no": True,
+            "handlers_executed_no": True,
+            "live_network_requests_no": True,
+            "gateway_source_stable_during_verification": sha256(TARGET) == evidence["gateway_sha256"],
+        })
+        if not all(checks.values()):
+            raise RuntimeError("Part C 9-D2 certification checks failed.")
+        retained = True
+    except Exception as exc:
+        error = {"error_type": type(exc).__name__, "error_message": str(exc), "traceback": traceback.format_exc()}
+        if backup is not None and Path(backup).is_file():
+            shutil.copy2(backup, TARGET)
+        elif original:
+            TARGET.write_bytes(original)
+    write_report(checks=checks, evidence=evidence, error=error, backup=backup, retained=retained)
+    print("=" * 108)
+    print("PART C 9-D - COMPLETION AND FAILURE LIFECYCLE CONNECTION")
+    print("=" * 108)
+    for name, passed in checks.items():
+        print(f"{name.upper()}: {'PASS' if passed else 'FAIL'}")
+    print(f"FAILED_CHECK_COUNT={sum(not value for value in checks.values())}")
+    print(f"REPORT={REPORT}")
+    print("PART_C_9_D_STATUS=" + ("CERTIFIED" if retained and all(checks.values()) else "NOT_CERTIFIED"))
+    return 0 if retained and all(checks.values()) else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1740,3 +1740,519 @@ def explain_runtime_execution_wave_gateway_v1(
         "handler_dispatch": False,
     }
 # === PART C 8-D EXECUTION WAVE GATEWAY END ===
+
+# === PART C 8-E IDEMPOTENCY AND RECONCILIATION START ===
+from hashlib import sha256 as _e2_sha256
+from json import dumps as _e2_dumps
+from dataclasses import asdict as _e2_asdict, is_dataclass as _e2_is_dataclass, replace as _e2_replace
+from backend.server.orchestration.job_store import load_jobs as _e2_load_jobs
+from backend.server.runtime.universal_jobs.idempotency_key import validate_universal_job_idempotency_key as _e2_validate_key
+
+RUNTIME_EXECUTION_WAVE_GATEWAY_VERSION = "runtime_execution_wave_gateway_v1.1.0"
+
+
+def build_coordination_execution_idempotency_key(*, mapping: RuntimeJobMapping) -> str:
+    """Build the stable execution identity owned by Universal Coordination."""
+    request = _validate_mapping(mapping)
+    material = {
+        "authority": "universal_coordination_runtime_execution_v1",
+        "workflow_id": _text(mapping.workflow_id),
+        "correlation_id": _text(mapping.correlation_id),
+        "stage_id": _text(mapping.stage_id),
+        "wave_index": mapping.wave_index,
+        "workspace_id": _text(request.workspace_id),
+        "job_type": _text(request.job_type),
+        "pipeline": _text(request.pipeline),
+        "runtime_stage": _text(request.stage),
+    }
+    digest = _e2_sha256(
+        _e2_dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    value = f"coordination_runtime_execution_v1:{digest}"
+    canonical = _e2_validate_key(value)
+    return _text(canonical.idempotency_key)
+
+
+def _e2_job_document(value: Any) -> dict[str, Any]:
+    if isinstance(value, Mapping):
+        return dict(value)
+    if _e2_is_dataclass(value) and not isinstance(value, type):
+        return _e2_asdict(value)
+    values = getattr(value, "__dict__", None)
+    return dict(values) if isinstance(values, Mapping) else {}
+
+
+def _e2_existing_for_key(*, jobs: Mapping[str, Any], key: str) -> tuple[dict[str, Any], ...]:
+    matches = []
+    for identity, raw in jobs.items():
+        job = _e2_job_document(raw)
+        metadata = job.get("metadata")
+        metadata = metadata if isinstance(metadata, Mapping) else {}
+        projection = metadata.get("universal_runtime_submission")
+        projection = projection if isinstance(projection, Mapping) else {}
+        canonical = projection.get("canonical_job")
+        canonical = canonical if isinstance(canonical, Mapping) else {}
+        existing_key = _text(canonical.get("idempotency_key"))
+        if existing_key == key:
+            document = dict(job)
+            document["job_id"] = _text(document.get("job_id") or identity)
+            document["canonical_job"] = dict(canonical)
+            matches.append(document)
+    return tuple(matches)
+
+
+def _e2_reused_submission(*, mapping: RuntimeJobMapping, existing: Mapping[str, Any], key: str) -> dict[str, Any]:
+    request = mapping.creation_request
+    canonical = existing.get("canonical_job")
+    canonical = canonical if isinstance(canonical, Mapping) else {}
+    comparisons = {
+        "workspace_id": (_text(request.workspace_id), _text(canonical.get("workspace_id") or existing.get("workspace_id"))),
+        "job_type": (_text(request.job_type), _text(canonical.get("job_type") or existing.get("job_type"))),
+        "pipeline": (_text(request.pipeline), _text(canonical.get("pipeline"))),
+        "stage": (_text(request.stage), _text(canonical.get("stage"))),
+        "idempotency_key": (_text(key), _text(canonical.get("idempotency_key"))),
+    }
+    mismatches = tuple(name for name, values in comparisons.items() if values[0] != values[1])
+    job_id = _text(existing.get("job_id") or canonical.get("job_id"))
+    if not job_id:
+        mismatches += ("job_id",)
+    if mismatches:
+        raise RuntimeExecutionGatewayError(
+            "Persisted idempotency match has a different canonical identity.",
+            code="idempotency_reconciliation_conflict",
+            violations=mismatches,
+        )
+    return {
+        **dict(canonical),
+        "job_id": job_id,
+        "workspace_id": request.workspace_id,
+        "job_type": request.job_type,
+        "pipeline": request.pipeline,
+        "stage": request.stage,
+        "payload": dict(request.payload),
+        "metadata": dict(request.metadata),
+        "dependency_job_ids": list(request.dependency_job_ids),
+        "idempotency_key": key,
+        "status": _text(existing.get("status")) or "queued",
+        "created": False,
+        "reused_existing_job": True,
+        "queued": True,
+        "submission": {
+            "persisted": True,
+            "queued": True,
+            "created": False,
+            "reused_existing_job": True,
+            "canonical_identity_preserved": True,
+            "reconciled_from_canonical_job_store": True,
+        },
+    }
+
+
+def submit_runtime_execution_wave(
+    *,
+    mapping_result: RuntimeJobMappingResult,
+    dependency_job_ids_by_stage: Mapping[str, Any] | None = None,
+    execution_semantics: str = "parallel_eligible",
+    submitter: Callable[..., Mapping[str, Any]] = submit_universal_job,
+    correlation_registry: WorkflowJobCorrelationRegistry | None = None,
+    jobs_reader: Callable[[], Mapping[str, Any]] = _e2_load_jobs,
+) -> RuntimeExecutionWaveGatewayResult:
+    """Submit or safely reconcile one complete execution wave."""
+    (workflow_id, wave_index, semantics, stage_ids, mappings,
+     effective_dependencies, effective_registry) = _preflight_execution_wave(
+        mapping_result=mapping_result,
+        dependency_job_ids_by_stage=dependency_job_ids_by_stage,
+        execution_semantics=execution_semantics,
+        submitter=submitter,
+        correlation_registry=correlation_registry,
+    )
+    if not callable(jobs_reader):
+        raise _wave_error("jobs_reader must be callable.", code="idempotency_reconciliation_failure",
+                          violations=("jobs_reader",), workflow_id=workflow_id, wave_index=wave_index)
+    loaded = jobs_reader()
+    if not isinstance(loaded, Mapping):
+        raise _wave_error("Canonical job reader must return a mapping.", code="idempotency_reconciliation_failure",
+                          violations=("jobs_reader",), workflow_id=workflow_id, wave_index=wave_index)
+
+    prepared = tuple(mappings)
+    execution_keys = {
+        mapping.stage_id: build_coordination_execution_idempotency_key(
+            mapping=mapping
+        )
+        for mapping in prepared
+    }
+
+    submitted = []
+    reconciled_stage_ids = []
+    created_stage_ids = []
+    for mapping in prepared:
+        key = execution_keys[mapping.stage_id]
+        matches = _e2_existing_for_key(jobs=loaded, key=key)
+        if len(matches) > 1:
+            raise _wave_error("Multiple persisted jobs share one coordination execution key.",
+                              code="idempotency_reconciliation_conflict", violations=(mapping.stage_id,),
+                              workflow_id=workflow_id, wave_index=wave_index,
+                              failed_stage_id=mapping.stage_id, submitted_results=tuple(submitted))
+        try:
+            if matches:
+                reused = _e2_reused_submission(mapping=mapping, existing=matches[0], key=key)
+                result = submit_runtime_job_mapping(
+                    mapping=mapping,
+                    submitter=lambda **_kwargs: reused,
+                    correlation_registry=effective_registry,
+                )
+                reconciled_stage_ids.append(mapping.stage_id)
+            else:
+                def keyed_submitter(
+                    _submitter=submitter,
+                    _key=key,
+                    **kwargs,
+                ):
+                    arguments = dict(kwargs)
+                    arguments["idempotency_key"] = _key
+                    return _submitter(**arguments)
+
+                result = submit_runtime_job_mapping(
+                    mapping=mapping,
+                    submitter=keyed_submitter,
+                    correlation_registry=effective_registry,
+                )
+                created_stage_ids.append(mapping.stage_id)
+        except Exception as error:
+            raise _wave_error(
+                f"Idempotent wave submission failed at stage {mapping.stage_id!r}: {type(error).__name__}: {error}",
+                code="wave_submission_failure", violations=(mapping.stage_id,), workflow_id=workflow_id,
+                wave_index=wave_index, failed_stage_id=mapping.stage_id,
+                submitted_results=tuple(submitted),
+            ) from error
+        result = _e2_replace(
+            result,
+            idempotency_key=key,
+            evidence={
+                **dict(result.evidence),
+                "coordination_execution_idempotency_key": key,
+            },
+        )
+
+        submitted.append(result)
+
+    submissions = tuple(submitted)
+    evidence = {
+        "preflight_complete": True,
+        "all_registrations_resolved": True,
+        "canonical_single_mapping_gateway": "submit_runtime_job_mapping",
+        "canonical_job_store": "orchestration.job_store.load_jobs",
+        "idempotency_authority": "universal_job_idempotency_key",
+        "execution_identity_owner": "universal_coordination_runtime_execution_gateway",
+        "phase_5_2_mapping_unchanged": True,
+        "reconciliation_complete": True,
+        "reconciled_stage_ids": tuple(reconciled_stage_ids),
+        "created_stage_ids": tuple(created_stage_ids),
+        "partial_failure_evidence_retained": True,
+        "handler_dispatched": False,
+    }
+    return RuntimeExecutionWaveGatewayResult(
+        contract_version=RUNTIME_EXECUTION_WAVE_GATEWAY_CONTRACT_VERSION,
+        gateway_version=RUNTIME_EXECUTION_WAVE_GATEWAY_VERSION,
+        workflow_id=workflow_id, wave_index=wave_index, execution_semantics=semantics,
+        stage_ids=stage_ids, submission_count=len(submissions),
+        created_count=sum(1 for item in submissions if item.created),
+        reused_existing_count=sum(1 for item in submissions if item.reused_existing_job),
+        queued_count=sum(1 for item in submissions if item.queued),
+        job_ids=tuple(item.job_id for item in submissions),
+        dependency_job_ids_by_stage=effective_dependencies,
+        mappings=tuple(prepared), submissions=submissions, evidence=evidence,
+    )
+
+
+def explain_runtime_execution_reconciliation_v1() -> dict[str, Any]:
+    return {
+        "component": "Runtime Execution Idempotency and Reconciliation",
+        "version": RUNTIME_EXECUTION_WAVE_GATEWAY_VERSION,
+        "identity_owner": "Universal Coordination Runtime Execution Gateway",
+        "canonical_job_store": "orchestration.job_store.load_jobs",
+        "duplicate_store_created": False,
+        "phase_5_2_mapping_modified": False,
+        "partial_wave_retry": "submit_only_missing_stages",
+    }
+# === PART C 8-E IDEMPOTENCY AND RECONCILIATION END ===
+
+
+# PART C 8-F: TERMINAL RUNTIME INTAKE GATEWAY
+from dataclasses import dataclass as _8f_dataclass
+from types import MappingProxyType as _8f_MappingProxyType
+from typing import Any as _8f_Any
+from typing import Callable as _8f_Callable
+from typing import Mapping as _8f_Mapping
+
+from backend.server.coordination.runtime_integration.runtime_completion_intake import (
+    intake_runtime_completion as _8f_intake_runtime_completion,
+)
+from backend.server.coordination.runtime_integration.runtime_failure_intake import (
+    intake_runtime_failure as _8f_intake_runtime_failure,
+)
+from backend.server.coordination.runtime_integration.workflow_job_correlation import (
+    resolve_workflow_job_correlation as _8f_resolve_workflow_job_correlation,
+)
+from backend.server.coordination.stage_handoff.stage_result_processor import (
+    process_stage_result as _8f_process_stage_result,
+)
+from backend.server.orchestration.job_store import (
+    list_job_events as _8f_list_job_events,
+)
+from backend.server.orchestration.service import (
+    get_orchestration_job as _8f_get_orchestration_job,
+)
+
+
+class RuntimeTerminalIntakeGatewayError(RuntimeError):
+    """Fail-closed terminal Runtime intake integration error."""
+
+
+def _8f_plain(value: _8f_Any) -> _8f_Any:
+    if isinstance(value, _8f_Mapping):
+        return {
+            str(key): _8f_plain(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [_8f_plain(item) for item in value]
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and not isinstance(value, str):
+        return _8f_plain(enum_value)
+    return value
+
+
+def _8f_freeze(value: _8f_Any) -> _8f_Any:
+    if isinstance(value, _8f_Mapping):
+        return _8f_MappingProxyType(
+            {
+                str(key): _8f_freeze(item)
+                for key, item in value.items()
+            }
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(_8f_freeze(item) for item in value)
+    return value
+
+
+def _8f_value(candidate: _8f_Any, name: str) -> _8f_Any:
+    if isinstance(candidate, _8f_Mapping):
+        return candidate.get(name)
+    return getattr(candidate, name, None)
+
+
+def _8f_text(candidate: _8f_Any, name: str) -> str:
+    value = _8f_value(candidate, name)
+    enum_value = getattr(value, "value", value)
+    return str(enum_value or "").strip()
+
+
+def _8f_snapshot(candidate: _8f_Any) -> dict[str, _8f_Any]:
+    to_dict = getattr(candidate, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+    elif isinstance(candidate, _8f_Mapping):
+        value = dict(candidate)
+    else:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Terminal intake authority returned an unsupported contract."
+        )
+    if not isinstance(value, _8f_Mapping):
+        raise RuntimeTerminalIntakeGatewayError(
+            "Terminal intake snapshot must be a mapping."
+        )
+    return _8f_plain(value)
+
+
+@_8f_dataclass(frozen=True, slots=True)
+class RuntimeTerminalIntakeGatewayResult:
+    job_id: str
+    workflow_id: str
+    correlation_id: str
+    stage_id: str
+    runtime_status: str
+    disposition: str
+    stage_result: _8f_Mapping[str, _8f_Any]
+    processed_result: _8f_Mapping[str, _8f_Any]
+    evidence: _8f_Mapping[str, _8f_Any]
+    gateway_version: str = "runtime_execution_gateway_v8.f.0"
+    schema_version: str = "runtime_terminal_intake_gateway_v1"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "job_id",
+            "workflow_id",
+            "correlation_id",
+            "stage_id",
+            "runtime_status",
+            "disposition",
+        ):
+            if not str(getattr(self, field_name, "") or "").strip():
+                raise RuntimeTerminalIntakeGatewayError(
+                    f"{field_name} is required."
+                )
+        object.__setattr__(self, "stage_result", _8f_freeze(self.stage_result))
+        object.__setattr__(self, "processed_result", _8f_freeze(self.processed_result))
+        object.__setattr__(self, "evidence", _8f_freeze(self.evidence))
+
+    def to_dict(self) -> dict[str, _8f_Any]:
+        return {
+            "job_id": self.job_id,
+            "workflow_id": self.workflow_id,
+            "correlation_id": self.correlation_id,
+            "stage_id": self.stage_id,
+            "runtime_status": self.runtime_status,
+            "disposition": self.disposition,
+            "stage_result": _8f_plain(self.stage_result),
+            "processed_result": _8f_plain(self.processed_result),
+            "evidence": _8f_plain(self.evidence),
+            "gateway_version": self.gateway_version,
+            "schema_version": self.schema_version,
+        }
+
+
+def intake_runtime_terminal_stage_result(
+    *,
+    job_id: str,
+    workflow_repository: _8f_Any,
+    correlation_registry: _8f_Any = None,
+    job_reader: _8f_Callable[[str], _8f_Any] = _8f_get_orchestration_job,
+    events_reader: _8f_Callable[[str], _8f_Any] = _8f_list_job_events,
+    completion_intake: _8f_Callable[..., _8f_Any] = _8f_intake_runtime_completion,
+    failure_intake: _8f_Callable[..., _8f_Any] = _8f_intake_runtime_failure,
+    correlation_resolver: _8f_Callable[..., _8f_Any] = _8f_resolve_workflow_job_correlation,
+    result_processor: _8f_Callable[[_8f_Any], _8f_Any] = _8f_process_stage_result,
+) -> RuntimeTerminalIntakeGatewayResult:
+    """Intake one completed or failed Runtime job without executing it."""
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        raise RuntimeTerminalIntakeGatewayError("job_id is required.")
+
+    load_workflow = getattr(workflow_repository, "load_workflow", None)
+    if not callable(load_workflow):
+        raise RuntimeTerminalIntakeGatewayError(
+            "workflow_repository must expose load_workflow()."
+        )
+    if not callable(job_reader) or not callable(events_reader):
+        raise RuntimeTerminalIntakeGatewayError(
+            "Canonical job and event readers must be callable."
+        )
+
+    terminal_job = job_reader(normalized_job_id)
+    if terminal_job is None:
+        raise RuntimeTerminalIntakeGatewayError(
+            f"Runtime job was not found: {normalized_job_id}"
+        )
+    observed_job_id = (
+        _8f_text(terminal_job, "job_id")
+        or _8f_text(terminal_job, "id")
+    )
+    if observed_job_id != normalized_job_id:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Runtime job reader returned a conflicting job identity."
+        )
+
+    runtime_status = _8f_text(terminal_job, "status").lower()
+    if runtime_status not in {"completed", "failed"}:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Runtime job is not ready for completion/failure intake: "
+            f"{runtime_status or '<missing>'}"
+        )
+
+    correlation = correlation_resolver(
+        job_id=normalized_job_id,
+        registry=correlation_registry,
+    )
+    workflow_id = _8f_text(correlation, "workflow_id")
+    workflow = load_workflow(workflow_id)
+    if workflow is None:
+        raise RuntimeTerminalIntakeGatewayError(
+            f"Persisted workflow was not found: {workflow_id}"
+        )
+
+    identity_pairs = (
+        ("workflow_id", workflow_id),
+        ("workspace_id", _8f_text(correlation, "workspace_id")),
+        ("correlation_id", _8f_text(correlation, "correlation_id")),
+    )
+    for field_name, expected in identity_pairs:
+        actual = _8f_text(workflow, field_name)
+        if not expected or actual != expected:
+            raise RuntimeTerminalIntakeGatewayError(
+                "Persisted workflow identity conflicts with Runtime "
+                f"correlation: {field_name}"
+            )
+
+    fixed_job_reader = lambda requested_id: (
+        terminal_job if requested_id == normalized_job_id else None
+    )
+    if runtime_status == "completed":
+        stage_result = completion_intake(
+            job_id=normalized_job_id,
+            registry=correlation_registry,
+            completion_reader=fixed_job_reader,
+            events_reader=events_reader,
+        )
+        intake_authority = "intake_runtime_completion"
+    else:
+        stage_result = failure_intake(
+            job_id=normalized_job_id,
+            registry=correlation_registry,
+            failure_reader=fixed_job_reader,
+            events_reader=events_reader,
+        )
+        intake_authority = "intake_runtime_failure"
+
+    for field_name, expected in (
+        ("job_id", normalized_job_id),
+        ("workflow_id", workflow_id),
+        ("workspace_id", _8f_text(correlation, "workspace_id")),
+        ("correlation_id", _8f_text(correlation, "correlation_id")),
+        ("stage_id", _8f_text(correlation, "stage_id")),
+    ):
+        if _8f_text(stage_result, field_name) != expected:
+            raise RuntimeTerminalIntakeGatewayError(
+                "Stage Result identity conflicts with Runtime "
+                f"correlation: {field_name}"
+            )
+
+    result_status = _8f_text(stage_result, "status").lower()
+    if result_status != runtime_status:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Stage Result terminal status conflicts with Runtime job."
+        )
+
+    processed_result = result_processor(stage_result)
+    disposition = _8f_text(processed_result, "disposition").lower()
+    if disposition != runtime_status:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Processed Stage Result disposition conflicts with Runtime job."
+        )
+
+    return RuntimeTerminalIntakeGatewayResult(
+        job_id=normalized_job_id,
+        workflow_id=workflow_id,
+        correlation_id=_8f_text(correlation, "correlation_id"),
+        stage_id=_8f_text(correlation, "stage_id"),
+        runtime_status=runtime_status,
+        disposition=disposition,
+        stage_result=_8f_snapshot(stage_result),
+        processed_result=_8f_snapshot(processed_result),
+        evidence={
+            "intake_authority": intake_authority,
+            "correlation_authority": (
+                "resolve_workflow_job_correlation"
+            ),
+            "workflow_authority": (
+                type(workflow_repository).__name__
+            ),
+            "processor_authority": "process_stage_result",
+            "handler_executed": False,
+            "job_created": False,
+            "queue_claimed": False,
+            "workflow_mutated": False,
+        },
+    )
+# END PART C 8-F
+

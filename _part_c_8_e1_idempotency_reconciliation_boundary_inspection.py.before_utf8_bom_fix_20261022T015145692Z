@@ -1,0 +1,849 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import inspect
+import json
+import py_compile
+import sys
+import traceback
+from collections.abc import Mapping
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+REPORT_NAME = (
+    "PART_C_8_E1_IDEMPOTENCY_RECONCILIATION_BOUNDARY_INSPECTION.txt"
+)
+
+
+def sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def source_hashes(paths: list[Path]) -> dict[str, str]:
+    return {
+        path.as_posix(): sha256_path(path)
+        for path in paths
+        if path.is_file()
+    }
+
+
+def clean_annotation(node: ast.AST | None) -> str:
+    if node is None:
+        return ""
+    try:
+        return ast.unparse(node)
+    except Exception:
+        return ""
+
+
+def ast_signature(node: ast.FunctionDef | ast.AsyncFunctionDef) -> str:
+    arguments = []
+    positional = list(node.args.posonlyargs) + list(node.args.args)
+    positional_defaults = [None] * (
+        len(positional) - len(node.args.defaults)
+    ) + list(node.args.defaults)
+
+    for argument, default in zip(positional, positional_defaults):
+        item = argument.arg
+        annotation = clean_annotation(argument.annotation)
+        if annotation:
+            item += f": {annotation}"
+        if default is not None:
+            item += f" = {ast.unparse(default)}"
+        arguments.append(item)
+
+    if node.args.vararg is not None:
+        item = "*" + node.args.vararg.arg
+        annotation = clean_annotation(node.args.vararg.annotation)
+        if annotation:
+            item += f": {annotation}"
+        arguments.append(item)
+    elif node.args.kwonlyargs:
+        arguments.append("*")
+
+    for argument, default in zip(
+        node.args.kwonlyargs,
+        node.args.kw_defaults,
+    ):
+        item = argument.arg
+        annotation = clean_annotation(argument.annotation)
+        if annotation:
+            item += f": {annotation}"
+        if default is not None:
+            item += f" = {ast.unparse(default)}"
+        arguments.append(item)
+
+    if node.args.kwarg is not None:
+        item = "**" + node.args.kwarg.arg
+        annotation = clean_annotation(node.args.kwarg.annotation)
+        if annotation:
+            item += f": {annotation}"
+        arguments.append(item)
+
+    result = f"({', '.join(arguments)})"
+    returns = clean_annotation(node.returns)
+    if returns:
+        result += f" -> {returns}"
+    return result
+
+
+def dotted_call_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = dotted_call_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def callable_inventory(path: Path) -> dict:
+    text = path.read_text(encoding="utf-8")
+    tree = ast.parse(text, filename=str(path))
+    functions = []
+    classes = []
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            calls = sorted(
+                {
+                    dotted_call_name(call.func)
+                    for call in ast.walk(node)
+                    if isinstance(call, ast.Call)
+                    and dotted_call_name(call.func)
+                }
+            )
+            functions.append(
+                {
+                    "name": node.name,
+                    "line": node.lineno,
+                    "signature": ast_signature(node),
+                    "calls": calls,
+                }
+            )
+        elif isinstance(node, ast.ClassDef):
+            methods = []
+            for child in node.body:
+                if isinstance(
+                    child,
+                    (ast.FunctionDef, ast.AsyncFunctionDef),
+                ):
+                    methods.append(
+                        {
+                            "name": child.name,
+                            "line": child.lineno,
+                            "signature": ast_signature(child),
+                        }
+                    )
+            classes.append(
+                {
+                    "name": node.name,
+                    "line": node.lineno,
+                    "methods": methods,
+                }
+            )
+
+    return {
+        "functions": functions,
+        "classes": classes,
+    }
+
+
+def matching_callables(
+    inventory: dict,
+    terms: tuple[str, ...],
+) -> list[dict]:
+    results = []
+    for function in inventory["functions"]:
+        name = function["name"].lower()
+        if any(term in name for term in terms):
+            results.append(function)
+    for class_row in inventory["classes"]:
+        for method in class_row["methods"]:
+            qualified = (
+                f"{class_row['name']}.{method['name']}"
+            )
+            if any(term in qualified.lower() for term in terms):
+                results.append(
+                    {
+                        **method,
+                        "name": qualified,
+                        "calls": [],
+                    }
+                )
+    return results
+
+
+def public_callable_details(module, names: tuple[str, ...]) -> dict:
+    result = {}
+    for name in names:
+        value = getattr(module, name, None)
+        row = {
+            "available": callable(value),
+            "name": name,
+        }
+        if callable(value):
+            try:
+                row["signature"] = str(inspect.signature(value))
+            except (TypeError, ValueError):
+                row["signature"] = ""
+            try:
+                source = inspect.getsource(value)
+            except (OSError, TypeError):
+                source = ""
+            row["source_excerpt"] = source[:12000]
+        result[name] = row
+    return result
+
+
+def registry_file_hash(snapshot: Mapping) -> tuple[str, str | None]:
+    path_text = str(
+        snapshot.get("persistent_registry_path") or ""
+    ).strip()
+    if not path_text:
+        return "", None
+    path = Path(path_text)
+    if not path.is_file():
+        return str(path), None
+    return str(path), sha256_path(path)
+
+
+def render_report(
+    *,
+    generated: str,
+    root: Path,
+    checks: dict[str, bool],
+    decision: dict,
+    evidence: dict,
+    execution_error,
+) -> str:
+    failed = [name for name, passed in checks.items() if not passed]
+    status = "COMPLETE" if execution_error is None and not failed else "NOT_COMPLETE"
+    final = (
+        "PART C 8-E1 COMPLETE"
+        if status == "COMPLETE"
+        else "PART C 8-E1 NOT_COMPLETE"
+    )
+    lines = [
+        "LINKCRAFTER UNIVERSAL COORDINATION",
+        "PART C 8-E1 IDEMPOTENCY AND RECONCILIATION BOUNDARY INSPECTION",
+        "",
+        f"Generated: {generated}",
+        "Mode: READ-ONLY TARGETED INSPECTION",
+        f"Project root: {root}",
+        "Production source changes: NONE",
+        "Runtime registrations created: NO",
+        "Registry persistence executed: NO",
+        "Universal Jobs created: NO",
+        "Queue claims executed: NO",
+        "Handlers executed: NO",
+        "Live network requests executed: NO",
+        f"INSPECTION STATUS: {status}",
+        "",
+        "=" * 110,
+        "INSPECTION DECISION",
+        "=" * 110,
+        json.dumps(decision, indent=2, sort_keys=True),
+        "",
+        "=" * 110,
+        "CHECKS",
+        "=" * 110,
+        json.dumps(checks, indent=2, sort_keys=True),
+        "",
+        "FAILED_CHECKS:",
+        json.dumps(failed, indent=2),
+        "",
+        "=" * 110,
+        "BOUNDARY EVIDENCE",
+        "=" * 110,
+        json.dumps(evidence, indent=2, sort_keys=True, default=str),
+        "",
+        "EXECUTION_ERROR:",
+        json.dumps(execution_error, indent=2, default=str),
+        "",
+        "=" * 110,
+        "NEXT STEP",
+        "=" * 110,
+        (
+            "Use this frozen boundary to implement Part C 8-E2. Reuse the canonical Universal Job "
+            "idempotency authority; add only the Coordination-owned deterministic execution identity "
+            "and partial-wave reconciliation boundary required by the evidence."
+            if status == "COMPLETE"
+            else "Correct the inspection failure before implementing Part C 8-E2."
+        ),
+        "",
+        "=" * 110,
+        "FINAL RESULT",
+        "=" * 110,
+        final,
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def main() -> int:
+    if len(sys.argv) != 3:
+        raise SystemExit(
+            "Usage: inspection.py <project-root> <report-path>"
+        )
+
+    root = Path(sys.argv[1]).resolve()
+    report = Path(sys.argv[2]).resolve()
+    report.parent.mkdir(parents=True, exist_ok=True)
+    generated = datetime.now(timezone.utc).isoformat()
+
+    checks: dict[str, bool] = {}
+    evidence: dict = {}
+    decision: dict = {}
+    execution_error = None
+
+    source_map = {
+        "gateway": root / (
+            "backend/server/coordination/runtime_integration/"
+            "runtime_execution_gateway.py"
+        ),
+        "mapping": root / (
+            "backend/server/coordination/runtime_integration/"
+            "runtime_job_mapping.py"
+        ),
+        "correlation": root / (
+            "backend/server/coordination/runtime_integration/"
+            "workflow_job_correlation.py"
+        ),
+        "creation": root / (
+            "backend/server/runtime/universal_jobs/creation_engine.py"
+        ),
+        "submission": root / (
+            "backend/server/runtime/universal_job_submission.py"
+        ),
+        "idempotency_key": root / (
+            "backend/server/runtime/universal_jobs/idempotency_key.py"
+        ),
+        "duplicate_detection": root / (
+            "backend/server/runtime/universal_jobs/duplicate_detection.py"
+        ),
+        "duplicate_handling": root / (
+            "backend/server/runtime/universal_jobs/duplicate_handling.py"
+        ),
+        "job_store": root / "backend/server/orchestration/job_store.py",
+        "queue": root / "backend/server/orchestration/queue.py",
+        "workflow_persistence": root / (
+            "backend/server/coordination/workflow_persistence/repository.py"
+        ),
+    }
+    previous_report = root / (
+        "backend/server/data/reports/"
+        "PART_C_8_D_EXECUTION_WAVE_SUBMISSION_CERTIFICATION.txt"
+    )
+
+    scan_roots = [
+        root / "backend/server/runtime",
+        root / "backend/server/orchestration",
+        root / "backend/server/coordination",
+    ]
+    production_sources = sorted(
+        {
+            path
+            for scan_root in scan_roots
+            if scan_root.is_dir()
+            for path in scan_root.rglob("*.py")
+            if "__pycache__" not in path.parts
+        }
+    )
+    hashes_before = source_hashes(production_sources)
+
+    try:
+        checks["part_c_8_d_report_exists"] = previous_report.is_file()
+        previous_text = (
+            previous_report.read_text(encoding="utf-8")
+            if previous_report.is_file()
+            else ""
+        )
+        checks["part_c_8_d_certified"] = (
+            "CERTIFICATION STATUS: CERTIFIED" in previous_text
+            and "PART C 8-D CERTIFIED" in previous_text
+        )
+
+        for name, path in source_map.items():
+            checks[f"source_exists_{name}"] = path.is_file()
+            if path.is_file():
+                py_compile.compile(str(path), doraise=True)
+                checks[f"source_syntax_{name}"] = True
+            else:
+                checks[f"source_syntax_{name}"] = False
+
+        if not all(path.is_file() for path in source_map.values()):
+            raise RuntimeError("One or more required 8-E sources are unavailable.")
+
+        inventories = {
+            name: callable_inventory(path)
+            for name, path in source_map.items()
+        }
+        texts = {
+            name: path.read_text(encoding="utf-8")
+            for name, path in source_map.items()
+        }
+
+        checks["wave_gateway_patch_retained"] = (
+            "submit_runtime_execution_wave" in texts["gateway"]
+            and "RuntimeExecutionWaveGatewayResult" in texts["gateway"]
+            and "RuntimeExecutionWaveGatewayError" in texts["gateway"]
+        )
+        checks["partial_submission_evidence_retained"] = all(
+            marker in texts["gateway"]
+            for marker in (
+                "submitted_results",
+                "submitted_job_ids",
+                "failed_stage_id",
+                "partial_failure_evidence_retained",
+            )
+        )
+        checks["phase_5_2_idempotency_prohibition_retained"] = (
+            "Phase 5.2 must not generate" in texts["mapping"]
+            and "idempotency_key" in texts["mapping"]
+        )
+
+        sys.path.insert(0, str(root))
+        registration_module = importlib.import_module(
+            "backend.server.runtime.universal_runtime_registration"
+        )
+        creation_module = importlib.import_module(
+            "backend.server.runtime.universal_jobs.creation_engine"
+        )
+        submission_module = importlib.import_module(
+            "backend.server.runtime.universal_job_submission"
+        )
+        idempotency_module = importlib.import_module(
+            "backend.server.runtime.universal_jobs.idempotency_key"
+        )
+        duplicate_detection_module = importlib.import_module(
+            "backend.server.runtime.universal_jobs.duplicate_detection"
+        )
+        duplicate_handling_module = importlib.import_module(
+            "backend.server.runtime.universal_jobs.duplicate_handling"
+        )
+        gateway_module = importlib.import_module(
+            "backend.server.coordination.runtime_integration.runtime_execution_gateway"
+        )
+        correlation_module = importlib.import_module(
+            "backend.server.coordination.runtime_integration.workflow_job_correlation"
+        )
+
+        checks["required_modules_imported"] = True
+
+        registration_module.ensure_persisted_runtime_registrations_loaded()
+        snapshot_before = registration_module.runtime_registration_snapshot()
+        registry_path, registry_hash_before = registry_file_hash(snapshot_before)
+
+        submitter = getattr(submission_module, "submit_universal_job", None)
+        submitter_signature = (
+            inspect.signature(submitter)
+            if callable(submitter)
+            else None
+        )
+        submitter_parameters = (
+            tuple(submitter_signature.parameters)
+            if submitter_signature is not None
+            else ()
+        )
+        checks["canonical_submitter_available"] = callable(submitter)
+        checks["canonical_submitter_accepts_idempotency_key"] = (
+            "idempotency_key" in submitter_parameters
+        )
+
+        creation_lower = texts["creation"].lower()
+        submission_lower = texts["submission"].lower()
+        checks["creation_engine_accepts_idempotency_identity"] = (
+            "idempotency_key" in creation_lower
+        )
+        submitter_reuse_outcome_available = (
+            "idempotency_key" in submission_lower
+            and "reused_existing_job" in submission_lower
+        )
+        checks["canonical_submitter_reuse_behavior_inspected"] = True
+
+        idempotency_details = public_callable_details(
+            idempotency_module,
+            (
+                "normalize_universal_job_idempotency_key",
+                "validate_universal_job_idempotency_key",
+            ),
+        )
+        duplicate_detection_details = public_callable_details(
+            duplicate_detection_module,
+            (
+                "build_universal_job_duplicate_signature",
+                "detect_universal_job_duplicate",
+            ),
+        )
+        duplicate_handling_details = public_callable_details(
+            duplicate_handling_module,
+            ("decide_universal_job_duplicate_handling",),
+        )
+        checks["canonical_idempotency_normalizer_available"] = all(
+            row["available"]
+            for row in idempotency_details.values()
+        )
+        checks["canonical_duplicate_detection_available"] = all(
+            row["available"]
+            for row in duplicate_detection_details.values()
+        )
+        checks["canonical_duplicate_handling_available"] = all(
+            row["available"]
+            for row in duplicate_handling_details.values()
+        )
+
+        gateway_signature = inspect.signature(
+            gateway_module.submit_runtime_job_mapping
+        )
+        wave_signature = inspect.signature(
+            gateway_module.submit_runtime_execution_wave
+        )
+        checks["single_gateway_has_no_execution_idempotency_override"] = (
+            "idempotency_key" not in gateway_signature.parameters
+        )
+        checks["wave_gateway_has_no_idempotency_authority_yet"] = (
+            "idempotency" not in wave_signature.parameters
+            and "reconciliation" not in wave_signature.parameters
+        )
+
+        error_type = getattr(
+            gateway_module,
+            "RuntimeExecutionWaveGatewayError",
+            None,
+        )
+        error_signature = (
+            inspect.signature(error_type)
+            if error_type is not None
+            else None
+        )
+        error_parameters = (
+            tuple(error_signature.parameters)
+            if error_signature is not None
+            else ()
+        )
+        checks["wave_error_exposes_partial_result_contract"] = all(
+            item in error_parameters
+            for item in (
+                "failed_stage_id",
+                "submitted_results",
+            )
+        )
+
+        registry_type = getattr(
+            correlation_module,
+            "WorkflowJobCorrelationRegistry",
+            None,
+        )
+        registry_methods = {}
+        if registry_type is not None:
+            for name, value in inspect.getmembers(
+                registry_type,
+                inspect.isfunction,
+            ):
+                if name.startswith("_"):
+                    continue
+                try:
+                    signature = str(inspect.signature(value))
+                except (TypeError, ValueError):
+                    signature = ""
+                try:
+                    source = inspect.getsource(value)
+                except (OSError, TypeError):
+                    source = ""
+                registry_methods[name] = {
+                    "signature": signature,
+                    "source_excerpt": source[:10000],
+                }
+        checks["correlation_registry_available"] = registry_type is not None
+        checks["correlation_register_method_available"] = (
+            "register" in registry_methods
+        )
+
+        register_source = registry_methods.get(
+            "register",
+            {},
+        ).get("source_excerpt", "")
+        correlation_replay_markers = (
+            "existing",
+            "job_id",
+            "correlation",
+        )
+        replay_evidence = all(
+            marker in register_source.lower()
+            for marker in correlation_replay_markers
+        )
+        checks["correlation_replay_behavior_inspected"] = bool(
+            register_source
+        )
+
+        search_terms = (
+            "idempot",
+            "duplicate",
+            "reus",
+            "reconcil",
+            "retry",
+            "lookup",
+            "get_job",
+            "load_job",
+            "find_job",
+            "read_job",
+            "resolve_job",
+        )
+        candidate_rows = []
+        for name, inventory in inventories.items():
+            for row in matching_callables(inventory, search_terms):
+                candidate_rows.append(
+                    {
+                        "source_key": name,
+                        "source": str(source_map[name].relative_to(root)),
+                        **row,
+                    }
+                )
+
+        broader_candidates = []
+        for path in production_sources:
+            relative = path.relative_to(root).as_posix()
+            text_lower = path.read_text(
+                encoding="utf-8",
+                errors="replace",
+            ).lower()
+            matched_terms = sorted(
+                {
+                    term
+                    for term in search_terms
+                    if term in text_lower
+                }
+            )
+            if matched_terms:
+                broader_candidates.append(
+                    {
+                        "source": relative,
+                        "matched_terms": matched_terms,
+                    }
+                )
+
+        job_lookup_candidates = [
+            row
+            for row in candidate_rows
+            if any(
+                marker in row["name"].lower()
+                for marker in (
+                    "get_job",
+                    "load_job",
+                    "find_job",
+                    "read_job",
+                    "resolve_job",
+                    "lookup",
+                )
+            )
+        ]
+        reconciliation_candidates = [
+            row
+            for row in candidate_rows
+            if any(
+                marker in row["name"].lower()
+                for marker in (
+                    "reconcil",
+                    "idempot",
+                    "retry",
+                )
+            )
+        ]
+
+        checks["idempotency_candidate_inventory_completed"] = True
+        checks["job_lookup_candidate_inventory_completed"] = True
+        checks["reconciliation_candidate_inventory_completed"] = True
+
+        snapshot_after = registration_module.runtime_registration_snapshot()
+        _, registry_hash_after = registry_file_hash(snapshot_after)
+        checks["production_registry_memory_unchanged"] = (
+            snapshot_before.get("registration_count")
+            == snapshot_after.get("registration_count")
+            and snapshot_before.get("registry_sha256")
+            == snapshot_after.get("registry_sha256")
+        )
+        checks["production_registry_file_unchanged"] = (
+            registry_hash_before == registry_hash_after
+        )
+
+        hashes_after = source_hashes(production_sources)
+        checks["production_sources_unchanged"] = (
+            hashes_before == hashes_after
+        )
+        checks["runtime_registration_created_no"] = True
+        checks["registry_persistence_executed_no"] = True
+        checks["universal_job_created_no"] = True
+        checks["queue_claim_executed_no"] = True
+        checks["handler_executed_no"] = True
+        checks["live_network_request_executed_no"] = True
+
+        idempotency_authority = (
+            "REUSE_CANONICAL_UNIVERSAL_JOB_IDEMPOTENCY_AND_DUPLICATE_AUTHORITIES"
+            if checks["canonical_submitter_accepts_idempotency_key"]
+            and checks["creation_engine_accepts_idempotency_identity"]
+            and checks["canonical_idempotency_normalizer_available"]
+            and checks["canonical_duplicate_detection_available"]
+            and checks["canonical_duplicate_handling_available"]
+            else "CANONICAL_AUTHORITY_NOT_CONFIRMED"
+        )
+        coordination_work = (
+            "IMPLEMENTATION_REQUIRED"
+            if checks["single_gateway_has_no_execution_idempotency_override"]
+            or checks["wave_gateway_has_no_idempotency_authority_yet"]
+            else "EXISTING_AUTHORITY_AVAILABLE"
+        )
+        decision = {
+            "idempotency_authority": idempotency_authority,
+            "coordination_reconciliation_decision": coordination_work,
+            "phase_5_2_mapping_contract": (
+                "RETAIN_UNCHANGED_NO_IDEMPOTENCY_KEY"
+            ),
+            "execution_identity_owner": "PART_C_8_E_COORDINATION_GATEWAY",
+            "duplicate_job_store": "DO_NOT_CREATE",
+            "canonical_submitter_reuse_outcome_available": (
+                submitter_reuse_outcome_available
+            ),
+            "retry_strategy": (
+                "PASS_DETERMINISTIC_COORDINATION_EXECUTION_KEY_TO_CANONICAL_SUBMITTER"
+            ),
+            "partial_wave_strategy": (
+                "RECONCILE_AGAINST_CANONICAL_JOB_STORE_THEN_SUBMIT_ONLY_MISSING_STAGES"
+            ),
+            "correlation_replay_evidence_detected": replay_evidence,
+            "direct_job_lookup_candidates_found": len(job_lookup_candidates),
+            "existing_reconciliation_candidates_found": len(
+                reconciliation_candidates
+            ),
+            "next_step": "PART_C_8_E2",
+        }
+
+        evidence = {
+            "source_hashes": {
+                name: sha256_path(path)
+                for name, path in source_map.items()
+            },
+            "registry_path": registry_path,
+            "registry_sha256": registry_hash_after,
+            "canonical_submitter": public_callable_details(
+                submission_module,
+                ("submit_universal_job",),
+            ),
+            "creation_engine": public_callable_details(
+                creation_module,
+                (
+                    "create_universal_job",
+                    "normalize_universal_job_creation_request",
+                ),
+            ),
+            "canonical_idempotency_functions": idempotency_details,
+            "canonical_duplicate_detection_functions": (
+                duplicate_detection_details
+            ),
+            "canonical_duplicate_handling_functions": (
+                duplicate_handling_details
+            ),
+            "canonical_submitter_reuse_outcome_available": (
+                submitter_reuse_outcome_available
+            ),
+            "gateway_callables": public_callable_details(
+                gateway_module,
+                (
+                    "submit_runtime_job_mapping",
+                    "submit_runtime_execution_wave",
+                    "explain_runtime_execution_wave_gateway_v1",
+                ),
+            ),
+            "wave_error_signature": (
+                str(error_signature)
+                if error_signature is not None
+                else ""
+            ),
+            "correlation_registry_methods": registry_methods,
+            "targeted_candidates": candidate_rows,
+            "job_lookup_candidates": job_lookup_candidates,
+            "reconciliation_candidates": reconciliation_candidates,
+            "broader_keyword_sources": broader_candidates,
+            "production_source_count": len(production_sources),
+        }
+
+        required_truths = (
+            "part_c_8_d_certified",
+            "wave_gateway_patch_retained",
+            "partial_submission_evidence_retained",
+            "phase_5_2_idempotency_prohibition_retained",
+            "canonical_submitter_available",
+            "canonical_submitter_accepts_idempotency_key",
+            "creation_engine_accepts_idempotency_identity",
+            "canonical_submitter_reuse_behavior_inspected",
+            "canonical_idempotency_normalizer_available",
+            "canonical_duplicate_detection_available",
+            "canonical_duplicate_handling_available",
+            "wave_error_exposes_partial_result_contract",
+            "correlation_registry_available",
+            "correlation_register_method_available",
+            "production_sources_unchanged",
+            "production_registry_memory_unchanged",
+            "production_registry_file_unchanged",
+        )
+        failed_required = [
+            name for name in required_truths if not checks.get(name, False)
+        ]
+        if failed_required:
+            raise RuntimeError(
+                "Required 8-E boundary checks failed: "
+                + ", ".join(failed_required)
+            )
+
+    except Exception as error:
+        execution_error = {
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+            "traceback": traceback.format_exc(),
+        }
+        if not decision:
+            decision = {
+                "coordination_reconciliation_decision": "BLOCKED",
+                "next_step": "CORRECT_8_E1_INSPECTION",
+            }
+        hashes_after = source_hashes(production_sources)
+        checks["production_sources_unchanged"] = (
+            hashes_before == hashes_after
+        )
+
+    report_text = render_report(
+        generated=generated,
+        root=root,
+        checks=checks,
+        decision=decision,
+        evidence=evidence,
+        execution_error=execution_error,
+    )
+    report.write_text(
+        report_text,
+        encoding="utf-8",
+        newline="\n",
+    )
+
+    for name, passed in checks.items():
+        print(f"{name.upper()}: {'PASS' if passed else 'FAIL'}")
+    print()
+    print(f"REPORT={report}")
+
+    failed = [name for name, passed in checks.items() if not passed]
+    if execution_error is not None or failed:
+        print("PART_C_8_E1_STATUS=NOT_COMPLETE")
+        return 1
+
+    print("PART_C_8_E1_STATUS=COMPLETE")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

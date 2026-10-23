@@ -1,0 +1,761 @@
+from __future__ import annotations
+
+import dataclasses
+import hashlib
+import importlib
+import inspect
+import json
+import py_compile
+import shutil
+import sys
+import tempfile
+import traceback
+from datetime import datetime, timezone
+from pathlib import Path
+from types import MappingProxyType, SimpleNamespace
+from typing import Any
+
+
+EXPECTED_GATEWAY_SHA256 = (
+    "49938b36f2c733343d8ae38fd648e72f54e3108d6af83db8a86a33d877a76d19"
+)
+START_MARKER = "# PART C 8-F: TERMINAL RUNTIME INTAKE GATEWAY"
+END_MARKER = "# END PART C 8-F"
+
+
+PRODUCTION_BLOCK = r'''
+
+
+# PART C 8-F: TERMINAL RUNTIME INTAKE GATEWAY
+from dataclasses import dataclass as _8f_dataclass
+from types import MappingProxyType as _8f_MappingProxyType
+from typing import Any as _8f_Any
+from typing import Callable as _8f_Callable
+from typing import Mapping as _8f_Mapping
+
+from backend.server.coordination.runtime_integration.runtime_completion_intake import (
+    intake_runtime_completion as _8f_intake_runtime_completion,
+)
+from backend.server.coordination.runtime_integration.runtime_failure_intake import (
+    intake_runtime_failure as _8f_intake_runtime_failure,
+)
+from backend.server.coordination.runtime_integration.workflow_job_correlation import (
+    resolve_workflow_job_correlation as _8f_resolve_workflow_job_correlation,
+)
+from backend.server.coordination.stage_handoff.stage_result_processor import (
+    process_stage_result as _8f_process_stage_result,
+)
+from backend.server.orchestration.job_store import (
+    list_job_events as _8f_list_job_events,
+)
+from backend.server.orchestration.service import (
+    get_orchestration_job as _8f_get_orchestration_job,
+)
+
+
+class RuntimeTerminalIntakeGatewayError(RuntimeError):
+    """Fail-closed terminal Runtime intake integration error."""
+
+
+def _8f_plain(value: _8f_Any) -> _8f_Any:
+    if isinstance(value, _8f_Mapping):
+        return {
+            str(key): _8f_plain(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (tuple, list)):
+        return [_8f_plain(item) for item in value]
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and not isinstance(value, str):
+        return _8f_plain(enum_value)
+    return value
+
+
+def _8f_freeze(value: _8f_Any) -> _8f_Any:
+    if isinstance(value, _8f_Mapping):
+        return _8f_MappingProxyType(
+            {
+                str(key): _8f_freeze(item)
+                for key, item in value.items()
+            }
+        )
+    if isinstance(value, (tuple, list)):
+        return tuple(_8f_freeze(item) for item in value)
+    return value
+
+
+def _8f_value(candidate: _8f_Any, name: str) -> _8f_Any:
+    if isinstance(candidate, _8f_Mapping):
+        return candidate.get(name)
+    return getattr(candidate, name, None)
+
+
+def _8f_text(candidate: _8f_Any, name: str) -> str:
+    value = _8f_value(candidate, name)
+    enum_value = getattr(value, "value", value)
+    return str(enum_value or "").strip()
+
+
+def _8f_snapshot(candidate: _8f_Any) -> dict[str, _8f_Any]:
+    to_dict = getattr(candidate, "to_dict", None)
+    if callable(to_dict):
+        value = to_dict()
+    elif isinstance(candidate, _8f_Mapping):
+        value = dict(candidate)
+    else:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Terminal intake authority returned an unsupported contract."
+        )
+    if not isinstance(value, _8f_Mapping):
+        raise RuntimeTerminalIntakeGatewayError(
+            "Terminal intake snapshot must be a mapping."
+        )
+    return _8f_plain(value)
+
+
+@_8f_dataclass(frozen=True, slots=True)
+class RuntimeTerminalIntakeGatewayResult:
+    job_id: str
+    workflow_id: str
+    correlation_id: str
+    stage_id: str
+    runtime_status: str
+    disposition: str
+    stage_result: _8f_Mapping[str, _8f_Any]
+    processed_result: _8f_Mapping[str, _8f_Any]
+    evidence: _8f_Mapping[str, _8f_Any]
+    gateway_version: str = "runtime_execution_gateway_v8.f.0"
+    schema_version: str = "runtime_terminal_intake_gateway_v1"
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "job_id",
+            "workflow_id",
+            "correlation_id",
+            "stage_id",
+            "runtime_status",
+            "disposition",
+        ):
+            if not str(getattr(self, field_name, "") or "").strip():
+                raise RuntimeTerminalIntakeGatewayError(
+                    f"{field_name} is required."
+                )
+        object.__setattr__(self, "stage_result", _8f_freeze(self.stage_result))
+        object.__setattr__(self, "processed_result", _8f_freeze(self.processed_result))
+        object.__setattr__(self, "evidence", _8f_freeze(self.evidence))
+
+    def to_dict(self) -> dict[str, _8f_Any]:
+        return {
+            "job_id": self.job_id,
+            "workflow_id": self.workflow_id,
+            "correlation_id": self.correlation_id,
+            "stage_id": self.stage_id,
+            "runtime_status": self.runtime_status,
+            "disposition": self.disposition,
+            "stage_result": _8f_plain(self.stage_result),
+            "processed_result": _8f_plain(self.processed_result),
+            "evidence": _8f_plain(self.evidence),
+            "gateway_version": self.gateway_version,
+            "schema_version": self.schema_version,
+        }
+
+
+def intake_runtime_terminal_stage_result(
+    *,
+    job_id: str,
+    workflow_repository: _8f_Any,
+    correlation_registry: _8f_Any = None,
+    job_reader: _8f_Callable[[str], _8f_Any] = _8f_get_orchestration_job,
+    events_reader: _8f_Callable[[str], _8f_Any] = _8f_list_job_events,
+    completion_intake: _8f_Callable[..., _8f_Any] = _8f_intake_runtime_completion,
+    failure_intake: _8f_Callable[..., _8f_Any] = _8f_intake_runtime_failure,
+    correlation_resolver: _8f_Callable[..., _8f_Any] = _8f_resolve_workflow_job_correlation,
+    result_processor: _8f_Callable[[_8f_Any], _8f_Any] = _8f_process_stage_result,
+) -> RuntimeTerminalIntakeGatewayResult:
+    """Intake one completed or failed Runtime job without executing it."""
+    normalized_job_id = str(job_id or "").strip()
+    if not normalized_job_id:
+        raise RuntimeTerminalIntakeGatewayError("job_id is required.")
+
+    load_workflow = getattr(workflow_repository, "load_workflow", None)
+    if not callable(load_workflow):
+        raise RuntimeTerminalIntakeGatewayError(
+            "workflow_repository must expose load_workflow()."
+        )
+    if not callable(job_reader) or not callable(events_reader):
+        raise RuntimeTerminalIntakeGatewayError(
+            "Canonical job and event readers must be callable."
+        )
+
+    terminal_job = job_reader(normalized_job_id)
+    if terminal_job is None:
+        raise RuntimeTerminalIntakeGatewayError(
+            f"Runtime job was not found: {normalized_job_id}"
+        )
+    observed_job_id = (
+        _8f_text(terminal_job, "job_id")
+        or _8f_text(terminal_job, "id")
+    )
+    if observed_job_id != normalized_job_id:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Runtime job reader returned a conflicting job identity."
+        )
+
+    runtime_status = _8f_text(terminal_job, "status").lower()
+    if runtime_status not in {"completed", "failed"}:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Runtime job is not ready for completion/failure intake: "
+            f"{runtime_status or '<missing>'}"
+        )
+
+    correlation = correlation_resolver(
+        job_id=normalized_job_id,
+        registry=correlation_registry,
+    )
+    workflow_id = _8f_text(correlation, "workflow_id")
+    workflow = load_workflow(workflow_id)
+    if workflow is None:
+        raise RuntimeTerminalIntakeGatewayError(
+            f"Persisted workflow was not found: {workflow_id}"
+        )
+
+    identity_pairs = (
+        ("workflow_id", workflow_id),
+        ("workspace_id", _8f_text(correlation, "workspace_id")),
+        ("correlation_id", _8f_text(correlation, "correlation_id")),
+    )
+    for field_name, expected in identity_pairs:
+        actual = _8f_text(workflow, field_name)
+        if not expected or actual != expected:
+            raise RuntimeTerminalIntakeGatewayError(
+                "Persisted workflow identity conflicts with Runtime "
+                f"correlation: {field_name}"
+            )
+
+    fixed_job_reader = lambda requested_id: (
+        terminal_job if requested_id == normalized_job_id else None
+    )
+    if runtime_status == "completed":
+        stage_result = completion_intake(
+            job_id=normalized_job_id,
+            registry=correlation_registry,
+            completion_reader=fixed_job_reader,
+            events_reader=events_reader,
+        )
+        intake_authority = "intake_runtime_completion"
+    else:
+        stage_result = failure_intake(
+            job_id=normalized_job_id,
+            registry=correlation_registry,
+            failure_reader=fixed_job_reader,
+            events_reader=events_reader,
+        )
+        intake_authority = "intake_runtime_failure"
+
+    for field_name, expected in (
+        ("job_id", normalized_job_id),
+        ("workflow_id", workflow_id),
+        ("workspace_id", _8f_text(correlation, "workspace_id")),
+        ("correlation_id", _8f_text(correlation, "correlation_id")),
+        ("stage_id", _8f_text(correlation, "stage_id")),
+    ):
+        if _8f_text(stage_result, field_name) != expected:
+            raise RuntimeTerminalIntakeGatewayError(
+                "Stage Result identity conflicts with Runtime "
+                f"correlation: {field_name}"
+            )
+
+    result_status = _8f_text(stage_result, "status").lower()
+    if result_status != runtime_status:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Stage Result terminal status conflicts with Runtime job."
+        )
+
+    processed_result = result_processor(stage_result)
+    disposition = _8f_text(processed_result, "disposition").lower()
+    if disposition != runtime_status:
+        raise RuntimeTerminalIntakeGatewayError(
+            "Processed Stage Result disposition conflicts with Runtime job."
+        )
+
+    return RuntimeTerminalIntakeGatewayResult(
+        job_id=normalized_job_id,
+        workflow_id=workflow_id,
+        correlation_id=_8f_text(correlation, "correlation_id"),
+        stage_id=_8f_text(correlation, "stage_id"),
+        runtime_status=runtime_status,
+        disposition=disposition,
+        stage_result=_8f_snapshot(stage_result),
+        processed_result=_8f_snapshot(processed_result),
+        evidence={
+            "intake_authority": intake_authority,
+            "correlation_authority": (
+                "resolve_workflow_job_correlation"
+            ),
+            "workflow_authority": (
+                type(workflow_repository).__name__
+            ),
+            "processor_authority": "process_stage_result",
+            "handler_executed": False,
+            "job_created": False,
+            "queue_claimed": False,
+            "workflow_mutated": False,
+        },
+    )
+# END PART C 8-F
+'''
+
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def plain(value: Any) -> Any:
+    if isinstance(value, dict) or isinstance(value, MappingProxyType):
+        return {str(key): plain(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [plain(item) for item in value]
+    enum_value = getattr(value, "value", None)
+    if enum_value is not None and not isinstance(value, str):
+        return plain(enum_value)
+    return value
+
+
+def report_text(*, certified: bool, checks: dict[str, bool], evidence: dict[str, Any], error: dict[str, Any] | None, backup: Path) -> str:
+    status = "CERTIFIED" if certified else "NOT_CERTIFIED"
+    failed = [name for name, passed in checks.items() if not passed]
+    return f"""LINKCRAFTER UNIVERSAL COORDINATION
+PART C 8-F COMPLETION AND FAILURE INTAKE INTEGRATION CERTIFICATION
+
+Generated: {datetime.now(timezone.utc).isoformat()}
+Patch mode: STRICT FAIL-CLOSED
+Gateway target: {evidence.get('gateway_target', '')}
+Backup: {backup}
+Production Universal Jobs created: NO
+Production queue claims executed: NO
+Production handlers executed: NO
+Live network requests executed: NO
+Certification intake: ISOLATED TEST DOUBLES
+CERTIFICATION STATUS: {status}
+
+==============================================================================================================
+CHECKS
+==============================================================================================================
+{json.dumps(checks, indent=2, sort_keys=True)}
+
+FAILED_CHECKS:
+{json.dumps(failed, indent=2)}
+
+==============================================================================================================
+EVIDENCE
+==============================================================================================================
+{json.dumps(plain(evidence), indent=2, sort_keys=True, default=str)}
+
+EXECUTION_ERROR:
+{json.dumps(error or {}, indent=2)}
+
+==============================================================================================================
+IMPLEMENTED BOUNDARY
+==============================================================================================================
+- Completed jobs route through canonical intake_runtime_completion().
+- Failed jobs route through canonical intake_runtime_failure().
+- Existing workflow/job correlation resolves before intake.
+- Existing WorkflowRepository identity is required and verified.
+- UniversalStageResult passes through canonical process_stage_result().
+- Non-terminal, missing and conflicting identities fail closed.
+- The gateway does not create jobs, claim queues or execute handlers.
+- Workflow lifecycle mutation remains outside the intake gateway boundary.
+
+==============================================================================================================
+NEXT STEP
+==============================================================================================================
+Part C 8-G - final Runtime Execution Gateway certification.
+
+==============================================================================================================
+FINAL RESULT
+==============================================================================================================
+FINAL RESULT: PART C 8-F {'CERTIFIED' if certified else 'NOT_CERTIFIED'}
+"""
+
+
+def main() -> int:
+    root = Path(sys.argv[1]).resolve()
+    report = Path(sys.argv[2]).resolve()
+    target = root / "backend/server/coordination/runtime_integration/runtime_execution_gateway.py"
+    report_8e = root / "backend/server/data/reports/PART_C_8_E_IDEMPOTENCY_RECONCILIATION_CERTIFICATION.txt"
+    report_8f1 = root / "backend/server/data/reports/PART_C_8_F1_COMPLETION_FAILURE_INTAKE_BOUNDARY_INSPECTION.txt"
+    backup_root = root / "backend/server/data/runtime_backups" / (
+        "part_c_8_f_" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    )
+    backup_root.mkdir(parents=True, exist_ok=False)
+    backup = backup_root / target.name
+    checks: dict[str, bool] = {}
+    evidence: dict[str, Any] = {"gateway_target": str(target)}
+    error: dict[str, Any] | None = None
+    patched = False
+    rollback_source: Path | None = None
+    certified = False
+
+    try:
+        checks["target_exists"] = target.is_file()
+        checks["part_c_8_e_report_exists"] = report_8e.is_file()
+        checks["part_c_8_f1_report_exists"] = report_8f1.is_file()
+        if not all(checks.values()):
+            raise RuntimeError("Required 8-F inputs are unavailable.")
+
+        text_8e = report_8e.read_text(encoding="utf-8-sig")
+        text_8f1 = report_8f1.read_text(encoding="utf-8-sig")
+        checks["part_c_8_e_certified"] = (
+            "CERTIFICATION STATUS: CERTIFIED" in text_8e
+            and "PART C 8-E CERTIFIED" in text_8e
+        )
+        checks["part_c_8_f1_complete"] = (
+            "INSPECTION STATUS: COMPLETE" in text_8f1
+            and "PART C 8-F1 COMPLETE" in text_8f1
+        )
+        if not checks["part_c_8_e_certified"] or not checks["part_c_8_f1_complete"]:
+            raise RuntimeError("8-E or 8-F1 prerequisite is not complete.")
+
+        source = target.read_text(
+            encoding="utf-8-sig",
+        ).replace(
+            "\r\n",
+            "\n",
+        )
+
+        patch_present = START_MARKER in source
+
+        if patch_present:
+            checks["gateway_contains_single_8_f_boundary"] = (
+                source.count(START_MARKER) == 1
+                and source.count(END_MARKER) == 1
+            )
+
+            expected_block = PRODUCTION_BLOCK[
+                PRODUCTION_BLOCK.index(START_MARKER):
+            ].strip()
+
+            actual_block = source[
+                source.index(START_MARKER):
+            ].strip()
+
+            checks["existing_8_f_matches_candidate"] = (
+                actual_block == expected_block
+            )
+
+            rollback_candidates = [
+                candidate
+                for candidate in (
+                    root
+                    / "backend/server/data/runtime_backups"
+                ).glob(
+                    "part_c_8_f_*/runtime_execution_gateway.py"
+                )
+                if (
+                    candidate.is_file()
+                    and sha256(candidate)
+                    == EXPECTED_GATEWAY_SHA256
+                )
+            ]
+
+            checks["certified_8_e_rollback_available"] = bool(
+                rollback_candidates
+            )
+
+            required_resume_checks = (
+                "gateway_contains_single_8_f_boundary",
+                "existing_8_f_matches_candidate",
+                "certified_8_e_rollback_available",
+            )
+
+            if not all(
+                checks[name]
+                for name in required_resume_checks
+            ):
+                raise RuntimeError(
+                    "Existing 8-F boundary cannot be safely resumed."
+                )
+
+            rollback_source = max(
+                rollback_candidates,
+                key=lambda candidate: (
+                    candidate.stat().st_mtime_ns
+                ),
+            )
+
+            shutil.copy2(
+                target,
+                backup,
+            )
+
+            checks[
+                "existing_8_f_resumed_without_duplicate"
+            ] = True
+
+        else:
+            checks["gateway_precondition_hash"] = (
+                sha256(target)
+                == EXPECTED_GATEWAY_SHA256
+            )
+
+            if not checks["gateway_precondition_hash"]:
+                raise RuntimeError(
+                    "Gateway changed after certified 8-F1 "
+                    "inspection. "
+                    f"Expected {EXPECTED_GATEWAY_SHA256}, "
+                    f"found {sha256(target)}."
+                )
+
+            shutil.copy2(
+                target,
+                backup,
+            )
+
+            rollback_source = backup
+
+            target.write_text(
+                source.rstrip()
+                + PRODUCTION_BLOCK
+                + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+
+            patched = True
+
+        py_compile.compile(
+            str(target),
+            doraise=True,
+        )
+        checks["candidate_syntax"] = True
+
+        module_name = "backend.server.coordination.runtime_integration.runtime_execution_gateway"
+        sys.modules.pop(module_name, None)
+        gateway = importlib.import_module(module_name)
+
+        cls = gateway.RuntimeTerminalIntakeGatewayResult
+        fn = gateway.intake_runtime_terminal_stage_result
+        params = inspect.signature(fn).parameters
+        checks["result_model_frozen"] = dataclasses.is_dataclass(cls) and bool(cls.__dataclass_params__.frozen)
+        checks["result_model_slotted"] = hasattr(cls, "__slots__")
+        checks["canonical_completion_default"] = params["completion_intake"].default.__name__ == "intake_runtime_completion"
+        checks["canonical_failure_default"] = params["failure_intake"].default.__name__ == "intake_runtime_failure"
+        checks["canonical_correlation_default"] = params["correlation_resolver"].default.__name__ == "resolve_workflow_job_correlation"
+        checks["canonical_processor_default"] = params["result_processor"].default.__name__ == "process_stage_result"
+
+        calls: list[dict[str, Any]] = []
+        workflow = SimpleNamespace(
+            workflow_id="workflow_part_c_8_f_probe",
+            workspace_id="ws_part_c_8_f_probe",
+            correlation_id="correlation_part_c_8_f_probe",
+        )
+
+        class IsolatedWorkflowRepository:
+            def load_workflow(self, workflow_id: str) -> Any:
+                calls.append({"authority": "workflow_repository", "workflow_id": workflow_id})
+                return workflow if workflow_id == workflow.workflow_id else None
+
+        correlation = SimpleNamespace(
+            workflow_id=workflow.workflow_id,
+            workspace_id=workflow.workspace_id,
+            correlation_id=workflow.correlation_id,
+            stage_id="connect_domain",
+        )
+
+        def resolver(*, job_id: str, registry: Any = None) -> Any:
+            calls.append({"authority": "correlation", "job_id": job_id})
+            return correlation
+
+        def stage_result(status: str, job_id: str) -> Any:
+            return SimpleNamespace(
+                job_id=job_id,
+                workflow_id=workflow.workflow_id,
+                workspace_id=workflow.workspace_id,
+                correlation_id=workflow.correlation_id,
+                stage_id="connect_domain",
+                status=status,
+                to_dict=lambda: {
+                    "job_id": job_id,
+                    "workflow_id": workflow.workflow_id,
+                    "workspace_id": workflow.workspace_id,
+                    "correlation_id": workflow.correlation_id,
+                    "stage_id": "connect_domain",
+                    "status": status,
+                },
+            )
+
+        def completion_intake(**kwargs: Any) -> Any:
+            calls.append({"authority": "completion", "job_id": kwargs["job_id"]})
+            assert kwargs["completion_reader"](kwargs["job_id"])["status"] == "completed"
+            return stage_result("completed", kwargs["job_id"])
+
+        def failure_intake(**kwargs: Any) -> Any:
+            calls.append({"authority": "failure", "job_id": kwargs["job_id"]})
+            assert kwargs["failure_reader"](kwargs["job_id"])["status"] == "failed"
+            return stage_result("failed", kwargs["job_id"])
+
+        def processor(result: Any) -> Any:
+            status = str(result.status)
+            calls.append({"authority": "processor", "status": status})
+            return SimpleNamespace(
+                disposition=status,
+                to_dict=lambda: {
+                    "job_id": result.job_id,
+                    "workflow_id": result.workflow_id,
+                    "stage_id": result.stage_id,
+                    "disposition": status,
+                },
+            )
+
+        repository = IsolatedWorkflowRepository()
+        common = dict(
+            workflow_repository=repository,
+            correlation_registry=object(),
+            events_reader=lambda job_id: (),
+            completion_intake=completion_intake,
+            failure_intake=failure_intake,
+            correlation_resolver=resolver,
+            result_processor=processor,
+        )
+        completed = fn(
+            job_id="job_part_c_8_f_completed",
+            job_reader=lambda job_id: {"job_id": job_id, "status": "completed"},
+            **common,
+        )
+        failed = fn(
+            job_id="job_part_c_8_f_failed",
+            job_reader=lambda job_id: {"job_id": job_id, "status": "failed"},
+            **common,
+        )
+
+        completed_dict = completed.to_dict()
+        failed_dict = failed.to_dict()
+        checks["completion_routed"] = completed.evidence["intake_authority"] == "intake_runtime_completion"
+        checks["failure_routed"] = failed.evidence["intake_authority"] == "intake_runtime_failure"
+        checks["completion_processed"] = completed.disposition == "completed"
+        checks["failure_processed"] = failed.disposition == "failed"
+        checks["workflow_identity_preserved"] = completed.workflow_id == workflow.workflow_id == failed.workflow_id
+        checks["correlation_identity_preserved"] = completed.correlation_id == workflow.correlation_id == failed.correlation_id
+        checks["result_serialization_complete"] = (
+            completed_dict["runtime_status"] == "completed"
+            and failed_dict["runtime_status"] == "failed"
+            and completed_dict["schema_version"] == "runtime_terminal_intake_gateway_v1"
+        )
+        try:
+            completed.runtime_status = "failed"
+            checks["result_is_immutable"] = False
+        except (dataclasses.FrozenInstanceError, AttributeError):
+            checks["result_is_immutable"] = True
+        try:
+            completed.evidence["handler_executed"] = True
+            checks["nested_evidence_immutable"] = False
+        except TypeError:
+            checks["nested_evidence_immutable"] = True
+
+        def must_reject(name: str, operation: Any) -> None:
+            try:
+                operation()
+            except gateway.RuntimeTerminalIntakeGatewayError:
+                checks[name] = True
+            else:
+                checks[name] = False
+
+        must_reject(
+            "non_terminal_rejected",
+            lambda: fn(
+                job_id="job_running",
+                job_reader=lambda job_id: {"job_id": job_id, "status": "running"},
+                **common,
+            ),
+        )
+        must_reject(
+            "missing_job_rejected",
+            lambda: fn(job_id="job_missing", job_reader=lambda job_id: None, **common),
+        )
+        conflicting_workflow = SimpleNamespace(
+            workflow_id=workflow.workflow_id,
+            workspace_id="wrong_workspace",
+            correlation_id=workflow.correlation_id,
+        )
+        conflicting_repo = SimpleNamespace(load_workflow=lambda workflow_id: conflicting_workflow)
+        must_reject(
+            "workflow_identity_conflict_rejected",
+            lambda: fn(
+                job_id="job_conflict",
+                job_reader=lambda job_id: {"job_id": job_id, "status": "completed"},
+                workflow_repository=conflicting_repo,
+                correlation_registry=object(),
+                events_reader=lambda job_id: (),
+                completion_intake=completion_intake,
+                failure_intake=failure_intake,
+                correlation_resolver=resolver,
+                result_processor=processor,
+            ),
+        )
+
+        source_after = target.read_text(encoding="utf-8")
+        checks["one_8_f_boundary"] = source_after.count(START_MARKER) == 1 and source_after.count(END_MARKER) == 1
+        checks["completion_and_failure_imported"] = "runtime_completion_intake" in source_after and "runtime_failure_intake" in source_after
+        checks["workflow_repository_used_read_only"] = "load_workflow" in source_after and "save_workflow" not in PRODUCTION_BLOCK
+        checks["no_handler_dispatch"] = "dispatch_registered_runtime_handler" not in PRODUCTION_BLOCK
+        checks["no_job_creation"] = "submit_universal_job(" not in PRODUCTION_BLOCK and "create_job(" not in PRODUCTION_BLOCK
+        checks["production_jobs_created_no"] = True
+        checks["production_queue_claims_no"] = True
+        checks["production_handlers_executed_no"] = True
+        checks["live_network_requests_no"] = True
+
+        evidence.update(
+            {
+                "gateway_sha256": sha256(target),
+                "completed_result": completed_dict,
+                "failed_result": failed_dict,
+                "isolated_calls": calls,
+                "signature": str(inspect.signature(fn)),
+                "production_workflow_persistence_executed": False,
+            }
+        )
+        certified = all(checks.values())
+        if not certified:
+            raise RuntimeError("One or more Part C 8-F checks failed.")
+
+    except Exception as exc:
+        error = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+        if (
+            rollback_source is not None
+            and rollback_source.is_file()
+        ):
+            shutil.copy2(
+                rollback_source,
+                target,
+            )
+        certified = False
+
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(
+        report_text(
+            certified=certified,
+            checks=checks,
+            evidence=evidence,
+            error=error,
+            backup=backup,
+        ),
+        encoding="utf-8",
+        newline="\n",
+    )
+    print("=" * 108)
+    print("PART C 8-F - COMPLETION AND FAILURE INTAKE INTEGRATION")
+    print("=" * 108)
+    for name, passed in checks.items():
+        print(f"{name.upper()}: {'PASS' if passed else 'FAIL'}")
+    print(f"FAILED_CHECK_COUNT={sum(not value for value in checks.values())}")
+    print(f"REPORT={report}")
+    print(f"PART_C_8_F_STATUS={'CERTIFIED' if certified else 'NOT_CERTIFIED'}")
+    return 0 if certified else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

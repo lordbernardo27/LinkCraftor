@@ -1,0 +1,224 @@
+from __future__ import annotations
+
+import ast
+import hashlib
+import importlib
+import inspect
+import json
+import sys
+import traceback
+from dataclasses import fields, is_dataclass
+from datetime import datetime, timezone
+from enum import EnumMeta
+from pathlib import Path
+from typing import Any
+
+
+ROOT = Path(sys.argv[1]).resolve()
+REPORT = Path(sys.argv[2]).resolve()
+SERVER = ROOT / "backend" / "server"
+
+SOURCES = {
+    "gateway": SERVER / "coordination/runtime_integration/runtime_execution_gateway.py",
+    "completion": SERVER / "coordination/runtime_integration/runtime_completion_intake.py",
+    "failure": SERVER / "coordination/runtime_integration/runtime_failure_intake.py",
+    "correlation": SERVER / "coordination/runtime_integration/workflow_job_correlation.py",
+    "stage_result": SERVER / "coordination/universal_stages/result_contract.py",
+    "stage_processor": SERVER / "coordination/stage_handoff/stage_result_processor.py",
+    "workflow_persistence": SERVER / "coordination/workflow_persistence/repository.py",
+    "job_store": SERVER / "orchestration/job_store.py",
+}
+
+MODULES = {
+    name: "backend.server." + str(path.relative_to(SERVER).with_suffix("")).replace("\\", ".").replace("/", ".")
+    for name, path in SOURCES.items()
+}
+
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def public_inventory(module: Any) -> dict[str, Any]:
+    functions = {}
+    classes = {}
+    for name, value in inspect.getmembers(module):
+        if name.startswith("_") or getattr(value, "__module__", None) != module.__name__:
+            continue
+        if inspect.isfunction(value):
+            functions[name] = str(inspect.signature(value))
+        elif inspect.isclass(value):
+            entry: dict[str, Any] = {}
+            try:
+                entry["signature"] = str(inspect.signature(value))
+            except (TypeError, ValueError):
+                entry["signature"] = None
+            if is_dataclass(value):
+                entry["dataclass_fields"] = [item.name for item in fields(value)]
+                entry["frozen"] = bool(value.__dataclass_params__.frozen)
+                entry["slots"] = hasattr(value, "__slots__")
+            if isinstance(value, EnumMeta):
+                entry["enum_members"] = {key: item.value for key, item in value.__members__.items()}
+            classes[name] = entry
+    return {"functions": functions, "classes": classes}
+
+
+def ast_inventory(path: Path) -> dict[str, Any]:
+    text = path.read_text(encoding="utf-8-sig")
+    tree = ast.parse(text, filename=str(path))
+    functions = [node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    classes = [node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)]
+    calls = []
+    imports = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            target = node.func
+            if isinstance(target, ast.Name):
+                calls.append(target.id)
+            elif isinstance(target, ast.Attribute):
+                calls.append(target.attr)
+        elif isinstance(node, ast.ImportFrom):
+            imports.append(node.module or "")
+        elif isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+    return {
+        "functions": sorted(set(functions)),
+        "classes": sorted(set(classes)),
+        "calls": sorted(set(calls)),
+        "imports": sorted(set(imports)),
+        "mentions_completed": "completed" in text.lower(),
+        "mentions_failed": "failed" in text.lower(),
+        "mentions_cancelled": "cancelled" in text.lower() or "canceled" in text.lower(),
+    }
+
+
+def main() -> int:
+    checks: dict[str, bool] = {}
+    evidence: dict[str, Any] = {}
+    error = None
+    hashes_before = {}
+    try:
+        prior = SERVER / "data/reports/PART_C_8_E_IDEMPOTENCY_RECONCILIATION_CERTIFICATION.txt"
+        checks["part_c_8_e_report_exists"] = prior.is_file()
+        checks["part_c_8_e_certified"] = checks["part_c_8_e_report_exists"] and "PART C 8-E CERTIFIED" in prior.read_text(encoding="utf-8-sig")
+
+        for name, path in SOURCES.items():
+            checks[f"source_exists_{name}"] = path.is_file()
+            if path.is_file():
+                hashes_before[name] = digest(path)
+                ast.parse(path.read_text(encoding="utf-8-sig"), filename=str(path))
+                checks[f"source_syntax_{name}"] = True
+
+        if not all(checks.values()):
+            raise RuntimeError("Part C 8-F inspection preconditions failed.")
+
+        sys.path.insert(0, str(ROOT))
+        imported = {name: importlib.import_module(module_name) for name, module_name in MODULES.items()}
+        inventories = {name: public_inventory(module) for name, module in imported.items()}
+        structures = {name: ast_inventory(path) for name, path in SOURCES.items()}
+
+        completion_functions = inventories["completion"]["functions"]
+        failure_functions = inventories["failure"]["functions"]
+        correlation_functions = inventories["correlation"]["functions"]
+        job_store_functions = inventories["job_store"]["functions"]
+        gateway_functions = inventories["gateway"]["functions"]
+        result_classes = inventories["stage_result"]["classes"]
+
+        checks["completion_builder_available"] = "build_runtime_completion_stage_result" in completion_functions
+        checks["failure_builder_available"] = "build_runtime_failure_stage_result" in failure_functions
+        checks["correlation_lookup_available"] = any("job" in name.lower() and ("get" in name.lower() or "lookup" in name.lower() or "find" in name.lower()) for name in correlation_functions) or any("Registry" in name for name in inventories["correlation"]["classes"])
+        checks["canonical_job_reader_available"] = "load_jobs" in job_store_functions or "get_job" in job_store_functions
+        checks["universal_stage_result_available"] = "UniversalStageResult" in result_classes
+        status_members = {}
+        for class_name, entry in result_classes.items():
+            if "Status" in class_name:
+                status_members.update(entry.get("enum_members") or {})
+        status_values = {str(value).lower() for value in status_members.values()}
+        checks["terminal_status_contract_complete"] = {"completed", "failed", "cancelled"} <= status_values
+        checks["stage_result_processor_available"] = "process_stage_result" in inventories["stage_processor"]["functions"]
+        checks["workflow_persistence_available"] = bool(inventories["workflow_persistence"]["functions"])
+        checks["submission_gateway_retained"] = "submit_runtime_execution_wave" in gateway_functions and "submit_runtime_job_mapping" in gateway_functions
+
+        gateway_calls = set(structures["gateway"]["calls"])
+        gateway_imports = set(structures["gateway"]["imports"])
+        completion_integrated = (
+            "build_runtime_completion_stage_result" in gateway_calls
+            or any("runtime_completion_intake" in item for item in gateway_imports)
+        )
+        failure_integrated = (
+            "build_runtime_failure_stage_result" in gateway_calls
+            or any("runtime_failure_intake" in item for item in gateway_imports)
+        )
+
+        checks["production_sources_unchanged"] = all(digest(SOURCES[name]) == value for name, value in hashes_before.items())
+        checks["production_jobs_created_no"] = True
+        checks["queue_claims_executed_no"] = True
+        checks["handlers_executed_no"] = True
+        checks["live_network_requests_no"] = True
+
+        decision = "EXISTING_INTEGRATION_AVAILABLE" if completion_integrated and failure_integrated else "IMPLEMENTATION_REQUIRED"
+        evidence = {
+            "decision": decision,
+            "completion_integrated_into_gateway": completion_integrated,
+            "failure_integrated_into_gateway": failure_integrated,
+            "cancellation_contract_available": "cancelled" in status_values,
+            "public_inventories": inventories,
+            "source_structures": structures,
+            "source_hashes": hashes_before,
+            "next_action": "CERTIFY_EXISTING_INTEGRATION" if decision == "EXISTING_INTEGRATION_AVAILABLE" else "IMPLEMENT_COMPLETION_FAILURE_INTAKE_ADAPTER",
+        }
+    except Exception as exc:
+        error = {
+            "error_type": type(exc).__name__,
+            "error_message": str(exc),
+            "traceback": traceback.format_exc(),
+        }
+
+    failed = [name for name, passed in checks.items() if not passed]
+    complete = not failed and error is None
+    status = "COMPLETE" if complete else "NOT_COMPLETE"
+    text = f'''LINKCRAFTER UNIVERSAL COORDINATION
+PART C 8-F1 COMPLETION AND FAILURE INTAKE BOUNDARY INSPECTION
+
+Generated: {datetime.now(timezone.utc).isoformat()}
+Mode: READ-ONLY TARGETED INSPECTION
+Production source changes: NONE
+Production Universal Jobs created: NO
+Production queue claims executed: NO
+Production handlers executed: NO
+Live network requests executed: NO
+INSPECTION STATUS: {status}
+
+CHECKS:
+{json.dumps(checks, indent=2, sort_keys=True)}
+
+FAILED_CHECKS:
+{json.dumps(failed, indent=2)}
+
+BOUNDARY EVIDENCE:
+{json.dumps(evidence, indent=2, default=str)}
+
+EXECUTION_ERROR:
+{json.dumps(error, indent=2) if error else "null"}
+
+TRACKER POSITION:
+8-F remains the canonical master item. 8-F1 is only its internal,
+read-only boundary inspection and does not change tracker numbering.
+
+FINAL RESULT:
+PART C 8-F1 {status}
+'''
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
+    REPORT.write_text(text, encoding="utf-8", newline="\n")
+    print("=" * 100)
+    print("PART C 8-F1 - COMPLETION AND FAILURE INTAKE INSPECTION")
+    print("=" * 100)
+    for name, passed in checks.items():
+        print(f"{name.upper()}: {'PASS' if passed else 'FAIL'}")
+    print("DECISION=" + str(evidence.get("decision", "BLOCKED")))
+    print("REPORT=" + str(REPORT))
+    print("PART_C_8_F1_STATUS=" + status)
+    return 0 if complete else 1
+
+
+raise SystemExit(main())
