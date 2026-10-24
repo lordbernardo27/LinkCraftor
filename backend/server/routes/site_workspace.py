@@ -1,4 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
+
+from fastapi import Request
 
 from typing import Any, Dict
 
@@ -28,23 +30,28 @@ class ConnectDomainRequest(BaseModel):
 @router.post("/connect_domain")
 def connect_domain(
     payload: ConnectDomainRequest,
+    request: Request,
 ) -> Dict[str, Any]:
-    """
-    Canonical Domain-mode workspace creation and Connect Domain entry point.
-
-    The complete modal identity is submitted atomically:
-    - workspace_name
-    - workspace_mode
-    - domain
-    - site_url
-    - optional existing workspace_id
-    """
-
-    return run_connect_domain(
+    """Submit one Connected Domain workflow through the canonical runtime."""
+    runtime_gateway = getattr(
+        request.app.state,
+        "runtime_coordination_gateway",
+        None,
+    )
+    if runtime_gateway is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Runtime Coordination Gateway is unavailable.",
+        )
+    from backend.server.pipelines.connect_domain.activation import (
+        activate_connected_domain_pipeline,
+    )
+    return activate_connected_domain_pipeline(
+        runtime_gateway=runtime_gateway,
         workspace_id=payload.workspace_id,
         workspace_name=payload.workspace_name,
-        workspace_mode=payload.workspace_mode,
         domain=payload.domain,
         site_url=payload.site_url,
         url=payload.url,
     )
+

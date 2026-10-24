@@ -481,15 +481,16 @@ class RuntimeCoordinationGateway:
 
 
 def register_runtime_coordination_gateway(
-    kernel: UniversalRuntimeKernel,
+    composition: Any,
     project_root: Path | str | None = None,
     **_: Any,
 ) -> RuntimeCoordinationGateway:
+    kernel = composition.kernel
     if kernel.has_component(RUNTIME_COORDINATION_GATEWAY_KEY):
         raise RuntimeCoordinationGatewayBindingError(
             "Runtime coordination gateway is already bound to the kernel."
         )
-    resolved_root = Path(project_root or Path.cwd()).resolve()
+    resolved_root = Path(project_root or composition.project_root).resolve()
     workflow_root = (
         resolved_root / "backend" / "server" / "data" / "coordination" / "workflows"
     )

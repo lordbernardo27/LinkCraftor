@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import tempfile
+import time
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -143,6 +144,41 @@ def _utc_now() -> str:
     return datetime.now(
         timezone.utc
     ).isoformat()
+
+
+
+
+_ATOMIC_REPLACE_MAX_ATTEMPTS = 20
+
+
+def _atomic_replace_with_windows_retry(
+    source: Path,
+    target: Path,
+) -> None:
+    """Atomically replace target, tolerating transient Windows file locks."""
+    for attempt in range(
+        _ATOMIC_REPLACE_MAX_ATTEMPTS
+    ):
+        try:
+            os.replace(
+                source,
+                target,
+            )
+            return
+        except PermissionError:
+            if (
+                os.name != "nt"
+                or attempt + 1
+                >= _ATOMIC_REPLACE_MAX_ATTEMPTS
+            ):
+                raise
+
+            time.sleep(
+                min(
+                    0.05 * (attempt + 1),
+                    0.25,
+                )
+            )
 
 
 class WorkflowRepository:
@@ -342,7 +378,7 @@ class WorkflowRepository:
                         stream.fileno()
                     )
 
-                os.replace(
+                _atomic_replace_with_windows_retry(
                     temporary,
                     target,
                 )

@@ -569,6 +569,14 @@ def run_one_universal_runtime_job_v1(
         )
     )
 
+    from backend.server.runtime.runtime_payload_hydration import (
+        hydrate_runtime_job_payload,
+    )
+
+    runtime_job = hydrate_runtime_job_payload(
+        runtime_job
+    )
+
     if runtime_job[
         "job_id"
     ] != job_id:
