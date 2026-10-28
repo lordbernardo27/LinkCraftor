@@ -46,7 +46,9 @@ def test_lifecycle_preserves_registrars_and_fails_closed():
         "register_runtime_registration_gateway",
         "register_runtime_coordination_gateway",
         "register_semantic_memory_certification_identity",
+        "register_semantic_memory_certification_workspace",
     ]
 
-    assert len(set(registrars)) == 4
-    assert registrars[-1] is register_semantic_memory_certification_identity
+    assert len(set(registrars)) == 5
+    assert registrars[-2] is register_semantic_memory_certification_identity
+    assert registrars[-1] is lifecycle.register_semantic_memory_certification_workspace

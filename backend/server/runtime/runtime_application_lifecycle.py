@@ -113,6 +113,9 @@ from backend.server.runtime.runtime_coordination_gateway import (
 from backend.server.runtime.semantic_memory_certification_identity_registration import register_semantic_memory_certification_identity
 
 
+from backend.server.runtime.semantic_memory_certification_workspace_registration import register_semantic_memory_certification_workspace
+
+
 @asynccontextmanager
 async def linkcraftor_runtime_lifespan(
     application: Any,
@@ -123,7 +126,7 @@ async def linkcraftor_runtime_lifespan(
     application.state.runtime_lifecycle_status = "BOOTING"
 
     try:
-        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway, register_runtime_registration_gateway, register_runtime_coordination_gateway, register_semantic_memory_certification_identity,))
+        boot_process, boot_context = await boot_runtime(project_root=_project_root(), service_registrars=(register_runtime_feature_flag_gateway, register_runtime_registration_gateway, register_runtime_coordination_gateway, register_semantic_memory_certification_identity, register_semantic_memory_certification_workspace,))
 
     except Exception as exc:
         application.state.runtime_lifecycle_status = (
