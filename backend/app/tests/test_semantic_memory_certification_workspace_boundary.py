@@ -1,0 +1,182 @@
+"""PT2C.2A ? Workspace certification security regressions."""
+
+import pytest
+
+from backend.server.engine.semantic_memory_certification_identity_boundary import (
+    ProvisionedCertificationIdentityBoundary,
+)
+from backend.server.engine.semantic_memory_certification_workspace_boundary import (
+    CertificationWorkspaceAccessDenied,
+    CertificationWorkspaceConfigurationError,
+    ProvisionedCertificationWorkspaceBoundary,
+)
+
+
+def identity_evidence():
+    return {
+        "principal_id": "test-principal-a",
+        "principal_type": "SERVICE",
+        "authentication_established": True,
+        "identity_authority": "synthetic-test-authority",
+        "authentication_reference": "synthetic-reference",
+    }
+
+
+def access_evidence():
+    return {
+        "principal_id": "test-principal-a",
+        "workspace_id": "ws_test_a",
+        "access_granted": True,
+        "authorization_source": "synthetic-test-policy",
+        "authorization_reference": "synthetic-policy-reference",
+    }
+
+
+_UNSET = object()
+
+
+def boundary(*, identity=None, access=_UNSET, resolver=None):
+    identity_boundary = ProvisionedCertificationIdentityBoundary(
+        identity_resolver=lambda _: (
+            identity_evidence() if identity is None else identity
+        )
+    )
+    if resolver is None:
+        resolver = lambda **_: (
+            access_evidence() if access is _UNSET else access
+        )
+    return ProvisionedCertificationWorkspaceBoundary(
+        identity_boundary=identity_boundary,
+        workspace_access_resolver=resolver,
+    )
+
+
+def evaluate(instance, workspace_id="ws_test_a"):
+    return instance.evaluate(
+        request_lookup="synthetic-request",
+        workspace_id=workspace_id,
+    )
+
+
+def test_matching_synthetic_evidence():
+    result = evaluate(boundary())
+    assert result["principal_id"] == "test-principal-a"
+    assert result["workspace_id"] == "ws_test_a"
+    assert result["access_granted"] is True
+
+
+@pytest.mark.parametrize(
+    "workspace_id",
+    ["", " ", " ws_test_a", "ws_test_a ", None, 123],
+)
+def test_invalid_workspace_rejected(workspace_id):
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(boundary(), workspace_id)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("principal_id", "another-principal"),
+        ("workspace_id", "ws_test_b"),
+        ("access_granted", False),
+        ("access_granted", 1),
+        ("authorization_source", ""),
+        ("authorization_reference", " "),
+    ],
+)
+def test_access_mismatch_rejected(field, value):
+    evidence = access_evidence()
+    evidence[field] = value
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(boundary(access=evidence))
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [None, {}, [], "granted"],
+)
+def test_missing_access_evidence_rejected(evidence):
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(boundary(access=evidence))
+
+
+def test_extra_access_claim_rejected():
+    evidence = access_evidence()
+    evidence["unrestricted_scope"] = True
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(boundary(access=evidence))
+
+
+def test_unverified_identity_rejected_before_access_resolution():
+    evidence = identity_evidence()
+    evidence["authentication_established"] = False
+    called = []
+
+    def access_resolver(**kwargs):
+        called.append(kwargs)
+        return access_evidence()
+
+    instance = boundary(identity=evidence, resolver=access_resolver)
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(instance)
+    assert called == []
+
+
+def test_resolver_failure_denied():
+    def broken_resolver(**_):
+        raise RuntimeError("synthetic authority unavailable")
+
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(boundary(resolver=broken_resolver))
+
+
+def test_result_is_immutable():
+    result = evaluate(boundary())
+    with pytest.raises(TypeError):
+        result["workspace_id"] = "ws_test_b"
+
+
+def test_missing_identity_boundary_rejected():
+    with pytest.raises(CertificationWorkspaceConfigurationError):
+        ProvisionedCertificationWorkspaceBoundary(
+            identity_boundary=None,
+            workspace_access_resolver=lambda **_: access_evidence(),
+        )
+
+
+def test_missing_workspace_resolver_rejected():
+    identity_boundary = ProvisionedCertificationIdentityBoundary(
+        identity_resolver=lambda _: identity_evidence()
+    )
+    with pytest.raises(CertificationWorkspaceConfigurationError):
+        ProvisionedCertificationWorkspaceBoundary(
+            identity_boundary=identity_boundary,
+            workspace_access_resolver=None,
+        )
+
+
+def test_real_fail_closed_identity_boundary_denies_workspace():
+    from backend.server.runtime.semantic_memory_certification_identity_registration import (
+        register_semantic_memory_certification_identity,
+    )
+    from backend.server.runtime.universal_runtime_kernel import (
+        UniversalRuntimeKernel,
+    )
+    from types import SimpleNamespace
+
+    composition = SimpleNamespace(
+        kernel=UniversalRuntimeKernel(
+            runtime_id="workspace-security-test",
+            product_name="LinkCraftor",
+        )
+    )
+    identity = register_semantic_memory_certification_identity(
+        composition
+    )
+    instance = ProvisionedCertificationWorkspaceBoundary(
+        identity_boundary=identity,
+        workspace_access_resolver=lambda **_: access_evidence(),
+    )
+    with pytest.raises(CertificationWorkspaceAccessDenied):
+        evaluate(instance)
