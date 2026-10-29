@@ -151,3 +151,58 @@ from .security_phase2_certification import (
     SecurityPhase2Certification,
     get_security_phase2_certification,
 )
+
+from .security_hardware_asset_registry import (
+    SecurityHardwareAssetRegistry,
+    get_security_hardware_asset_registry,
+)
+
+from .security_software_asset_registry import (
+    SecuritySoftwareAssetRegistry,
+    get_security_software_asset_registry,
+)
+
+from .security_cloud_resource_registry import (
+    SecurityCloudResourceRegistry,
+    get_security_cloud_resource_registry,
+)
+
+from .security_application_registry import (
+    SecurityApplicationRegistry,
+    get_security_application_registry,
+)
+
+from .security_service_inventory_bridge import (
+    SecurityServiceInventoryBridge,
+    get_security_service_inventory_bridge,
+)
+
+from .security_api_inventory_bridge import (
+    SecurityApiInventoryBridge,
+    get_security_api_inventory_bridge,
+)
+
+from .security_data_asset_inventory_bridge import (
+    SecurityDataAssetInventoryBridge,
+    get_security_data_asset_inventory_bridge,
+)
+
+from .security_identity_inventory_bridge import (
+    SecurityIdentityInventoryBridge,
+    get_security_identity_inventory_bridge,
+)
+
+from .security_domain_inventory_bridge import (
+    SecurityDomainInventoryBridge,
+    get_security_domain_inventory_bridge,
+)
+
+from .security_certificate_inventory import (
+    SecurityCertificateInventory,
+    get_security_certificate_inventory,
+)
+
+from .security_third_party_inventory import (
+    SecurityThirdPartyInventory,
+    get_security_third_party_inventory,
+)

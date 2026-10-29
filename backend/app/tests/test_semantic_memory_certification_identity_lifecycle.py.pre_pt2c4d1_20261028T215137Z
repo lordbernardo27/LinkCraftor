@@ -1,0 +1,53 @@
+"""PT2B.4F ? Permanent, non-booting lifecycle security regression."""
+
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from backend.server.runtime import runtime_application_lifecycle as lifecycle
+from backend.server.runtime.semantic_memory_certification_identity_registration import (
+    register_semantic_memory_certification_identity,
+)
+
+
+class ControlledBootStop(Exception):
+    pass
+
+
+def test_lifecycle_preserves_registrars_and_fails_closed():
+    captured = {}
+
+    async def intercept_boot_runtime(**kwargs):
+        captured.update(kwargs)
+        raise ControlledBootStop("Synthetic boot interception")
+
+    async def check():
+        application = SimpleNamespace(state=SimpleNamespace())
+
+        with patch.object(
+            lifecycle, "boot_runtime", new=intercept_boot_runtime
+        ):
+            try:
+                async with lifecycle.linkcraftor_runtime_lifespan(application):
+                    raise AssertionError("Unexpected successful boot")
+            except ControlledBootStop:
+                pass
+
+        assert application.state.runtime_lifecycle_status == "BOOT_FAILED"
+        assert application.state.runtime_boot_failure[
+            "error_type"
+        ] == "ControlledBootStop"
+
+    asyncio.run(check())
+
+    registrars = captured["service_registrars"]
+    assert [item.__name__ for item in registrars] == [
+        "register_runtime_feature_flag_gateway",
+        "register_runtime_registration_gateway",
+        "register_runtime_coordination_gateway",
+        "register_semantic_memory_certification_identity",
+        "register_semantic_memory_certification_workspace",
+    ]
+
+    assert len(set(registrars)) == 4
+    assert registrars[-1] is register_semantic_memory_certification_identity

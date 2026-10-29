@@ -1,4 +1,4 @@
-﻿"""
+"""
 Universal Runtime Owner Control Tower
 Phase 2.18 — Runtime Summary API
 
@@ -43,6 +43,12 @@ from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping
 
 from fastapi import APIRouter, HTTPException, Request
+
+from backend.server.owner.pipeline_operations import (
+    PipelineOperationsNotFoundError,
+    build_pipeline_operations_index,
+    build_pipeline_operations_snapshot,
+)
 
 from backend.server.owner.runtime_owner_architecture_registry import (
     runtime_owner_architecture_snapshot,
@@ -447,6 +453,88 @@ async def runtime_owner_summary(
         ) from exc
 
     return dict(summary)
+
+
+def _pipeline_operations_repository(request: Request) -> Any:
+    repository = getattr(
+        request.app.state,
+        "runtime_coordination_workflow_repository",
+        None,
+    )
+    if repository is None:
+        gateway = getattr(
+            request.app.state,
+            "runtime_coordination_gateway",
+            None,
+        )
+        repository = getattr(gateway, "workflow_repository", None)
+    if repository is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "runtime_pipeline_operations_repository_unavailable",
+                "message": "The canonical Runtime workflow repository is unavailable.",
+                "read_only": True,
+            },
+        )
+    return repository
+
+
+@router.get("/pipelines")
+async def runtime_pipeline_operations_index(
+    request: Request,
+) -> Mapping[str, Any]:
+    """List read-only operations summaries for every registered pipeline."""
+    try:
+        result = build_pipeline_operations_index(
+            workflow_repository=_pipeline_operations_repository(request),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "runtime_pipeline_operations_unavailable",
+                "message": str(exc),
+                "read_only": True,
+            },
+        ) from exc
+    return result.to_dict()
+
+
+@router.get("/pipelines/{pipeline_id}")
+async def runtime_pipeline_operations_detail(
+    pipeline_id: str,
+    request: Request,
+) -> Mapping[str, Any]:
+    """Read one registered pipeline's workflows, stages, jobs and evidence."""
+    try:
+        result = build_pipeline_operations_snapshot(
+            pipeline_id=pipeline_id,
+            workflow_repository=_pipeline_operations_repository(request),
+        )
+    except PipelineOperationsNotFoundError as exc:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error": "runtime_pipeline_not_found",
+                "message": str(exc),
+                "read_only": True,
+            },
+        ) from exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "runtime_pipeline_operations_unavailable",
+                "message": str(exc),
+                "read_only": True,
+            },
+        ) from exc
+    return result.to_dict()
 
 
 def certify_runtime_summary_api_v1(

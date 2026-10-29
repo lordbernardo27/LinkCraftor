@@ -113,18 +113,55 @@ def retrieve_semantic_memory_v1(
     memory_items: List[Dict[str, Any]],
     max_results: int = 25,
 ) -> Dict[str, Any]:
+    """Retrieve memory without discarding available source metadata.
+
+    Recall score is lexical retrieval relevance, not certification
+    or verified semantic confidence.
+    """
+    from copy import deepcopy
+
     q = _normalize(query)
     results = []
     seen = set()
 
+    metadata_fields = (
+        "canonical", "semantic_type", "aliases",
+        "confidence", "confidence_factors",
+        "source_count", "evidence_count",
+        "first_seen_at", "last_seen_at",
+        "source_feed_version", "stale",
+        "validity_status", "source_id",
+        "document_id", "provenance",
+    )
+
     for item in memory_items or []:
-        text = _safe_text(item.get("text") or item.get("phrase") or item.get("entity") if isinstance(item, dict) else item)
+        if isinstance(item, dict):
+            text = _safe_text(
+                item.get("text")
+                or item.get("phrase")
+                or item.get("entity")
+                or item.get("canonical")
+            )
+        else:
+            text = _safe_text(item)
+
         key = _normalize(text)
 
-        if not text or key in seen:
+        if not text:
             continue
 
-        seen.add(key)
+        # Distinct memory IDs may represent different meanings
+        # of the same canonical phrase.
+        raw_id = item.get("memory_id") if isinstance(item, dict) else None
+        if isinstance(raw_id, str) and raw_id.strip():
+            identity = ("memory_id", raw_id)
+        else:
+            identity = ("legacy_text", key)
+
+        if identity in seen:
+            continue
+
+        seen.add(identity)
 
         score = 0.0
         if q and q in key:
@@ -133,14 +170,28 @@ def retrieve_semantic_memory_v1(
             score += 0.35
 
         if score > 0:
-            results.append({
+            result = {
                 "text": text,
-                "memory_id": item.get("memory_id", key.replace(" ", "_")) if isinstance(item, dict) else key.replace(" ", "_"),
+                "memory_id": (
+                    item.get("memory_id", key.replace(" ", "_"))
+                    if isinstance(item, dict)
+                    else key.replace(" ", "_")
+                ),
                 "recall_score": round(score, 4),
                 "memory_role": "semantic_memory_retrieval",
-            })
+            }
 
-    results.sort(key=lambda x: x["recall_score"], reverse=True)
+            if isinstance(item, dict):
+                for field in metadata_fields:
+                    if field in item:
+                        result[field] = deepcopy(item[field])
+
+            results.append(result)
+
+    results.sort(
+        key=lambda x: x["recall_score"],
+        reverse=True,
+    )
 
     return _make_response(
         "1.12.3",
