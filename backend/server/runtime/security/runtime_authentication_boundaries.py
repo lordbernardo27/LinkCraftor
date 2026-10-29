@@ -1,4 +1,4 @@
-﻿"""
+"""
 LinkCraftor Universal Runtime Infrastructure
 Phase 7.1 — Runtime Authentication Boundaries
 
@@ -87,6 +87,7 @@ class RuntimeAuthenticationBoundary(str, Enum):
     CANCELLATION_OPERATION = "CANCELLATION_OPERATION"
     RUNTIME_ADMINISTRATION = "RUNTIME_ADMINISTRATION"
     INTERNAL_SERVICE_CALL = "INTERNAL_SERVICE_CALL"
+    SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ = "SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ"
 
 
 class AuthenticationRequirement(str, Enum):
@@ -263,6 +264,15 @@ class RuntimeAuthenticationBoundaryDecision:
 
 RUNTIME_AUTHENTICATION_BOUNDARY_POLICIES = MappingProxyType(
     {
+        RuntimeAuthenticationBoundary.SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ:
+            RuntimeAuthenticationBoundaryPolicy(
+                boundary=RuntimeAuthenticationBoundary.SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ,
+                requirement=AuthenticationRequirement.REQUIRED,
+                allowed_principal_types=(
+                    RuntimePrincipalType.USER,
+                ),
+            ),
+
         RuntimeAuthenticationBoundary.JOB_SUBMISSION:
             RuntimeAuthenticationBoundaryPolicy(
                 boundary=RuntimeAuthenticationBoundary.JOB_SUBMISSION,

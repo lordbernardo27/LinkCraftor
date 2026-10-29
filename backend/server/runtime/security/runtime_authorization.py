@@ -1,4 +1,4 @@
-﻿"""
+"""
 LinkCraftor Universal Runtime Infrastructure
 Phase 7.2 — Runtime Authorization
 
@@ -89,6 +89,7 @@ class RuntimeOperation(str, Enum):
     CANCEL_RUNTIME_WORK = "CANCEL_RUNTIME_WORK"
     ADMINISTER_RUNTIME = "ADMINISTER_RUNTIME"
     CALL_INTERNAL_SERVICE = "CALL_INTERNAL_SERVICE"
+    SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ = "SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ"
 
 
 class RuntimeAuthorizationDisposition(str, Enum):
@@ -232,6 +233,9 @@ class RuntimeAuthorizationDecision:
 
 BOUNDARY_OPERATION_MAP = MappingProxyType(
     {
+        RuntimeAuthenticationBoundary.SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ:
+            RuntimeOperation.SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ,
+
         RuntimeAuthenticationBoundary.JOB_SUBMISSION:
             RuntimeOperation.SUBMIT_JOB,
 
@@ -371,6 +375,13 @@ def evaluate_runtime_authorization(
             "evidence must be RuntimeAuthorizationEvidence.",
             code="invalid_runtime_authorization_evidence",
             value=evidence,
+        )
+
+    if request.operation is RuntimeOperation.SEMANTIC_MEMORY_CERTIFICATION_CONTEXT_READ:
+        return _deny(
+            request=request,
+            evidence=evidence,
+            reason_code="semantic_memory_production_authority_unavailable",
         )
 
     boundary_decision = (
