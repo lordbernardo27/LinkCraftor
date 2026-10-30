@@ -43,6 +43,12 @@ def enrich_canonical_concept_entities(package):
             continue
 
         status = graph.get("status")
+
+        # An unexecuted source has no concept_matches contract yet.
+        if status in ("not_executed", "pending"):
+            prepared.append(_result("not_executed"))
+            continue
+
         if status in {"unavailable", "error", "invalid", "stale"}:
             prepared.append(_result(status))
             continue
@@ -53,9 +59,12 @@ def enrich_canonical_concept_entities(package):
             continue
 
         if not matches:
-            prepared.append(
-                _result("no_evidence" if status == "no_evidence" else "invalid")
-            )
+            if status in ("not_executed", "pending"):
+                prepared.append(_result("not_executed"))
+            elif status == "no_evidence":
+                prepared.append(_result("no_evidence"))
+            else:
+                prepared.append(_result("invalid"))
             continue
 
         if status != "concept_evidence_found":

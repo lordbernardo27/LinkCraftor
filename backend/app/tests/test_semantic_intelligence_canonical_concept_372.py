@@ -157,3 +157,29 @@ def test_candidate_order_mismatch_denied():
     data["enriched_candidates"][0]["candidate_index"] = 2
     with pytest.raises(ValueError):
         enrich_canonical_concept_entities(data)
+
+
+def test_workspace_free_graph_not_executed_is_not_invalid():
+    data = make_package([], status="not_executed")
+    result = enrich_canonical_concept_entities(
+        data
+    )["enriched_candidates"][0]["canonical_concept_entity"]
+
+    assert result["status"] == "not_executed"
+    assert result["canonical_concept_id"] is None
+    assert result["identity_verified"] is False
+    assert result["automatic_concept_linking_blocked"] is True
+
+
+def test_workspace_free_real_enricher_preserves_not_executed():
+    output = enrich_selected_phrase_candidates(
+        selected_candidates=[{
+            "phrase": "high blood pressure",
+            "upstream_candidate_id": "alias_test_001",
+        }],
+        workspace_id=None,
+    )
+    identity = output["enriched_candidates"][0]["canonical_concept_entity"]
+
+    assert identity["status"] == "not_executed"
+    assert identity["certified"] is False
