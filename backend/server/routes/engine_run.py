@@ -796,6 +796,52 @@ def engine_run(payload: EngineRunRequest = Body(...)):
         ):
             raise RuntimeError("Unsafe advisory handoff result.")
 
+        # canonical_semantic_package_3114
+        # Phase 3.9 package validation is advisory only.
+        # Do not replace the Main Enricher output or run the Scorer.
+        from backend.server.engine.semantic_intelligence_package_39 import (
+            build_semantic_intelligence_package,
+        )
+
+        canonical_semantic_package = build_semantic_intelligence_package(
+            selected_candidates=copy.deepcopy(
+                canonical_selected_phrase_candidates
+            ),
+            enriched_candidates=copy.deepcopy(
+                enrichment_package["enriched_candidates"]
+            ),
+            evidence_registry=copy.deepcopy(
+                enrichment_package["evidence_registry"]
+            ),
+            sparse_candidate_retention=copy.deepcopy(
+                enrichment_package["sparse_candidate_retention"]
+            ),
+            sparse_scorer_advisory_handoff=copy.deepcopy(
+                enrichment_package["sparse_scorer_advisory_handoff"]
+            ),
+        )
+
+        if (
+            canonical_semantic_package.get("status")
+            != "package_envelope_created"
+            or canonical_semantic_package.get("candidate_count")
+            != len(canonical_selected_phrase_candidates)
+            or canonical_semantic_package.get(
+                "original_candidates_preserved"
+            ) is not True
+            or canonical_semantic_package.get("scorer_invoked") is not False
+            or canonical_semantic_package.get(
+                "semantic_certification_performed"
+            ) is not False
+            or canonical_semantic_package.get(
+                "automatic_linking_authorized"
+            ) is not False
+        ):
+            raise RuntimeError(
+                "Canonical Phase 3.9 package validation failed: "
+                + str(canonical_semantic_package.get("reason"))
+            )
+
         operational = enrichment_package.get("operational_health")
         if not isinstance(operational, dict):
             raise RuntimeError("Invalid operational health report.")
@@ -812,6 +858,10 @@ def engine_run(payload: EngineRunRequest = Body(...)):
                 operational.get("degraded_sources", [])
             ),
             "handoff_prepared": True,
+            "canonical_package_status": canonical_semantic_package["status"],
+            "canonical_package_schema_version": (
+                canonical_semantic_package["schema_version"]
+            ),
             "scorer_invoked": False,
             "linking_performed": False,
             "semantic_certification_performed": False,

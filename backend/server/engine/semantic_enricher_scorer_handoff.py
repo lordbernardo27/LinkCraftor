@@ -82,9 +82,15 @@ def prepare_original_scorer_handoff(
         if entry.get("original_candidate") != candidate:
             raise HandoffContractError("Original candidate mismatch")
 
+        # An upstream ID is optional. Never invent one.
+        # Canonical occurrence identity is anchored by the validated
+        # candidate index and the complete original candidate.
         candidate_id = entry.get("candidate_id")
-        if candidate_id is None:
-            raise HandoffContractError("Missing candidate identity")
+        upstream_id = candidate.get("upstream_candidate_id")
+        if candidate_id != upstream_id:
+            raise HandoffContractError(
+                "Candidate identity lineage mismatch"
+            )
 
         integrity = entry.get("evidence_certification")
         explanation = entry.get("explainability")
