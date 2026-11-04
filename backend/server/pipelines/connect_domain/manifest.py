@@ -294,8 +294,17 @@ def _stage_reference(
         job_type=job_type,
         runtime_stage=stage_id,
         required_payload_fields=tuple(
-            record.get("required_payload_fields")
-            or ()
+            field
+            for field in (
+                record.get("required_payload_fields")
+                or ()
+            )
+            if field not in {
+                "url_cleaner": {"source_urls"},
+                "site_pages": {"cleaner_records"},
+                "live_domain_target_pool": {"site_pages"},
+                "active_target_set": {"live_domain_payload"},
+            }.get(stage_id, set())
         ),
         metadata={
             "handler_ref": record.get("handler_ref"),

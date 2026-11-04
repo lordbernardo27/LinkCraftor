@@ -114,7 +114,10 @@ def _find_predecessor(
     candidates = [job_reader(job_id) for job_id in dependencies]
     candidates = [candidate for candidate in candidates if candidate is not None]
     matching = [candidate for candidate in candidates if _job_stage(candidate) == predecessor_stage]
-    if not matching:
+    # Explicit predecessor identities are authoritative.
+    # Workflow-stage discovery is permitted only for legacy jobs
+    # without declared dependency IDs.
+    if not matching and not dependencies:
         workflow_id = _workflow_id(job)
         loaded = jobs_reader()
         if not isinstance(loaded, Mapping):
@@ -132,6 +135,37 @@ def _find_predecessor(
             f"Expected one {predecessor_stage} predecessor job; found {len(matching)}."
         )
     predecessor = matching[0]
+
+    # A predecessor must belong to the same workspace and
+    # workflow as the job consuming its output.
+    requested_workspace = str(
+        _value(job, "workspace_id", "") or ""
+    ).strip()
+    predecessor_workspace = str(
+        _value(predecessor, "workspace_id", "") or ""
+    ).strip()
+
+    if (
+        not requested_workspace
+        or not predecessor_workspace
+        or predecessor_workspace != requested_workspace
+    ):
+        raise ConnectedDomainRuntimeHydrationError(
+            "Predecessor workspace identity mismatch."
+        )
+
+    requested_workflow = _workflow_id(job)
+    predecessor_workflow = _workflow_id(_plain(predecessor))
+
+    if (
+        not requested_workflow
+        or not predecessor_workflow
+        or predecessor_workflow != requested_workflow
+    ):
+        raise ConnectedDomainRuntimeHydrationError(
+            "Predecessor workflow identity mismatch."
+        )
+
     status = str(_value(predecessor, "status", "") or "").strip().lower()
     if status != "completed":
         raise ConnectedDomainRuntimeHydrationError(

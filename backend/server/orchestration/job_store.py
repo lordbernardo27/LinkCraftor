@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from dataclasses import asdict
@@ -20,6 +20,88 @@ DATA_DIR = Path("backend/server/data/orchestration")
 JOBS_FILE = DATA_DIR / "jobs.json"
 EVENTS_FILE = DATA_DIR / "job_events.json"
 
+# A3.2 - Shared orchestration persistence transaction boundary.
+import os as _store_os
+import time as _store_time
+import tempfile as _store_tempfile
+import threading as _store_threading
+from functools import wraps as _store_wraps
+
+_STORE_THREAD_LOCK = _store_threading.RLock()
+_STORE_THREAD_STATE = _store_threading.local()
+
+def _job_store_transaction(function):
+    @_store_wraps(function)
+    def wrapped(*args, **kwargs):
+        with _STORE_THREAD_LOCK:
+            depth = getattr(_STORE_THREAD_STATE, "depth", 0)
+            if depth:
+                _STORE_THREAD_STATE.depth = depth + 1
+                try:
+                    return function(*args, **kwargs)
+                finally:
+                    _STORE_THREAD_STATE.depth -= 1
+
+            _ensure_dir()
+            lock_path = DATA_DIR / ".jobs.lock"
+            deadline = _store_time.monotonic() + 15.0
+
+            with lock_path.open("a+b") as handle:
+                handle.seek(0, 2)
+                if handle.tell() == 0:
+                    handle.write(b"\\0")
+                    handle.flush()
+
+                acquired = False
+                try:
+                    while not acquired:
+                        try:
+                            if _store_os.name == "nt":
+                                import msvcrt
+                                handle.seek(0)
+                                msvcrt.locking(
+                                    handle.fileno(),
+                                    msvcrt.LK_NBLCK,
+                                    1,
+                                )
+                            else:
+                                import fcntl
+                                fcntl.flock(
+                                    handle.fileno(),
+                                    fcntl.LOCK_EX |
+                                    fcntl.LOCK_NB,
+                                )
+                            acquired = True
+                        except OSError:
+                            if _store_time.monotonic() >= deadline:
+                                raise TimeoutError(
+                                    "Canonical job store lock timeout"
+                                )
+                            _store_time.sleep(0.05)
+
+                    _STORE_THREAD_STATE.depth = 1
+                    try:
+                        return function(*args, **kwargs)
+                    finally:
+                        _STORE_THREAD_STATE.depth = 0
+                finally:
+                    if acquired:
+                        if _store_os.name == "nt":
+                            import msvcrt
+                            handle.seek(0)
+                            msvcrt.locking(
+                                handle.fileno(),
+                                msvcrt.LK_UNLCK,
+                                1,
+                            )
+                        else:
+                            import fcntl
+                            fcntl.flock(
+                                handle.fileno(),
+                                fcntl.LOCK_UN,
+                            )
+    return wrapped
+
 
 def _ensure_dir() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -37,16 +119,36 @@ def _read_json(path: Path, default: Any) -> Any:
         return default
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            f"Existing orchestration JSON cannot be read: {path}"
+        ) from exc
 
 
 def _write_json(path: Path, data: Any) -> None:
     _ensure_dir()
-    path.write_text(
-        json.dumps(data, indent=2, ensure_ascii=False, default=_json_default),
-        encoding="utf-8",
+    content = json.dumps(
+        data, indent=2, ensure_ascii=False,
+        default=_json_default,
     )
+    temporary = None
+    try:
+        with _store_tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=path.name + ".",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary = Path(handle.name)
+            handle.write(content)
+            handle.flush()
+            _store_os.fsync(handle.fileno())
+        _store_os.replace(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _parse_datetime(value: Any) -> Optional[datetime]:
@@ -97,7 +199,7 @@ def _job_from_dict(data: Dict[str, Any]) -> OrchestrationJob:
 def load_jobs() -> Dict[str, OrchestrationJob]:
     raw = _read_json(JOBS_FILE, {})
     if not isinstance(raw, dict):
-        return {}
+        raise ValueError("Canonical job store must contain an object")
     return {
         job_id: _job_from_dict(item)
         for job_id, item in raw.items()
@@ -105,6 +207,7 @@ def load_jobs() -> Dict[str, OrchestrationJob]:
     }
 
 
+@_job_store_transaction
 def save_jobs(jobs: Dict[str, OrchestrationJob]) -> None:
     _write_json(JOBS_FILE, {job_id: asdict(job) for job_id, job in jobs.items()})
 
@@ -113,6 +216,7 @@ def get_job(job_id: str) -> Optional[OrchestrationJob]:
     return load_jobs().get(job_id)
 
 
+@_job_store_transaction
 def create_job(
     workspace_id: str,
     job_type: str,
@@ -156,6 +260,43 @@ def create_job(
             + canonical_job_id
         )
 
+    # Enforce uniqueness for jobs carrying a canonical
+    # Universal Runtime execution idempotency key.
+    incoming_projection = (
+        metadata.get("universal_runtime_submission", {})
+        if isinstance(metadata, dict) else {}
+    )
+    incoming_canonical = (
+        incoming_projection.get("canonical_job", {})
+        if isinstance(incoming_projection, dict) else {}
+    )
+    incoming_key = (
+        incoming_canonical.get("idempotency_key")
+        if isinstance(incoming_canonical, dict) else None
+    )
+
+    if incoming_key is not None:
+        if not isinstance(incoming_key, str) or not incoming_key.strip():
+            raise ValueError("Invalid canonical idempotency key")
+
+        for persisted in jobs.values():
+            stored_metadata = persisted.metadata
+            if not isinstance(stored_metadata, dict):
+                continue
+            projection = stored_metadata.get(
+                "universal_runtime_submission", {}
+            )
+            if not isinstance(projection, dict):
+                continue
+            canonical = projection.get("canonical_job", {})
+            if not isinstance(canonical, dict):
+                continue
+            if canonical.get("idempotency_key") == incoming_key:
+                raise ValueError(
+                    "Canonical idempotency conflict: "
+                    + str(persisted.job_id)
+                )
+
     job = OrchestrationJob(
         job_id=canonical_job_id,
         workspace_id=workspace_id,
@@ -188,6 +329,7 @@ def create_job(
     return job
 
 
+@_job_store_transaction
 def update_job_status(
     job_id: str,
     new_status: str,
@@ -256,6 +398,7 @@ def update_job_status(
     return job
 
 
+@_job_store_transaction
 def update_job_progress(
     job_id: str,
     progress_percent: float,
@@ -325,6 +468,7 @@ def update_job_progress(
     return job
 
 
+@_job_store_transaction
 def append_job_event(
     job_id: str,
     old_status: str,

@@ -96,6 +96,67 @@ def activate_connected_domain_pipeline(
             "hydration_authority": CONNECTED_DOMAIN_HYDRATOR_REF,
         },
     )
+
+    # A3.2: Validate the canonical workspace profile identity
+    # before creating or submitting runtime work.
+    from pathlib import Path as _WorkspacePath
+    import json as _workspace_json
+
+    _workspace_root = _WorkspacePath(
+        "backend/server/data/workspaces"
+    ).resolve()
+
+    _workspace_id = str(intent.workspace_id)
+
+    _workspace_dir = (
+        _workspace_root / _workspace_id
+    ).resolve()
+
+    if (
+        not _workspace_id
+        or _workspace_dir.parent != _workspace_root
+    ):
+        raise ConnectedDomainActivationError(
+            "Invalid canonical workspace directory identity."
+        )
+
+    _profile_path = (
+        _workspace_dir / "workspace_profile.json"
+    )
+
+    _existing_profile = None
+
+    if _profile_path.exists():
+        try:
+            _existing_profile = _workspace_json.loads(
+                _profile_path.read_text(
+                    encoding="utf-8-sig"
+                )
+            )
+        except (OSError, ValueError) as exc:
+            raise ConnectedDomainActivationError(
+                "Existing workspace profile cannot be read."
+            ) from exc
+
+        if not isinstance(_existing_profile, dict):
+            raise ConnectedDomainActivationError(
+                "Existing workspace profile is invalid."
+            )
+
+        if (
+            _existing_profile.get("workspace_id")
+            != intent.workspace_id
+            or str(
+                _existing_profile.get("domain") or ""
+            ).lower() != str(intent.domain).lower()
+            or _existing_profile.get("workspace_mode")
+            not in ("domain", "connect_domain")
+        ):
+            raise ConnectedDomainActivationError(
+                "Existing workspace identity conflicts with "
+                "Connected Domain activation."
+            )
+
     manifest = build_connected_domain_pipeline_manifest(
         workflow_id=intent.workflow_id,
     )
@@ -160,10 +221,34 @@ def activate_connected_domain_pipeline(
         execution_semantics="dependency_ordered",
     )
     submission = connection.runtime_submission
+
+    # Persist the workspace identity only after the canonical
+    # runtime submission has returned successfully.
+    # Never overwrite an existing customer workspace profile.
+    if _existing_profile is None:
+        if _profile_path.exists():
+            raise ConnectedDomainActivationError(
+                "Workspace profile appeared during activation; "
+                "refusing to overwrite it."
+            )
+
+        from backend.server.pipelines.connect_domain.coordinator import (
+            _persist_workspace_profile,
+        )
+
+        _persist_workspace_profile(
+            workspace_id=intent.workspace_id,
+            workspace_name=intent.workspace_name,
+            workspace_mode="domain",
+            domain=intent.domain,
+            site_url=intent.site_url,
+        )
+
+    # Successful submission means processing, not completed.
     job_ids = tuple(getattr(submission, "job_ids", ()) or ())
     return {
         "ok": True,
-        "connected": True,
+        "connected": False,
         "connection_status": "processing",
         "execution_mode": "asynchronous",
         "workspace_id": intent.workspace_id,

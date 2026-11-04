@@ -56,6 +56,28 @@ def _freeze(value: Any) -> Any:
     return value
 
 
+
+@dataclass(frozen=True, slots=True)
+class RuntimeWorkflowWaveBatchResult:
+    workflow_id: str
+    wave_results: tuple[Any, ...]
+    stage_ids: tuple[str, ...]
+    job_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "workflow_id": self.workflow_id,
+            "wave_count": len(self.wave_results),
+            "stage_ids": list(self.stage_ids),
+            "job_ids": list(self.job_ids),
+            "submission_count": len(self.job_ids),
+            "waves": [
+                result.to_dict()
+                for result in self.wave_results
+            ],
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeWorkflowSubmissionResult:
     workflow_id: str
@@ -199,6 +221,7 @@ class RuntimeCoordinationGateway:
         submitter: Any = None,
         correlation_registry: Any = None,
         jobs_reader: Any = None,
+        stage_dependencies_by_stage: Mapping[str, Any] | None = None,
     ) -> RuntimeWorkflowSubmissionResult:
         bridge_result = _bridge_execution_plan_to_runtime(
             execution_plan=execution_plan,
@@ -208,20 +231,194 @@ class RuntimeCoordinationGateway:
         mapping_result = _map_runtime_handoffs_to_job_requests(
             bridge_result=bridge_result,
         )
-        submission_arguments: dict[str, Any] = {
-            "mapping_result": mapping_result,
-            "dependency_job_ids_by_stage": dependency_job_ids_by_stage,
-            "execution_semantics": execution_semantics,
-        }
-        if submitter is not None:
-            submission_arguments["submitter"] = submitter
-        if correlation_registry is not None:
-            submission_arguments["correlation_registry"] = correlation_registry
-        if jobs_reader is not None:
-            submission_arguments["jobs_reader"] = jobs_reader
-        submission_result = _submit_runtime_execution_wave(
-            **submission_arguments,
+        mappings = tuple(mapping_result.mappings)
+        plan_waves = tuple(execution_plan.waves)
+
+        if not mappings or not plan_waves:
+            raise RuntimeCoordinationGatewayError(
+                "Workflow execution plan has no mapped waves."
+            )
+
+        actual_stage_ids = tuple(mapping.stage_id for mapping in mappings)
+        if actual_stage_ids != tuple(mapping_result.stage_ids):
+            raise RuntimeCoordinationGatewayError(
+                "Workflow mapping order is inconsistent."
+            )
+
+        planned_indexes = tuple(wave.wave_index for wave in plan_waves)
+        if (
+            len(set(planned_indexes)) != len(planned_indexes)
+            or planned_indexes != tuple(sorted(planned_indexes))
+        ):
+            raise RuntimeCoordinationGatewayError(
+                "Execution-wave order is invalid."
+            )
+
+        mapped_by_stage = {mapping.stage_id: mapping for mapping in mappings}
+        if len(mapped_by_stage) != len(mappings):
+            raise RuntimeCoordinationGatewayError(
+                "Duplicate workflow stage mapping."
+            )
+
+        planned_stages = tuple(
+            stage_id
+            for wave in plan_waves
+            for stage_id in wave.stage_ids
         )
+        if planned_stages != actual_stage_ids:
+            raise RuntimeCoordinationGatewayError(
+                "Planned and mapped workflow stages differ."
+            )
+
+        for wave in plan_waves:
+            for stage_id in wave.stage_ids:
+                if mapped_by_stage[stage_id].wave_index != wave.wave_index:
+                    raise RuntimeCoordinationGatewayError(
+                        "Stage mapping has an incorrect execution-wave index."
+                    )
+
+        overrides = dependency_job_ids_by_stage or {}
+        predecessors = stage_dependencies_by_stage or {}
+
+        if not isinstance(overrides, Mapping) or not isinstance(
+            predecessors, Mapping
+        ):
+            raise RuntimeCoordinationGatewayError(
+                "Workflow dependencies must be mappings."
+            )
+
+        if (
+            set(overrides) - set(actual_stage_ids)
+            or set(predecessors) - set(actual_stage_ids)
+        ):
+            raise RuntimeCoordinationGatewayError(
+                "Workflow dependencies reference unknown stages."
+            )
+
+        stage_positions = {
+            stage_id: index
+            for index, stage_id in enumerate(actual_stage_ids)
+        }
+
+        normalized_predecessors = {}
+        for stage_id in actual_stage_ids:
+            values = predecessors.get(stage_id, ())
+            if not isinstance(values, (tuple, list)):
+                raise RuntimeCoordinationGatewayError(
+                    "Stage predecessors must be a list or tuple."
+                )
+            values = tuple(values)
+            if (
+                len(values) != len(set(values))
+                or any(
+                    parent not in stage_positions
+                    or stage_positions[parent] >= stage_positions[stage_id]
+                    for parent in values
+                )
+            ):
+                raise RuntimeCoordinationGatewayError(
+                    "Workflow predecessor relationships are invalid."
+                )
+            normalized_predecessors[stage_id] = values
+
+        if len(plan_waves) > 1:
+            if stage_dependencies_by_stage is None:
+                raise RuntimeCoordinationGatewayError(
+                    "Multi-wave workflow requires explicit predecessors."
+                )
+            for index, wave in enumerate(plan_waves):
+                if index and not any(
+                    normalized_predecessors[stage_id]
+                    for stage_id in wave.stage_ids
+                ):
+                    raise RuntimeCoordinationGatewayError(
+                        "A later execution wave has no predecessor."
+                    )
+
+        submitted_ids_by_stage = {}
+        results = []
+
+        for wave in plan_waves:
+            wave_stage_ids = tuple(wave.stage_ids)
+            wave_mappings = tuple(
+                mapped_by_stage[stage_id]
+                for stage_id in wave_stage_ids
+            )
+
+            wave_dependency_ids = {}
+            for stage_id in wave_stage_ids:
+                supplied = overrides.get(stage_id, ())
+                if not isinstance(supplied, (tuple, list)):
+                    raise RuntimeCoordinationGatewayError(
+                        "Dependency job IDs must be a list or tuple."
+                    )
+
+                dependencies = list(supplied)
+                for parent_stage in normalized_predecessors[stage_id]:
+                    parent_job_id = submitted_ids_by_stage.get(parent_stage)
+                    if not parent_job_id:
+                        raise RuntimeCoordinationGatewayError(
+                            "Predecessor job is not available for submission."
+                        )
+                    dependencies.append(parent_job_id)
+
+                wave_dependency_ids[stage_id] = tuple(
+                    dict.fromkeys(dependencies)
+                )
+
+            wave_mapping_result = replace(
+                mapping_result,
+                mapping_count=len(wave_mappings),
+                mappings=wave_mappings,
+                stage_ids=wave_stage_ids,
+            )
+
+            submission_arguments: dict[str, Any] = {
+                "mapping_result": wave_mapping_result,
+                "dependency_job_ids_by_stage": wave_dependency_ids,
+                "execution_semantics": execution_semantics,
+            }
+            if submitter is not None:
+                submission_arguments["submitter"] = submitter
+            if correlation_registry is not None:
+                submission_arguments["correlation_registry"] = correlation_registry
+            if jobs_reader is not None:
+                submission_arguments["jobs_reader"] = jobs_reader
+
+            wave_result = _submit_runtime_execution_wave(
+                **submission_arguments,
+            )
+
+            wave_job_ids = tuple(wave_result.job_ids)
+            if (
+                wave_result.workflow_id != mapping_result.workflow_id
+                or tuple(wave_result.stage_ids) != wave_stage_ids
+                or len(wave_job_ids) != len(wave_stage_ids)
+                or any(not job_id for job_id in wave_job_ids)
+            ):
+                raise RuntimeCoordinationGatewayError(
+                    "Runtime returned inconsistent wave submission identities."
+                )
+
+            for stage_id, job_id in zip(wave_stage_ids, wave_job_ids):
+                submitted_ids_by_stage[stage_id] = job_id
+
+            results.append(wave_result)
+
+        complete_job_ids = tuple(
+            submitted_ids_by_stage[stage_id]
+            for stage_id in actual_stage_ids
+        )
+
+        if len(results) == 1:
+            submission_result = results[0]
+        else:
+            submission_result = RuntimeWorkflowWaveBatchResult(
+                workflow_id=mapping_result.workflow_id,
+                wave_results=tuple(results),
+                stage_ids=actual_stage_ids,
+                job_ids=complete_job_ids,
+            )
         correlation_id = str(getattr(context, "correlation_id", "") or "").strip()
         evidence = {
             "connection": "runtime_workflow_submission_connection_v1",

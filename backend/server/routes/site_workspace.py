@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import Request
+from fastapi import Request, HTTPException
 
 from typing import Any, Dict
 

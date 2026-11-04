@@ -697,6 +697,7 @@ def dequeue_job(
     *,
     worker_registration: Mapping[str, Any] | None = None,
     lease_seconds: int = 1800,
+    allowed_job_ids: frozenset[str] | None = None,
 ) -> Optional[OrchestrationJob]:
     """Atomically claim and return the highest-priority queued job.
 
@@ -707,8 +708,24 @@ def dequeue_job(
     Workers may still call mark_job_running() afterwards; with the
     corrected service.py that call is idempotent.
     """
+    if allowed_job_ids is not None:
+        if (
+            not isinstance(allowed_job_ids, frozenset)
+            or not allowed_job_ids
+            or any(
+                not isinstance(job_id, str)
+                or not job_id.strip()
+                for job_id in allowed_job_ids
+            )
+        ):
+            raise ValueError(
+                'allowed_job_ids must be a nonempty '
+                'frozenset of nonempty job IDs.'
+            )
+
     with _dequeue_lock():
-        recover_interrupted_runtime_jobs()
+        if allowed_job_ids is None:
+            recover_interrupted_runtime_jobs()
         from backend.server.runtime.runtime_feature_flag_gateway import (
             runtime_queue_claims_enabled,
         )
@@ -716,6 +733,28 @@ def dequeue_job(
             return None
 
         for candidate in _queued_jobs():
+            if (
+                allowed_job_ids is not None
+                and candidate.job_id not in allowed_job_ids
+            ):
+                continue
+
+            # AK_CANONICAL_CONNECTED_DOMAIN_AUTHORIZATION_GUARD
+            # Temporary fail-closed production control.
+            # This must be replaced by trusted authorization
+            # verified inside the atomic queue boundary.
+            from backend.server.runtime.universal_runtime_worker_scope_contract import (
+                EXPECTED_SCOPE as _protected_connected_domain_jobs,
+            )
+            if candidate.job_id in _protected_connected_domain_jobs:
+                # AK6_SIGNED_EXECUTION_AUTHORITY_INTEGRATED
+                # Verified UNDER the atomic queue lock, before all mutations.
+                from backend.server.runtime.security.ak6_signed_execution_grants import (
+                    require_signed_ak6_execution_authority,
+                )
+                require_signed_ak6_execution_authority(
+                    job=candidate, worker_id=worker_id, action="claim",
+                )
             from backend.server.orchestration.job_store import (
                 load_jobs,
             )

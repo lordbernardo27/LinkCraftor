@@ -1026,8 +1026,12 @@ def _is_sentence_fragment_phrase(tokens: List[str]) -> bool:
 
     if len(tokens) == 2:
         a, b = tokens
-        if a.endswith("ly") or b.endswith("ly"):
-            return True
+
+        # Do not classify a phrase as a sentence fragment merely because
+        # one token ends in "-ly". Many legitimate nouns/adjectives have
+        # that spelling (for example, lexical forms unrelated to adverbs).
+        # Genuine clause/adverb fragment evidence is handled by the
+        # explicit fragment vocabularies and clause-verb checks above.
         if b in {"ahead", "faster", "slower", "well"}:
             return True
 
@@ -2024,6 +2028,11 @@ def score_phrase_strength(
             _has_valid_ordered_pair(tokens)
             or _is_natural_compound_phrase(tokens)
             or any(len(t) >= 6 for t in content_tokens)
+            or (
+                source_type == "noun_phrase"
+                and len(tokens) == 2
+                and len(content_tokens) == 2
+            )
         )
     )
 

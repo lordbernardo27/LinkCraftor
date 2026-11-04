@@ -1184,9 +1184,46 @@ def _invoke_handler(
     return handler()
 
 
+
+# AK_REGISTERED_HANDLER_EXECUTION_GUARD
+def _ak_require_connected_domain_execution_authority(job, *, phase="dispatch"):
+    """
+    Temporary fail-closed protection for the six
+    canonical Connected Domain jobs.
+
+    This function is not an authorization issuer.
+
+    Remove or replace this protection only after
+    authoritative per-job permission checks are
+    integrated at queue claim and handler execution.
+    """
+    from collections.abc import Mapping
+
+    from backend.server.runtime.universal_runtime_worker_scope_contract import (
+        EXPECTED_SCOPE,
+    )
+
+    if isinstance(job, Mapping):
+        job_id = str(
+            job.get("job_id") or ""
+        ).strip()
+
+        if job_id in EXPECTED_SCOPE:
+            # AK6_SIGNED_EXECUTION_AUTHORITY_INTEGRATED
+            from backend.server.runtime.security.ak6_signed_execution_grants import (
+                require_signed_ak6_execution_authority,
+                WORKER_ID,
+            )
+            require_signed_ak6_execution_authority(
+                job=job, worker_id=WORKER_ID, action="execute", phase=phase,
+            )
+
+
 def dispatch_registered_runtime_handler(
     job: Mapping[str, Any],
 ) -> dict[str, Any]:
+    # AK_REGISTERED_HANDLER_EXECUTION_GUARD
+    _ak_require_connected_domain_execution_authority(job)
     ensure_persisted_runtime_registrations_loaded()
 
     if not isinstance(job, Mapping):
@@ -1266,6 +1303,8 @@ def dispatch_registered_runtime_handler(
 def execute_registered_runtime_job_v1(
     job: Mapping[str, Any],
 ) -> dict[str, Any]:
+    # AK_REGISTERED_HANDLER_EXECUTION_GUARD
+    _ak_require_connected_domain_execution_authority(job, phase="pre_execute")  # AK6_FOUR_CONTROLS_OPERATIONAL_BOUNDARY
     from backend.server.jobs.universal_knowledge_orchestrator import (
         record_job_failure,
         update_job_progress,

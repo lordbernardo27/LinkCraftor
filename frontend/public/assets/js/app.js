@@ -1,4 +1,4 @@
-﻿ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
+ console.log("APP.JS ACTIVE VERSION: ? EDIT CONFIRMED 2025-12-14-AAA");
 
 // ---- COMPAT SHIM: hydrateImportsOnLoad calls reloadFromBackend() in some builds ----
 if (typeof window.reloadFromBackend !== "function") {
@@ -6530,32 +6530,52 @@ try {
 })();
 
 
-function updateConnectionStatus(domain = "") {
-  // LC_CONNECTION_TOGGLE_STATUS_SYNC_6_1
+function updateConnectionStatus(domain = "", status = "") {
+  // Display-only state. Never use this indicator as authorization.
   const connectionDot = document.getElementById("connectionDot");
   const connectionText = document.getElementById("connectionText");
   const connectionSwitch = document.getElementById("btnConnectionSwitch");
 
   if (!connectionDot || !connectionText) return;
 
-  if (domain) {
-    connectionDot.classList.remove("disconnected");
-    connectionDot.classList.add("connected");
-    connectionText.textContent = "Connected";
-    if (connectionSwitch) {
-      connectionSwitch.classList.add("is-connected");
-      connectionSwitch.setAttribute("aria-pressed", "true");
-      connectionSwitch.title = "Disconnect workspace domain";
-    }
-  } else {
-    connectionDot.classList.remove("connected");
-    connectionDot.classList.add("disconnected");
-    connectionText.textContent = "Disconnected";
-    if (connectionSwitch) {
-      connectionSwitch.classList.remove("is-connected");
-      connectionSwitch.setAttribute("aria-pressed", "false");
-      connectionSwitch.title = "Connect workspace domain";
-    }
+  const normalizedDomain = String(domain || "").trim();
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+
+  const effectiveStatus = !normalizedDomain
+    ? "disconnected"
+    : normalizedStatus === "connected"
+      ? "connected"
+      : normalizedStatus === "processing"
+        ? "processing"
+        : normalizedStatus === "disconnected"
+          ? "disconnected"
+          : "pending";
+
+  connectionDot.classList.remove("connected", "disconnected", "processing");
+  connectionDot.classList.add(
+    effectiveStatus === "connected" ? "connected" :
+    effectiveStatus === "disconnected" ? "disconnected" :
+    "processing"
+  );
+
+  connectionText.textContent =
+    effectiveStatus === "connected" ? "Connected" :
+    effectiveStatus === "processing" ? "Processing" :
+    effectiveStatus === "disconnected" ? "Disconnected" :
+    "Pending verification";
+
+  if (connectionSwitch) {
+    const connected = effectiveStatus === "connected";
+    connectionSwitch.classList.toggle("is-connected", connected);
+    connectionSwitch.setAttribute(
+      "aria-pressed",
+      connected ? "true" : "false"
+    );
+    connectionSwitch.title =
+      effectiveStatus === "connected" ? "Disconnect workspace domain" :
+      effectiveStatus === "processing" ? "Domain processing in progress" :
+      effectiveStatus === "pending" ? "Domain connection pending verification" :
+      "Connect workspace domain";
   }
 }
 
@@ -6605,24 +6625,22 @@ function lcMakeNewWorkspaceIdentity(domain, projectName){
 document.addEventListener("DOMContentLoaded", () => {
   const domainModal = document.getElementById("domainModal");
   const domainInput = document.getElementById("domainInput");
-  const sitemapInput = document.getElementById("sitemapInput");
   const btnConnectDomain = document.getElementById("btnConnectDomain");
-    const workspaceNameInput = document.getElementById("workspaceNameInput");
-
-    const customWorkspaceName = String(
-      workspaceNameInput?.value || ""
-    ).trim();
+  const workspaceNameInput = document.getElementById("workspaceNameInput");
 
   // LC_WORKSPACE_RESTORE_ON_REFRESH_6_9
   const savedWorkspaceId = localStorage.getItem("lc_workspace_id") || "";
   const savedDomain = localStorage.getItem("lc_domain") || "";
+  const savedConnectionStatus = savedWorkspaceId
+    ? localStorage.getItem("lc_connection_status_" + savedWorkspaceId) || ""
+    : "";
 
   if (savedWorkspaceId) {
     window.LINKCRAFTOR_WORKSPACE_ID = savedWorkspaceId;
     window.CURRENT_WORKSPACE_ID = savedWorkspaceId;
     window.LC_WORKSPACE_ID = savedWorkspaceId;
 
-    updateConnectionStatus(savedDomain);
+    updateConnectionStatus(savedDomain, savedConnectionStatus);
 
     if (domainModal) {
       domainModal.style.display = "none";
@@ -6644,163 +6662,95 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
+  // Close only the workspace-creation modal.
+  const btnCreateWorkspaceCancel = document.getElementById(
+    "btnCreateWorkspaceCancel"
+  );
+
+  if (btnCreateWorkspaceCancel && domainModal) {
+    btnCreateWorkspaceCancel.addEventListener("click", () => {
+      domainModal.style.display = "none";
+    });
+  }
+
   btnConnectDomain.addEventListener("click", async () => {
-    // LC_CONTINUE_ROUTING_PHASE_3_1_DOMAIN_MODE_GUARD
-    const selectedWorkspaceMode = String(
-      window.LC_WORKSPACE_START_MODE ||
-      window.workspaceMode ||
-      document.querySelector('input[name="workspaceStartMode"]:checked')?.value ||
-      "domain"
+    const customWorkspaceName = String(
+      workspaceNameInput?.value || ""
     ).trim();
 
-    if (selectedWorkspaceMode === "sitemap") {
-      // LC_CONTINUE_ROUTING_PHASE_3_2_3_SITE_URL_MODE
-      // LC_NORMALIZE_SITE_URL_3_2_4
-      let siteUrl = (sitemapInput?.value || "").trim();
+    const rawWebsiteUrl = String(domainInput?.value || "").trim();
 
-      siteUrl = siteUrl
+    if (!rawWebsiteUrl) {
+      alert("Please enter your website URL");
+      return;
+    }
+
+    let parsedWebsite;
+
+    try {
+      if (
+        /\\/.test(rawWebsiteUrl) ||
+        /\s/.test(rawWebsiteUrl) ||
+        (rawWebsiteUrl.includes("://") &&
+          !/^https?:\/\//i.test(rawWebsiteUrl))
+      ) {
+        throw new Error("Invalid website URL format");
+      }
+
+      const candidate = /^https?:\/\//i.test(rawWebsiteUrl)
+        ? rawWebsiteUrl
+        : `https://${rawWebsiteUrl}`;
+
+      parsedWebsite = new URL(candidate);
+
+      if (!["http:", "https:"].includes(parsedWebsite.protocol)) {
+        throw new Error("Unsupported protocol");
+      }
+
+      const authority = candidate
         .replace(/^https?:\/\//i, "")
-        .replace(/^www\./i, "")
-        .replace(/\/.*$/g, "")
-        .trim();
+        .split(/[/?#]/, 1)[0];
 
-      siteUrl = siteUrl ? "https://" + siteUrl : "";
-
-      if (!siteUrl) {
-        alert("Please enter a site URL");
-        return;
+      if (
+        parsedWebsite.username ||
+        parsedWebsite.password ||
+        parsedWebsite.port ||
+        authority.includes("@") ||
+        /:\d+$/.test(authority)
+      ) {
+        throw new Error("Credentials or ports not supported");
       }
 
-      const identity = lcMakeNewWorkspaceIdentity(siteUrl, customWorkspaceName);
-      const workspaceId = identity.workspaceId;
-      const workspaceName = customWorkspaceName || identity.workspaceName;
-      const sessionId = localStorage.getItem("lc_active_session_id_" + workspaceId) || identity.sessionId;
+      const hostname = parsedWebsite.hostname.toLowerCase();
+      const labels = hostname.split(".");
 
-      localStorage.setItem("lc_workspace_id", workspaceId);
-      localStorage.setItem("lc_site_url", siteUrl);
-      localStorage.setItem("lc_active_session_id_" + workspaceId, sessionId);
-
-      window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
-      window.CURRENT_WORKSPACE_ID = workspaceId;
-      window.LC_WORKSPACE_ID = workspaceId;
-      window.LC_ACTIVE_SESSION_ID = sessionId;
-      window.LC_ACTIVE_SESSION_TITLE = workspaceName;
-      window.LC_WORKSPACE_MODE = "sitemap";
-      window.LC_SITE_URL = siteUrl;
-
-      try {
-        const saveRes = await fetch("/api/workspace/workspace-folder/name", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workspace_id: workspaceId,
-            workspace_name: workspaceName,
-            workspace_mode: "sitemap",
-            site_url: siteUrl,
-            source_type: "site_url"
-          })
-        });
-
-        const saveData = await saveRes.json().catch(() => ({}));
-        if (!saveRes.ok || !saveData.ok) {
-          throw new Error(saveData.detail || "Could not save site URL workspace");
-        }
-      } catch (profileErr) {
-        console.warn("[Site URL Workspace] profile save failed:", profileErr);
-        alert("Could not create Site URL workspace");
-        return;
+      if (
+        hostname.length > 253 ||
+        labels.length < 2 ||
+        labels.some(label =>
+          !label ||
+          label.length > 63 ||
+          !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)
+        ) ||
+        !/^(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})$/.test(
+          labels[labels.length - 1]
+        ) ||
+        /^\d+\.\d+\.\d+\.\d+$/.test(hostname)
+      ) {
+        throw new Error("Invalid public domain hostname");
       }
-
-      // LC_FIX_NON_DOMAIN_WORKSPACE_DISCONNECTED_6_10
-      updateConnectionStatus("");
-
-      if (domainModal) {
-        domainModal.style.display = "none";
-      }
-
-      console.log("[Site URL Workspace] New workspace:", {
-        workspaceId,
-        workspaceName,
-        sessionId,
-        siteUrl
-      });
-
+    } catch (error) {
+      alert(
+        "Enter a valid website URL, such as https://example.com"
+      );
       return;
     }
 
-    if (selectedWorkspaceMode === "blank") {
-      // LC_CONTINUE_ROUTING_PHASE_3_3_BLANK_MODE
-
-      const identity = lcMakeNewWorkspaceIdentity("blank-workspace", customWorkspaceName);
-      const workspaceId = identity.workspaceId;
-      const workspaceName = customWorkspaceName || identity.workspaceName;
-      const sessionId = localStorage.getItem("lc_active_session_id_" + workspaceId) || identity.sessionId;
-
-      localStorage.setItem("lc_workspace_id", workspaceId);
-      localStorage.removeItem("lc_domain");
-      localStorage.removeItem("lc_site_url");
-      localStorage.setItem("lc_active_session_id_" + workspaceId, sessionId);
-
-      window.LINKCRAFTOR_WORKSPACE_ID = workspaceId;
-      window.CURRENT_WORKSPACE_ID = workspaceId;
-      window.LC_WORKSPACE_ID = workspaceId;
-      window.LC_ACTIVE_SESSION_ID = sessionId;
-      window.LC_ACTIVE_SESSION_TITLE = workspaceName;
-      window.LC_WORKSPACE_MODE = "blank";
-      window.LC_SITE_URL = "";
-      window.LC_CONNECTED_DOMAIN = "";
-      window.CURRENT_DOMAIN = "";
-
-      try {
-        // LC_BLANK_WORKSPACE_CALL_CREATE_ROUTE_3_3_2
-        const saveRes = await fetch("/api/workspace/create_blank", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            workspace_id: workspaceId,
-            workspace_name: workspaceName,
-            session_id: sessionId
-          })
-        });
-
-        const saveData = await saveRes.json().catch(() => ({}));
-        if (!saveRes.ok || !saveData.ok) {
-          throw new Error(saveData.detail || "Could not create blank workspace");
-        }
-      } catch (profileErr) {
-        console.warn("[Blank Workspace] create failed:", profileErr);
-        alert("Could not create blank workspace");
-        return;
-      }
-
-      // LC_FIX_NON_DOMAIN_WORKSPACE_DISCONNECTED_6_10
-      updateConnectionStatus("");
-
-      if (domainModal) {
-        domainModal.style.display = "none";
-      }
-
-      console.log("[Blank Workspace] New workspace:", {
-        workspaceId,
-        workspaceName,
-        sessionId
-      });
-
-      return;
-    }
-
-
-    if (selectedWorkspaceMode !== "domain") {
-      console.log("[Workspace Continue] Non-domain mode selected; domain pipeline skipped:", selectedWorkspaceMode);
-      return;
-    }
-
-    const domain = (domainInput.value || "").trim();
-
-    if (!domain) {
-      alert("Please enter a domain");
-      return;
-    }
+    const hostname = parsedWebsite.hostname.toLowerCase();
+    const domain = hostname.startsWith("www.")
+      ? hostname.slice(4)
+      : hostname;
+    const siteUrl = parsedWebsite.origin + "/";
 
     try {
       const res = await fetch(
@@ -6813,7 +6763,7 @@ document.addEventListener("DOMContentLoaded", () => {
             workspace_name: customWorkspaceName || null,
             workspace_mode: "domain",
             domain,
-            site_url: null
+            site_url: siteUrl
           })
         }
       );
@@ -6856,7 +6806,16 @@ document.addEventListener("DOMContentLoaded", () => {
         // Workspace profile is persisted atomically by
         // /api/site/workspace/connect_domain.
 
-        updateConnectionStatus(cleanDomain);
+        const connectionStatus = String(
+          data.connection_status || "pending"
+        ).trim().toLowerCase();
+
+        localStorage.setItem(
+          "lc_connection_status_" + workspaceId,
+          connectionStatus
+        );
+
+        updateConnectionStatus(cleanDomain, connectionStatus);
 
         if (domainModal) {
           domainModal.style.display = "none";
@@ -7029,7 +6988,16 @@ document.addEventListener("DOMContentLoaded", function(){
         window.LC_CONNECTED_DOMAIN = cleanDomain;
         window.CURRENT_DOMAIN = cleanDomain;
 
-        updateConnectionStatus(cleanDomain);
+        const connectionStatus = String(
+          data.connection_status || "pending"
+        ).trim().toLowerCase();
+
+        localStorage.setItem(
+          "lc_connection_status_" + workspaceId,
+          connectionStatus
+        );
+
+        updateConnectionStatus(cleanDomain, connectionStatus);
         closeConnectLaterModal();
 
         console.log("[Connect Later] connected domain:", {

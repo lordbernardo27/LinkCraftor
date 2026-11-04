@@ -702,6 +702,13 @@ def connect_connected_domain_to_universal_coordination(
         "stage_references": stage_references,
         "context": handoff_context,
         "dependency_job_ids_by_stage": dependency_job_ids_by_stage,
+        "stage_dependencies_by_stage": {
+            stage_id: (
+                (intent.stage_ids[index - 1],)
+                if index > 0 else ()
+            )
+            for index, stage_id in enumerate(intent.stage_ids)
+        },
         "execution_semantics": execution_semantics,
     }
     if submitter is not None:

@@ -415,11 +415,138 @@ def _submitter_arguments(
     request: UniversalJobCreationRequest,
     registration: Mapping[str, Any],
 ) -> dict[str, Any]:
+    # Canonical registration is resolved by the execution gateway.
+    # The creation-only view may defer precisely one predecessor
+    # output for each approved Connected Domain stage.
+    # The original registration remains unchanged for dispatch.
+    deferred_fields = {
+        "url_cleaner": "source_urls",
+        "site_pages": "cleaner_records",
+        "live_domain_target_pool": "site_pages",
+        "active_target_set": "live_domain_payload",
+    }
+
+    creation_registration = dict(registration)
+
+    if (
+        registration.get("pipeline") == "connect_domain"
+        and registration.get("stage") in deferred_fields
+        and registration.get("job_type") == request.job_type
+        and request.pipeline == "connect_domain"
+        and request.stage == registration.get("stage")
+    ):
+        stage = request.stage
+        field = deferred_fields[stage]
+        required = tuple(
+            registration.get("required_payload_fields") or ()
+        )
+
+        hydrator_ref = (
+            "backend.server.pipelines.connect_domain."
+            "runtime_hydration:"
+            "hydrate_connected_domain_runtime_job"
+        )
+
+        payload = request.payload
+
+        if not isinstance(payload, Mapping):
+            raise RuntimeExecutionGatewayError(
+                "Connected Domain payload must be a mapping.",
+                code="invalid_mapping",
+                violations=("payload",),
+            )
+
+        if payload.get("__runtime_payload_hydrator_ref__") != hydrator_ref:
+            raise RuntimeExecutionGatewayError(
+                "Connected Domain hydration authority is missing.",
+                code="invalid_mapping",
+                violations=("hydration_authority",),
+            )
+
+        if field not in required:
+            raise RuntimeExecutionGatewayError(
+                "Registered deferred field is unavailable.",
+                code="registration_mismatch",
+                violations=(field,),
+            )
+
+        creation_registration["required_payload_fields"] = [
+            item for item in required if item != field
+        ]
+
+    # Materialize immutable bridge values only at the JSON job boundary.
+    # Do not mutate the frozen workflow mapping or stringify objects.
+    import json
+    import math
+
+    def json_ready(value, depth=0):
+        if depth > 64:
+            raise RuntimeExecutionGatewayError(
+                "Job data exceeds the supported nesting depth.",
+                code="invalid_mapping",
+                violations=("json_depth",),
+            )
+
+        if isinstance(value, Mapping):
+            if any(not isinstance(key, str) for key in value):
+                raise RuntimeExecutionGatewayError(
+                    "Job mapping keys must be strings.",
+                    code="invalid_mapping",
+                    violations=("json_keys",),
+                )
+
+            return {
+                key: json_ready(item, depth + 1)
+                for key, item in value.items()
+            }
+
+        if isinstance(value, (list, tuple)):
+            return [
+                json_ready(item, depth + 1)
+                for item in value
+            ]
+
+        if value is None or isinstance(
+            value, (str, bool, int)
+        ):
+            return value
+
+        if isinstance(value, float) and math.isfinite(value):
+            return value
+
+        raise RuntimeExecutionGatewayError(
+            "Job data contains a non-JSON-compatible value.",
+            code="invalid_mapping",
+            violations=("json_value",),
+        )
+
+    json_payload = json_ready(request.payload)
+    json_metadata = json_ready(request.metadata)
+    json_registration = json_ready(creation_registration)
+
+    for value in (
+        json_payload,
+        json_metadata,
+        json_registration,
+    ):
+        try:
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                allow_nan=False,
+            )
+        except (TypeError, ValueError) as error:
+            raise RuntimeExecutionGatewayError(
+                "Job submission arguments are not JSON serializable.",
+                code="invalid_mapping",
+                violations=("json_serialization",),
+            ) from error
+
     return {
         "workspace_id": request.workspace_id,
         "job_type": request.job_type,
-        "payload": request.payload,
-        "metadata": request.metadata,
+        "payload": json_payload,
+        "metadata": json_metadata,
         "user_id": request.user_id,
         "product_id": request.product_id,
         "pipeline": request.pipeline,
@@ -449,11 +576,9 @@ def _submitter_arguments(
         "scheduled_at": (
             request.scheduled_at
         ),
-        "supported_job_types": (
-            request.job_type,
-        ),
+        "supported_job_types": (),
         "runtime_registration": (
-            registration
+            json_registration
         ),
         "enqueue": True,
     }
@@ -1788,6 +1913,23 @@ def _e2_existing_for_key(*, jobs: Mapping[str, Any], key: str) -> tuple[dict[str
         job = _e2_job_document(raw)
         metadata = job.get("metadata")
         metadata = metadata if isinstance(metadata, Mapping) else {}
+
+        # Only explicitly cancelled and audited invalid records
+        # may be excluded from active execution reconciliation.
+        # Their original canonical key remains persisted.
+        quarantine = metadata.get("runtime_recovery_quarantine")
+        quarantine = (
+            quarantine if isinstance(quarantine, Mapping) else {}
+        )
+        if (
+            _text(job.get("status")).lower() == "cancelled"
+            and quarantine.get("state") == "quarantined"
+            and quarantine.get("reason") == "invalid_canonical_dependency"
+            and _text(quarantine.get("job_id"))
+                == _text(job.get("job_id") or identity)
+        ):
+            continue
+
         projection = metadata.get("universal_runtime_submission")
         projection = projection if isinstance(projection, Mapping) else {}
         canonical = projection.get("canonical_job")
@@ -1813,6 +1955,25 @@ def _e2_reused_submission(*, mapping: RuntimeJobMapping, existing: Mapping[str, 
         "idempotency_key": (_text(key), _text(canonical.get("idempotency_key"))),
     }
     mismatches = tuple(name for name, values in comparisons.items() if values[0] != values[1])
+
+    # A matching execution key does not authorize reusing a job
+    # whose persisted predecessor relationships are different.
+    persisted_dependencies = canonical.get("dependency_job_ids")
+    requested_dependencies = request.dependency_job_ids
+
+    if not isinstance(persisted_dependencies, (list, tuple)):
+        mismatches += ("dependency_job_ids_missing",)
+    elif (
+        not all(
+            isinstance(item, str) and item.strip()
+            for item in persisted_dependencies
+        )
+        or len(set(persisted_dependencies)) != len(persisted_dependencies)
+    ):
+        mismatches += ("dependency_job_ids_invalid",)
+    elif tuple(persisted_dependencies) != tuple(requested_dependencies):
+        mismatches += ("dependency_job_ids",)
+
     job_id = _text(existing.get("job_id") or canonical.get("job_id"))
     if not job_id:
         mismatches += ("job_id",)

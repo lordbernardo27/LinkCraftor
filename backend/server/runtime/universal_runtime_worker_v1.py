@@ -473,6 +473,7 @@ def run_one_universal_runtime_job_v1(
         [Mapping[str, Any]],
         dict[str, Any],
     ] = dispatch_registered_runtime_handler,
+    allowed_job_ids: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     """
     Claim and execute at most one canonical orchestration job.
@@ -519,6 +520,7 @@ def run_one_universal_runtime_job_v1(
             "registration"
         ],
         lease_seconds=1800,
+        allowed_job_ids=allowed_job_ids,
     )
 
     if claimed_job is None:
@@ -563,28 +565,28 @@ def run_one_universal_runtime_job_v1(
             "dequeue_job returned a job that is not RUNNING."
         )
 
-    runtime_job = (
-        orchestration_job_to_runtime_mapping_v1(
-            claimed_job
-        )
-    )
-
-    from backend.server.runtime.runtime_payload_hydration import (
-        hydrate_runtime_job_payload,
-    )
-
-    runtime_job = hydrate_runtime_job_payload(
-        runtime_job
-    )
-
-    if runtime_job[
-        "job_id"
-    ] != job_id:
-        raise UniversalRuntimeWorkerContractError(
-            "Runtime mapping changed canonical job identity."
-        )
-
     try:
+        runtime_job = (
+            orchestration_job_to_runtime_mapping_v1(
+                claimed_job
+            )
+        )
+
+        from backend.server.runtime.runtime_payload_hydration import (
+            hydrate_runtime_job_payload,
+        )
+
+        runtime_job = hydrate_runtime_job_payload(
+            runtime_job
+        )
+
+        if runtime_job[
+            "job_id"
+        ] != job_id:
+            raise UniversalRuntimeWorkerContractError(
+                "Runtime mapping changed canonical job identity."
+            )
+
         registration = get_runtime_registration(
             claimed_job.job_type
         )
