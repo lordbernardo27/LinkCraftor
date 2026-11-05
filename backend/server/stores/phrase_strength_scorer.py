@@ -182,6 +182,23 @@ UNIVERSAL_WEAK_PREFIXES: Set[str] = {
     "normal", "regular", "traditional", "random", "minor", "major",
 }
 
+# Universal contextual weakness is intentionally relational rather than
+# phrase-specific. These modifiers are not weak in every phrase, and these
+# heads are not weak in every phrase. The combination is weak only when a
+# compact two-token candidate consists solely of a low-information contextual
+# modifier plus a context-dependent abstract head.
+UNIVERSAL_CONTEXTUAL_WEAK_MODIFIERS: Set[str] = {
+    "additional",
+    "several",
+}
+
+UNIVERSAL_CONTEXT_DEPENDENT_HEADS: Set[str] = {
+    "benefit",
+    "benefits",
+    "factor",
+    "factors",
+}
+
 UNIVERSAL_WEAK_HEADS: Set[str] = {
     "system", "systems", "course", "courses", "care", "routine",
     "routines", "thing", "things", "area", "areas", "part", "parts",
@@ -449,6 +466,13 @@ def _is_universal_weak_semantic_phrase(tokens: List[str]) -> bool:
     first = tokens[0]
     last = tokens[-1]
 
+    if (
+        len(tokens) == 2
+        and first in UNIVERSAL_CONTEXTUAL_WEAK_MODIFIERS
+        and last in UNIVERSAL_CONTEXT_DEPENDENT_HEADS
+    ):
+        return True
+
     if first in UNIVERSAL_WEAK_PREFIXES:
         return True
 
@@ -623,26 +647,40 @@ def _boundary_splits_known_semantic_unit(
     child_tokens: List[str],
     parent_tokens: List[str],
 ) -> bool:
-    """Return True only when the child boundary cuts through a known unit.
+    """Return True only when a child edge cuts through a known semantic unit.
 
-    Example:
+    Supports both universal truncation directions:
+
         parent: blood pressure management
         child:       pressure management
+                     ^ left edge splits ``blood pressure``
 
-    The child starts inside the established semantic unit ``blood pressure``,
-    so an essential modifier was lost.
+        parent: established multi-token semantic unit + completion
+        child:  prefix ending inside that established semantic unit
+                ^ right edge splits the unit
 
-    By contrast:
-        possible adverse effects -> adverse effects
-
-    does not cut through a known multi-token semantic unit.
+    Valid independent shorter concepts remain safe when their boundary lands
+    exactly on a semantic-unit boundary rather than inside one.
     """
     if not child_tokens or len(parent_tokens) <= len(child_tokens):
         return False
 
-    child_start = len(parent_tokens) - len(child_tokens)
+    child_width = len(child_tokens)
+    parent_width = len(parent_tokens)
 
-    if child_start <= 0:
+    alignments: List[Tuple[int, int]] = []
+
+    if parent_tokens[:child_width] == child_tokens:
+        alignments.append((0, child_width))
+
+    if parent_tokens[-child_width:] == child_tokens:
+        child_start = parent_width - child_width
+        child_end = parent_width
+        alignment = (child_start, child_end)
+        if alignment not in alignments:
+            alignments.append(alignment)
+
+    if not alignments:
         return False
 
     semantic_units: List[List[str]] = []
@@ -660,15 +698,24 @@ def _boundary_splits_known_semantic_unit(
     for unit in semantic_units:
         width = len(unit)
 
-        for start in range(0, len(parent_tokens) - width + 1):
+        for start in range(0, parent_width - width + 1):
             end = start + width
 
             if parent_tokens[start:end] != unit:
                 continue
 
-            # The child begins INSIDE this semantic unit.
-            if start < child_start < end:
-                return True
+            for child_start, child_end in alignments:
+                left_edge_splits = (
+                    child_start > 0
+                    and start < child_start < end
+                )
+                right_edge_splits = (
+                    child_end < parent_width
+                    and start < child_end < end
+                )
+
+                if left_edge_splits or right_edge_splits:
+                    return True
 
     return False
 
@@ -678,13 +725,13 @@ def _is_truncated_contained_candidate(
     snippet: str,
     candidate_pool: Any,
 ) -> bool:
-    """Detect suffix truncation only when an essential semantic unit is split.
+    """Detect edge truncation only when an essential semantic unit is split.
 
     Required evidence:
     - a longer sibling candidate exists,
-    - the candidate is its exact token suffix,
+    - the candidate is its exact token prefix or suffix,
     - the complete parent occurs in this candidate's current source snippet,
-    - and the suffix boundary cuts through an established multi-token semantic
+    - and the exposed child boundary cuts through an established multi-token semantic
       unit already known to the Scorer.
 
     This prevents broad suppression of valid shorter concepts such as
@@ -718,20 +765,70 @@ def _is_truncated_contained_candidate(
         if len(sibling_tokens) <= len(phrase_tokens):
             continue
 
-        if sibling_tokens[-len(phrase_tokens):] != phrase_tokens:
+        is_prefix_child = (
+            sibling_tokens[:len(phrase_tokens)] == phrase_tokens
+        )
+        is_suffix_child = (
+            sibling_tokens[-len(phrase_tokens):] == phrase_tokens
+        )
+
+        if not (is_prefix_child or is_suffix_child):
             continue
 
-        if not _boundary_splits_known_semantic_unit(
-            phrase_tokens,
-            sibling_tokens,
-        ):
+        # Existing left-edge/suffix truncation rule:
+        # reject only when the child begins inside a known semantic unit.
+        suffix_truncation = (
+            is_suffix_child
+            and _boundary_splits_known_semantic_unit(
+                phrase_tokens,
+                sibling_tokens,
+            )
+        )
+
+        # Universal right-extension rule:
+        # a prefix child is incomplete when the stronger completion is
+        # physically present in the same snippet and the child has no
+        # established independent structural identity.
+        child_identity = _quality_identity_evidence(
+            phrase,
+            "",
+        )
+        child_has_independent_identity = any((
+            bool(child_identity.get("exact_canonical_anchor")),
+            bool(child_identity.get("valid_ordered_pair")),
+            bool(child_identity.get("natural_compound")),
+            bool(child_identity.get("has_structural_signal")),
+        ))
+
+        prefix_truncation = (
+            is_prefix_child
+            and not child_has_independent_identity
+        )
+
+        if not (suffix_truncation or prefix_truncation):
             continue
 
         parent_width = len(sibling_tokens)
 
-        for start in range(0, len(snippet_tokens) - parent_width + 1):
-            if snippet_tokens[start:start + parent_width] == sibling_tokens:
-                return True
+        parent_in_current_snippet = any(
+            snippet_tokens[start:start + parent_width] == sibling_tokens
+            for start in range(
+                0,
+                max(0, len(snippet_tokens) - parent_width + 1),
+            )
+        )
+
+        if not parent_in_current_snippet:
+            continue
+
+        if prefix_truncation and not _passes_parent_quality_gates(
+            sibling_phrase,
+            snippet,
+            candidate_pool,
+        ):
+            continue
+
+        return True
 
     return False
 
@@ -2028,11 +2125,6 @@ def score_phrase_strength(
             _has_valid_ordered_pair(tokens)
             or _is_natural_compound_phrase(tokens)
             or any(len(t) >= 6 for t in content_tokens)
-            or (
-                source_type == "noun_phrase"
-                and len(tokens) == 2
-                and len(content_tokens) == 2
-            )
         )
     )
 
