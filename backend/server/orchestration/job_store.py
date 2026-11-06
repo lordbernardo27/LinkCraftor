@@ -118,8 +118,9 @@ def _read_json(path: Path, default: Any) -> Any:
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        import orjson
+        return orjson.loads(path.read_bytes())
+    except (OSError, UnicodeError, orjson.JSONDecodeError) as exc:
         raise ValueError(
             f"Existing orchestration JSON cannot be read: {path}"
         ) from exc

@@ -4,6 +4,7 @@ Version: 1.1
 Status: Canonical
 Phase: Cloud Infrastructure Architecture
 Section: 1.1.1 Cloud Architecture Vision
+Runtime Eligibility: Not Runtime Eligible / N/A
 
 ---
 
@@ -124,4 +125,5 @@ LinkCraftor Architecture
 
 Status:
 CANONICAL
+
 

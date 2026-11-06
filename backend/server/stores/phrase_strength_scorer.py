@@ -2119,8 +2119,52 @@ def score_phrase_strength(
         and not _is_universal_weak_semantic_phrase(tokens)
     )
 
+    # Contextual Compact Recovery Guard
+    #
+    # Prevent the generic long-word fallback from rescuing compact phrases
+    # whose modifier/head relationship remains context-dependent rather than
+    # identifying an independent concept. This guard is deliberately scoped
+    # only to the fallback recovery path; established canonical, ordered-pair,
+    # and natural-compound evidence remains authoritative.
+    contextual_recovery_modifiers = {
+        "associated",
+        "common",
+        "other",
+        "personal",
+        "possible",
+        "susceptible",
+    }
+    contextual_recovery_heads = {
+        "condition",
+        "conditions",
+        "factor",
+        "factors",
+        "feature",
+        "features",
+        "pattern",
+        "patterns",
+        "people",
+        "preference",
+        "preferences",
+        "test",
+        "tests",
+    }
+
+    contextual_compact_recovery_blocked = (
+        len(tokens) == 2
+        and tokens[0] in contextual_recovery_modifiers
+        and tokens[-1] in contextual_recovery_heads
+        and not _is_exact_canonical_anchor(tokens)
+        and not _has_valid_ordered_pair(tokens)
+        and not _is_natural_compound_phrase(tokens)
+    )
+
+    if contextual_compact_recovery_blocked:
+        reasons.append("contextual_compact_recovery_blocked")
+
     high_value_compact_phrase = (
         compact_contentful_phrase
+        and not contextual_compact_recovery_blocked
         and (
             _has_valid_ordered_pair(tokens)
             or _is_natural_compound_phrase(tokens)

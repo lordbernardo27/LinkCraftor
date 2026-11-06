@@ -431,7 +431,7 @@ def favicon():
 # =========================
 
 
-# DOCX ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ HTML converter
+# DOCX ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ HTML converter
 
 
 # =========================
@@ -494,7 +494,7 @@ async def convert_docx(file: UploadFile = File(...)):
 # ================================
 
 
-# Export simple HTML ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ .docx
+# Export simple HTML ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ .docx
 
 
 # ================================
@@ -905,6 +905,15 @@ if not _already_mounted("backend.server.routes.external.import_clear", "/api/ext
     )
 
 
+from .routes.wordpress_pairing import router as wordpress_pairing_router
 from .routes.site_workspace import router as site_workspace_router
+if not _already_mounted(
+    "backend.server.routes.wordpress_pairing",
+    "/api/wordpress/pairing",
+):
+    app.include_router(
+        wordpress_pairing_router
+    )
+
 app.include_router(site_workspace_router)
 

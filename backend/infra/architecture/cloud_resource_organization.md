@@ -1,6 +1,6 @@
 ﻿# LinkCraftor Cloud Resource Organization
 
-Version: 1.0
+Version: 1.1
 Status: Canonical
 Phase: Cloud Infrastructure Architecture
 Section: 1.1.6 Cloud Resource Organization
@@ -308,6 +308,43 @@ sanitization, masking, governance, and audit controls.
 
 ---
 
+# Regional Account Boundary
+
+AWS account boundaries and AWS Region boundaries are separate architectural
+dimensions.
+
+The existence of more than one approved Region does not automatically require
+a separate AWS account for each Region.
+
+Initial production organization:
+
+LINKCRAFTOR-PRODUCTION
+→ eu-west-1 — Europe (Ireland) — primary production
+→ us-east-1 — US East (N. Virginia) — disaster recovery
+
+The N. Virginia disaster-recovery Region may therefore reside within the
+approved production account unless a later security, compliance, data
+residency, enterprise-isolation, operational, or governance requirement
+requires a dedicated regional account.
+
+Creating a dedicated disaster-recovery or region-specific production account
+requires architecture approval and must preserve:
+
+- Central AWS Organizations governance
+- Production isolation
+- Security and logging enrollment
+- IAM boundaries
+- Cost allocation
+- Infrastructure as Code management
+- Required ownership and tagging
+- Backup and recovery governance
+- Auditability
+
+Future regional expansion, including Africa (Cape Town), shall not
+automatically create additional AWS accounts solely because a Region is added.
+
+---
+
 # Resource Hierarchy
 
 The canonical resource hierarchy is:
@@ -535,10 +572,21 @@ Environment must be one of:
 RegionRole must be one of:
 
 - primary
-- secondary
 - disaster-recovery
 - future
 - global
+
+The value "secondary" is not a canonical RegionRole because it does not define
+the operational responsibility of a Region.
+
+Canonical initial mappings are:
+
+- eu-west-1 — Europe (Ireland) — RegionRole=primary
+- us-east-1 — US East (N. Virginia) — RegionRole=disaster-recovery
+- af-south-1 — Africa (Cape Town) — RegionRole=future
+
+The global value is reserved for resources whose AWS scope or architectural
+responsibility is global rather than assigned to one application Region.
 
 Lifecycle must be one of:
 
@@ -592,6 +640,7 @@ Production resources must:
 
 - Exist only in approved production accounts
 - Use approved Regions
+- Carry the correct canonical RegionRole
 - Use approved Availability Zones
 - Be managed through Infrastructure as Code
 - Have monitoring and alerting
@@ -600,6 +649,14 @@ Production resources must:
 - Have required tags
 - Have cost controls
 - Have documented ownership
+
+For the initial regional architecture:
+
+- Ireland production resources use RegionRole=primary.
+- N. Virginia disaster-recovery resources use
+  RegionRole=disaster-recovery.
+- Future Cape Town resources use RegionRole=future until a later architecture
+  formally promotes that Region to another operational role.
 
 Manual production resource creation is prohibited unless an emergency procedure
 authorizes it and the resource is subsequently imported into Infrastructure as
@@ -705,6 +762,15 @@ The account structure must support future:
 
 Expansion must preserve centralized governance and isolation.
 
+A new AWS Region and a new AWS account are not synonymous.
+
+Regional expansion shall reuse an approved account where the security,
+compliance, data-residency, operational, and tenant-isolation architecture
+permits it.
+
+A separate regional account shall be created only when an approved architecture
+requirement justifies that additional isolation boundary.
+
 ---
 
 # Prohibited Practices
@@ -753,7 +819,15 @@ LinkCraftor shall adopt:
 - Centralized governance
 - Mandatory ownership and tagging
 - Infrastructure as Code management
+- Canonical RegionRole values of primary, disaster-recovery, future, and global
+- eu-west-1 as RegionRole=primary
+- us-east-1 as RegionRole=disaster-recovery
+- af-south-1 as RegionRole=future
+- Regional and account boundaries as independent dimensions
 - Expansion readiness for regions, enterprises, and white-label deployments
+
+The initial disaster-recovery Region does not require a separate AWS account
+solely because it is a different Region.
 
 Specific AWS account IDs must not be stored in this document.
 
@@ -764,3 +838,4 @@ LinkCraftor Architecture
 
 Status:
 CANONICAL
+
