@@ -20,7 +20,7 @@ from backend.server.runtime.universal_runtime_registration import (
 )
 
 
-PIPELINE_OPERATIONS_VERSION = "runtime_pipeline_operations_v1.0.0"
+PIPELINE_OPERATIONS_VERSION = "runtime_pipeline_operations_v1.0.1"
 PIPELINE_OPERATIONS_SCHEMA_VERSION = "runtime_pipeline_operations_schema_v1"
 
 
@@ -327,6 +327,19 @@ def build_pipeline_operations_snapshot(
     workflow_count = len(workflow_rows)
     failed_workflows = status_counts.get("failed", 0)
     active_workflows = sum(status_counts.get(value, 0) for value in ("created", "pending", "running", "processing"))
+    completed_workflows = status_counts.get("completed", 0)
+
+    # BEGIN PART F 15-B4D10R OUTPUT READINESS SEMANTICS
+    if workflow_count == 0:
+        readiness_status = "NOT_EVALUATED"
+    elif failed_workflows or final_outputs_ready < completed_workflows:
+        readiness_status = "BLOCKED"
+    elif completed_workflows == workflow_count:
+        readiness_status = "VERIFIED"
+    else:
+        readiness_status = "PENDING"
+    # END PART F 15-B4D10R OUTPUT READINESS SEMANTICS
+
     if failed_workflows or failed_jobs:
         health = "CRITICAL"
     elif workflow_count == 0:
@@ -354,10 +367,10 @@ def build_pipeline_operations_snapshot(
         }),
         output_readiness=_freeze({
             "final_stage_id": order[-1] if order else None,
+            "completed_workflow_count": completed_workflows,
             "ready_workflow_count": final_outputs_ready,
-            "all_completed_outputs_ready": bool(
-                workflow_count and final_outputs_ready == status_counts.get("completed", 0)
-            ),
+            "readiness_status": readiness_status,
+            "all_completed_outputs_ready": readiness_status == "VERIFIED",
         }),
     )
 

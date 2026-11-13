@@ -66,7 +66,7 @@ from backend.server.coordination.stage_handoff.stage_result_processor import (
 
 
 HANDOFF_CERTIFICATION_VERSION: Final[str] = (
-    "handoff_certification_v6.6.0"
+    "handoff_certification_v6.6.1"
 )
 
 HANDOFF_CERTIFICATION_SCHEMA_VERSION: Final[str] = (
@@ -83,7 +83,7 @@ _EXPECTED_SOURCE_SHA256: Final[
     (
         "6.1",
         "stage_result_processor.py",
-        "8106D844B0B4D1C4D4E3A07A6232F4796010C604F538ED0F8E45F823D2C64456",
+        "6028FED380B0E4E970F7DB30179EE2ED48C81CE00313314FF8449DA9C6A6480E",
     ),
     (
         "6.2",
@@ -117,7 +117,7 @@ _EXPECTED_FREEZE_SHA256: Final[
     (
         "6.1",
         "stage_result_processor.phase_6_1.freeze.json",
-        "58AD1700AC8EA9BB838EC9E11273A7723D9D7C1F80D5FCB6222AFE563FB2017F",
+        "A30EB1F5FAF7BCA68E2DBC74FE266DC233906FC2AECD4B145A396869DD2B5A8D",
     ),
     (
         "6.2",
@@ -127,17 +127,17 @@ _EXPECTED_FREEZE_SHA256: Final[
     (
         "6.3",
         "context_propagation.phase_6_3.freeze.json",
-        "39AD8A1ABF7753F0A5E8A9F2195E60495CCC38708DDDAAC01C8BDF8885B555D1",
+        "734A5A0E9EAE9A2B56AB988B4C065592B289339E485347DF2050ADE22AB510E4",
     ),
     (
         "6.4",
         "artifact_reference_handoff.phase_6_4.freeze.json",
-        "71B3A04739CB2D00D7A0DBC7EB7E86F820F3930BD2C4E20F375906E58C74857C",
+        "FC84E80AFB21127136685541DD674EAABBAD16B941AED691F0F3B086D89FB738",
     ),
     (
         "6.5",
         "handoff_validation.phase_6_5.freeze.json",
-        "AB31AFF04CBE02F154278A9CB581CA6E777DBE143B13B37605553E006D286868",
+        "ED1F1CB273557B009695A0D096657928BD72857DD4FB60B36C683DD28FD7FC87",
     ),
 )
 

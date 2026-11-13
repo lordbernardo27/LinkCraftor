@@ -746,3 +746,96 @@ __all__ = [
     "runtime_owner_summary",
     "certify_runtime_summary_api_v1",
 ]
+# BEGIN PART F 15-B5K RUNTIME INFRASTRUCTURE JOBS WIRING
+from backend.server.owner.runtime_infrastructure_projection import (
+    RuntimeInfrastructureProjectionError,
+    build_runtime_infrastructure_snapshot,
+)
+
+
+@router.get("/infrastructure")
+async def runtime_owner_infrastructure() -> Mapping[str, Any]:
+    """Return one shared read-only Runtime Infrastructure evidence snapshot."""
+
+    try:
+        return build_runtime_infrastructure_snapshot()
+    except RuntimeInfrastructureProjectionError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "runtime_infrastructure_projection_unavailable",
+                "message": str(exc),
+                "read_only": True,
+            },
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "runtime_infrastructure_evidence_unavailable",
+                "message": str(exc),
+                "read_only": True,
+            },
+        ) from exc
+
+
+# END PART F 15-B5K RUNTIME INFRASTRUCTURE JOBS WIRING
+# BEGIN PART F 15-B6B THROUGH 15-B6I OWNER ACTIONS AND RECOVERY
+from fastapi import Request
+
+from backend.server.owner.owner_actions_gateway import (
+    OwnerActionBlocked,
+    OwnerActionValidationError,
+    preview_owner_action,
+    submit_owner_action,
+)
+
+
+@router.post("/actions/preview")
+async def runtime_owner_action_preview(
+    payload: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    """Return a read-only eligibility and impact preview."""
+
+    try:
+        return preview_owner_action(payload)
+    except OwnerActionValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OwnerActionBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "owner_action_preview_unavailable",
+                "message": str(exc),
+                "action_executed": False,
+            },
+        ) from exc
+
+
+@router.post("/actions/execute")
+async def runtime_owner_action_execute(
+    payload: Mapping[str, Any],
+    request: Request,
+) -> Mapping[str, Any]:
+    """Submit one protected owner action request through the gateway."""
+
+    try:
+        return submit_owner_action(payload, dict(request.headers))
+    except OwnerActionValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except OwnerActionBlocked as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "owner_action_gateway_unavailable",
+                "message": str(exc),
+                "action_executed": False,
+            },
+        ) from exc
+
+
+# END PART F 15-B6B THROUGH 15-B6I OWNER ACTIONS AND RECOVERY

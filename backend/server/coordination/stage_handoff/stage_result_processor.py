@@ -52,11 +52,11 @@ from backend.server.coordination.universal_stages.result_contract import (
 
 
 STAGE_RESULT_PROCESSOR_VERSION: Final[str] = (
-    "stage_result_processor_v6.1.0"
+    "stage_result_processor_v6.1.1"
 )
 
 STAGE_RESULT_PROCESSOR_SCHEMA_VERSION: Final[str] = (
-    "stage_result_processor_schema_v1"
+    "stage_result_processor_schema_v2"
 )
 
 
@@ -199,6 +199,10 @@ class ProcessedStageResult:
     workflow_type: str
     workspace_id: str
 
+    # Canonical source execution authority preserved from
+    # UniversalStageResult.
+    execution_target: Any
+
     job_id: str
     job_type: str
 
@@ -211,12 +215,19 @@ class ProcessedStageResult:
     result_reference: str
     artifact_references: Tuple[str, ...]
 
+    # Canonical terminal timing evidence.
+    started_at: str
+    finished_at: str
+
     failure_code: str
     failure_message: str
     failure_details: Mapping[str, Any]
 
     metadata: Mapping[str, Any]
 
+    # Canonical contract lineage from UniversalStageResult.
+    workflow_contract_version: str
+    stage_reference_contract_version: str
     source_result_contract_version: str
     processor_version: str = (
         STAGE_RESULT_PROCESSOR_VERSION
@@ -337,6 +348,18 @@ class ProcessedStageResult:
             "workspace_id":
                 self.workspace_id,
 
+            "execution_target":
+                (
+                    self.execution_target.value
+                    if hasattr(
+                        self.execution_target,
+                        "value",
+                    )
+                    else str(
+                        self.execution_target
+                    )
+                ),
+
             "job_id":
                 self.job_id,
 
@@ -365,6 +388,12 @@ class ProcessedStageResult:
                     self.artifact_references
                 ),
 
+            "started_at":
+                self.started_at,
+
+            "finished_at":
+                self.finished_at,
+
             "failure_code":
                 self.failure_code,
 
@@ -380,6 +409,12 @@ class ProcessedStageResult:
                 _thaw(
                     self.metadata
                 ),
+
+            "workflow_contract_version":
+                self.workflow_contract_version,
+
+            "stage_reference_contract_version":
+                self.stage_reference_contract_version,
 
             "source_result_contract_version":
                 self.source_result_contract_version,
@@ -532,6 +567,9 @@ def process_stage_result(
         workspace_id=
             result.workspace_id,
 
+        execution_target=
+            result.execution_target,
+
         job_id=
             result.job_id,
 
@@ -558,6 +596,12 @@ def process_stage_result(
                 result.artifact_references
             ),
 
+        started_at=
+            result.started_at,
+
+        finished_at=
+            result.finished_at,
+
         failure_code=
             result.failure_code,
 
@@ -569,6 +613,12 @@ def process_stage_result(
 
         metadata=
             result.metadata,
+
+        workflow_contract_version=
+            result.workflow_contract_version,
+
+        stage_reference_contract_version=
+            result.stage_reference_contract_version,
 
         source_result_contract_version=
             result.contract_version,
