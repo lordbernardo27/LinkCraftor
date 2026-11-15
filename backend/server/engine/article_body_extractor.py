@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import re
@@ -217,6 +217,236 @@ def _build_related_concepts(key_phrases: List[str], limit: int = 80) -> List[Dic
     return related
 
 
+
+def _isolate_main_article_v1(raw_html: str):
+    """Return only recognized main editorial content, or empty results."""
+    from html import unescape
+    from html.parser import HTMLParser
+
+    class Reader(HTMLParser):
+        VOID = {
+            "area", "base", "br", "col", "embed", "hr",
+            "img", "input", "link", "meta", "param",
+            "source", "track", "wbr",
+        }
+
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self.root = {"tag": "root", "attrs": {}, "children": []}
+            self.stack = [self.root]
+
+        def handle_starttag(self, tag, attrs):
+            # HTML permits omitted closing tags for paragraphs
+            # and list items. Close them when the next block starts.
+            paragraph_breaks = {
+                "p", "div", "section", "article", "main",
+                "h1", "h2", "h3", "h4", "h5", "h6",
+                "ul", "ol", "table", "blockquote",
+                "header", "footer", "aside",
+            }
+
+            if tag in paragraph_breaks:
+                for i in range(len(self.stack) - 1, 0, -1):
+                    if self.stack[i]["tag"] == "p":
+                        del self.stack[i:]
+                        break
+
+            if tag == "li":
+                for i in range(len(self.stack) - 1, 0, -1):
+                    if self.stack[i]["tag"] == "li":
+                        del self.stack[i:]
+                        break
+
+            node = {
+                "tag": tag,
+                "attrs": dict(attrs),
+                "children": [],
+            }
+            self.stack[-1]["children"].append(node)
+            if tag not in self.VOID:
+                self.stack.append(node)
+
+        def handle_startendtag(self, tag, attrs):
+            self.handle_starttag(tag, attrs)
+            if tag not in self.VOID:
+                self.handle_endtag(tag)
+
+        def handle_endtag(self, tag):
+            for i in range(len(self.stack) - 1, 0, -1):
+                if self.stack[i]["tag"] == tag:
+                    del self.stack[i:]
+                    return
+
+        def handle_data(self, data):
+            self.stack[-1]["children"].append(data)
+
+    def text_of(node):
+        if isinstance(node, str):
+            return unescape(node)
+
+        # Never include script or non-editorial descendants,
+        # even when they appear inside a paragraph.
+        if excluded(node):
+            return ""
+
+        return " ".join(
+            text_of(child) for child in node["children"]
+        )
+
+    def children_of(node):
+        for child in node["children"]:
+            if isinstance(child, dict):
+                yield child
+                yield from children_of(child)
+
+    def excluded(node):
+        tag = node["tag"]
+
+        if tag in {
+            "script", "style", "noscript", "nav", "footer",
+            "header", "aside", "form", "iframe", "svg",
+            "button",
+        }:
+            return True
+
+        attrs = node["attrs"]
+
+        label = " ".join(
+            str(attrs.get(key) or "")
+            for key in ("id", "class", "role", "aria-label")
+        ).lower()
+
+        tokens = set(re.split(r"[\s_-]+", label))
+
+        excluded_tokens = {
+            "sidebar", "recommendation", "recommendations",
+            "recommended", "related", "advertisement",
+            "advertisements", "advert", "ads", "newsletter",
+            "breadcrumb", "breadcrumbs", "comments",
+            "comment", "promo", "promotional", "cookie",
+            "social", "share",
+        }
+
+        dedicated_sections = {
+            "faq", "faqs", "references", "bibliography",
+        }
+
+        if tokens & dedicated_sections:
+            return True
+
+        if "frequently" in tokens and "asked" in tokens:
+            return True
+
+        return bool(tokens & excluded_tokens)
+
+    parser = Reader()
+    parser.feed(raw_html or "")
+    parser.close()
+
+    candidates = []
+    for node in children_of(parser.root):
+        attrs = node["attrs"]
+        label = " ".join(
+            str(attrs.get(key) or "")
+            for key in ("id", "class")
+        ).lower()
+        role = str(attrs.get("role") or "").lower()
+
+        priority = 0
+        if node["tag"] == "article":
+            priority = 3
+        elif re.search(
+            r"article[-_ ]?(body|content)|"
+            r"(entry|post|story)[-_ ]?(body|content)",
+            label,
+        ):
+            priority = 4
+        elif node["tag"] == "main" or role == "main":
+            priority = 2
+
+        if priority and not excluded(node):
+            paragraphs = [
+                item for item in children_of(node)
+                if item["tag"] == "p" and not excluded(item)
+            ]
+            size = sum(len(text_of(item)) for item in paragraphs)
+            minimum_size = 120 if priority >= 3 else 300
+            if size >= minimum_size:
+                candidates.append((priority, size, node))
+
+    if not candidates:
+        return "", [], ""
+
+    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    selected = candidates[0][2]
+
+    from html import escape
+
+    headings = []
+    pieces = []
+    html_pieces = []
+
+    def visit(node):
+        if isinstance(node, str) or excluded(node):
+            return
+
+        tag = node["tag"]
+        allowed = {"p", "h2", "h3", "h4", "h5", "h6",
+                   "li", "blockquote", "td", "th"}
+
+        if tag == "tr":
+            cells = [
+                item for item in children_of(node)
+                if item["tag"] in {"td", "th"}
+                and not excluded(item)
+            ]
+
+            values = [
+                " ".join(text_of(cell).split())
+                for cell in cells
+            ]
+
+            values = [value for value in values if value]
+
+            if values:
+                row_text = " | ".join(values)
+                pieces.append(row_text)
+                html_pieces.append(
+                    "<p>" + escape(row_text) + "</p>"
+                )
+            return
+
+        if tag in allowed:
+            # Prevent counting the same paragraph twice.
+            if tag == "li" and any(
+                child["tag"] in allowed
+                for child in children_of(node)
+            ):
+                for child in node["children"]:
+                    visit(child)
+                return
+
+            value = " ".join(text_of(node).split())
+            if value:
+                if tag.startswith("h"):
+                    headings.append(value)
+                pieces.append(value)
+                html_pieces.append(
+                    f"<{tag}>{escape(value)}</{tag}>"
+                )
+            return
+
+        for child in node["children"]:
+            visit(child)
+
+    visit(selected)
+
+    body = "\n\n".join(pieces)
+    scoped_html = "\n".join(html_pieces)
+
+    return body, headings[:80], scoped_html
+
+
 def extract_article_from_html(url: str, html: str) -> Dict[str, Any]:
     raw = str(html or "")
     cleaned_html = _HTML_DROP_RE.sub(" ", raw)
@@ -224,52 +454,112 @@ def extract_article_from_html(url: str, html: str) -> Dict[str, Any]:
     title = _extract_first(_TITLE_RE, cleaned_html)
     h1 = _extract_first(_H1_RE, cleaned_html)
     description = _extract_first(_META_DESC_RE, cleaned_html)
-    headings = _extract_all(_HEADING_RE, cleaned_html, limit=80)
+    body_text, headings, article_html = _isolate_main_article_v1(
+        cleaned_html
+    )
 
-    paragraphs = _extract_all(_P_RE, cleaned_html, limit=300)
-    body_text = _norm(" ".join(paragraphs))
-
+    # Both indexing outputs use the same accepted Smart extraction
+    # evidence. Neither output is a fallback for the other.
     smart_rows = []
-    if extract_smart_phrases is not None:
+    phrase_extraction_status = "unavailable"
+
+    if not body_text:
+        phrase_extraction_status = "no_article_body"
+    elif extract_smart_phrases is not None:
         try:
             smart_rows = extract_smart_phrases(
                 text=body_text,
-                html=cleaned_html,
-                title=title or h1,
+                html=article_html,
+                title=h1 or title,
                 doc_id=url,
                 max_candidates=150,
                 workspace_id="article_body",
                 vertical="general",
+                learn_rejections=False,
+            )
+            if not isinstance(smart_rows, list):
+                raise TypeError("Unexpected Smart Phrase output")
+            phrase_extraction_status = (
+                "ok" if smart_rows else "no_candidates"
             )
         except Exception:
             smart_rows = []
+            phrase_extraction_status = "error"
 
-    if smart_rows:
-        key_phrases = []
-        related_concepts = []
+    # Preserve the accepted Smart Phrase Extractor candidates and
+    # their original provenance instead of fabricating relationships.
+    smart_phrase_candidates = [
+        dict(candidate)
+        for candidate in smart_rows
+        if isinstance(candidate, dict)
+        and _norm(candidate.get("phrase") or "")
+    ]
 
-        for row in smart_rows:
-            phrase = _norm(row.get("phrase") or "")
-            if not phrase:
-                continue
+    # Build an independent article-focused ranking from the same
+    # accepted evidence, without invoking a second extractor.
+    title_words = set(_tokens(h1 or title))
+    heading_words = set(_tokens(" ".join(headings)))
+    body_lower = body_text.lower()
 
-            if phrase not in key_phrases:
-                key_phrases.append(phrase)
+    ranked_topics = []
+    seen_topics = set()
+    smart_phrases = []
+    seen_smart = set()
 
-            related_concepts.append({
-                "concept": phrase,
-                "related": phrase,
-                "relation_type": "smart_extractor_candidate",
-                "confidence": float((row.get("extractor_intelligence") or {}).get("score") or 0.75),
-                "source_type": row.get("source_type") or "",
-                "section_id": row.get("section_id") or "",
-            })
+    for candidate in smart_phrase_candidates:
+        phrase = _norm(candidate.get("phrase") or "")
+        key = phrase.casefold()
+        if key not in seen_smart:
+            seen_smart.add(key)
+            smart_phrases.append(phrase)
 
-        entities = _extract_entities(" ".join([title, h1, body_text]), limit=80)
-    else:
-        key_phrases = _extract_key_phrases(" ".join([title, h1, body_text]), limit=100)
-        entities = _extract_entities(" ".join([title, h1, body_text]), limit=80)
-        related_concepts = _build_related_concepts(key_phrases, limit=80)
+        if key in seen_topics:
+            continue
+        seen_topics.add(key)
+
+        tokens = set(_tokens(phrase))
+        if not tokens:
+            continue
+
+        title_overlap = len(tokens & title_words)
+        heading_overlap = len(tokens & heading_words)
+        body_frequency = body_lower.count(key)
+        source_type = str(
+            candidate.get("source_type") or ""
+        ).lower()
+
+        relevance = (
+            5 * title_overlap
+            + 3 * heading_overlap
+            + min(body_frequency, 5)
+            + (3 if source_type == "title" else 0)
+            + (2 if "heading" in source_type else 0)
+        )
+
+        ranked_topics.append((relevance, phrase))
+
+    ranked_topics.sort(key=lambda item: item[0], reverse=True)
+
+    article_key_phrases = [
+        phrase for _, phrase in ranked_topics[:50]
+    ]
+
+    # Compatibility view: both outputs contribute; no fallback.
+    key_phrases = []
+    seen_keys = set()
+
+    for phrase in article_key_phrases + smart_phrases:
+        key = phrase.casefold()
+        if key not in seen_keys:
+            seen_keys.add(key)
+            key_phrases.append(phrase)
+
+    # Candidate identity does not establish a semantic relationship.
+    related_concepts = []
+    entities = _extract_entities(
+        " ".join([title, h1, body_text]),
+        limit=80,
+    )
 
     row = {
         "url": url,
@@ -279,12 +569,19 @@ def extract_article_from_html(url: str, html: str) -> Dict[str, Any]:
         "headings": headings,
         "body_text": body_text,
         "key_phrases": key_phrases,
+        "article_key_phrases": article_key_phrases,
+        "smart_phrase_candidates": smart_phrase_candidates,
+        "phrase_extraction_status": phrase_extraction_status,
         "entities": entities,
         "related_concepts": related_concepts,
         "extracted_at_utc": datetime.now(timezone.utc).isoformat(),
     }
 
-    validation = validate_article_parse(row)
+    validation_input = dict(row)
+    validation_input["_article_container_verified"] = bool(
+        article_html and body_text
+    )
+    validation = validate_article_parse(validation_input)
 
     row["status"] = validation.get("status")
     row["parse_quality"] = validation.get("quality")
@@ -319,6 +616,50 @@ def validate_article_parse(row: Dict[str, Any]) -> Dict[str, Any]:
         "has_h1": bool(h1),
     }
 
+    # Detect extensive, diverse navigation boilerplate.
+    # A single mention of any pattern is not sufficient.
+    navigation_patterns = (
+        r"\brecommended reading\b",
+        r"\bsee all topics\b",
+        r"\bshopping offers\b",
+        r"\btrending articles\b",
+        r"\bpopular products\b",
+        r"\bsubscribe newsletter\b",
+        r"\brelated stories\b",
+        r"\bpromotional offers\b",
+    )
+
+    navigation_hits = [
+        len(re.findall(pattern, body, flags=re.IGNORECASE))
+        for pattern in navigation_patterns
+    ]
+
+    navigation_total = sum(navigation_hits)
+    navigation_variety = sum(
+        count > 0 for count in navigation_hits
+    )
+
+    navigation_density = (
+        navigation_total / max(word_count, 1)
+    )
+
+    quality["navigation_pattern_hits"] = navigation_total
+    quality["navigation_pattern_variety"] = navigation_variety
+    quality["navigation_pattern_density"] = round(
+        navigation_density, 4
+    )
+
+    if (
+        navigation_variety >= 3
+        and navigation_total >= 6
+        and navigation_density >= 0.03
+    ):
+        return {
+            "status": "weak_parse",
+            "quality": quality,
+            "reason": "navigation_contamination_detected",
+        }
+
     if body_chars == 0:
         return {
             "status": "empty_parse",
@@ -326,14 +667,28 @@ def validate_article_parse(row: Dict[str, Any]) -> Dict[str, Any]:
             "reason": "no_body_text_extracted",
         }
 
-    if word_count < 150:
+    # A verified short article should not automatically become
+    # a navigation page solely because of its word count.
+    verified_container = (
+        row.get("_article_container_verified") is True
+    )
+
+    short_article_evidence = (
+        verified_container
+        and bool(title or h1)
+        and len(headings) >= 1
+        and len(key_phrases) >= 5
+        and word_count >= 40
+    )
+
+    if word_count < 150 and not short_article_evidence:
         return {
             "status": "navigation_page",
             "quality": quality,
             "reason": "too_few_words_for_article",
         }
 
-    if word_count < 300:
+    if word_count < 300 and not short_article_evidence:
         return {
             "status": "short_parse",
             "quality": quality,

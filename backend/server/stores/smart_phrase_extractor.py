@@ -1,4 +1,4 @@
-﻿"""
+"""
 Smart phrase extractor (corrected, niche-agnostic).
 
 Produces *complete* anchor phrases — whole noun phrases or intent phrases that
@@ -1130,12 +1130,14 @@ def _score_phrase(tokens: Sequence[str], tags: Optional[Sequence[str]],
 # ---------------------------------------------------------------------------
 
 def _reject(candidate: Dict[str, Any], reason: str, seen_rejects: Set[str],
-            workspace_id: str, doc_id: str, vertical: str) -> None:
+            workspace_id: str, doc_id: str, vertical: str, learn_rejections: bool = True) -> None:
     # de-duplicate rejection logging so suffix expansion can't spam the hook.
     key = f"{reason}:{candidate.get('phrase','')}"
     if key in seen_rejects:
         return
     seen_rejects.add(key)
+    if not learn_rejections:
+        return
     learn_from_pipeline_rejection(
         workspace_id=workspace_id,
         document_id=doc_id,
@@ -1159,6 +1161,7 @@ def _add_candidate(
     doc_id: str = "",
     workspace_id: str = "default",
     vertical: str = "general",
+    learn_rejections: bool = True,
 ) -> None:
     p = canonical_phrase(phrase)
     tokens = _trim_boundaries(tokenize(p))
@@ -1201,13 +1204,13 @@ def _add_candidate(
 
     if not ok:
         _reject(record, "incomplete_or_hanging_phrase", seen_rejects,
-                workspace_id, doc_id, vertical)
+                workspace_id, doc_id, vertical, learn_rejections)
         return
 
     scoring = _score_phrase(tokens, tg, source_type, snippet)
     if scoring["decision"] != "ACCEPT":
         _reject(record, "below_quality_threshold", seen_rejects,
-                workspace_id, doc_id, vertical)
+                workspace_id, doc_id, vertical, learn_rejections)
         return
 
     key = f"{source_type}:{p}:{section_id}"
@@ -1246,6 +1249,7 @@ def extract_smart_phrases(
     max_candidates: int = 500,
     workspace_id: str = "default",
     vertical: str = "general",
+    learn_rejections: bool = True,
 ) -> List[Dict[str, Any]]:
     """Extract clean, complete anchor phrases from a document.
 
@@ -1259,13 +1263,13 @@ def extract_smart_phrases(
 
     if title:
         _add_candidate(out, seen, seen_rejects, title, "np", None,
-                       "title", "title_0", title, doc_id, workspace_id, vertical)
+                       "title", "title_0", title, doc_id, workspace_id, vertical, learn_rejections)
         # also mine sub-anchors from the title ("Residential Lease Agreement
         # Basics" -> "lease agreement")
         for phrase, kind, tg in _candidate_phrases(title):
             _add_candidate(out, seen, seen_rejects, phrase, kind, tg,
                            _classify_source(phrase, kind), "title_0", title,
-                           doc_id, workspace_id, vertical)
+                           doc_id, workspace_id, vertical, learn_rejections)
 
     for h in extract_headings_and_lists(html):
         whole = h.get("phrase") or ""
@@ -1273,11 +1277,11 @@ def extract_smart_phrases(
         sec = h.get("section_id") or "section_0"
         snip = h.get("snippet") or ""
         _add_candidate(out, seen, seen_rejects, whole, "np", None,
-                       src, sec, snip, doc_id, workspace_id, vertical)
+                       src, sec, snip, doc_id, workspace_id, vertical, learn_rejections)
         for phrase, kind, tg in _candidate_phrases(snip or whole):
             _add_candidate(out, seen, seen_rejects, phrase, kind, tg,
                            _classify_source(phrase, kind), sec, snip,
-                           doc_id, workspace_id, vertical)
+                           doc_id, workspace_id, vertical, learn_rejections)
         if len(out) >= max_candidates:
             return out[:max_candidates]
 
@@ -1289,7 +1293,7 @@ def extract_smart_phrases(
                 source_type = _classify_source(phrase, kind)
                 _add_candidate(out, seen, seen_rejects, phrase, kind, tg,
                                source_type, section_id, sent,
-                               doc_id, workspace_id, vertical)
+                               doc_id, workspace_id, vertical, learn_rejections)
                 if len(out) >= max_candidates:
                     return out[:max_candidates]
 
