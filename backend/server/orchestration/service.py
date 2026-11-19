@@ -93,7 +93,24 @@ def mark_job_running(job_id: str, worker_id: str | None = None) -> Orchestration
     if job is None:
         raise KeyError(f"unknown job: {job_id}")
 
+    # UDARE_SERVICE_RUNNING_ADMISSION_GUARD
+    # Only the canonical queue may initiate UDARE RUNNING status.
+    # A previous queue claim may still be acknowledged idempotently.
+    if job.job_type == "udare_reconstruction" and job.status != JOB_STATUS_RUNNING:
+        raise PermissionError(
+            "UDARE_DIRECT_SERVICE_RUNNING_TRANSITION_DENIED"
+        )
+
     if job.status == JOB_STATUS_RUNNING:
+        # UDARE_RUNNING_WORKER_IDENTITY_IMMUTABILITY_GUARD
+        # Only the canonical queue may establish UDARE worker identity.
+        # This service must not overwrite or backfill that identity.
+        if job.job_type == "udare_reconstruction" and worker_id:
+            recorded_worker_id = (job.metadata or {}).get("worker_id")
+            if recorded_worker_id != worker_id:
+                raise PermissionError(
+                    "UDARE_RUNNING_WORKER_IDENTITY_CHANGE_DENIED"
+                )
         if worker_id and (job.metadata or {}).get("worker_id") != worker_id:
             # Record the worker identity without re-transitioning status.
             return update_job_status(

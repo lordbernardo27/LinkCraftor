@@ -288,6 +288,7 @@ def _concurrency_policy(
         "max_active_jobs",
         "maximum_active_jobs",
         "max_concurrent_jobs",
+        "max_concurrency",
         "limit",
     )
 
@@ -414,7 +415,11 @@ def evaluate_runtime_registration_queue_candidate(
 
     if public is None:
         return RuntimeRegistrationQueueAdmission(
-            action=RuntimeRegistrationQueueAction.CLAIM,
+            action=(
+                RuntimeRegistrationQueueAction.DEFER
+                if job_type == "udare_reconstruction"
+                else RuntimeRegistrationQueueAction.CLAIM
+            ),
             reason="no_runtime_registration",
             registration_job_type=job_type,
         )
@@ -505,6 +510,13 @@ def evaluate_runtime_registration_queue_candidate(
     limit, scope = _concurrency_policy(public)
 
     if limit is None:
+        if job_type == "udare_reconstruction":
+            return RuntimeRegistrationQueueAdmission(
+                action=RuntimeRegistrationQueueAction.DEFER,
+                reason="udare_concurrency_policy_missing",
+                registration_job_type=job_type,
+            )
+
         return RuntimeRegistrationQueueAdmission(
             action=RuntimeRegistrationQueueAction.CLAIM,
             reason="registration_policy_admitted",

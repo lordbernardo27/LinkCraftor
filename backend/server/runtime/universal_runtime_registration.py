@@ -1242,6 +1242,15 @@ def dispatch_registered_runtime_handler(
             "Universal runtime job has no job_type."
         )
 
+    # UDARE_EXECUTION_AUTHORITY_HOLD
+    # Registration alone never authorizes execution.
+    # Preserve until independent authorization and
+    # canonical concurrency enforcement are certified.
+    if job_type == "udare_reconstruction":
+        raise PermissionError(
+            "UDARE_EXECUTION_AUTHORITY_UNPROVISIONED"
+        )
+
     with _REGISTRY_LOCK:
         registration = (
             _RUNTIME_HANDLER_REGISTRY.get(
@@ -1303,113 +1312,58 @@ def dispatch_registered_runtime_handler(
 def execute_registered_runtime_job_v1(
     job: Mapping[str, Any],
 ) -> dict[str, Any]:
-    # AK_REGISTERED_HANDLER_EXECUTION_GUARD
-    _ak_require_connected_domain_execution_authority(job, phase="pre_execute")  # AK6_FOUR_CONTROLS_OPERATIONAL_BOUNDARY
-    from backend.server.jobs.universal_knowledge_orchestrator import (
-        record_job_failure,
-        update_job_progress,
-        update_job_status,
+    """Execute a registered job through the canonical lifecycle."""
+    _ak_require_connected_domain_execution_authority(
+        job,
+        phase="pre_execute",
     )
 
-    workspace_id = str(
-        job.get("workspace_id")
-        or "default"
-    ).strip() or "default"
-
-    job_id = str(
-        job.get("job_id")
-        or ""
-    ).strip()
-
-    job_type = str(
-        job.get("job_type")
-        or job.get("stage")
-        or ""
-    ).strip()
-
-    payload = job.get(
-        "payload",
-        {},
+    from backend.server.runtime.canonical_job_lifecycle_bridge_v1 import (
+        begin_registered_job_v1,
+        complete_registered_job_v1,
+        fail_registered_job_v1,
     )
 
-    if not isinstance(payload, Mapping):
-        payload = {}
+    # This operation is deliberately outside the dispatch exception
+    # handler. Missing, mismatched or unclaimed jobs must fail closed.
+    begin_registered_job_v1(job)
+
+    workspace_id = str(job["workspace_id"]).strip()
+    job_id = str(job["job_id"]).strip()
+    job_type = str(job["job_type"]).strip()
 
     try:
-        update_job_status(
-            workspace_id=workspace_id,
-            job_id=job_id,
-            status="running",
-            message=(
-                f"Running registered runtime handler "
-                f"for {job_type}."
-            ),
-        )
-
-        update_job_progress(
-            workspace_id=workspace_id,
-            job_id=job_id,
-            percent=10,
-            message=(
-                "Universal Runtime Registration "
-                "accepted the job."
-            ),
-            step="runtime_registration_dispatch",
-        )
-
-        result = (
-            dispatch_registered_runtime_handler(
-                job
-            )
-        )
-
-        update_job_progress(
-            workspace_id=workspace_id,
-            job_id=job_id,
-            percent=100,
-            message=(
-                "Registered runtime handler completed."
-            ),
-            step="runtime_registration_completed",
-        )
-
-        update_job_status(
-            workspace_id=workspace_id,
-            job_id=job_id,
-            status="completed",
-            message=(
-                "Registered runtime handler completed."
-            ),
-            result=result,
-        )
-
-        return {
-            "ok": True,
-            "job_id": job_id,
-            "workspace_id": workspace_id,
-            "job_type": job_type,
-            "dispatch_mode": (
-                "universal_runtime_registration"
-            ),
-            "result": result,
-        }
-
+        result = dispatch_registered_runtime_handler(job)
     except Exception as exc:
-        failure = record_job_failure(
-            workspace_id=workspace_id,
-            job_id=job_id,
-            job_type=job_type,
-            error=str(exc),
-            payload=dict(payload),
+        # If recording fails, propagate that failure. Never claim
+        # a failed job was successfully persisted.
+        failure_record = fail_registered_job_v1(
+            job,
+            error_message=str(exc) or type(exc).__name__,
         )
-
         return {
             "ok": False,
             "job_id": job_id,
             "workspace_id": workspace_id,
             "job_type": job_type,
-            "dispatch_mode": (
-                "universal_runtime_registration"
-            ),
-            "failure": failure,
+            "dispatch_mode": "universal_runtime_registration",
+            "failure": {
+                "error": str(exc),
+                "recorded_status": getattr(
+                    failure_record, "status", None
+                ),
+            },
         }
+
+    # Completion persistence errors also propagate rather than
+    # being disguised as handler failures.
+    complete_registered_job_v1(job)
+
+    return {
+        "ok": True,
+        "job_id": job_id,
+        "workspace_id": workspace_id,
+        "job_type": job_type,
+        "dispatch_mode": "universal_runtime_registration",
+        "result": result,
+    }

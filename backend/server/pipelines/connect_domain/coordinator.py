@@ -24,8 +24,8 @@ from typing import Any, Dict
 
 from fastapi import HTTPException
 
-from backend.server.jobs.universal_knowledge_orchestrator import (
-    create_universal_knowledge_job,
+from backend.server.runtime.universal_job_submission import (
+    submit_universal_job,
 )
 from backend.server.pipelines.connect_domain.job_types import (
     LINKING_TARGET_PIPELINE_BATCH,
@@ -175,7 +175,7 @@ def run_connect_domain(
 
     registration = ensure_linking_target_pipeline_registration()
 
-    pipeline_1_job = create_universal_knowledge_job(
+    pipeline_1_job = submit_universal_job(
         workspace_id=resolved_workspace_id,
         job_type=LINKING_TARGET_PIPELINE_BATCH,
         pipeline="linking_target_pipeline",
@@ -199,7 +199,8 @@ def run_connect_domain(
     )
 
     pipeline_1_queued = (
-        pipeline_1_job.get("status") == "queued"
+        (pipeline_1_job.get("orchestration") or {}).get("status")
+        == "queued"
     )
 
     overall_ok = bool(

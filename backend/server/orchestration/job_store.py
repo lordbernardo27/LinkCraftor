@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from .models import (
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_CANCELLED,
     JOB_STATUS_FAILED,
     VALID_JOB_STATUSES,
     JobStatusEvent,
@@ -346,6 +348,19 @@ def update_job_status(
 
     job = jobs[job_id]
     old_status = job.status
+    # TERMINAL_STATE_SAFETY_V1
+    if old_status in (
+        JOB_STATUS_COMPLETED,
+        JOB_STATUS_FAILED,
+        JOB_STATUS_CANCELLED,
+    ):
+        if new_status == old_status:
+            return job
+        raise ValueError(
+            f"Terminal job cannot transition: "
+            f"{old_status} -> {new_status}"
+        )
+
     job.status = new_status
     job.updated_at = utc_now()
 
@@ -422,6 +437,16 @@ def update_job_progress(
         raise KeyError(f"Job not found: {job_id}")
 
     job = jobs[job_id]
+    # TERMINAL_PROGRESS_SAFETY_V1
+    if job.status in (
+        JOB_STATUS_COMPLETED,
+        JOB_STATUS_FAILED,
+        JOB_STATUS_CANCELLED,
+    ):
+        raise ValueError(
+            f"Terminal job progress is immutable: {job.status}"
+        )
+
     job.progress_percent = max(0.0, min(100.0, float(progress_percent)))
     job.updated_at = utc_now()
 

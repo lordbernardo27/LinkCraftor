@@ -576,9 +576,38 @@ def run_one_universal_runtime_job_v1(
             hydrate_runtime_job_payload,
         )
 
+        # UDARE_HYDRATION_CLAIM_INTEGRITY_GUARD
+        # Hydration may change payload, not canonical claim fields.
+        udare_claim_snapshot = (
+            deepcopy({
+                key: value
+                for key, value in runtime_job.items()
+                if key != "payload"
+            })
+            if claimed_job.job_type == "udare_reconstruction"
+            else None
+        )
+
         runtime_job = hydrate_runtime_job_payload(
             runtime_job
         )
+
+        if udare_claim_snapshot is not None:
+            if not isinstance(runtime_job, Mapping):
+                raise UniversalRuntimeWorkerContractError(
+                    "UDARE hydration returned an invalid job."
+                )
+
+            udare_after_hydration = {
+                key: value
+                for key, value in runtime_job.items()
+                if key != "payload"
+            }
+
+            if udare_after_hydration != udare_claim_snapshot:
+                raise UniversalRuntimeWorkerContractError(
+                    "UDARE hydration changed canonical claim fields."
+                )
 
         if runtime_job[
             "job_id"
@@ -652,6 +681,35 @@ def run_one_universal_runtime_job_v1(
             raise UniversalRuntimeWorkerContractError(
                 "Worker lacks required runtime capabilities: "
                 + ", ".join(capability_match.missing_capabilities)
+            )
+
+        # B4C_CANONICAL_WORKER_CLAIM_GUARD
+        from backend.server.runtime.canonical_worker_claim_verification_v1 import (
+            require_canonical_worker_claim_v1,
+            CanonicalWorkerClaimDenied,
+        )
+        require_canonical_worker_claim_v1(
+            claimed_job=claimed_job,
+            worker_id=canonical_worker_id,
+        )
+
+        # UDARE_PERSISTED_ADMISSION_WORKER_INTEGRATION
+        # Verify recorded admission against canonical persisted state.
+        # This does not authenticate a reservation or grant execution.
+        if claimed_job.job_type == "udare_reconstruction":
+            from backend.server.runtime.udare_persisted_admission_verification_v1 import (
+                require_udare_persisted_admission_evidence_v1,
+            )
+            require_udare_persisted_admission_evidence_v1(
+                claimed_job=claimed_job,
+            )
+
+        # UDARE_CANONICAL_RESERVATION_WORKER_HOLD
+        # A valid lease and matching admission evidence are insufficient.
+        # Keep UDARE blocked until reservation authority exists.
+        if claimed_job.job_type == "udare_reconstruction":
+            raise UniversalRuntimeWorkerContractError(
+                "UDARE_CANONICAL_RESERVATION_UNPROVISIONED"
             )
 
         dispatch_result = dispatcher(
@@ -785,6 +843,11 @@ def run_one_universal_runtime_job_v1(
         }
 
     except UniversalRuntimeWorkerFinalizationError:
+        raise
+
+    except CanonicalWorkerClaimDenied:
+        # Ownership denial must not retry, release a foreign
+        # lease, or finalize a job without authority.
         raise
 
     except Exception as exc:

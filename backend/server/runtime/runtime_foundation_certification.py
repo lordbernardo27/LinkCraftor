@@ -90,91 +90,91 @@ FOUNDATION_COMPONENTS: tuple[_ComponentSpec, ...] = (
         "1.1.1",
         ROLE_KERNEL,
         "Universal Runtime Kernel",
-        ("universal_runtime_kernel",),
+        ("backend.server.runtime.universal_runtime_kernel",),
     ),
     _ComponentSpec(
         "1.1.2",
         ROLE_CONFIGURATION,
         "Runtime Configuration",
-        ("runtime_configuration",),
+        ("backend.server.runtime.runtime_configuration",),
     ),
     _ComponentSpec(
         "1.1.3",
         ROLE_ENVIRONMENT,
         "Runtime Environment",
-        ("runtime_environment",),
+        ("backend.server.runtime.runtime_environment",),
     ),
     _ComponentSpec(
         "1.1.4",
         ROLE_SERVICE_REGISTRY,
         "Runtime Service Registry",
-        ("runtime_service_registry",),
+        ("backend.server.runtime.runtime_service_registry",),
     ),
     _ComponentSpec(
         "1.1.5",
         ROLE_LIFECYCLE,
         "Runtime Lifecycle Manager",
-        ("runtime_lifecycle_manager",),
+        ("backend.server.runtime.runtime_lifecycle_manager",),
     ),
     _ComponentSpec(
         "1.1.6",
         ROLE_BOOT,
         "Runtime Boot Process",
-        ("runtime_boot_process",),
+        ("backend.server.runtime.runtime_boot_process",),
     ),
     _ComponentSpec(
         "1.1.7",
         ROLE_SHUTDOWN,
         "Runtime Shutdown Process",
-        ("runtime_shutdown_process",),
+        ("backend.server.runtime.runtime_shutdown_process",),
     ),
     _ComponentSpec(
         "1.1.8",
         ROLE_VERSIONING,
         "Runtime Versioning",
-        ("runtime_versioning",),
+        ("backend.server.runtime.runtime_versioning",),
     ),
     _ComponentSpec(
         "1.1.9",
         ROLE_COMPATIBILITY,
         "Runtime Compatibility Layer",
-        ("runtime_compatibility",),
+        ("backend.server.runtime.runtime_compatibility",),
     ),
     _ComponentSpec(
         "1.1.10",
         ROLE_FEATURE_FLAGS,
         "Runtime Feature Flags",
-        ("runtime_feature_flags",),
+        ("backend.server.runtime.runtime_feature_flags",),
     ),
     _ComponentSpec(
         "1.1.11",
         ROLE_CAPABILITY,
         "Runtime Capability Negotiation",
-        ("runtime_capability_negotiation",),
+        ("backend.server.runtime.runtime_capability_negotiation",),
     ),
     _ComponentSpec(
         "1.1.12",
         ROLE_PERSISTENCE,
         "Runtime Persistence Interface",
-        ("runtime_persistence",),
+        ("backend.server.runtime.runtime_persistence",),
     ),
     _ComponentSpec(
         "1.1.13",
         ROLE_STATE_STORE,
         "Runtime State Store Abstraction",
-        ("runtime_state_store",),
+        ("backend.server.runtime.runtime_state_store",),
     ),
     _ComponentSpec(
         "1.1.14",
         ROLE_SCHEMA,
         "Runtime Schema Management",
-        ("runtime_schema.certification",),
+        ("backend.server.runtime.runtime_schema.certification",),
     ),
 )
 
 #: Candidate locations for the schema subsystem's own certifier class.
 _SCHEMA_CERTIFIER_CANDIDATES: tuple[str, ...] = (
-    "runtime_schema.certification",
+    "backend.server.runtime.runtime_schema.certification",
 )
 
 _SCHEMA_CERTIFIER_ATTRIBUTE: str = (

@@ -290,19 +290,21 @@ def _default_failure_recorder_v1(
 def _default_concurrency_checker_v1(
     *,
     workspace_id: str,
-    max_running: int,
+    max_running: int | None,
 ) -> Any:
-    from backend.server.runtime.universal_runtime_infrastructure import (
-        workspace_concurrency_decision,
-    )
+    """Fail closed until canonical reservation evidence is connected.
 
-    return workspace_concurrency_decision(
-        workspace_id=
-            workspace_id,
-
-        max_running=
-            max_running,
-    )
+    This is a temporary admission HOLD, not an execution-capacity
+    estimate. Never infer zero reservations from missing evidence.
+    """
+    return {
+        "workspace_id": workspace_id,
+        "max_running": max_running,
+        "can_start_new_job": False,
+        "decision": "hold",
+        "reason": "canonical_reservation_evidence_unavailable",
+        "evidence_verified": False,
+    }
 
 
 def _as_mapping_v1(
@@ -805,17 +807,19 @@ def run_udare_reconstruction_job_v1(
         or _default_failure_recorder_v1
     )
 
-    concurrency_checker = (
-        concurrency_checker
-        or _default_concurrency_checker_v1
-    )
-
-    max_running = int(
-        execution_controls.get(
-            "workspace_max_running"
+    # UDARE_UNTRUSTED_CONCURRENCY_OVERRIDE_GUARD
+    # External checker callbacks cannot grant execution.
+    if concurrency_checker is not None:
+        raise PermissionError(
+            "UDARE_UNTRUSTED_CONCURRENCY_CHECKER_DENIED"
         )
-        or 5
-    )
+
+    concurrency_checker = _default_concurrency_checker_v1
+
+    # UDARE_CANONICAL_LIMIT_UNCONFIGURED_HOLD
+    # Never derive concurrency authority from payload controls.
+    # None means no canonical limit is provisioned.
+    max_running = None
 
     attempt = int(
         job_mapping.get(
@@ -865,7 +869,7 @@ def run_udare_reconstruction_job_v1(
             concurrency_mapping.get(
                 "can_start_new_job"
             )
-            is False
+            is not True
         ):
             return {
                 "ok":

@@ -1,4 +1,4 @@
-﻿"""Canonical per-document UUCD persistence v1.
+"""Canonical per-document UUCD persistence v1.
 
 Responsibility
 --------------
@@ -1251,3 +1251,112 @@ def explain_uucd_persistence_v1() -> dict[str, Any]:
         "next_stage":
             "runtime_queue_handoff",
     }
+
+
+def load_persisted_uucd_for_runtime_v1(
+    *,
+    project_root: str | Path,
+    workspace_id: str,
+    document_id: str,
+    content_ref: str,
+    content_hash: str,
+    source_type: str,
+    body_ref: str,
+    persistence_fingerprint: str,
+) -> dict[str, Any]:
+    """Read one canonical persisted UUCD for a runtime request.
+
+    This function performs no job submission or worker execution.
+    """
+
+    root = Path(project_root).resolve()
+
+    workspace_id = _require_workspace_id(workspace_id)
+    document_id = _require_document_id(document_id)
+    content_hash = _require_sha256(
+        content_hash,
+        field_name="content_hash",
+    )
+
+    target_path = _resolve_canonical_uucd_path(
+        project_root=root,
+        workspace_id=workspace_id,
+        document_id=document_id,
+        supplied_content_ref=content_ref,
+    )
+
+    record = _load_existing_record(target_path)
+
+    if record.get("workspace_id") != workspace_id:
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD workspace identity mismatch."
+        )
+
+    if record.get("document_id") != document_id:
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD document identity mismatch."
+        )
+
+    if record.get("content_hash") != content_hash:
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD content hash mismatch."
+        )
+
+    if record.get("content_ref") != content_ref:
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD content reference mismatch."
+        )
+
+    if record.get("body_status") != "STORED_AND_VERIFIED":
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD body is not verified."
+        )
+
+    persistence = record.get("persistence")
+
+    if (
+        not isinstance(persistence, dict)
+        or persistence.get("persistence_status")
+        != "PERSISTED_AND_VERIFIED"
+    ):
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD verification evidence is invalid."
+        )
+
+    if "content_body" in record:
+        raise UUCDPersistenceVerificationError(
+            "Persisted UUCD must not contain article body text."
+        )
+
+    source_type = _require_non_empty_string(
+        source_type,
+        field_name="source_type",
+    )
+    body_ref = _require_non_empty_string(
+        body_ref,
+        field_name="body_ref",
+    )
+    persistence_fingerprint = _require_sha256(
+        persistence_fingerprint,
+        field_name="persistence_fingerprint",
+    )
+
+    if record.get("source_type") != source_type:
+        raise UUCDPersistenceVerificationError(
+            "Runtime source_type does not match persisted UUCD."
+        )
+
+    if record.get("body_ref") != body_ref:
+        raise UUCDPersistenceVerificationError(
+            "Runtime body_ref does not match persisted UUCD."
+        )
+
+    if (
+        persistence.get("input_record_sha256")
+        != persistence_fingerprint
+    ):
+        raise UUCDPersistenceVerificationError(
+            "Runtime persistence fingerprint does not match UUCD."
+        )
+
+    return record

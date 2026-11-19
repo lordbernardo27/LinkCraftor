@@ -23,7 +23,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
-from runtime_persistence import (
+from backend.server.runtime.runtime_persistence import (
     RuntimePersistenceBackend,
     RuntimePersistenceConflictError,
     RuntimePersistenceKey,

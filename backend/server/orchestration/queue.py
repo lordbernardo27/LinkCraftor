@@ -838,6 +838,14 @@ def dequeue_job(
             metadata.update(
                 registration_dependency_decision.to_metadata()
             )
+            # UDARE_CANONICAL_ADMISSION_METADATA_HANDOFF
+            # Diagnostic decision evidence only; not an
+            # execution grant or reservation certificate.
+            if candidate.job_type == "udare_reconstruction":
+                metadata.update(
+                    registration_policy_decision.to_metadata()
+                )
+
 
             if worker_id:
                 metadata["worker_id"] = worker_id
